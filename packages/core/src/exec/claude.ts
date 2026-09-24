@@ -10,7 +10,13 @@ export async function executeClaude(req: ExecRequest): Promise<ExecResult> {
   let outputTokens = 0;
   for (const line of result.stdout.split("\n")) {
     if (!line.trim()) continue;
-    const event = JSON.parse(line);
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch (error) {
+      if (error instanceof SyntaxError) continue;
+      throw error;
+    }
     if (event.type === "result") {
       output = event.result ?? "";
       inputTokens = event.usage?.input_tokens ?? 0;

@@ -9,7 +9,10 @@ fs.writeFileSync(process.env.FIXTURE_CAPTURE, JSON.stringify({
   session: process.env.AGENT_GRAPH_SESSION,
   delegation: process.env.AGENT_GRAPH_DELEGATION,
 }));
-if (process.env.FIXTURE_HANG === "1") setInterval(() => {}, 1_000);
+if (process.env.FIXTURE_HANG === "1") {
+  process.stdout.write('{"type":"result","result":"partial');
+  setInterval(() => {}, 1_000);
+}
 else {
   console.log(JSON.stringify({ type: "assistant", message: "intermediate" }));
   console.log(JSON.stringify({ type: "result", result: "Claude result", usage: { input_tokens: 12, output_tokens: 7 } }));

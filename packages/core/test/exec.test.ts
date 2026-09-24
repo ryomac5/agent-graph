@@ -69,10 +69,11 @@ test("Codex の引数、標準入力、結果とトレース", async () => {
   } finally { await rm(workDir, { recursive: true, force: true }); }
 });
 
-test("制限時間で子プロセスを終了する", async () => {
+test("JSON 行が途中で切れても制限時間で子プロセスを終了する", async () => {
   const { result, workDir } = await runFixture("claude", true);
   try {
     assert.equal(result.timedOut, true);
     assert.notEqual(result.exitCode, 0);
+    assert.equal(result.output, "");
   } finally { await rm(workDir, { recursive: true, force: true }); }
 });

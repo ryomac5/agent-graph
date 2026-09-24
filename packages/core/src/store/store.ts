@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Event, Span } from "../events.ts";
+import type { AcceptanceResult, Assignment, Role, TokenUsage } from "../delegate/types.ts";
 import { migrate } from "./migrate.ts";
 
 export interface Repo {
@@ -106,5 +107,41 @@ export class Store {
       UPDATE spans SET ended_at = ?, status = ? WHERE trace_id = ? AND span_id = ?
     `).run(endedAt, status, traceId, spanId);
     if (result.changes === 0) throw new Error("Span not found");
+  }
+
+  insertDelegation(row: { id: string; repoKey: string; sessionId: string; parentId?: string; role: Role; title: string; status: string }): void {
+    this.db.prepare(`INSERT INTO delegations (id, repo_key, session_id, parent_id, role, title, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .run(row.id, row.repoKey, row.sessionId, row.parentId ?? null, row.role, row.title, row.status);
+  }
+
+  finishDelegation(id: string, status: string): void {
+    this.db.prepare("UPDATE delegations SET status = ? WHERE id = ?").run(status, id);
+  }
+
+  insertAssignment(id: string, assignment: Assignment): void {
+    this.db.prepare(`INSERT INTO assignments
+      (delegation_id, executor, model, family, tier, reason, policy_version)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .run(id, assignment.executor, assignment.model, assignment.family, assignment.tier,
+        JSON.stringify(assignment.reason), assignment.policyVersion);
+  }
+
+  insertAcceptance(id: string, acceptance: AcceptanceResult): void {
+    this.db.prepare(`INSERT INTO acceptances (delegation_id, passed, results, scope_violations)
+      VALUES (?, ?, ?, ?)`)
+      .run(id, Number(acceptance.passed), JSON.stringify(acceptance.results), JSON.stringify(acceptance.scopeViolations));
+  }
+
+  insertReview(id: string, reviewerId: string, verdict: string, comment: string): void {
+    this.db.prepare(`INSERT INTO reviews (delegation_id, reviewer_delegation_id, verdict, comment)
+      VALUES (?, ?, ?, ?)`)
+      .run(id, reviewerId, verdict, comment);
+  }
+
+  insertTokenUsage(id: string, usage: TokenUsage, model: string): void {
+    this.db.prepare(`INSERT INTO token_usage (delegation_id, input_tokens, output_tokens, model)
+      VALUES (?, ?, ?, ?)`)
+      .run(id, usage.inputTokens, usage.outputTokens, model);
   }
 }

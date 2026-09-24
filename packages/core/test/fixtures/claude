@@ -1,0 +1,16 @@
+#!/usr/bin/env node
+import fs from "node:fs";
+const input = fs.readFileSync(0, "utf8");
+fs.writeFileSync(process.env.FIXTURE_CAPTURE, JSON.stringify({
+  args: process.argv.slice(2),
+  input,
+  traceparent: process.env.TRACEPARENT,
+  tracestate: process.env.TRACESTATE,
+  session: process.env.AGENT_GRAPH_SESSION,
+  delegation: process.env.AGENT_GRAPH_DELEGATION,
+}));
+if (process.env.FIXTURE_HANG === "1") setInterval(() => {}, 1_000);
+else {
+  console.log(JSON.stringify({ type: "assistant", message: "intermediate" }));
+  console.log(JSON.stringify({ type: "result", result: "Claude result", usage: { input_tokens: 12, output_tokens: 7 } }));
+}

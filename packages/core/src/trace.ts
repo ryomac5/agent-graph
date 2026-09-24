@@ -16,7 +16,6 @@ export interface TraceState {
 const TRACE_ID_BYTES = 16;
 const SPAN_ID_BYTES = 8;
 const TRACEPARENT_PATTERN = /^00-([0-9a-f]{32})-([0-9a-f]{16})-01$/;
-const SPAN_ID_PATTERN = /^[0-9a-f]{16}$/;
 const AGENT_MEMBER = "agent-graph=";
 const AGENT_STATE_PATTERN = /^agent-graph=session:([^;,=\s]+);delegation:([^;,=\s]+)$/;
 const INVALID_STATE_ID_PATTERN = /[;,=\s]/;
@@ -99,26 +98,12 @@ export function childContext(parent: TraceContext): TraceContext {
 export function toEnv(context: TraceContext): Record<string, string> {
   const env: Record<string, string> = { TRACEPARENT: formatTraceparent(context) };
   if (context.traceState !== undefined) env.TRACESTATE = context.traceState;
-  // TRACEPARENT は現在の span のみを持つため、親は補助変数で渡す。
-  if (context.parentSpanId !== undefined) {
-    if (!isSpanId(context.parentSpanId)) throw new TypeError("Invalid parent span ID");
-    env.AGENT_GRAPH_PARENT_SPAN_ID = context.parentSpanId;
-  }
   return env;
-}
-
-function isSpanId(value: string): boolean {
-  return value.length === SPAN_ID_BYTES * 2 && SPAN_ID_PATTERN.test(value) && !/^0+$/.test(value);
 }
 
 export function fromEnv(env: Record<string, string | undefined> = process.env): TraceContext | undefined {
   const context = parseTraceparent(env.TRACEPARENT);
   if (!context) return undefined;
   if (env.TRACESTATE !== undefined) context.traceState = env.TRACESTATE;
-  const parentSpanId = env.AGENT_GRAPH_PARENT_SPAN_ID;
-  if (parentSpanId !== undefined) {
-    if (!isSpanId(parentSpanId)) return undefined;
-    context.parentSpanId = parentSpanId;
-  }
   return context;
 }

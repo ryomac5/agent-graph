@@ -31,8 +31,20 @@ test("子の文脈を環境変数で渡して親子関係を復元する", () =>
   assert.notEqual(child.spanId, parent.spanId);
   assert.equal(child.parentSpanId, parent.spanId);
   assert.equal(child.traceState, parent.traceState);
-  assert.deepEqual(fromEnv(toEnv(child)), child);
-  const grandchild = childContext(fromEnv(toEnv(child))!);
+  const env = toEnv(child);
+  assert.deepEqual(env, {
+    TRACEPARENT: formatTraceparent(child),
+    TRACESTATE: child.traceState,
+  });
+  const received = fromEnv(env);
+  assert.deepEqual(received, {
+    traceId: child.traceId,
+    spanId: child.spanId,
+    traceState: child.traceState,
+  });
+  assert.ok(received);
+  assert.equal(Object.hasOwn(received, "parentSpanId"), false);
+  const grandchild = childContext(received);
   assert.equal(grandchild.parentSpanId, child.spanId);
   assert.equal(grandchild.traceId, parent.traceId);
   assert.equal(parent.spanId, child.parentSpanId);
@@ -98,12 +110,8 @@ test("tracestate は他ベンダの順序と値を保持して往復する", () 
   assert.equal(formatTracestate(parseTracestate("first=abc, last=xyz")), "first=abc,last=xyz");
 });
 
-test("formatter と補助環境変数は不正な ID を拒否する", () => {
+test("formatter は不正な ID を拒否する", () => {
   assert.throws(() => formatTraceparent({ traceId: "bad", spanId: SPAN_ID }), TypeError);
-  for (const parentSpanId of ["bad", "0".repeat(16), SPAN_ID.toUpperCase(), `${SPAN_ID}\n`]) {
-    assert.equal(fromEnv({ TRACEPARENT, AGENT_GRAPH_PARENT_SPAN_ID: parentSpanId }), undefined);
-    assert.throws(() => toEnv({ traceId: TRACE_ID, spanId: SPAN_ID, parentSpanId }), TypeError);
-  }
   for (const sessionId of ["", "a,b", "a;b", "a=b", "a b", "a\n"]) {
     assert.throws(() => formatTracestate({ sessionId, delegationId: "d", members: [] }), TypeError);
   }

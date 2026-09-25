@@ -5,6 +5,7 @@ import { openStore } from "../packages/core/src/store/store.ts";
 import { parseTraceparent, parseTracestate } from "../packages/core/src/trace.ts";
 
 const [mode, role, executor] = process.argv.slice(2);
+assert.ok(mode && role && executor);
 const root = process.cwd();
 const key = repoKey(root);
 const store = openStore(stateDbPath(key));
@@ -17,13 +18,16 @@ try {
   assert.ok(sessionId);
   if (mode !== "check-root") assert.ok(state.delegationId);
   if (mode === "seed") {
+    const delegationId = state.delegationId;
+    assert.ok(delegationId);
     store.upsertRepo({ key, rootPath: root, name: basename(root) });
     store.insertSession({ id: sessionId, repoKey: key, name: sessionId,
       client: executor, traceId: trace.traceId, startedAt: new Date().toISOString() });
-    store.insertDelegation({ id: state.delegationId, repoKey: key, sessionId,
+    store.insertDelegation({ id: delegationId, repoKey: key, sessionId,
       role: "orchestrate", title: "e2e caller fixture", status: "done" });
     store.insertSpan({ trace, name: "e2e caller fixture", startedAt: new Date().toISOString(), status: "ok",
-      attributes: { "agent.delegation": state.delegationId } });
+      attributes: { "agent.role": "orchestrate", "agent.executor": executor, "agent.model": "fixture",
+        "agent.session": sessionId, "agent.delegation": delegationId } });
   } else if (mode === "check-root") {
     assert.equal(store.db.prepare("SELECT count(*) AS n FROM delegations WHERE session_id = ?")
       .get(sessionId)?.n, 1, "delegate must be called exactly once, including unsuccessful calls");
@@ -41,8 +45,10 @@ try {
     assert.equal(store.db.prepare("SELECT client FROM sessions WHERE id = ?").get(sessionId)?.client,
       process.env.AGENT_GRAPH_CLIENT);
   } else {
+    const delegationId = state.delegationId;
+    assert.ok(delegationId);
     const count = store.db.prepare("SELECT count(*) AS n FROM delegations WHERE session_id = ? AND id != ?")
-      .get(sessionId, state.delegationId)!;
+      .get(sessionId, delegationId)!;
     assert.equal(count.n, 1, "delegate must be called exactly once, including unsuccessful calls");
     const rows = store.db.prepare(`SELECT d.status, d.parent_id, a.executor, s.trace_id, s.parent_span_id,
       p.trace_id AS parent_trace_id, p.span_id AS parent_span

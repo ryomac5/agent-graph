@@ -46,14 +46,16 @@ for (const mode of ["root", "session-only", "nested"] as const) {
       role: "implement", title: "child", status: "done" });
     store.insertAssignment("child", { executor: "codex", model: "fixture", family: "openai",
       tier: "low", reason: [], policyVersion: "test" });
+    const attributes = { "agent.role": "implement", "agent.executor": "codex",
+      "agent.model": "fixture", "agent.session": "session", "agent.delegation": "child" };
     store.insertSpan({ trace: { traceId, spanId: "3".repeat(16), parentSpanId: spanId },
       name: "delegate", startedAt: new Date().toISOString(), status: "ok",
-      attributes: { "agent.delegation": "child" } });
+      attributes });
     // 実行・再指示の span が増えても委譲は一回として検証する。
     for (const id of ["4", "5"]) store.insertSpan({
       trace: { traceId, spanId: id.repeat(16), parentSpanId: "3".repeat(16) },
       name: "execute", startedAt: new Date().toISOString(), status: "ok",
-      attributes: { "agent.delegation": "child" },
+      attributes,
     });
     const args = [mode === "nested" ? "check" : "check-root", "implement", "codex"];
     const checked = run(args);

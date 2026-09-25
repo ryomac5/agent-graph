@@ -51,3 +51,22 @@ export function installCodexConfig(options: CodexInstallOptions): void {
   if (existsSync(options.configPath)) copyFileSync(options.configPath, `${options.configPath}.agent-graph.bak`);
   writeFileSync(options.configPath, updated);
 }
+
+export function removeCodexConfig(existing: string): string {
+  const lines = existing.match(/.*(?:\r\n|\n|$)/g)?.filter(Boolean) ?? [];
+  let inside = false;
+  return lines.filter((line) => {
+    const section = line.match(/^\s*\[([^\]]+)\]/);
+    if (section) inside = section[1] === `mcp_servers.${SERVER}` || section[1].startsWith(`mcp_servers.${SERVER}.`);
+    return !inside;
+  }).join("");
+}
+
+export function uninstallCodexConfig(options: { configPath: string }): void {
+  if (!existsSync(options.configPath)) return;
+  const existing = readFileSync(options.configPath, "utf8");
+  const updated = removeCodexConfig(existing);
+  if (updated === existing) return;
+  copyFileSync(options.configPath, `${options.configPath}.agent-graph.bak`);
+  writeFileSync(options.configPath, updated);
+}

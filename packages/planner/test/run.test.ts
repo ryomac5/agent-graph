@@ -5,11 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
+import type { TestContext } from "node:test";
 import type { DelegateRequest, DelegateResult } from "../../core/src/index.ts";
 import { openPlanner, requestDecision, runGraph } from "../src/run.ts";
 
 function git(repo: string, ...args: string[]) { return execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim(); }
-function fixture(t: test.TestContext, tasks: string) {
+function fixture(t: TestContext, tasks: string) {
   const repo = realpathSync(mkdtempSync(join(tmpdir(), "planner-run-")));
   const previous = { XDG_STATE_HOME: process.env.XDG_STATE_HOME, XDG_CACHE_HOME: process.env.XDG_CACHE_HOME };
   process.env.XDG_STATE_HOME = join(repo, "state");

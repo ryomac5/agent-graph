@@ -149,3 +149,28 @@ test("利用枠の最新と最後の動き", (t) => {
   assert.equal(lastActivityAt(store.db, "r"), "2026-09-25T02:00:00.000Z");
   assert.equal(lastActivityAt(store.db, "other"), undefined);
 });
+
+test("委譲の詳細の列と往復を返し、列が空なら events の依頼文で補う", (t) => {
+  const store = withStore(t);
+  store.insertSession({ id: "s1", repoKey: "r", name: "repo-001", client: "claude", traceId: trace, startedAt: ts });
+  store.insertDelegation({ id: "d1", repoKey: "r", sessionId: "s1", role: "implement", title: "実装", status: "done",
+    task: "列の依頼文", scope: ["src/**"], outputs: ["docs/x.md"], worktree: "/work/tree" });
+  store.finishDelegation("d1", "done", "列の出力");
+  store.insertDelegationRound("d1", "request", "列の依頼文", ts);
+  store.insertDelegationRound("d1", "report", "列の出力", later);
+  event(store, "delegation.requested", ts, { delegationId: "d1", task: "events の依頼文" });
+  store.insertDelegation({ id: "d2", repoKey: "r", sessionId: "s1", role: "research", title: "古い", status: "done" });
+  event(store, "delegation.requested", ts, { delegationId: "d2", task: "events の依頼文" });
+  const [first, second] = listDelegations(store.db, "r");
+  assert.equal(first.task, "列の依頼文");
+  assert.equal(first.output, "列の出力");
+  assert.deepEqual(first.scope, ["src/**"]);
+  assert.deepEqual(first.outputs, ["docs/x.md"]);
+  assert.equal(first.worktree, "/work/tree");
+  assert.deepEqual(first.rounds, [{ kind: "request", text: "列の依頼文", at: ts }, { kind: "report", text: "列の出力", at: later }]);
+  assert.equal(second.task, "events の依頼文");
+  assert.equal(second.output, undefined);
+  assert.equal(second.scope, undefined);
+  assert.equal(second.worktree, undefined);
+  assert.equal(second.rounds, undefined);
+});

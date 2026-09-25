@@ -350,3 +350,45 @@ test("SSE は project と overview の全体を送り、変化から 1 秒以内
   assert.equal((changedOverview.data as Overview).projects[0].status, "running");
   controller.abort();
 });
+
+test("NodeDetail は delegations の列と delegation_rounds から task, output, scope, outputs, worktree, rounds を埋める", (t) => {
+  const store = withStore(t);
+  store.insertSession({ id: "s1", repoKey: "r", name: "repo-001", client: "claude", traceId: trace, startedAt: ts });
+  store.insertDelegation({ id: "d1", repoKey: "r", sessionId: "s1", role: "implement", title: "実装", status: "requested",
+    task: "実装して", scope: ["src/**"], outputs: ["docs/x.md"], worktree: "/work/tree" });
+  store.insertDelegationRound("d1", "request", "実装して", ts);
+  store.insertDelegationRound("d1", "report", "一度目の報告", later);
+  store.insertDelegationRound("d1", "reinstruct", "前回の結果を踏まえて修正してください。\n受け入れ失敗", later);
+  store.insertDelegationRound("d1", "report", "二度目の報告", "2026-09-25T02:00:00.000Z");
+  store.finishDelegation("d1", "done", "二度目の報告");
+  // events の依頼文は列があるときは使わない
+  event(store, "delegation.requested", ts, { delegationId: "d1", task: "events の依頼文" });
+  event(store, "delegation.finished", later, { delegationId: "d1", status: "done" });
+  // 列の無い古い記録は events と reviews から従来どおり組む
+  store.insertDelegation({ id: "d2", repoKey: "r", sessionId: "s1", parentId: "d1", role: "review", title: "Review", status: "done" });
+  store.insertReview("d1", "d2", "approve", "VERDICT: approve");
+  event(store, "delegation.requested", ts, { delegationId: "d2", task: "レビューして" });
+  event(store, "delegation.finished", later, { delegationId: "d2", status: "done" });
+
+  const [session] = project(store).sessions;
+  const byId = new Map(session.nodes.map((node) => [node.id, node]));
+  const first = byId.get("d1")!;
+  assert.equal(first.task, "実装して");
+  assert.equal(first.output, "二度目の報告");
+  assert.deepEqual(first.scope, ["src/**"]);
+  assert.deepEqual(first.outputs, ["docs/x.md"]);
+  assert.equal(first.worktree, "/work/tree");
+  assert.deepEqual(first.rounds, [
+    { kind: "request", text: "実装して", at: ts },
+    { kind: "report", text: "一度目の報告", at: later },
+    { kind: "reinstruct", text: "前回の結果を踏まえて修正してください。\n受け入れ失敗", at: later },
+    { kind: "report", text: "二度目の報告", at: "2026-09-25T02:00:00.000Z" },
+  ]);
+  assert.equal(session.edges.find((edge) => edge.id === "d1->s1#return")?.label, "二度目の報告");
+  const reviewer = byId.get("d2")!;
+  assert.equal(reviewer.task, "レビューして");
+  assert.equal(reviewer.output, "VERDICT: approve");
+  assert.equal(reviewer.scope, undefined);
+  assert.equal(reviewer.worktree, undefined);
+  assert.deepEqual(reviewer.rounds, [{ kind: "request", text: "レビューして", at: ts }, { kind: "report", text: "VERDICT: approve", at: later }]);
+});

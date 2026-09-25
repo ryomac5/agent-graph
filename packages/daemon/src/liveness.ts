@@ -57,8 +57,9 @@ export async function reconcileLiveness(store: Store, options: LivenessOptions =
       }
     } else dead = now.getTime() - Date.parse(session.lastSeenAt) > staleMs;
     if (!dead) continue;
+    // 理由を残す。idle で終えたものだけが次の観測で running に戻る
     const endedAt = session.pid !== undefined ? now.toISOString() : session.lastSeenAt;
-    if (store.endSession(session.id, endedAt)) ended.push(session.id);
+    if (store.endSession(session.id, endedAt, session.pid !== undefined ? "process_exit" : "idle")) ended.push(session.id);
   }
   return ended;
 }

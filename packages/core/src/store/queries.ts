@@ -3,7 +3,9 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { AcceptanceResult, ModelFamily } from "../delegate/types.ts";
 import type { UsageSample } from "../usage/types.ts";
-import type { Repo, SessionRow, SessionStatus, TaskRecord, TaskState, TurnRow, WaitingReason } from "./store.ts";
+import type {
+  EndedReason, Repo, RoundKind, SessionRow, SessionStatus, TaskRecord, TaskState, TurnRow, WaitingReason,
+} from "./store.ts";
 
 export type DelegationStatus = "requested" | "planned" | "running" | "waiting" | "done" | "failed" | "timeout" | "denied" | "lost";
 
@@ -26,7 +28,15 @@ export interface DelegationRow {
   reviewOutput?: string;
   requestedAt?: string;
   finishedAt?: string;
+  // 依頼文。delegations.task が空なら delegation.requested の payload から補う
   task?: string;
+  // 子の最終の出力。delegations.output
+  output?: string;
+  scope?: string[];
+  outputs?: string[];
+  worktree?: string;
+  // 往復の記録。delegation_rounds を seq 順に並べる
+  rounds?: { kind: RoundKind; text: string; at: string }[];
 }
 
 export interface GraphRow {
@@ -63,6 +73,7 @@ function sessionFromRow(row: Record<string, unknown>): SessionRow {
     traceId: String(row.trace_id), startedAt: String(row.started_at), status: String(row.status) as SessionStatus,
     lastSeenAt: String(row.last_seen_at ?? row.started_at),
     ...(text(row.ended_at) === undefined ? {} : { endedAt: String(row.ended_at) }),
+    ...(text(row.ended_reason) === undefined ? {} : { endedReason: String(row.ended_reason) as EndedReason }),
     ...(row.pid === null || row.pid === undefined ? {} : { pid: Number(row.pid) }),
     ...(text(row.pid_started_at) === undefined ? {} : { pidStartedAt: String(row.pid_started_at) }),
     ...(text(row.waiting_reason) === undefined ? {} : { waitingReason: String(row.waiting_reason) as WaitingReason }),
@@ -110,8 +121,8 @@ export function listDelegations(db: DatabaseSync, repoKey: string): DelegationRo
       (SELECT SUM(output_tokens) FROM token_usage WHERE delegation_id = d.id) AS output_tokens,
       (SELECT ts FROM events WHERE kind = 'delegation.requested' AND json_extract(payload, '$.delegationId') = d.id
         ORDER BY ts LIMIT 1) AS requested_at,
-      (SELECT json_extract(payload, '$.task') FROM events WHERE kind = 'delegation.requested'
-        AND json_extract(payload, '$.delegationId') = d.id ORDER BY ts LIMIT 1) AS task,
+      COALESCE(d.task, (SELECT json_extract(payload, '$.task') FROM events WHERE kind = 'delegation.requested'
+        AND json_extract(payload, '$.delegationId') = d.id ORDER BY ts LIMIT 1)) AS task,
       (SELECT ts FROM events WHERE kind = 'delegation.finished' AND json_extract(payload, '$.delegationId') = d.id
         ORDER BY ts DESC LIMIT 1) AS finished_at,
       (SELECT started_at FROM spans WHERE name = 'delegate' AND json_extract(attributes, '$."agent.delegation"') = d.id
@@ -123,6 +134,12 @@ export function listDelegations(db: DatabaseSync, repoKey: string): DelegationRo
     WHERE d.repo_key = ?
     ORDER BY d.rowid
   `).all(repoKey) as Record<string, unknown>[];
+  const rounds = new Map<string, { kind: RoundKind; text: string; at: string }[]>();
+  for (const row of db.prepare(`SELECT r.delegation_id, r.kind, r.text, r.at FROM delegation_rounds r
+      JOIN delegations d ON d.id = r.delegation_id WHERE d.repo_key = ? ORDER BY r.delegation_id, r.seq`).all(repoKey)) {
+    const id = String(row.delegation_id);
+    rounds.set(id, [...(rounds.get(id) ?? []), { kind: String(row.kind) as RoundKind, text: String(row.text), at: String(row.at) }]);
+  }
   return rows.map((row) => {
     const requestedAt = text(row.requested_at) ?? text(row.span_started_at);
     const delegation: DelegationRow = {
@@ -154,6 +171,12 @@ export function listDelegations(db: DatabaseSync, repoKey: string): DelegationRo
     if (requestedAt !== undefined) delegation.requestedAt = requestedAt;
     if (text(row.finished_at) !== undefined) delegation.finishedAt = String(row.finished_at);
     if (text(row.task) !== undefined) delegation.task = String(row.task);
+    if (text(row.output) !== undefined) delegation.output = String(row.output);
+    if (text(row.scope) !== undefined) delegation.scope = parseJson<string[]>(row.scope, []);
+    if (text(row.outputs) !== undefined) delegation.outputs = parseJson<string[]>(row.outputs, []);
+    if (text(row.worktree) !== undefined) delegation.worktree = String(row.worktree);
+    const delegationRounds = rounds.get(delegation.id);
+    if (delegationRounds) delegation.rounds = delegationRounds;
     return delegation;
   });
 }

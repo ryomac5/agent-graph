@@ -17,6 +17,8 @@ import type { AcceptanceResult, Assignment, DelegateRequest, DelegateResult, Mod
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_TIMEOUT_SEC = 1800;
+const REVIEW_DIFF_CHAR_LIMIT = 30000;
+const REVIEW_DIFF_TRUNCATED = "\n…(以降省略)";
 const EMPTY_ACCEPTANCE: AcceptanceResult = { passed: false, results: [], scopeViolations: [] };
 const EMPTY_USAGE = { inputTokens: 0, outputTokens: 0 };
 
@@ -43,6 +45,22 @@ export interface DelegationCaller {
 function readVerdict(output: string): "approve" | "request_changes" {
   const line = output.trimEnd().split(/\r?\n/).at(-1)?.trim();
   return line === "VERDICT: approve" ? "approve" : "request_changes";
+}
+
+async function readReviewDiff(cwd: string, baseRef: string): Promise<string> {
+  let diff = (await execFileAsync("git", ["diff", baseRef, "--"], { cwd, maxBuffer: 10 * 1024 * 1024 })).stdout;
+  const untracked = (await execFileAsync("git", ["ls-files", "--others", "--exclude-standard", "-z"], { cwd })).stdout;
+  for (const file of untracked.split("\0").filter(Boolean)) {
+    try {
+      await execFileAsync("git", ["diff", "--no-index", "--", "/dev/null", file], { cwd, maxBuffer: 10 * 1024 * 1024 });
+    } catch (error) {
+      const result = error as Error & { code?: number; stdout?: string };
+      if (result.code !== 1 || result.stdout === undefined) throw error;
+      diff += result.stdout;
+    }
+  }
+  return diff.length > REVIEW_DIFF_CHAR_LIMIT
+    ? diff.slice(0, REVIEW_DIFF_CHAR_LIMIT) + REVIEW_DIFF_TRUNCATED : diff;
 }
 
 export async function runDelegation(
@@ -154,7 +172,7 @@ export async function runDelegation(
           event("acceptance.evaluated", { delegationId, passed: acceptance.passed });
           status = execution.exitCode === 0 && acceptance.passed ? "done" : "failed";
           if (status === "done" && (req.review ?? req.role === "implement")) {
-            const diff = (await execFileAsync("git", ["diff"], { cwd, maxBuffer: 10 * 1024 * 1024 })).stdout;
+            const diff = await readReviewDiff(cwd, baseRef);
             const reviewResult = await runDelegation({
               role: "review", title: `Review: ${req.title}`, cwd,
               task: `元の依頼:\n${req.task}\n\n受け入れ結果:\n${JSON.stringify(acceptance)}\n\ngit diff:\n${diff}\n\n最終行に VERDICT: approve または VERDICT: request_changes を書いてください。`,

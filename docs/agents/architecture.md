@@ -1,6 +1,6 @@
 # agent-graph 設計書
 
-- 版: 2026-09-25 初版
+- 版: 2026-09-25 初版、同日 実装結果を反映
 - 読み手: これから実装する AI エージェントと人
 - 位置づけ: 決定済みの設計を固定し、未確認事項を切り分ける
 
@@ -105,7 +105,10 @@ pnpm workspace のモノレポとし、次のパッケージに分ける。
 ### 実行方式
 
 実行は Node 互換で書く。Bun で単一バイナリにも固められる形に保つ。
-SQLite の実装は Node と Bun の両方で動くものを選ぶ。候補の比較は未確認事項に置く。
+SQLite は Node 24 の標準の `node:sqlite` を使う。
+Bun での動作は未確認事項の U8 に残す。
+MCP は SDK を使わず、改行区切りの JSON-RPC 2.0 を最小限で実装する。
+依存をゼロに保ち、単一バイナリの方針を守るためである。
 
 ### 実行アダプタ
 
@@ -203,6 +206,24 @@ sequenceDiagram
 `adapters` は各クライアントに stdio の薄い shim を登録する。
 shim は自分の環境変数から `TRACEPARENT` と `AGENT_GRAPH_SESSION` と cwd を読み、Unix ソケット経由でデーモンに転送する。
 デーモン本体は 1 つで、shim はクライアントごとに起きる。
+
+呼び出し側の系統は、登録時の環境変数 `AGENT_GRAPH_CLIENT` で決める。
+値は `claude` と `codex` と `planner` の 3 つである。
+未設定のとき shim は親プロセスの実行ファイル名から推定する。
+デーモンはこの値を `sessions.client` に記録する。
+記録した値をグラフの根の系統に使う。
+
+Codex は stdio の MCP サーバに環境変数を渡せる。
+`mcp_servers.<名前>.env` で固定値を指定する。
+`mcp_servers.<名前>.env_vars` で親の環境変数を引き継ぐ。
+shim は `AGENT_GRAPH_CLIENT` を `env` の固定値で受け取る。
+`TRACEPARENT` は `env_vars` で親から受け取る。
+
+`codex exec` の子も MCP クライアントとして `delegate` を呼べる。
+これで Codex から Claude への委譲も完了する。
+exec の承認方針が `never` だと MCP ツールの呼び出しは拒まれる。
+そこで `mcp_servers.<名前>.tools.delegate.approval_mode = "approve"` で事前に承認する。
+`tool_timeout_sec` は委譲の完了を待てるよう 1800 秒に延ばす。
 
 ## イベントとトレースの型
 
@@ -407,11 +428,13 @@ sudo を要求しない。root 所有のファイルを作らない。
 | Claude Code の権限設定 | ツール呼び出しの allow と deny | プラグインが推奨の deny を同梱する |
 | Claude Code のサンドボックス | 無人実行の子の書き込みと通信の制限 | `claude` アダプタが `--settings` で渡す |
 | Codex のサンドボックス | cwd 外への書き込みの禁止 | `codex` アダプタが `--sandbox workspace-write` を渡す |
-| hook | 根の登録と危険操作の制止 | `session.started` と `guard.denied` を記録する |
+| hook | 根の登録と危険操作の制止 | `session.started` と `guard.denied` を記録する。プラグインが MCP サーバと同時に配る |
 
 hook の役割は 2 つに限る。
 根の起動を `sessions` に登録することと、`git push` や `sudo` などの危険操作を止めることである。
 グラフを作る処理と観測は hook に置かない。
+`claude -p` で起きた子でも `SessionStart` の hook は動く。
+子の起動も `sessions` に登録される。
 
 デーモン自身の守りは次の 3 つである。
 
@@ -449,8 +472,4 @@ hook の役割は 2 つに限る。
 | U3 | `control_request` の `get_usage` が今後も使えるか | 2026-09-25 時点で旧実装の `usage_probe.py` が動作している。版ごとに再確認する | statusline の表示を読む。取れなければ利用枠の段を飛ばす |
 | U4 | Codex の `payload.rate_limits` の形が版で変わらないか | 2026-09-25 時点の jsonl で `primary.used_percent` を確認済み | 欠けた値は無視し、利用枠の段を飛ばす |
 | U5 | MCP の進捗通知を Claude Code と Codex が受けるか | 長い `delegate` を呼び、通知の表示を見る | 通知を出さず、完了まで待つ |
-| U6 | Codex が stdio の MCP サーバに環境変数を渡せるか | `~/.codex/config.toml` の `mcp_servers` の仕様を読む | shim が cwd と親プロセスから文脈を推定する |
-| U7 | Claude Code プラグインで MCP サーバと hook を同時に配れるか | プラグインの仕様を読む | `settings.json` への追記手順を文書で配る |
 | U8 | Bun の単一バイナリに SQLite を同梱できるか | `node:sqlite` と `bun:sqlite` の互換層を試す | Node 実行だけを正式に支援する |
-| U9 | `codex exec` の子が MCP クライアントとして `delegate` を呼べるか | Codex から Claude への委譲を 1 回通す | Codex からの委譲は planner 経由に限る |
-| U10 | Claude Code の `-p` 実行で `SessionStart` hook が動くか | 子の起動時に `session.started` が記録されるか見る | 実行アダプタが子の起動を直接記録する |

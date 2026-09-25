@@ -9,9 +9,17 @@ export type Hello = {
   traceparent?: string;
   tracestate?: string;
   session?: string;
+  client?: "claude" | "codex" | "planner";
   cwd: string;
   pid: number;
 };
+
+export function isHello(value: unknown): value is Hello {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const hello = value as Record<string, unknown>;
+  return hello.type === "hello" && typeof hello.cwd === "string" && Number.isInteger(hello.pid) &&
+    (hello.client === undefined || hello.client === "claude" || hello.client === "codex" || hello.client === "planner");
+}
 
 function acceptConnection(socket: Socket, handler: DelegateHandler<Hello>): void {
   let pending = "";
@@ -21,14 +29,14 @@ function acceptConnection(socket: Socket, handler: DelegateHandler<Hello>): void
     const end = pending.indexOf("\n");
     if (end < 0) return;
     socket.off("data", readHello);
-    let hello: Hello;
+    let hello: unknown;
     try {
-      hello = JSON.parse(pending.slice(0, end)) as Hello;
+      hello = JSON.parse(pending.slice(0, end));
     } catch {
       socket.destroy();
       return;
     }
-    if (hello.type !== "hello" || typeof hello.cwd !== "string" || !Number.isInteger(hello.pid)) {
+    if (!isHello(hello)) {
       socket.destroy();
       return;
     }

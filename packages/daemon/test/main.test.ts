@@ -53,6 +53,15 @@ test("handler restores caller and reuses repository store across nested cwd", as
       assert.equal(span.parent_span_id, "b".repeat(16));
       assert.equal(span.trace_state, hello.tracestate);
     }
+    for (const client of ["claude", "codex", "planner"] as const) {
+      await handler(request, { type: "hello", cwd: root, pid: process.pid, session: client, client });
+      assert.equal(store.db.prepare("SELECT client FROM sessions WHERE id = ?").get(client)?.client, client);
+    }
+    await handler(request, { type: "hello", cwd: root, pid: process.pid, session: "session", client: "codex" });
+    assert.equal(store.db.prepare("SELECT client FROM sessions WHERE id = 'session'").get()?.client, "codex");
+    await handler(request, { ...hello, client: "claude" });
+    assert.equal(store.db.prepare("SELECT client FROM sessions WHERE id = 'session'").get()?.client, "codex",
+      "nested clients must not overwrite the root client");
   } finally {
     for (const store of stores.values()) store.close();
     if (oldState === undefined) delete process.env.XDG_STATE_HOME; else process.env.XDG_STATE_HOME = oldState;
@@ -66,9 +75,13 @@ test("daemon rejects duplicate PID and cleans runtime files", async (t) => {
   const oldState = process.env.XDG_STATE_HOME;
   const oldSocket = process.env.AGENT_GRAPH_SOCKET;
   const oldProbe = process.env.AGENT_GRAPH_USAGE_PROBE;
+  const oldPort = process.env.AGENT_GRAPH_PORT;
+  const oldConfig = process.env.XDG_CONFIG_HOME;
   process.env.XDG_STATE_HOME = dir;
   process.env.AGENT_GRAPH_SOCKET = join(dir, "daemon.sock");
   process.env.AGENT_GRAPH_USAGE_PROBE = "0";
+  process.env.AGENT_GRAPH_PORT = "0";
+  process.env.XDG_CONFIG_HOME = join(dir, "config");
   let daemon;
   try {
     const pidPath = join(dir, "agent-graph/run/daemon.pid");
@@ -90,7 +103,13 @@ test("daemon rejects duplicate PID and cleans runtime files", async (t) => {
     await assert.rejects(startDaemon(), /already running/);
     assert.equal(await readFile(pidPath, "utf8"), `${process.pid}\n`);
     assert.equal(existsSync(process.env.AGENT_GRAPH_SOCKET), true);
+    const log = await readFile(join(dir, "agent-graph/run/daemon.log"), "utf8");
+    const url = log.match(/dashboard (http:\/\/127\.0\.0\.1:\d+\/)/)?.[1];
+    assert.ok(url, "dashboard URL is logged");
+    const response = await fetch(url);
+    assert.equal(response.status, 200);
     await daemon.stop();
+    await assert.rejects(fetch(url));
     assert.equal(existsSync(process.env.AGENT_GRAPH_SOCKET), false);
     assert.equal(existsSync(join(dir, "agent-graph/run/daemon.pid")), false);
     assert.equal(existsSync(join(dir, "agent-graph/run/daemon.log")), true);
@@ -99,6 +118,8 @@ test("daemon rejects duplicate PID and cleans runtime files", async (t) => {
     if (oldState === undefined) delete process.env.XDG_STATE_HOME; else process.env.XDG_STATE_HOME = oldState;
     if (oldSocket === undefined) delete process.env.AGENT_GRAPH_SOCKET; else process.env.AGENT_GRAPH_SOCKET = oldSocket;
     if (oldProbe === undefined) delete process.env.AGENT_GRAPH_USAGE_PROBE; else process.env.AGENT_GRAPH_USAGE_PROBE = oldProbe;
+    if (oldPort === undefined) delete process.env.AGENT_GRAPH_PORT; else process.env.AGENT_GRAPH_PORT = oldPort;
+    if (oldConfig === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = oldConfig;
     await rm(dir, { recursive: true, force: true });
   }
 });

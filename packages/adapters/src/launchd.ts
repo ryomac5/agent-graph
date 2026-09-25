@@ -40,7 +40,7 @@ export function installLaunchd(options: LaunchdOptions): void {
   const plistPath = join(options.plistDir, `${label}.plist`);
   mkdirSync(options.plistDir, { recursive: true });
   mkdirSync(options.logDir, { recursive: true });
-  if (existsSync(plistPath)) run(["bootout", `gui/${uid}`, plistPath]);
+  run(["bootout", `gui/${uid}/${label}`]);
   writeFileSync(plistPath, renderLaunchdPlist(options));
   if (run(["bootstrap", `gui/${uid}`, plistPath]) !== 0) throw new Error(`launchctl bootstrap failed: ${plistPath}`);
 }

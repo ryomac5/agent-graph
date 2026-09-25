@@ -18,6 +18,9 @@ const pluginOptions = { shimPath, hookPath, nodePath };
 const stateHome = process.env.XDG_STATE_HOME || join(homedir(), ".local", "state");
 const logDir = join(stateHome, "agent-graph", "run");
 const plistDir = join(homedir(), "Library", "LaunchAgents");
+const launchdEnvKeys = ["HOME", "XDG_STATE_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "AGENT_GRAPH_PORT"];
+const launchdEnv = Object.fromEntries(launchdEnvKeys.filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]]));
+launchdEnv.PATH = process.env.PATH;
 
 function readExisting(path: string): string {
   try { return readFileSync(path, "utf8"); } catch (error) {
@@ -34,13 +37,13 @@ for (let i = 0; i < args.length; i++) {
     continue;
   }
   if (flag === "--launchd") {
-    const options = { plistDir, nodePath, daemonPath, logDir, env: process.env };
+    const options = { plistDir, nodePath, daemonPath, logDir, env: launchdEnv };
     if (dryRun) process.stdout.write(renderLaunchdPlist(options));
     else installLaunchd(options);
     continue;
   }
   if (flag === "--uninstall-launchd") {
-    if (dryRun) process.stdout.write(`launchctl bootout gui/${process.getuid()} ${join(plistDir, "dev.agent-graph.daemon.plist")}\n`);
+    if (dryRun) process.stdout.write(`launchctl bootout gui/${process.getuid()}/dev.agent-graph.daemon\n`);
     else uninstallLaunchd({ plistDir });
     continue;
   }

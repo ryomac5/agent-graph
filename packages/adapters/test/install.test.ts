@@ -26,8 +26,18 @@ test("launchd plist と呼び出し", () => {
   assert.equal(readFileSync(path, "utf8"), xml);
   installLaunchd(options);
   uninstallLaunchd(options);
-  assert.deepEqual(calls, [["bootstrap", "gui/42", path], ["bootout", "gui/42", path], ["bootstrap", "gui/42", path], ["bootout", "gui/42", path]]);
+  assert.deepEqual(calls, [["bootout", "gui/42/dev.agent-graph.daemon"], ["bootstrap", "gui/42", path], ["bootout", "gui/42/dev.agent-graph.daemon"], ["bootstrap", "gui/42", path], ["bootout", "gui/42", path]]);
   assert.equal(existsSync(path), false);
+});
+
+test("launchd の dry-run に未知の環境変数を載せない", () => {
+  const result = spawnSync(process.execPath, [new URL("../src/cli.ts", import.meta.url).pathname, "--launchd", "--dry-run"], {
+    encoding: "utf8",
+    env: { ...process.env, AGENT_GRAPH_TEST_SECRET: "must-not-appear" },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stdout, /AGENT_GRAPH_TEST_SECRET|must-not-appear/);
+  assert.match(result.stdout, /<key>PATH<\/key>/);
 });
 
 test("marketplace と plugin の配置", () => {

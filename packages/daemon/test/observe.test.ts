@@ -35,6 +35,11 @@ function eventsOf(store: Store, delegationId: string) {
     .map((row) => ({ kind: String(row.kind), payload: JSON.parse(String(row.payload)) as Record<string, unknown> }));
 }
 
+function roundsOf(store: Store, delegationId: string) {
+  return store.db.prepare("SELECT kind, text FROM delegation_rounds WHERE delegation_id = ? ORDER BY seq").all(delegationId)
+    .map((row) => ({ kind: String(row.kind), text: String(row.text) }));
+}
+
 test("observers は turn の 3 種を残し、サブエージェントの種類を足す", () => {
   assert.deepEqual(Object.keys(observers), ["turn_start", "turn_done", "waiting",
     "subagent_request", "subagent_done", "subagent_start", "subagent_message", "subagent_stop", "resumed"]);
@@ -119,6 +124,22 @@ test("SendMessage は宛先の子への再指示として rounds に足し、再
   observe({ kind: "subagent_stop", sessionId: "s", agentId: "a1", agentType: "general-purpose", report: "足した" }, stores, at(6));
   assert.equal(delegations(store)[0].status, "done");
   assert.equal(eventsOf(store, String(first.id)).filter((event) => event.kind === "subagent.reported").length, 2);
+});
+
+test("サブエージェントの往復は delegation_rounds に request / reinstruct / report で積む", async (t) => {
+  const { store, stores } = await createFixture(t);
+  observe({ kind: "subagent_request", sessionId: "s", toolUseId: "toolu_1", title: "直す", task: "直す", subagentType: "general-purpose", name: "fixer" }, stores, at(1));
+  observe({ kind: "subagent_start", sessionId: "s", agentId: "a1", agentType: "general-purpose" }, stores, at(2));
+  observe({ kind: "subagent_stop", sessionId: "s", agentId: "a1", agentType: "general-purpose", report: "できた" }, stores, at(3));
+  observe({ kind: "subagent_message", sessionId: "s", toolUseId: "toolu_2", to: "a1", text: "テストが足りない" }, stores, at(4));
+  observe({ kind: "subagent_stop", sessionId: "s", agentId: "a1", agentType: "general-purpose", report: "足した" }, stores, at(5));
+  const [row] = delegations(store);
+  assert.deepEqual(roundsOf(store, String(row.id)), [
+    { kind: "request", text: "直す" },
+    { kind: "report", text: "できた" },
+    { kind: "reinstruct", text: "テストが足りない" },
+    { kind: "report", text: "足した" },
+  ]);
 });
 
 test("AskUserQuestion は waiting_reason を question にし、PostToolUse で解除する", async (t) => {

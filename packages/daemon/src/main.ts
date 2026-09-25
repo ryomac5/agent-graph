@@ -4,7 +4,7 @@ import { appendFileSync, realpathSync } from "node:fs";
 import { mkdir, open, readFile, unlink } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { homedir } from "node:os";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { runDelegation } from "../../core/src/delegate/run.ts";
 import { repoKey, stateDbPath } from "../../core/src/paths.ts";
@@ -16,6 +16,8 @@ import { probeClaudeUsage } from "../../core/src/usage/claude.ts";
 import type { UsageSample } from "../../core/src/usage/types.ts";
 import type { DelegateHandler } from "./mcp/server.ts";
 import { runDir } from "./paths.ts";
+import { readDashboardPort } from "./config.ts";
+import { startHttpServer } from "./http/server.ts";
 import { startSocketServer, type Hello } from "./socket.ts";
 
 const execFileAsync = promisify(execFile);
@@ -146,7 +148,23 @@ export async function startDaemon(): Promise<{ stop: () => Promise<void> }> {
   const usageProbe = startUsageProbe(stores, { latest });
   const handler = createHandler(stores, latest);
   const pending = new Set<Promise<unknown>>();
+  let http: Awaited<ReturnType<typeof startHttpServer>> | undefined;
   try {
+    const repoRoot = await execFileAsync("git", ["rev-parse", "--show-toplevel"], { cwd: process.cwd() })
+      .then(({ stdout }) => stdout.trim(), () => undefined);
+    if (repoRoot) {
+      const key = repoKey(repoRoot);
+      const store = openStore(stateDbPath(key));
+      store.upsertRepo({ key, rootPath: repoRoot, name: basename(repoRoot) });
+      stores.set(key, store);
+    }
+    http = await startHttpServer({ port: readDashboardPort(), openStores: stores,
+      listRepos: () => [...stores.values()].flatMap((value) => value.db.prepare("SELECT key, root_path AS rootPath, name FROM repos").all()
+        .map((row) => ({ key: String(row.key), rootPath: String(row.rootPath), name: String(row.name) }))),
+      staticDir: fileURLToPath(new URL("../../dashboard/public/", import.meta.url)) });
+    const address = http.address();
+    if (!address || typeof address === "string") throw new Error("HTTP address unavailable");
+    log(`dashboard http://127.0.0.1:${address.port}/`);
     const server = await startSocketServer({ socketPath: process.env.AGENT_GRAPH_SOCKET || join(dir, "daemon.sock"),
       handler: async (request, hello) => {
         const result = handler(request, hello);
@@ -171,6 +189,8 @@ export async function startDaemon(): Promise<{ stop: () => Promise<void> }> {
       for (const socket of sockets) socket.destroy();
       await closed;
       await Promise.allSettled(pending);
+      http!.closeAllConnections();
+      await new Promise<void>((resolve) => http!.close(() => resolve()));
       await usageProbe.stop();
       for (const store of stores.values()) store.close();
       await unlink(pidPath);
@@ -180,6 +200,10 @@ export async function startDaemon(): Promise<{ stop: () => Promise<void> }> {
     return { stop };
   } catch (error) {
     log(String(error));
+    if (http) {
+      http.closeAllConnections();
+      await new Promise<void>((resolve) => http.close(() => resolve()));
+    }
     await usageProbe.stop();
     for (const store of stores.values()) store.close();
     await unlink(pidPath);

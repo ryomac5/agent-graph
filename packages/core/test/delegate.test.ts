@@ -97,3 +97,46 @@ test("caller.trace を渡すと traceId と親 span を引き継ぐ", async (t) 
     .get(result.spanId)!;
   assert.equal(span.parent_span_id, parent.spanId);
 });
+
+test("最新利用枠が hard 以上の候補を外し理由と版を保存する", async (t) => {
+  const deps = setup(t);
+  deps.store.appendUsageSample({ ts: new Date().toISOString(), provider: "openai", window: "5h", percent: 95 });
+  const result = await runDelegation({ ...request, role: "implement", review: false }, caller, deps);
+  assert.equal(result.assignment.model, "opus");
+  assert.match(result.assignment.reason.join(" "), /hard: gpt-6-astra excluded at 95%/);
+  const saved = deps.store.db.prepare("SELECT reason, policy_version FROM assignments").get()!;
+  assert.deepEqual(JSON.parse(saved.reason as string), result.assignment.reason);
+  assert.equal(saved.policy_version, result.assignment.policyVersion);
+  const decided = deps.store.listEvents().find((event) => event.kind === "assignment.decided")!;
+  assert.deepEqual((decided.payload as { reason: string[] }).reason, result.assignment.reason);
+  assert.equal((decided.payload as { policyVersion: string }).policyVersion, result.assignment.policyVersion);
+});
+
+test("Claude のモデル別利用枠は表示名の語で照合する", async (t) => {
+  const deps = setup(t);
+  deps.store.appendUsageSample({ ts: new Date().toISOString(), provider: "anthropic", window: "7d", percent: 20 });
+  deps.store.appendUsageSample({ ts: new Date().toISOString(), provider: "anthropic", window: "7d", percent: 95,
+    model: "Claude Sonnet 5.5" });
+  const result = await runDelegation({ ...request, review: false }, caller, deps);
+  assert.equal(result.assignment.model, "gpt-6-sol");
+  assert.match(result.assignment.reason.join(" "), /sonnet excluded at 95%.*Claude Sonnet 5.5/);
+});
+
+test("Claude のモデル別利用枠が一致しなければ全体枠を使う", async (t) => {
+  const deps = setup(t);
+  deps.store.appendUsageSample({ ts: new Date().toISOString(), provider: "anthropic", window: "5h", percent: 95 });
+  deps.store.appendUsageSample({ ts: new Date().toISOString(), provider: "anthropic", window: "7d", percent: 10,
+    model: "Claude Opus 5.5" });
+  const result = await runDelegation({ ...request, review: false }, caller, deps);
+  assert.equal(result.assignment.model, "gpt-6-sol");
+  assert.match(result.assignment.reason.join(" "), /sonnet excluded at 95%.*anthropic 5h/);
+});
+
+test("メモリと store のうち新しい利用枠を使う", async (t) => {
+  const deps = setup(t);
+  deps.store.appendUsageSample({ ts: "2026-09-25T00:00:00.000Z", provider: "anthropic", window: "5h", percent: 20 });
+  deps.usageSamples = [{ ts: "2026-09-25T00:01:00.000Z", provider: "anthropic", window: "5h", percent: 95 }];
+  const result = await runDelegation({ ...request, review: false }, caller, deps);
+  assert.equal(result.assignment.model, "gpt-6-sol");
+  assert.match(result.assignment.reason.join(" "), /sonnet excluded at 95%/);
+});

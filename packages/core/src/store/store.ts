@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Event, Span } from "../events.ts";
 import type { AcceptanceResult, Assignment, Role, TokenUsage } from "../delegate/types.ts";
+import type { UsageSample } from "../usage/types.ts";
 import { migrate } from "./migrate.ts";
 
 export interface Repo {
@@ -102,7 +103,7 @@ export class Store {
     );
   }
 
-  updateSpanAttributes(traceId: string, spanId: string, attributes: Span["attributes"]): void {
+  updateSpanAttributes(traceId: string, spanId: string, attributes: Partial<Span["attributes"]>): void {
     const row = this.db.prepare("SELECT attributes FROM spans WHERE trace_id = ? AND span_id = ?")
       .get(traceId, spanId);
     if (!row) throw new Error("Span not found");
@@ -151,5 +152,28 @@ export class Store {
     this.db.prepare(`INSERT INTO token_usage (delegation_id, input_tokens, output_tokens, model)
       VALUES (?, ?, ?, ?)`)
       .run(id, usage.inputTokens, usage.outputTokens, model);
+  }
+
+  appendUsageSample(sample: UsageSample): void {
+    this.db.prepare(`INSERT INTO usage_samples (ts, provider, window, percent, resets_at, model)
+      VALUES (?, ?, ?, ?, ?, ?)`)
+      .run(sample.ts, sample.provider, sample.window, sample.percent,
+        sample.resetsAt ?? null, sample.model ?? null);
+  }
+
+  latestUsageSamples(): UsageSample[] {
+    const rows = this.db.prepare(`
+      SELECT ts, provider, window, percent, resets_at, model FROM (
+        SELECT *, ROW_NUMBER() OVER (
+          PARTITION BY provider, model, window ORDER BY ts DESC, rowid DESC
+        ) AS position FROM usage_samples
+      ) WHERE position = 1 ORDER BY provider, model, window
+    `).all();
+    return rows.map((row) => ({
+      ts: row.ts as string, provider: row.provider as UsageSample["provider"],
+      window: row.window as string, percent: row.percent as number,
+      ...(row.resets_at === null ? {} : { resetsAt: row.resets_at as string }),
+      ...(row.model === null ? {} : { model: row.model as string }),
+    }));
   }
 }

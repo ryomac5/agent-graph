@@ -44,8 +44,10 @@ function assertTrace(received: any, result: Awaited<ReturnType<typeof execute>>)
 test("Claude の引数、標準入力、結果、usage とトレース", async () => {
   const { result, received, workDir } = await runFixture("claude");
   try {
-    assert.deepEqual(received.args, ["-p", "--model", "test-model", "--output-format", "stream-json", "--verbose"]);
-    assert.equal(received.input, "test task");
+    assert.deepEqual(received.args, ["-p", "--model", "test-model", "--output-format", "stream-json", "--verbose",
+      "--permission-mode", "acceptEdits",
+      "--settings", '{"sandbox":{"enabled":true,"allowUnsandboxedCommands":false}}']);
+    assert.equal(received.input, "無人実行です。質問せずに作業を完了し、最後に結果を報告してください。\ntest task");
     assert.equal(result.output, "Claude result");
     assert.deepEqual(result.usage, { inputTokens: 12, outputTokens: 7 });
     assert.equal(result.exitCode, 0);

@@ -2,8 +2,11 @@ import { runProcess } from "./process.ts";
 import type { ExecRequest, ExecResult } from "./types.ts";
 
 export async function executeClaude(req: ExecRequest): Promise<ExecResult> {
-  const result = await runProcess(req, process.env.AGENT_GRAPH_CLAUDE_BIN || "claude", [
+  const task = `無人実行です。質問せずに作業を完了し、最後に結果を報告してください。\n${req.task}`;
+  const result = await runProcess({ ...req, task }, process.env.AGENT_GRAPH_CLAUDE_BIN || "claude", [
     "-p", "--model", req.model, "--output-format", "stream-json", "--verbose",
+    "--permission-mode", "acceptEdits",
+    "--settings", JSON.stringify({ sandbox: { enabled: true, allowUnsandboxedCommands: false } }),
   ]);
   let output = "";
   let inputTokens = 0;

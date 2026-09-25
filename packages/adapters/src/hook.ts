@@ -30,6 +30,7 @@ export interface HookInput {
   tool_name?: string;
   tool_input?: Record<string, unknown>;
   tool_use_id?: string;
+  tool_response?: unknown;
   [key: string]: unknown;
 }
 
@@ -152,12 +153,37 @@ function subagentStopBody(sessionId: string, input: HookInput): Record<string, u
     ...(task ? { task: task.slice(0, TASK_LIMIT) } : {}) };
 }
 
+// tool_response から子の agent_id を拾う。構造化なら agentId か agent_id、文字列なら "agentId: <id>" の行。
+export function agentIdOf(response: unknown): string | undefined {
+  if (response && typeof response === "object") {
+    const record = response as { agentId?: unknown; agent_id?: unknown; content?: unknown };
+    const direct = str(record.agentId) ?? str(record.agent_id);
+    if (direct) return direct;
+    if (typeof record.content === "string") return agentIdOf(record.content);
+    if (!Array.isArray(record.content)) return undefined;
+    return agentIdOf(record.content.map((part) => part && typeof part === "object" ? String((part as { text?: string }).text ?? "") : "").join("\n"));
+  }
+  if (typeof response !== "string") return undefined;
+  const found = response.match(/agent[_ ]?id\s*[:=]\s*["']?([A-Za-z0-9_@.:-]+)/i);
+  return found ? found[1] : undefined;
+}
+
+// PostToolUse と PostToolUseFailure。AskUserQuestion は待ちの解除、Agent は起動の結果。
+function toolDoneBody(sessionId: string, input: HookInput): Record<string, unknown> | undefined {
+  const failed = input.hook_event_name === "PostToolUseFailure";
+  if (input.tool_name === "AskUserQuestion") return failed ? undefined : { kind: "resumed", sessionId };
+  if (input.tool_name !== "Agent") return undefined;
+  const agentId = agentIdOf(input.tool_response);
+  return { kind: "subagent_done", sessionId, toolUseId: str(input.tool_use_id) ?? "", failed,
+    ...(agentId ? { agentId } : {}) };
+}
+
 // 観測の本文を組み立てる。送らないときは undefined。
 export function observeBody(kind: string, input: HookInput): Record<string, unknown> | undefined {
   if (!input.session_id) return undefined;
   const sessionId = input.session_id;
   if (kind === "tool_start") return toolStartBody(sessionId, input);
-  if (kind === "tool_done") return input.tool_name === "AskUserQuestion" ? { kind: "resumed", sessionId } : undefined;
+  if (kind === "tool_done") return toolDoneBody(sessionId, input);
   if (kind === "subagent_start") {
     const agentId = str(input.agent_id);
     if (!agentId) return undefined;

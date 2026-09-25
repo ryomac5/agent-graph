@@ -11,7 +11,8 @@ export const HOOK_COMMANDS: readonly [string, string, string?][] = [
   ["Stop", "observe turn_done"],
   ["Notification", "observe notification"],
   ["PreToolUse", "observe tool_start", "Agent|SendMessage|AskUserQuestion"],
-  ["PostToolUse", "observe tool_done", "AskUserQuestion"],
+  ["PostToolUse", "observe tool_done", "AskUserQuestion|Agent"],
+  ["PostToolUseFailure", "observe tool_done", "Agent"],
   ["SubagentStart", "observe subagent_start"],
   ["SubagentStop", "observe subagent_stop"],
 ];

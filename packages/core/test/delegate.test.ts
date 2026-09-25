@@ -65,12 +65,12 @@ for (const verdict of ["approve", "request_changes"] as const) {
     assert.equal(result.review?.verdict, verdict);
     assert.equal(result.assignment.family, "openai");
     assert.equal(result.review?.reviewer.family, "anthropic");
-    assert.deepEqual(executors, ["codex", "claude"]);
+    assert.deepEqual(executors, verdict === "approve" ? ["codex", "claude"] : ["codex", "claude", "codex", "claude", "codex", "claude"]);
     const review = deps.store.db.prepare("SELECT * FROM reviews").get()!;
     const child = deps.store.db.prepare("SELECT parent_id FROM delegations WHERE id = ?")
       .get(review.reviewer_delegation_id as string)!;
     assert.equal(child.parent_id, result.delegationId);
-    assert.equal(result.roundTrips, 0);
+    assert.equal(result.roundTrips, verdict === "approve" ? 0 : 2);
     const parentEvents = deps.store.listEvents().filter((event) =>
       "delegationId" in event.payload && event.payload.delegationId === result.delegationId);
     assert.deepEqual(parentEvents.map((event) => event.kind).slice(-3), [
@@ -139,4 +139,50 @@ test("メモリと store のうち新しい利用枠を使う", async (t) => {
   const result = await runDelegation({ ...request, review: false }, caller, deps);
   assert.equal(result.assignment.model, "gpt-6-sol");
   assert.match(result.assignment.reason.join(" "), /sonnet excluded at 95%/);
+});
+
+test("受け入れ失敗から合格まで同じ実装者へ再指示する", async (t) => {
+  const deps = setup(t);
+  const tasks: string[] = [];
+  const models: string[] = [];
+  deps.execute = async (req) => {
+    tasks.push(req.task);
+    models.push(req.model);
+    return { exitCode: 0, output: "完了", timedOut: false,
+      usage: { inputTokens: 1, outputTokens: 1 }, durationMs: 1, childTrace: childContext(req.trace) };
+  };
+  let count = 0;
+  deps.accept = async () => ({ passed: ++count === 2,
+    results: [{ command: "check", exitCode: count === 1 ? 1 : 0,
+      output: count === 1 ? "specific failure" : "", durationMs: 1 }], scopeViolations: [] });
+  const result = await runDelegation(request, caller, deps);
+  assert.equal(result.status, "done");
+  assert.equal(result.roundTrips, 1);
+  assert.equal(deps.store.db.prepare("SELECT round_trips FROM delegations WHERE id = ?").get(result.delegationId)!.round_trips, 1);
+  assert.match(tasks[1], /specific failure/);
+  assert.ok(tasks[1].includes(request.task));
+  assert.deepEqual(models, [result.assignment.model, result.assignment.model]);
+  assert.equal(deps.store.db.prepare("SELECT COUNT(*) AS count FROM spans WHERE name = 'execute'").get()!.count, 2);
+});
+
+test("request_changes から approve へ進む", async (t) => {
+  const deps = setup(t);
+  const tasks: string[] = [];
+  let reviews = 0;
+  deps.execute = async (req) => {
+    if (req.task.includes("元の依頼:")) {
+      reviews++;
+      return { exitCode: 0, output: reviews === 1 ? "fix the detail\nVERDICT: request_changes" : "VERDICT: approve",
+        timedOut: false, usage: { inputTokens: 1, outputTokens: 1 }, durationMs: 1, childTrace: childContext(req.trace) };
+    }
+    tasks.push(req.task);
+    return { exitCode: 0, output: "実装", timedOut: false,
+      usage: { inputTokens: 1, outputTokens: 1 }, durationMs: 1, childTrace: childContext(req.trace) };
+  };
+  const result = await runDelegation({ ...request, role: "implement" }, caller, deps);
+  assert.equal(result.status, "done");
+  assert.equal(result.review?.verdict, "approve");
+  assert.equal(result.roundTrips, 1);
+  assert.match(tasks[1], /fix the detail/);
+  assert.equal(deps.store.db.prepare("SELECT round_trips FROM delegations WHERE id = ?").get(result.delegationId)!.round_trips, 1);
 });

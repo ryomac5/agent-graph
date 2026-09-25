@@ -137,3 +137,18 @@ test("onChange は委譲、割り当て、イベントの成功した書き込�
   store.appendEvent(makeEvent());
   assert.equal(changes, 4);
 });
+
+test("onChange のリスナー例外は書き込みと他のリスナーを妨げない", (t) => {
+  const store = openStore(":memory:");
+  t.after(() => store.close());
+  store.upsertRepo(repo);
+  store.insertSession({ id: "session", repoKey: repo.key, name: "repo-1", client: "codex",
+    traceId: trace.traceId, startedAt: ts });
+  let changes = 0;
+  store.onChange(() => { throw new Error("listener failed"); });
+  store.onChange(() => { changes += 1; });
+  assert.doesNotThrow(() => store.insertDelegation({ id: "delegation", repoKey: repo.key,
+    sessionId: "session", role: "implement", title: "task", status: "running" }));
+  assert.equal(changes, 1);
+  assert.equal(store.db.prepare("SELECT COUNT(*) AS count FROM delegations").get()!.count, 1);
+});

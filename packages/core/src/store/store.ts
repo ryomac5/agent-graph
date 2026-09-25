@@ -52,7 +52,10 @@ export class Store {
   }
 
   private notifyChange(): void {
-    for (const listener of this.changeListeners) listener();
+    for (const listener of this.changeListeners) {
+      try { listener(); }
+      catch { /* 通知先の障害で保存済みの書き込みを失敗扱いにしない */ }
+    }
   }
 
   upsertRepo(repo: Repo): void {

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -8,6 +9,19 @@ import { buildGraph } from "../src/http/graph.ts";
 import { startHttpServer } from "../src/http/server.ts";
 
 const startedAt = "2026-09-25T00:00:00.000Z";
+
+function getRawPath(port: number, path: string): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const client = request({ host: "127.0.0.1", port, path }, (response) => {
+      let body = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk: string) => { body += chunk; });
+      response.on("end", () => resolve({ status: response.statusCode ?? 0, body }));
+    });
+    client.on("error", reject);
+    client.end();
+  });
+}
 
 test("グラフは親子の向きとモデル系統を保持する", (t) => {
   const store = openStore(":memory:");
@@ -42,11 +56,14 @@ test("HTTP graph と SSE は委譲を配信し、静的ファイルを制限す�
     title: "first", status: "running" });
   store.insertAssignment("first", { executor: "codex", model: "gpt", family: "openai", tier: "mid",
     reason: [], policyVersion: "1" });
-  writeFileSync(join(directory, "index.html"), "hello");
+  const staticDir = join(directory, "public");
+  mkdirSync(staticDir);
+  writeFileSync(join(staticDir, "index.html"), "hello");
+  writeFileSync(join(directory, "secret"), "private content");
   let server;
   try {
     server = await startHttpServer({ port: 0, openStores: new Map([["repo", store]]),
-      listRepos: () => [{ key: "repo", rootPath: directory, name: "repo" }], staticDir: directory });
+      listRepos: () => [{ key: "repo", rootPath: directory, name: "repo" }], staticDir });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "EPERM") { t.skip("HTTP listen is prohibited by the sandbox"); return; }
     throw error;
@@ -60,7 +77,11 @@ test("HTTP graph と SSE は委譲を配信し、静的ファイルを制限す�
   assert.equal(graph.nodes.length, 2);
   assert.deepEqual(graph.edges, [{ from: "session", to: "first", fromFamily: null, toFamily: "openai" }]);
   assert.equal((await fetch(`${base}/`)).status, 200);
-  assert.notEqual((await fetch(`${base}/%2e%2e%2fsecret`)).status, 200);
+  for (const path of ["/%2e%2e%2fsecret", "/../secret"]) {
+    const result = await getRawPath(address.port, path);
+    assert.equal(result.status, 403);
+    assert.doesNotMatch(result.body, /private content/);
+  }
 
   const controller = new AbortController();
   t.after(() => controller.abort());

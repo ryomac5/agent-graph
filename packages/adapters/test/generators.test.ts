@@ -155,7 +155,7 @@ test("hook は POST で session の登録と終了と観測を送る", async (t)
     await observe("turn_done", { session_id: "s2", last_assistant_message: "done" });
     await endSession({ session_id: "s 2" });
     assert.deepEqual(received, [
-      { url: "/api/sessions", body: { id: "s2", cwd: root, client: "claude", pid: process.ppid, model: "fable" } },
+      { url: "/api/sessions", body: { id: "s2", cwd: root, client: "claude", model: "fable" } },
       { url: "/api/observe", body: { kind: "turn_start", sessionId: "s 2", prompt: "hi" } },
       { url: "/api/observe", body: { kind: "waiting", sessionId: "s2", reason: "permission" } },
       { url: "/api/observe", body: { kind: "turn_done", sessionId: "s2", summary: "done", reply: "done" } },

@@ -237,16 +237,29 @@ export class Store {
     if (result.changes > 0) this.notifyChange();
   }
 
-  // 終了。走っていた委譲は親を失うので lost にする。すでに終わっていれば何もしない。
+  // 終了。走っていた委譲は親を失うので lost にし、delegation.lost を追記する。すでに終わっていれば何もしない。
+  // lost の委譲があとで実際に完了したときは finishDelegation が done や failed で上書きする。事実を優先する。
   endSession(id: string, endedAt: string): boolean {
     this.db.exec("BEGIN IMMEDIATE");
     let changed: number;
     try {
-      changed = Number(this.db.prepare(`UPDATE sessions SET status = 'ended', ended_at = ?, waiting_reason = NULL
-        WHERE id = ? AND status != 'ended'`).run(endedAt, id).changes);
+      const session = this.db.prepare("SELECT repo_key, trace_id, status FROM sessions WHERE id = ?").get(id);
+      changed = session && session.status !== "ended"
+        ? Number(this.db.prepare("UPDATE sessions SET status = 'ended', ended_at = ?, waiting_reason = NULL WHERE id = ?")
+          .run(endedAt, id).changes)
+        : 0;
       if (changed > 0) {
-        this.db.prepare(`UPDATE delegations SET status = 'lost' WHERE session_id = ?
-          AND status IN (${ACTIVE_DELEGATION_STATUSES.map(() => "?").join(", ")})`).run(id, ...ACTIVE_DELEGATION_STATUSES);
+        const placeholders = ACTIVE_DELEGATION_STATUSES.map(() => "?").join(", ");
+        const lost = this.db.prepare(`SELECT id FROM delegations WHERE session_id = ? AND status IN (${placeholders})`)
+          .all(id, ...ACTIVE_DELEGATION_STATUSES).map((row) => String(row.id));
+        this.db.prepare(`UPDATE delegations SET status = 'lost' WHERE session_id = ? AND status IN (${placeholders})`)
+          .run(id, ...ACTIVE_DELEGATION_STATUSES);
+        const insert = this.db.prepare(`INSERT INTO events (id, ts, kind, repo_key, session_id, trace_id, span_id, payload)
+          VALUES (?, ?, 'delegation.lost', ?, ?, ?, ?, ?)`);
+        for (const delegationId of lost) {
+          insert.run(ulid(), endedAt, String(session!.repo_key), id, String(session!.trace_id), newSpanId(),
+            JSON.stringify({ delegationId, reason: "親セッションの終了で失われた" }));
+        }
       }
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }

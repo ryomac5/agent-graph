@@ -105,30 +105,28 @@ test("POST /api/sessions は登録に 201、不正な body に 400 を返す", a
   assert.equal((await fetch(url, { method: "POST", headers, body: JSON.stringify({ id: "s", cwd, client: "claude" }) })).status, 201);
 });
 
-test("登録はリポジトリごとの連番で名前を振り、再登録では変えず、pid と model を記録する", async (t) => {
+test("登録はリポジトリごとの連番で名前を振り、再登録では変えず、model を記録し、pid は受けない", async (t) => {
   const { cwd, store, stores } = createFixture(t);
-  await registerSession({ id: "first", cwd, client: "claude", pid: process.pid, model: "fable" }, stores);
+  await registerSession({ id: "first", cwd, client: "claude", model: "fable" }, stores);
   await registerSession({ id: "second", cwd, client: "codex" }, stores);
   await registerSession({ id: "first", cwd, client: "claude", pid: process.pid }, stores);
   const first = store.getSession("first")!;
   assert.equal(first.name, "test-001");
-  assert.equal(first.pid, process.pid);
-  assert.ok(first.pidStartedAt);
+  assert.equal(first.pid, undefined, "pid は shim の hello だけで記録する");
   assert.equal(first.model, "fable");
   assert.equal(store.getSession("second")?.name, "test-002");
-  assert.equal(store.getSession("second")?.pid, undefined);
   // 終了済みのセッションの再登録は running に戻す。名前は変えず、lost の委譲は戻さない
   store.insertDelegation({ id: "d", repoKey: store.getSession("first")!.repoKey, sessionId: "first", role: "implement", title: "d", status: "running" });
   assert.equal(store.endSession("first", "2026-09-25T00:00:00.000Z"), true);
-  await registerSession({ id: "first", cwd, client: "claude", pid: process.pid }, stores);
+  await registerSession({ id: "first", cwd, client: "claude" }, stores);
   const resumed = store.getSession("first")!;
   assert.equal(resumed.status, "running");
   assert.equal(resumed.endedAt, undefined);
   assert.equal(resumed.name, "test-001");
   assert.ok(resumed.lastSeenAt > "2026-09-25T00:00:00.000Z");
   assert.equal(store.db.prepare("SELECT status FROM delegations WHERE id = 'd'").get()?.status, "lost");
-  assert.equal(store.listEvents().filter((event) => event.session === "first").length, 1);
-  await assert.rejects(registerSession({ id: "third", cwd, client: "claude", pid: 0 }, stores), TypeError);
+  assert.equal(store.listEvents().filter((event) => event.session === "first" && event.kind === "session.started").length, 1,
+    "再登録で session.started を重ねない");
   await assert.rejects(registerSession({ id: "third", cwd, client: "claude", model: 1 }, stores), TypeError);
 });
 
@@ -143,6 +141,10 @@ test("終了は status と ended_at を書き、走っていた委譲を lost �
   assert.equal(session.status, "ended");
   assert.equal(session.endedAt, now.toISOString());
   assert.equal(store.db.prepare("SELECT status FROM delegations WHERE id = 'd'").get()?.status, "lost");
+  const lost = store.listEvents().filter((event) => event.kind === "delegation.lost");
+  assert.equal(lost.length, 1);
+  assert.equal(lost[0].session, "s");
+  assert.equal((lost[0].payload as { delegationId: string }).delegationId, "d");
   assert.throws(() => endSession("missing", stores), NotFoundError);
 });
 

@@ -51,6 +51,13 @@ test("終了は status と ended_at を記録し、走っていた委譲を lost
   assert.equal(status("d1"), "lost");
   assert.equal(status("d2"), "done");
   assert.equal(status("d3"), "requested");
+  // lost にした委譲ごとに delegation.lost を追記する。トレースは親セッションのもの
+  const lostEvents = store.listEvents().filter((event) => event.kind === "delegation.lost");
+  assert.equal(lostEvents.length, 1);
+  assert.equal(lostEvents[0].session, "s1");
+  assert.equal(lostEvents[0].ts, later);
+  assert.equal(lostEvents[0].trace.traceId, "a".repeat(32));
+  assert.deepEqual(lostEvents[0].payload, { delegationId: "d1", reason: "親セッションの終了で失われた" });
   assert.deepEqual(store.listLiveSessions().map((row) => row.id), ["s2"]);
   // 終わったセッションは観測や待ちで戻らない
   store.touchSession("s1", later);
@@ -69,6 +76,9 @@ test("終了は status と ended_at を記録し、走っていた委譲を lost
   assert.equal(resumed.name, "repo-001");
   assert.equal(status("d1"), "lost");
   assert.deepEqual(store.listLiveSessions().map((row) => row.id), ["s1", "s2"]);
+  // lost はあくまで推定。あとで実際に完了したら事実を優先して上書きできる
+  store.finishDelegation("d1", "done");
+  assert.equal(status("d1"), "done");
 });
 
 test("待ちの設定と解除、pid と goal と model の記録", (t) => {

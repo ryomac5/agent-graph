@@ -58,9 +58,10 @@ export function lastAssistantText(transcriptPath: string | undefined): string {
   return "";
 }
 
+// pid は送らない。hook の親は shell のことがあり、根のプロセスとは限らない。pid は shim の hello だけで記録する。
 export async function registerSession(input: HookInput): Promise<void> {
   if (!input.session_id || !input.cwd) return;
-  await post("/api/sessions", { id: input.session_id, cwd: input.cwd, client: "claude", pid: process.ppid,
+  await post("/api/sessions", { id: input.session_id, cwd: input.cwd, client: "claude",
     ...(typeof input.model === "string" && input.model ? { model: input.model } : {}) });
 }
 

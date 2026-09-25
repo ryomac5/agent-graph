@@ -24,3 +24,10 @@ for await(const line of createInterface({input:process.stdin})) {
   await assert.rejects(client.delegate({ ...request, title: "bad" }), /failed/);
   client.close();
 });
+
+test("shim が即座に終了したら接続失敗を返す", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "mcp-exit-"));
+  const shimPath = join(cwd, "exit.mjs");
+  writeFileSync(shimPath, "process.exit(1);\n");
+  await assert.rejects(connectDelegate({ shimPath, cwd, env: {} }));
+});

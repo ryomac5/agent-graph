@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -28,10 +28,21 @@ test("worktree の作成、限定コミット、マージ、衝突、退避", ()
   assert.equal(git(task, "show", "--format=", "--name-only", "HEAD"), "in.txt");
   assert.deepEqual(mergeIntoIntegration(repo, "s1", "t1"), { conflict: false, files: [] });
   assert.equal(readFileSync(join(integration, "in.txt"), "utf8"), "task\n");
-  const backup = removeTaskWorktree(repo, "s1", "t1");
+  const wrapper = mkdtempSync(join(tmpdir(), "planner-git-"));
+  const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const script = join(wrapper, "git");
+  writeFileSync(script, `#!/bin/sh\nif [ "$1" = stash ]; then exit 1; fi\nexec "${realGit}" "$@"\n`);
+  chmodSync(script, 0o755);
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${wrapper}:${originalPath ?? ""}`;
+  let backup: string | undefined;
+  try {
+    backup = removeTaskWorktree(repo, "s1", "t1");
+  } finally {
+    process.env.PATH = originalPath;
+  }
   assert.ok(backup && existsSync(join(backup, "outside.txt")));
   assert.equal(existsSync(task), false);
-  assert.equal(git(repo, "stash", "list"), "");
   const second = createTaskWorktree(repo, "s1", "t2");
   writeFileSync(join(second, "in.txt"), "second\n");
   commitScoped(second, "second", ["in.txt"]);

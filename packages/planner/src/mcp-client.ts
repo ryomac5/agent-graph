@@ -50,6 +50,7 @@ export async function connectDelegate(options: Options): Promise<{
     }
   });
   child.on("error", fail);
+  child.stdin.on("error", fail);
   child.on("exit", (code, signal) => fail(new Error(`MCP shim exited: ${code ?? signal}`)));
   const request = (method: string, params: unknown): Promise<unknown> => {
     if (failure) return Promise.reject(failure);

@@ -14,6 +14,11 @@ test("core からトレース文脈と ULID の公開関数を読み込める", 
     "parseTracestate",
     "toEnv",
     "ulid",
+    "runDelegation",
+    "assign",
+    "defaultPolicyTable",
+    "runAcceptance",
+    "execute",
   ] as const;
   for (const name of functions) {
     assert.equal(typeof core[name], "function", name);

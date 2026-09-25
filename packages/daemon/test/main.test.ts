@@ -119,6 +119,7 @@ test("daemon bin starts through a symlink", async () => {
 });
 
 test("周期取得を保存し、環境変数で停止する", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "ag-probe-"));
   const store = openStore(":memory:");
   store.upsertRepo({ key: "repo", rootPath: process.cwd(), name: "repo" });
   const stores = new Map([["repo", store]]);
@@ -127,9 +128,9 @@ test("周期取得を保存し、環境変数で停止する", async () => {
   let codexCalls = 0;
   let claudeCalls = 0;
   const options = {
-    env: { XDG_CACHE_HOME: "/tmp" },
+    env: { XDG_CACHE_HOME: dir },
     readCodex: () => { codexCalls++; return [{ ts: new Date().toISOString(), provider: "openai" as const, window: "5h", percent: 42 }]; },
-    probeClaude: async (cwd: string) => { claudeCalls++; assert.equal(cwd, "/tmp/agent-graph/usage-probe");
+    probeClaude: async (cwd: string) => { claudeCalls++; assert.equal(cwd, join(dir, "agent-graph", "usage-probe"));
       return [{ ts: new Date().toISOString(), provider: "anthropic" as const, window: "5h", percent: 32 }]; },
     setIntervalImpl: ((fn: () => void, ms: number) => { timers.push(fn); intervals.push(ms); return 1; }) as typeof setInterval,
     clearIntervalImpl: (() => {}) as typeof clearInterval,
@@ -145,5 +146,5 @@ test("周期取得を保存し、環境変数で停止する", async () => {
     assert.equal(store.listEvents().filter((event) => event.kind === "usage.sampled").length, 2);
     startUsageProbe(stores, { ...options, env: { AGENT_GRAPH_USAGE_PROBE: "0" } });
     assert.equal(timers.length, 2);
-  } finally { store.close(); }
+  } finally { store.close(); await rm(dir, { recursive: true, force: true }); }
 });

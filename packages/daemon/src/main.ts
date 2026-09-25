@@ -34,9 +34,9 @@ export function startUsageProbe(stores: Map<string, Store>, options: {
   if (env.AGENT_GRAPH_USAGE_PROBE === "0") return { stop: async () => {} };
   const schedule = options.setIntervalImpl ?? setInterval;
   const clear = options.clearIntervalImpl ?? clearInterval;
-  const active = new Set<Promise<void>>();
+  const inflight = new Map<"openai" | "anthropic", Promise<void>>();
   const sample = (provider: "openai" | "anthropic", read: () => Promise<UsageSample[]>): void => {
-    if ([...active].some((task) => (task as Promise<void> & { provider?: string }).provider === provider)) return;
+    if (inflight.has(provider)) return;
     const task = (async () => {
       const samples = await read();
       for (const [key, store] of stores) for (const value of samples) {
@@ -47,10 +47,9 @@ export function startUsageProbe(stores: Map<string, Store>, options: {
           trace: { traceId: newTraceId(), spanId: newSpanId() },
           payload });
       }
-    })() as Promise<void> & { provider?: string };
-    task.provider = provider;
-    active.add(task);
-    void task.catch((error) => console.error(error)).finally(() => active.delete(task));
+    })();
+    inflight.set(provider, task);
+    void task.catch((error) => console.error(error)).finally(() => inflight.delete(provider));
   };
   const codex = schedule(() => sample("openai", async () => (options.readCodex ?? readCodexUsage)()), CODEX_INTERVAL_MS);
   const claude = schedule(() => sample("anthropic", async () => {
@@ -58,7 +57,7 @@ export function startUsageProbe(stores: Map<string, Store>, options: {
     await mkdir(cwd, { recursive: true });
     return (options.probeClaude ?? ((path) => probeClaudeUsage({ cwd: path, timeoutMs: CLAUDE_TIMEOUT_MS })))(cwd);
   }), CLAUDE_INTERVAL_MS);
-  return { stop: async () => { clear(codex); clear(claude); await Promise.allSettled(active); } };
+  return { stop: async () => { clear(codex); clear(claude); await Promise.allSettled(inflight.values()); } };
 }
 
 export function createHandler(stores: Map<string, Store>): DelegateHandler<Hello> {

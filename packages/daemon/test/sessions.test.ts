@@ -7,7 +7,7 @@ import test from "node:test";
 import type { TestContext } from "node:test";
 import { repoKey, stateDbPath } from "../../core/src/paths.ts";
 import { openStore, type Store } from "../../core/src/store/store.ts";
-import { registerSession } from "../src/http/sessions.ts";
+import { endSession, NotFoundError, observe, registerSession, summarize } from "../src/sessions.ts";
 import { startHttpServer } from "../src/http/server.ts";
 
 function createFixture(t: TestContext) {
@@ -31,6 +31,8 @@ test("セッション登録は git ルートを解決し、再送でも開始イ
   assert.equal(session.id, body.id);
   assert.equal(session.repo_key, key);
   assert.equal(session.client, "claude");
+  assert.equal(session.name, "test-001");
+  assert.equal(session.status, "running");
   const events = store.listEvents();
   assert.equal(events.length, 1);
   assert.equal(events[0].kind, "session.started");
@@ -101,4 +103,98 @@ test("POST /api/sessions は登録に 201、不正な body に 400 を返す", a
     assert.equal((await fetch(url, { method: "POST", headers, body })).status, 400);
   }
   assert.equal((await fetch(url, { method: "POST", headers, body: JSON.stringify({ id: "s", cwd, client: "claude" }) })).status, 201);
+});
+
+test("登録はリポジトリごとの連番で名前を振り、再登録では変えず、pid と model を記録する", async (t) => {
+  const { cwd, store, stores } = createFixture(t);
+  await registerSession({ id: "first", cwd, client: "claude", pid: process.pid, model: "fable" }, stores);
+  await registerSession({ id: "second", cwd, client: "codex" }, stores);
+  await registerSession({ id: "first", cwd, client: "claude", pid: process.pid }, stores);
+  const first = store.getSession("first")!;
+  assert.equal(first.name, "test-001");
+  assert.equal(first.pid, process.pid);
+  assert.ok(first.pidStartedAt);
+  assert.equal(first.model, "fable");
+  assert.equal(store.getSession("second")?.name, "test-002");
+  assert.equal(store.getSession("second")?.pid, undefined);
+  await assert.rejects(registerSession({ id: "third", cwd, client: "claude", pid: 0 }, stores), TypeError);
+  await assert.rejects(registerSession({ id: "third", cwd, client: "claude", model: 1 }, stores), TypeError);
+});
+
+test("終了は status と ended_at を書き、走っていた委譲を lost にし、未知のセッションは NotFoundError", async (t) => {
+  const { cwd, key, store, stores } = createFixture(t);
+  await registerSession({ id: "s", cwd, client: "claude" }, stores);
+  store.insertDelegation({ id: "d", repoKey: key, sessionId: "s", role: "implement", title: "d", status: "requested" });
+  const now = new Date("2026-09-25T01:00:00.000Z");
+  endSession("s", stores, now);
+  endSession("s", stores, new Date("2026-09-25T02:00:00.000Z"));
+  const session = store.getSession("s")!;
+  assert.equal(session.status, "ended");
+  assert.equal(session.endedAt, now.toISOString());
+  assert.equal(store.db.prepare("SELECT status FROM delegations WHERE id = 'd'").get()?.status, "lost");
+  assert.throws(() => endSession("missing", stores), NotFoundError);
+});
+
+test("observe は turn の開始と応答を turns に入れ、待ちを設定して次の turn で解除する", async (t) => {
+  const { cwd, store, stores } = createFixture(t);
+  await registerSession({ id: "s", cwd, client: "claude" }, stores);
+  const at = (hour: number) => new Date(`2026-09-25T0${hour}:00:00.000Z`);
+  observe({ kind: "turn_start", sessionId: "s", prompt: "  最初の指示\n詳細  " }, stores, at(1));
+  observe({ kind: "waiting", sessionId: "s", reason: "permission" }, stores, at(2));
+  let session = store.getSession("s")!;
+  assert.equal(session.status, "waiting");
+  assert.equal(session.waitingReason, "permission");
+  assert.equal(session.goal, "最初の指示\n詳細");
+  observe({ kind: "turn_done", sessionId: "s", reply: "# 見出し\n\n1 行目\n2 行目\n3 行目\n4 行目" }, stores, at(3));
+  session = store.getSession("s")!;
+  assert.equal(session.status, "running");
+  assert.equal(session.waitingReason, undefined);
+  assert.equal(session.lastSeenAt, at(3).toISOString());
+  observe({ kind: "turn_start", sessionId: "s", prompt: "次の指示" }, stores, at(4));
+  observe({ kind: "waiting", sessionId: "s", reason: "question" }, stores, at(5));
+  observe({ kind: "turn_start", sessionId: "s", prompt: "解除" }, stores, at(6));
+  assert.equal(store.getSession("s")?.status, "running");
+  observe({ kind: "turn_done", sessionId: "s", summary: "手で付けた要約", reply: "x".repeat(7000) }, stores, at(7));
+  const turns = store.listTurns("s");
+  assert.deepEqual(turns.map((turn) => [turn.prompt, turn.summary, turn.at]), [
+    ["  最初の指示\n詳細  ", "# 見出し\n1 行目\n2 行目", at(1).toISOString()],
+    ["次の指示", undefined, at(4).toISOString()],
+    ["解除", "手で付けた要約", at(6).toISOString()],
+  ]);
+  assert.equal(turns[0].reply, "# 見出し\n\n1 行目\n2 行目\n3 行目\n4 行目");
+  assert.equal(turns[2].reply?.length, 6000);
+  assert.equal(store.getSession("s")?.goal, "最初の指示\n詳細");
+  for (const body of [null, {}, { kind: "unknown", sessionId: "s" }, { kind: "turn_start" },
+    { kind: "waiting", sessionId: "s", reason: "other" }]) {
+    assert.throws(() => observe(body, stores), TypeError);
+  }
+  assert.throws(() => observe({ kind: "turn_start", sessionId: "missing" }, stores), NotFoundError);
+  assert.equal(summarize("a\n\n b \nc\nd"), "a\nb\nc");
+});
+
+test("POST /api/sessions/<id>/end と /api/observe は hook から通り、未知のセッションに 404 を返す", async (t) => {
+  const { root, cwd, store, stores } = createFixture(t);
+  let server;
+  try { server = await startHttpServer({ port: 0, openStores: stores, listRepos: () => [], tokenPath: join(root, "dashboard.token") }); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EPERM") { t.skip("HTTP listen is prohibited by the sandbox"); return; }
+    throw error;
+  }
+  t.after(() => new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()); }));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const base = `http://127.0.0.1:${address.port}`;
+  const post = (path: string, body: string) => fetch(`${base}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body });
+  assert.equal((await post("/api/sessions", JSON.stringify({ id: "s", cwd, client: "claude" }))).status, 201);
+  assert.equal((await post("/api/observe", JSON.stringify({ kind: "turn_start", sessionId: "s", prompt: "hi" }))).status, 200);
+  assert.equal((await post("/api/observe", JSON.stringify({ kind: "turn_done", sessionId: "s", reply: "done" }))).status, 200);
+  assert.equal((await post("/api/observe", JSON.stringify({ kind: "turn_start", sessionId: "missing" }))).status, 404);
+  assert.equal((await post("/api/observe", JSON.stringify({ kind: "nope", sessionId: "s" }))).status, 400);
+  assert.equal((await post("/api/sessions/missing/end", "{}")).status, 404);
+  assert.equal((await post("/api/sessions/s/end", "[]")).status, 400);
+  const end = await post("/api/sessions/s/end", "{}");
+  assert.equal(end.status, 200);
+  assert.deepEqual(await end.json(), { ok: true });
+  assert.equal(store.getSession("s")?.status, "ended");
+  assert.deepEqual(store.listTurns("s").map((turn) => [turn.prompt, turn.summary]), [["hi", "done"]]);
 });

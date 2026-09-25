@@ -1,5 +1,5 @@
 import { sendJson, type Route } from "../route.ts";
-import { registerSession } from "../sessions.ts";
+import { registerSession } from "../../sessions.ts";
 
 const MAX_SESSION_BODY_BYTES = 16_384;
 

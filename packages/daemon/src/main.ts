@@ -19,6 +19,7 @@ import type { DelegateHandler } from "./mcp/server.ts";
 import { runDir } from "./paths.ts";
 import { readDashboardPort } from "./config.ts";
 import { startHttpServer } from "./http/server.ts";
+import { processStartedAt, startLivenessMonitor } from "./liveness.ts";
 import { startSocketServer, type Hello } from "./socket.ts";
 
 const execFileAsync = promisify(execFile);
@@ -85,6 +86,7 @@ export function createHandler(stores: Map<string, Store>, latest = new Map<strin
     }
     const state = parseTracestate(hello.tracestate);
     let caller = callers.get(hello);
+    const firstRequest = !caller;
     if (!caller) {
       const sessionId = state.sessionId ?? hello.session ?? ulid();
       const existing = store.db.prepare("SELECT trace_id FROM sessions WHERE id = ?").get(sessionId);
@@ -96,9 +98,16 @@ export function createHandler(stores: Map<string, Store>, latest = new Map<strin
     }
     const session = store.db.prepare("SELECT trace_id FROM sessions WHERE id = ?").get(caller.sessionId);
     if (session && session.trace_id !== caller.traceId) throw new Error("Session trace does not match hello");
-    if (!session) store.insertSession({ id: caller.sessionId, repoKey: key, name: caller.sessionId,
-      client: hello.client ?? "mcp", traceId: caller.traceId, startedAt: new Date().toISOString() });
-    if (session && hello.client && !state.delegationId) store.updateSessionClient(caller.sessionId, hello.client);
+    const now = new Date().toISOString();
+    // 根の pid と起動時刻は生死判定に使う。委譲の子からの hello では親の記録を上書きしない。
+    const rootHello = !state.delegationId;
+    const pidStartedAt = rootHello && firstRequest ? await processStartedAt(hello.pid) : undefined;
+    if (!session) store.insertNamedSession({ id: caller.sessionId, repoKey: key,
+      client: hello.client ?? "mcp", traceId: caller.traceId, startedAt: now,
+      ...(rootHello ? { pid: hello.pid, pidStartedAt } : {}) });
+    else if (rootHello && firstRequest) store.setSessionProcess(caller.sessionId, hello.pid, pidStartedAt, now);
+    else if (rootHello) store.touchSession(caller.sessionId, now);
+    if (session && hello.client && rootHello) store.updateSessionClient(caller.sessionId, hello.client);
     return runDelegation(request, { repoKey: key, repoRoot, sessionId: caller.sessionId,
       trace: { traceId: caller.traceId, spanId: caller.spanId, traceState: hello.tracestate },
       parentDelegationId: state.delegationId }, { store, usageSamples: [...latest.values()] });
@@ -148,6 +157,7 @@ export async function startDaemon(): Promise<{ stop: () => Promise<void> }> {
   const stores = new Map<string, Store>();
   const latest = new Map<string, UsageSample>();
   const usageProbe = startUsageProbe(stores, { latest });
+  const liveness = startLivenessMonitor(stores, { onError: (error) => log(String(error)) });
   const handler = createHandler(stores, latest);
   const pending = new Set<Promise<unknown>>();
   let http: Awaited<ReturnType<typeof startHttpServer>> | undefined;
@@ -194,6 +204,7 @@ export async function startDaemon(): Promise<{ stop: () => Promise<void> }> {
       http!.closeAllConnections();
       await new Promise<void>((resolve) => http!.close(() => resolve()));
       await usageProbe.stop();
+      await liveness.stop();
       for (const store of stores.values()) store.close();
       await unlink(pidPath);
       log("stopped");
@@ -208,6 +219,7 @@ export async function startDaemon(): Promise<{ stop: () => Promise<void> }> {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
     await usageProbe.stop();
+    await liveness.stop();
     for (const store of stores.values()) store.close();
     await unlink(pidPath);
     throw error;

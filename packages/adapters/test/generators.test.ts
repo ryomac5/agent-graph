@@ -8,6 +8,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { generateClaudePlugin } from "../src/claude-plugin.ts";
 import { installCodexConfig, renderCodexConfig, renderCodexOverrides } from "../src/codex-config.ts";
+import { endSession, lastAssistantText, observe, observeBody, registerSession, REPLY_LIMIT } from "../src/hook.ts";
 
 const options = { shimPath: "/tmp/shim.ts", nodePath: process.execPath };
 const root = mkdtempSync(join(tmpdir(), "agent-graph-adapters-"));
@@ -41,8 +42,14 @@ test("Claude plugin の JSON と hook", () => {
   const settings = JSON.parse(readFileSync(join(outDir, "recommended-settings.json"), "utf8"));
   assert.equal(manifest.name, "agent-graph");
   assert.deepEqual(mcp.mcpServers["agent-graph"], { command: process.execPath, args: [options.shimPath], env: { AGENT_GRAPH_CLIENT: "claude" } });
-  assert.deepEqual(Object.keys(hooks.hooks), ["SessionStart"]);
-  assert.equal(hooks.hooks.SessionStart[0].hooks[0].command, `${JSON.stringify(process.execPath)} ${JSON.stringify("/tmp/agent graph/hook.ts")} session-start`);
+  assert.deepEqual(Object.keys(hooks.hooks), ["SessionStart", "SessionEnd", "UserPromptSubmit", "Stop", "Notification"]);
+  const command = (args: string) => `${JSON.stringify(process.execPath)} ${JSON.stringify("/tmp/agent graph/hook.ts")} ${args}`;
+  assert.equal(hooks.hooks.SessionStart[0].hooks[0].command, command("session-start"));
+  assert.equal(hooks.hooks.SessionEnd[0].hooks[0].command, command("session-end"));
+  assert.equal(hooks.hooks.UserPromptSubmit[0].hooks[0].command, command("observe turn_start"));
+  assert.equal(hooks.hooks.Stop[0].hooks[0].command, command("observe turn_done"));
+  assert.equal(hooks.hooks.Notification[0].hooks[0].command, command("observe notification"));
+  for (const event of Object.keys(hooks.hooks)) assert.equal(hooks.hooks[event][0].hooks[0].timeout, 5);
   assert.ok(settings.permissions.deny.length);
 });
 
@@ -70,24 +77,62 @@ test("Codex 設定の追記、置換、バックアップ", () => {
   assert.equal(readFileSync(`${configPath}.agent-graph.bak`, "utf8"), `${second}${trailing}`);
 });
 
-test("hook は到達不能でも 0 で終わる", () => {
+test("hook はどの経路でも到達不能や不正な入力で 0 で終わる", () => {
   const hook = fileURLToPath(new URL("../src/hook.ts", import.meta.url));
-  const result = spawnSync(process.execPath, [hook, "session-start"], {
-    input: JSON.stringify({ session_id: "s1", cwd: root }), encoding: "utf8",
-    env: { ...process.env, AGENT_GRAPH_PORT: "1" },
-  });
-  assert.equal(result.status, 0);
-  assert.equal(result.stderr, "");
+  const env = { ...process.env, AGENT_GRAPH_PORT: "1" };
+  const inputs: [string[], string][] = [
+    [["session-start"], JSON.stringify({ session_id: "s1", cwd: root })],
+    [["session-end"], JSON.stringify({ session_id: "s1", reason: "exit" })],
+    [["observe", "turn_start"], JSON.stringify({ session_id: "s1", prompt: "hi" })],
+    [["observe", "turn_done"], JSON.stringify({ session_id: "s1", last_assistant_message: "done" })],
+    [["observe", "notification"], JSON.stringify({ session_id: "s1", notification_type: "permission_prompt" })],
+    [["observe", "unknown"], JSON.stringify({ session_id: "s1" })],
+    [["session-start"], "{"],
+    [[], ""],
+  ];
+  for (const [args, input] of inputs) {
+    const result = spawnSync(process.execPath, [hook, ...args], { input, encoding: "utf8", env });
+    assert.equal(result.status, 0, args.join(" "));
+    assert.equal(result.stderr, "", args.join(" "));
+    assert.equal(result.stdout, "", args.join(" "));
+  }
 });
 
-test("hook は POST で session を送る", async (t) => {
-  let received: unknown;
+test("観測の本文。turn の 2 種と許可待ちだけを送り、サブエージェントと他の通知は送らない", () => {
+  const transcript = join(root, "transcript.jsonl");
+  writeFileSync(transcript, [
+    JSON.stringify({ type: "user", message: { content: "q" } }),
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "from transcript\nsecond" }] } }),
+    JSON.stringify({ type: "user", message: { content: [{ type: "tool_result" }] } }),
+    "",
+  ].join("\n"));
+  assert.deepEqual(observeBody("turn_start", { session_id: "s", prompt: "p" }), { kind: "turn_start", sessionId: "s", prompt: "p" });
+  assert.deepEqual(observeBody("turn_start", { session_id: "s" }), { kind: "turn_start", sessionId: "s", prompt: "" });
+  assert.equal(observeBody("turn_start", { session_id: "s", agent_id: "a", prompt: "p" }), undefined);
+  assert.equal(observeBody("turn_start", { prompt: "p" }), undefined);
+  const long = Array.from({ length: 5 }, (_, i) => `line ${i}`).join("\n") + "\n" + "x".repeat(7000);
+  const done = observeBody("turn_done", { session_id: "s", last_assistant_message: long })!;
+  assert.equal(done.kind, "turn_done");
+  assert.equal(done.summary, "line 0\nline 1\nline 2");
+  assert.equal((done.reply as string).length, REPLY_LIMIT);
+  assert.deepEqual(observeBody("turn_done", { session_id: "s", transcript_path: transcript }),
+    { kind: "turn_done", sessionId: "s", summary: "from transcript\nsecond", reply: "from transcript\nsecond" });
+  assert.equal(observeBody("turn_done", { session_id: "s", stop_hook_active: true, last_assistant_message: "x" }), undefined);
+  assert.equal(lastAssistantText(join(root, "missing.jsonl")), "");
+  assert.deepEqual(observeBody("notification", { session_id: "s", notification_type: "permission_prompt", message: "Bash" }),
+    { kind: "waiting", sessionId: "s", reason: "permission" });
+  assert.equal(observeBody("notification", { session_id: "s", notification_type: "idle_prompt" }), undefined);
+  assert.equal(observeBody("unknown", { session_id: "s" }), undefined);
+});
+
+test("hook は POST で session の登録と終了と観測を送る", async (t) => {
+  const received: { url: string; body: unknown }[] = [];
   const server = createServer(async (req, res) => {
     let body = "";
     for await (const chunk of req) body += chunk;
     assert.equal(req.method, "POST");
-    assert.equal(req.url, "/api/sessions");
-    received = JSON.parse(body);
+    assert.equal(req.headers["content-type"], "application/json");
+    received.push({ url: req.url ?? "", body: JSON.parse(body) });
     res.writeHead(200).end();
   });
   try {
@@ -104,9 +149,18 @@ test("hook は POST で session を送る", async (t) => {
   const previous = process.env.AGENT_GRAPH_PORT;
   process.env.AGENT_GRAPH_PORT = String(address.port);
   try {
-    const { registerSession } = await import("../src/hook.ts");
-    await registerSession({ session_id: "s2", cwd: root });
-    assert.deepEqual(received, { id: "s2", cwd: root, client: "claude" });
+    await registerSession({ session_id: "s2", cwd: root, model: "fable" });
+    await observe("turn_start", { session_id: "s 2", prompt: "hi" });
+    await observe("notification", { session_id: "s2", notification_type: "permission_prompt" });
+    await observe("turn_done", { session_id: "s2", last_assistant_message: "done" });
+    await endSession({ session_id: "s 2" });
+    assert.deepEqual(received, [
+      { url: "/api/sessions", body: { id: "s2", cwd: root, client: "claude", pid: process.ppid, model: "fable" } },
+      { url: "/api/observe", body: { kind: "turn_start", sessionId: "s 2", prompt: "hi" } },
+      { url: "/api/observe", body: { kind: "waiting", sessionId: "s2", reason: "permission" } },
+      { url: "/api/observe", body: { kind: "turn_done", sessionId: "s2", summary: "done", reply: "done" } },
+      { url: "/api/sessions/s%202/end", body: {} },
+    ]);
   } finally {
     if (previous === undefined) delete process.env.AGENT_GRAPH_PORT;
     else process.env.AGENT_GRAPH_PORT = previous;

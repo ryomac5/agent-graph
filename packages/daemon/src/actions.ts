@@ -65,7 +65,7 @@ function endSession(store: Store, request: ActionRequest, now: Date): ActionResu
   if (session.status === "ended") return { ok: false, message: `${session.name} は終了済み` };
   const active = store.countActiveDelegations(id);
   if (active > 0) return { ok: false, message: `${session.name} は走っている委譲が ${active} 件あるので終えられない` };
-  store.endSession(id, now.toISOString());
+  store.endSession(id, now.toISOString(), "explicit");
   return { ok: true, message: `${session.name} を終了した` };
 }
 

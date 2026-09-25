@@ -247,3 +247,37 @@ test("request_changes から approve へ進む", async (t) => {
   assert.match(tasks[1], /fix the detail/);
   assert.equal(deps.store.db.prepare("SELECT round_trips FROM delegations WHERE id = ?").get(result.delegationId)!.round_trips, 1);
 });
+
+test("依頼の task と scope と outputs と cwd を列に残し、往復を delegation_rounds に残す", async (t) => {
+  const deps = setup(t);
+  let count = 0;
+  deps.execute = async (req) => ({ exitCode: 0, output: `出力 ${++count}`, timedOut: false,
+    usage: { inputTokens: 1, outputTokens: 1 }, durationMs: 1, childTrace: childContext(req.trace) });
+  let accepted = 0;
+  deps.accept = async () => ({ passed: ++accepted === 2,
+    results: [{ command: "check", exitCode: accepted === 1 ? 1 : 0, output: accepted === 1 ? "specific failure" : "", durationMs: 1 }],
+    scopeViolations: [] });
+  const cwd = process.cwd();
+  const result = await runDelegation({ ...request, scope: ["src/**"], outputs: ["docs/x.md"], cwd }, caller, deps);
+  assert.equal(result.status, "done");
+  const row = deps.store.db.prepare("SELECT task, scope, outputs, output, worktree FROM delegations WHERE id = ?").get(result.delegationId)!;
+  assert.equal(row.task, "調べる");
+  assert.deepEqual(JSON.parse(String(row.scope)), ["src/**"]);
+  assert.deepEqual(JSON.parse(String(row.outputs)), ["docs/x.md"]);
+  assert.equal(row.output, "出力 2");
+  assert.equal(row.worktree, cwd);
+  const rounds = deps.store.listDelegationRounds(result.delegationId);
+  assert.deepEqual(rounds.map((round) => [round.seq, round.kind]), [[1, "request"], [2, "report"], [3, "reinstruct"], [4, "report"]]);
+  assert.equal(rounds[0].text, "調べる");
+  assert.equal(rounds[1].text, "出力 1");
+  assert.match(rounds[2].text, /^前回の結果を踏まえて修正してください。\n受け入れ失敗/);
+  assert.match(rounds[2].text, /specific failure/);
+  assert.equal(rounds[3].text, "出力 2");
+  for (const round of rounds) assert.equal(new Date(round.at).toISOString(), round.at);
+  // cwd を省くと repoRoot が worktree になる。scope と outputs が無ければ空のまま
+  const plain = await runDelegation(request, caller, deps);
+  const plainRow = deps.store.db.prepare("SELECT scope, outputs, worktree FROM delegations WHERE id = ?").get(plain.delegationId)!;
+  assert.equal(plainRow.scope, null);
+  assert.equal(plainRow.outputs, null);
+  assert.equal(plainRow.worktree, caller.repoRoot);
+});

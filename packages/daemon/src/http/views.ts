@@ -61,8 +61,9 @@ interface DelegationContext {
   outputs: Map<string, string>;
 }
 
+// 子の出力。delegations.output を第一とし、無ければレビュー報告や planner の task.result から補う。
 function outputOf(row: DelegationRow, context: DelegationContext): string | undefined {
-  return row.reviewOutput ?? context.outputs.get(row.id);
+  return row.output ?? row.reviewOutput ?? context.outputs.get(row.id);
 }
 
 // 委譲の行から NodeDetail の詳細の項目を組む。task の node にも同じものを重ねる。
@@ -88,9 +89,17 @@ function delegationDetail(row: DelegationRow, context: DelegationContext): Parti
       ...(reviewer ? { reviewer: { executor: reviewer.executor, model: reviewer.model } } : {}) };
   }
   if (row.tokens) detail.tokens = row.tokens;
-  const rounds: Round[] = [];
-  if (row.task !== undefined) rounds.push({ kind: "request", text: row.task, ...(row.requestedAt ? { at: row.requestedAt } : {}) });
-  if (output !== undefined) rounds.push({ kind: "report", text: output, ...(row.finishedAt ? { at: row.finishedAt } : {}) });
+  if (row.scope) detail.scope = row.scope;
+  if (row.outputs) detail.outputs = row.outputs;
+  if (row.worktree !== undefined) detail.worktree = row.worktree;
+  // 往復は delegation_rounds を第一とし、無い古い記録では依頼文と出力から組む
+  const rounds: Round[] = row.rounds?.length
+    ? row.rounds.map((round) => ({ kind: round.kind, text: round.text, at: round.at }))
+    : [];
+  if (!rounds.length) {
+    if (row.task !== undefined) rounds.push({ kind: "request", text: row.task, ...(row.requestedAt ? { at: row.requestedAt } : {}) });
+    if (output !== undefined) rounds.push({ kind: "report", text: output, ...(row.finishedAt ? { at: row.finishedAt } : {}) });
+  }
   if (rounds.length) detail.rounds = rounds;
   return detail;
 }

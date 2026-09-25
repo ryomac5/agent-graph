@@ -84,12 +84,19 @@ export async function registerSession(body: unknown, stores: Map<string, Store>)
 export function endSession(id: string, stores: Map<string, Store>, now = new Date()): void {
   const store = findStore(id, stores);
   if (!store) throw new NotFoundError(`Session not found: ${id}`);
-  store.endSession(id, now.toISOString());
+  store.endSession(id, now.toISOString(), "explicit");
+}
+
+// 観測の前に、pid を持たないまま 30 分の規則で ended にしたセッションだけを running に戻す。
+// pid の死で ended にしたものと hook や操作で終えたものは戻さない。
+function reviveIfIdle(store: Store, sessionId: string, at: string): void {
+  store.reviveIdleSession(sessionId, at);
 }
 
 export const observers: Record<string, Observer> = {
   turn_start: (store, { sessionId, at, body }) => {
     const prompt = optionalString(body.prompt, PROMPT_LIMIT) ?? "";
+    reviveIfIdle(store, sessionId, at);
     store.touchSession(sessionId, at);
     if (prompt.trim()) store.setSessionGoalIfEmpty(sessionId, prompt.trim().slice(0, GOAL_LIMIT));
     store.insertTurn({ id: ulid(), sessionId, at, prompt });
@@ -97,12 +104,14 @@ export const observers: Record<string, Observer> = {
   turn_done: (store, { sessionId, at, body }) => {
     const reply = optionalString(body.reply, REPLY_LIMIT) ?? "";
     const summary = optionalString(body.summary, REPLY_LIMIT) ?? summarize(reply);
+    reviveIfIdle(store, sessionId, at);
     store.touchSession(sessionId, at);
     store.finishTurn(sessionId, at, summary, reply, ulid);
   },
   waiting: (store, { sessionId, at, body }) => {
     const reason = body.reason;
     if (reason !== "permission" && reason !== "question") throw new TypeError("Invalid waiting reason");
+    reviveIfIdle(store, sessionId, at);
     store.setSessionWaiting(sessionId, reason as WaitingReason, at);
   },
 };

@@ -134,3 +134,60 @@ test("委譲の kind と planner の判断の表", (t) => {
   assert.deepEqual(store.db.prepare("SELECT * FROM task_decisions").all().map((row) => ({ ...row })),
     [{ graph_id: "g1", task_id: "T1", action: "approve", at: ts }]);
 });
+
+test("終了理由を残し、idle で終えたものだけを観測で戻す。再登録はどの理由でも戻す", (t) => {
+  const store = withStore(t);
+  const base = { client: "claude", traceId: "a".repeat(32), startedAt: ts };
+  store.insertNamedSession({ id: "idle", repoKey: "r", ...base });
+  store.insertNamedSession({ id: "dead", repoKey: "r", ...base, pid: 11 });
+  store.insertNamedSession({ id: "explicit", repoKey: "r", ...base });
+  assert.equal(store.endSession("idle", later, "idle"), true);
+  assert.equal(store.endSession("dead", later, "process_exit"), true);
+  assert.equal(store.endSession("explicit", later), true);
+  assert.equal(store.getSession("idle")?.endedReason, "idle");
+  assert.equal(store.getSession("dead")?.endedReason, "process_exit");
+  assert.equal(store.getSession("explicit")?.endedReason, "explicit");
+  // touch と waiting は ended を戻さない
+  store.touchSession("idle", "2026-09-25T02:00:00.000Z");
+  store.setSessionWaiting("idle", "permission", "2026-09-25T02:00:00.000Z");
+  assert.equal(store.getSession("idle")?.status, "ended");
+  assert.equal(store.reviveIdleSession("dead", "2026-09-25T02:00:00.000Z"), false);
+  assert.equal(store.reviveIdleSession("explicit", "2026-09-25T02:00:00.000Z"), false);
+  assert.equal(store.getSession("dead")?.status, "ended");
+  assert.equal(store.reviveIdleSession("idle", "2026-09-25T02:00:00.000Z"), true);
+  const revived = store.getSession("idle")!;
+  assert.equal(revived.status, "running");
+  assert.equal(revived.endedAt, undefined);
+  assert.equal(revived.endedReason, undefined);
+  assert.equal(revived.lastSeenAt, "2026-09-25T02:00:00.000Z");
+  assert.equal(store.reviveIdleSession("idle", "2026-09-25T03:00:00.000Z"), false);
+  assert.equal(store.resumeSession("dead", "2026-09-25T02:00:00.000Z"), true);
+  assert.equal(store.getSession("dead")?.endedReason, undefined);
+  assert.equal(store.getSession("dead")?.status, "running");
+});
+
+test("委譲の詳細の列と往復の記録", (t) => {
+  const store = withStore(t);
+  store.insertNamedSession({ id: "s1", repoKey: "r", client: "claude", traceId: "a".repeat(32), startedAt: ts });
+  store.insertDelegation({ id: "d1", repoKey: "r", sessionId: "s1", role: "implement", title: "実装", status: "requested",
+    task: "実装して", scope: ["src/a.ts"], outputs: ["dist/a.js"], worktree: "/work/tree" });
+  const row = store.db.prepare("SELECT task, scope, outputs, output, worktree FROM delegations WHERE id = 'd1'").get()!;
+  assert.equal(row.task, "実装して");
+  assert.equal(row.scope, JSON.stringify(["src/a.ts"]));
+  assert.equal(row.outputs, JSON.stringify(["dist/a.js"]));
+  assert.equal(row.output, null);
+  assert.equal(row.worktree, "/work/tree");
+  assert.equal(store.insertDelegationRound("d1", "request", "実装して", ts), 1);
+  assert.equal(store.insertDelegationRound("d1", "report", "できた", later), 2);
+  assert.equal(store.insertDelegationRound("d1", "reinstruct", "直して", later), 3);
+  assert.deepEqual(store.listDelegationRounds("d1"), [
+    { delegationId: "d1", seq: 1, kind: "request", text: "実装して", at: ts },
+    { delegationId: "d1", seq: 2, kind: "report", text: "できた", at: later },
+    { delegationId: "d1", seq: 3, kind: "reinstruct", text: "直して", at: later },
+  ]);
+  assert.throws(() => store.insertDelegationRound("d1", "other" as "report", "", ts));
+  store.finishDelegation("d1", "done", "最終の出力");
+  assert.equal(store.db.prepare("SELECT output FROM delegations WHERE id = 'd1'").get()!.output, "最終の出力");
+  store.finishDelegation("d1", "failed");
+  assert.equal(store.db.prepare("SELECT output FROM delegations WHERE id = 'd1'").get()!.output, "最終の出力", "省略なら出力を保つ");
+});

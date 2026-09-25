@@ -163,4 +163,25 @@ export const migrations: readonly Migration[] = [
       CREATE INDEX task_decisions_task ON task_decisions (graph_id, task_id, at);
     `,
   },
+  {
+    // 委譲の詳細（依頼文、scope、outputs、出力、作業木）と往復の記録。セッションの終了理由。
+    version: 3,
+    sql: `
+      ALTER TABLE sessions ADD COLUMN ended_reason TEXT
+        CHECK (ended_reason IN ('process_exit', 'idle', 'explicit'));
+      ALTER TABLE delegations ADD COLUMN task TEXT;
+      ALTER TABLE delegations ADD COLUMN scope TEXT;
+      ALTER TABLE delegations ADD COLUMN outputs TEXT;
+      ALTER TABLE delegations ADD COLUMN output TEXT;
+      ALTER TABLE delegations ADD COLUMN worktree TEXT;
+      CREATE TABLE delegation_rounds (
+        delegation_id TEXT NOT NULL REFERENCES delegations(id),
+        seq INTEGER NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('request', 'reinstruct', 'report')),
+        text TEXT NOT NULL,
+        at TEXT NOT NULL,
+        PRIMARY KEY (delegation_id, seq)
+      );
+    `,
+  },
 ];

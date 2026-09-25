@@ -46,7 +46,7 @@ test("複数プロセスが空の DB を同時に開き、移行と書き込み�
     const store = openStore(join(dir, round + ".db"));
     try {
       assert.equal(store.db.prepare("SELECT COUNT(*) AS n FROM repos").get()!.n, workers.length);
-      assert.equal(store.db.prepare("SELECT COUNT(*) AS n FROM schema_version").get()!.n, 2);
+      assert.equal(store.db.prepare("SELECT COUNT(*) AS n FROM schema_version").get()!.n, 3);
     } finally { store.close(); }
   }
 });
@@ -142,7 +142,7 @@ test("親ディレクトリを作成し WAL と外部キーを有効にして再
   const reopened = openStore(path);
   try {
     assert.deepEqual(reopened.listEvents(), [event]);
-    assert.equal(reopened.db.prepare("SELECT COUNT(*) AS count FROM schema_version").get()!.count, 2);
+    assert.equal(reopened.db.prepare("SELECT COUNT(*) AS count FROM schema_version").get()!.count, 3);
   } finally {
     reopened.close();
   }

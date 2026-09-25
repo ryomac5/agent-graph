@@ -36,6 +36,17 @@ export interface Repo {
 
 export type SessionStatus = "running" | "waiting" | "ended";
 export type WaitingReason = "permission" | "question";
+// 終了の理由。process_exit は pid の死、idle は pid 無しで 30 分の記録断、explicit は hook や操作での終了。
+export type EndedReason = "process_exit" | "idle" | "explicit";
+export type RoundKind = "request" | "reinstruct" | "report";
+
+export interface DelegationRound {
+  delegationId: string;
+  seq: number;
+  kind: RoundKind;
+  text: string;
+  at: string;
+}
 
 export interface Session {
   id: string;
@@ -46,6 +57,7 @@ export interface Session {
   startedAt: string;
   status?: SessionStatus;
   endedAt?: string;
+  endedReason?: EndedReason;
   pid?: number;
   pidStartedAt?: string;
   waitingReason?: WaitingReason;
@@ -80,6 +92,7 @@ function sessionFromRow(row: Record<string, unknown>): SessionRow {
     traceId: String(row.trace_id), startedAt: String(row.started_at), status: String(row.status) as SessionStatus,
     lastSeenAt: String(row.last_seen_at ?? row.started_at),
     ...(row.ended_at === null ? {} : { endedAt: String(row.ended_at) }),
+    ...(optional(row.ended_reason) === undefined ? {} : { endedReason: String(row.ended_reason) as EndedReason }),
     ...(row.pid === null ? {} : { pid: Number(row.pid) }),
     ...(row.pid_started_at === null ? {} : { pidStartedAt: String(row.pid_started_at) }),
     ...(row.waiting_reason === null ? {} : { waitingReason: String(row.waiting_reason) as WaitingReason }),
@@ -139,11 +152,11 @@ export class Store {
 
   insertSession(session: Session): void {
     this.db.prepare(`
-      INSERT INTO sessions (id, repo_key, name, client, trace_id, started_at, status, ended_at, pid, pid_started_at,
+      INSERT INTO sessions (id, repo_key, name, client, trace_id, started_at, status, ended_at, ended_reason, pid, pid_started_at,
         waiting_reason, goal, model, last_seen_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(session.id, session.repoKey, session.name, session.client, session.traceId, session.startedAt,
-      session.status ?? "running", session.endedAt ?? null, session.pid ?? null, session.pidStartedAt ?? null,
+      session.status ?? "running", session.endedAt ?? null, session.endedReason ?? null, session.pid ?? null, session.pidStartedAt ?? null,
       session.waitingReason ?? null, session.goal ?? null, session.model ?? null, session.lastSeenAt ?? session.startedAt);
     this.notifyChange();
   }
@@ -207,8 +220,17 @@ export class Store {
 
   // 同じ id の再登録。終了済みなら running に戻す。名前は変えず、lost にした委譲も戻さない。
   resumeSession(id: string, seenAt: string): boolean {
-    const result = this.db.prepare(`UPDATE sessions SET status = 'running', ended_at = NULL, waiting_reason = NULL, last_seen_at = ?
-      WHERE id = ? AND status = 'ended'`).run(seenAt, id);
+    const result = this.db.prepare(`UPDATE sessions SET status = 'running', ended_at = NULL, ended_reason = NULL,
+      waiting_reason = NULL, last_seen_at = ? WHERE id = ? AND status = 'ended'`).run(seenAt, id);
+    if (result.changes > 0) this.notifyChange();
+    return result.changes > 0;
+  }
+
+  // pid を持たないまま 30 分の規則で ended にしたセッションだけを、観測で running に戻す。
+  // pid の死で ended にしたものは戻さない。戻すのは再登録か根の hello だけ。
+  reviveIdleSession(id: string, seenAt: string): boolean {
+    const result = this.db.prepare(`UPDATE sessions SET status = 'running', ended_at = NULL, ended_reason = NULL,
+      waiting_reason = NULL, last_seen_at = ? WHERE id = ? AND status = 'ended' AND ended_reason = 'idle'`).run(seenAt, id);
     if (result.changes > 0) this.notifyChange();
     return result.changes > 0;
   }
@@ -239,14 +261,14 @@ export class Store {
 
   // 終了。走っていた委譲は親を失うので lost にし、delegation.lost を追記する。すでに終わっていれば何もしない。
   // lost の委譲があとで実際に完了したときは finishDelegation が done や failed で上書きする。事実を優先する。
-  endSession(id: string, endedAt: string): boolean {
+  endSession(id: string, endedAt: string, reason: EndedReason = "explicit"): boolean {
     this.db.exec("BEGIN IMMEDIATE");
     let changed: number;
     try {
       const session = this.db.prepare("SELECT repo_key, trace_id, status FROM sessions WHERE id = ?").get(id);
       changed = session && session.status !== "ended"
-        ? Number(this.db.prepare("UPDATE sessions SET status = 'ended', ended_at = ?, waiting_reason = NULL WHERE id = ?")
-          .run(endedAt, id).changes)
+        ? Number(this.db.prepare(`UPDATE sessions SET status = 'ended', ended_at = ?, ended_reason = ?, waiting_reason = NULL
+          WHERE id = ?`).run(endedAt, reason, id).changes)
         : 0;
       if (changed > 0) {
         const placeholders = ACTIVE_DELEGATION_STATUSES.map(() => "?").join(", ");
@@ -254,11 +276,10 @@ export class Store {
           .all(id, ...ACTIVE_DELEGATION_STATUSES).map((row) => String(row.id));
         this.db.prepare(`UPDATE delegations SET status = 'lost' WHERE session_id = ? AND status IN (${placeholders})`)
           .run(id, ...ACTIVE_DELEGATION_STATUSES);
-        const insert = this.db.prepare(`INSERT INTO events (id, ts, kind, repo_key, session_id, trace_id, span_id, payload)
-          VALUES (?, ?, 'delegation.lost', ?, ?, ?, ?, ?)`);
         for (const delegationId of lost) {
-          insert.run(ulid(), endedAt, String(session!.repo_key), id, String(session!.trace_id), newSpanId(),
-            JSON.stringify({ delegationId, reason: "親セッションの終了で失われた" }));
+          this.appendEvent({ id: ulid(), ts: endedAt, kind: "delegation.lost", repo: String(session!.repo_key), session: id,
+            trace: { traceId: String(session!.trace_id), spanId: newSpanId() },
+            payload: { delegationId, reason: "親セッションの終了で失われた" } }, { notify: false });
         }
       }
       this.db.exec("COMMIT");
@@ -394,7 +415,8 @@ export class Store {
       .all(`planner.${kind}`, graphId).map((row) => ({ id: String(row.id), payload: JSON.parse(String(row.payload)) }));
   }
 
-  appendEvent(event: Event): void {
+  // notify を false にするのは、呼び出し側がトランザクションの COMMIT 後にまとめて通知するとき。
+  appendEvent(event: Event, options: { notify?: boolean } = {}): void {
     this.db.prepare(`
       INSERT INTO events
         (id, ts, kind, repo_key, session_id, trace_id, span_id, parent_span_id, trace_state, payload)
@@ -404,7 +426,7 @@ export class Store {
       event.trace.traceId, event.trace.spanId, event.trace.parentSpanId ?? null,
       event.trace.traceState ?? null, JSON.stringify(event.payload),
     );
-    this.notifyChange();
+    if (options.notify !== false) this.notifyChange();
   }
 
   listEvents(repoKey?: string): Event[] {
@@ -454,17 +476,43 @@ export class Store {
     if (result.changes === 0) throw new Error("Span not found");
   }
 
+  // task は依頼文、scope と outputs は依頼の指定、worktree は子が働いた作業木。詳細パネルに出す。
   insertDelegation(row: { id: string; repoKey: string; sessionId: string; parentId?: string; role: Role; title: string;
-    status: string; kind?: "delegation" | "subagent" }): void {
-    this.db.prepare(`INSERT INTO delegations (id, repo_key, session_id, parent_id, role, title, status, kind)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(row.id, row.repoKey, row.sessionId, row.parentId ?? null, row.role, row.title, row.status, row.kind ?? "delegation");
+    status: string; kind?: "delegation" | "subagent"; task?: string; scope?: string[]; outputs?: string[]; worktree?: string }): void {
+    this.db.prepare(`INSERT INTO delegations (id, repo_key, session_id, parent_id, role, title, status, kind, task, scope, outputs, worktree)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(row.id, row.repoKey, row.sessionId, row.parentId ?? null, row.role, row.title, row.status, row.kind ?? "delegation",
+        row.task ?? null, row.scope ? JSON.stringify(row.scope) : null, row.outputs ? JSON.stringify(row.outputs) : null,
+        row.worktree ?? null);
     this.notifyChange();
   }
 
-  finishDelegation(id: string, status: string): void {
-    const result = this.db.prepare("UPDATE delegations SET status = ? WHERE id = ?").run(status, id);
+  // output は子の最終の出力。省略すれば既存の値を保つ。
+  finishDelegation(id: string, status: string, output?: string): void {
+    const result = this.db.prepare("UPDATE delegations SET status = ?, output = COALESCE(?, output) WHERE id = ?")
+      .run(status, output ?? null, id);
     if (result.changes > 0) this.notifyChange();
+  }
+
+  // 往復の記録。seq は委譲ごとの連番で、採番と挿入を 1 つのトランザクションで行う。
+  insertDelegationRound(delegationId: string, kind: RoundKind, text: string, at: string): number {
+    this.db.exec("BEGIN IMMEDIATE");
+    let seq: number;
+    try {
+      seq = Number(this.db.prepare("SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM delegation_rounds WHERE delegation_id = ?")
+        .get(delegationId)!.seq);
+      this.db.prepare("INSERT INTO delegation_rounds (delegation_id, seq, kind, text, at) VALUES (?, ?, ?, ?, ?)")
+        .run(delegationId, seq, kind, text, at);
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+    this.notifyChange();
+    return seq;
+  }
+
+  listDelegationRounds(delegationId: string): DelegationRound[] {
+    return this.db.prepare("SELECT * FROM delegation_rounds WHERE delegation_id = ? ORDER BY seq").all(delegationId)
+      .map((row) => ({ delegationId: String(row.delegation_id), seq: Number(row.seq), kind: String(row.kind) as RoundKind,
+        text: String(row.text), at: String(row.at) }));
   }
 
   insertAssignment(id: string, assignment: Assignment): void {

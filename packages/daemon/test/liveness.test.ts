@@ -29,6 +29,7 @@ test("pid が死んでいれば ended にし、その委譲を lost にする。
   const dead = store.getSession("dead")!;
   assert.equal(dead.status, "ended");
   assert.equal(dead.endedAt, now.toISOString());
+  assert.equal(dead.endedReason, "process_exit");
   assert.equal(store.getSession("alive")?.status, "running");
   assert.equal(store.getSession("waiting")?.status, "ended");
   const status = (id: string) => store.db.prepare("SELECT status FROM delegations WHERE id = ?").get(id)!.status;
@@ -61,6 +62,7 @@ test("pid の無いセッションは 30 分記録が無ければ最後の記録
   const now = new Date("2026-09-25T00:40:00.000Z");
   assert.deepEqual(await reconcileLiveness(store, { now: () => now, isAlive: async () => { throw new Error("pid は問わない"); } }), ["stale"]);
   assert.equal(store.getSession("stale")?.endedAt, ts);
+  assert.equal(store.getSession("stale")?.endedReason, "idle");
   assert.equal(store.getSession("fresh")?.status, "running");
   assert.deepEqual(await reconcileLiveness(store, { now: () => new Date("2026-09-25T00:51:00.000Z") }), ["fresh"]);
 });

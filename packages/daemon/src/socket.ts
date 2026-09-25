@@ -21,7 +21,11 @@ export function isHello(value: unknown): value is Hello {
     (hello.client === undefined || hello.client === "claude" || hello.client === "codex" || hello.client === "planner");
 }
 
-function acceptConnection(socket: Socket, handler: DelegateHandler<Hello>): void {
+// hello を受けた時点で呼ぶ。根の登録と pid の記録に使う。終わるまで MCP の要求は溜めておく。
+export type HelloHandler = (hello: Hello) => Promise<void> | void;
+
+function acceptConnection(socket: Socket, handler: DelegateHandler<Hello>, onHello?: HelloHandler,
+  onError: (error: unknown) => void = console.error): void {
   let pending = "";
   const decoder = new StringDecoder("utf8");
   const readHello = (chunk: Buffer): void => {
@@ -40,9 +44,16 @@ function acceptConnection(socket: Socket, handler: DelegateHandler<Hello>): void
       socket.destroy();
       return;
     }
-    const rest = pending.slice(end + 1);
-    const session = createMcpSession(socket, handler, hello);
-    if (rest) session.receive(rest);
+    let buffered = pending.slice(end + 1);
+    const buffer = (chunk: Buffer): void => { buffered += decoder.write(chunk); };
+    socket.on("data", buffer);
+    const registered = onHello ? Promise.resolve().then(() => onHello(hello)).catch(onError) : Promise.resolve();
+    void registered.then(() => {
+      socket.off("data", buffer);
+      if (socket.destroyed) return;
+      const session = createMcpSession(socket, handler, hello);
+      if (buffered) session.receive(buffered);
+    });
   };
   socket.on("data", readHello);
 }
@@ -66,10 +77,11 @@ async function removeStaleSocket(socketPath: string): Promise<void> {
   await unlink(socketPath);
 }
 
-export async function startSocketServer(options: { socketPath: string; handler: DelegateHandler<Hello> }): Promise<Server> {
+export async function startSocketServer(options: { socketPath: string; handler: DelegateHandler<Hello>;
+  onHello?: HelloHandler; onError?: (error: unknown) => void }): Promise<Server> {
   await mkdir(dirname(options.socketPath), { recursive: true, mode: 0o700 });
   await removeStaleSocket(options.socketPath);
-  const server = createServer((socket) => acceptConnection(socket, options.handler));
+  const server = createServer((socket) => acceptConnection(socket, options.handler, options.onHello, options.onError));
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(options.socketPath, () => { server.off("error", reject); resolve(); });

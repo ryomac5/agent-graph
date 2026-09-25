@@ -9,6 +9,7 @@ import { repoKey, stateDbPath } from "../../core/src/paths.ts";
 import { openStore, type Store } from "../../core/src/store/store.ts";
 import { endSession, NotFoundError, observe, registerSession, summarize } from "../src/sessions.ts";
 import { startHttpServer } from "../src/http/server.ts";
+import { reconcileLiveness } from "../src/liveness.ts";
 
 function createFixture(t: TestContext) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "agent-graph-session-")));
@@ -210,4 +211,39 @@ test("POST /api/sessions/<id>/end と /api/observe は hook から通り、未�
   assert.deepEqual(await end.json(), { ok: true });
   assert.equal(store.getSession("s")?.status, "ended");
   assert.deepEqual(store.listTurns("s").map((turn) => [turn.prompt, turn.summary]), [["hi", "done"]]);
+});
+
+test("委譲せず 30 分黙って ended にした根は次の turn で running に戻り、プロセスの死で ended にした根は戻らない", async (t) => {
+  const { cwd, key, store, stores } = createFixture(t);
+  await registerSession({ id: "idle", cwd, client: "claude" }, stores);
+  store.insertNamedSession({ id: "dead", repoKey: key, client: "claude", traceId: "b".repeat(32), startedAt: new Date().toISOString(), pid: 11 });
+  const at = (hour: number) => new Date(`2026-09-26T0${hour}:00:00.000Z`);
+  // idle は pid が無いので 30 分の規則、dead は pid の死で ended になる
+  const ended = await reconcileLiveness(store, { now: () => at(1), isAlive: async () => false });
+  assert.deepEqual(ended.sort(), ["dead", "idle"]);
+  assert.equal(store.getSession("idle")?.endedReason, "idle");
+  assert.equal(store.getSession("dead")?.endedReason, "process_exit");
+  await registerSession({ id: "hooked", cwd, client: "claude" }, stores);
+  endSession("hooked", stores, at(1));
+  observe({ kind: "turn_start", sessionId: "idle", prompt: "続き" }, stores, at(2));
+  observe({ kind: "turn_start", sessionId: "dead", prompt: "続き" }, stores, at(2));
+  const idle = store.getSession("idle")!;
+  assert.equal(idle.status, "running");
+  assert.equal(idle.endedAt, undefined);
+  assert.equal(idle.endedReason, undefined);
+  assert.equal(idle.lastSeenAt, at(2).toISOString());
+  assert.equal(store.getSession("dead")?.status, "ended");
+  assert.equal(store.getSession("dead")?.endedReason, "process_exit");
+  // turn_done と waiting でも戻る。hook で終えたものは戻らない
+  await reconcileLiveness(store, { now: () => at(3), isAlive: async () => true });
+  assert.equal(store.getSession("idle")?.endedReason, "idle");
+  observe({ kind: "turn_done", sessionId: "idle", reply: "done" }, stores, at(4));
+  assert.equal(store.getSession("idle")?.status, "running");
+  await reconcileLiveness(store, { now: () => at(5), isAlive: async () => true });
+  observe({ kind: "waiting", sessionId: "idle", reason: "permission" }, stores, at(6));
+  assert.equal(store.getSession("idle")?.status, "waiting");
+  assert.equal(store.getSession("idle")?.waitingReason, "permission");
+  observe({ kind: "turn_start", sessionId: "hooked", prompt: "続き" }, stores, at(6));
+  assert.equal(store.getSession("hooked")?.status, "ended");
+  assert.equal(store.getSession("hooked")?.endedReason, "explicit");
 });

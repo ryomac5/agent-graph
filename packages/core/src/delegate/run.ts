@@ -89,9 +89,12 @@ export async function runDelegation(
   let review: DelegateResult["review"];
   let finished = false;
   let roundTrips = 0;
+  // 依頼の詳細と往復は表に残し、詳細パネルが events を辿らずに読めるようにする
   store.insertDelegation({ id: delegationId, repoKey: caller.repoKey,
     sessionId: caller.sessionId, parentId: caller.parentDelegationId,
-    role: req.role, title: req.title, status: "requested" });
+    role: req.role, title: req.title, status: "requested",
+    task: req.task, scope: req.scope, outputs: req.outputs, worktree: cwd });
+  store.insertDelegationRound(delegationId, "request", req.task, now().toISOString());
   store.insertSpan({ trace, name: "delegate", startedAt: now().toISOString(), status: "unset",
     attributes: { "agent.role": req.role, "agent.executor": "", "agent.model": "",
       "agent.session": caller.sessionId, "agent.delegation": delegationId } });
@@ -156,6 +159,7 @@ export async function runDelegation(
           await rm(workDir, { recursive: true, force: true });
         }
         output = execution.output;
+        store.insertDelegationRound(delegationId, "report", output, now().toISOString());
         usage = { inputTokens: usage.inputTokens + execution.usage.inputTokens, outputTokens: usage.outputTokens + execution.usage.outputTokens };
         if (roundTrips === 0) store.insertTokenUsage(delegationId, usage, assignment.model);
         else store.db.prepare("UPDATE token_usage SET input_tokens = ?, output_tokens = ? WHERE delegation_id = ?").run(usage.inputTokens, usage.outputTokens, delegationId);
@@ -192,12 +196,14 @@ export async function runDelegation(
         const feedback = !acceptance.passed || execution.exitCode !== 0
           ? `受け入れ失敗 (exitCode: ${execution.exitCode}):\n${JSON.stringify(acceptance)}`
           : `レビューの修正依頼:\n${review?.comment ?? ""}`;
-        task = `${req.task}\n\n前回の結果を踏まえて修正してください。\n${feedback}`;
+        const reinstruction = `前回の結果を踏まえて修正してください。\n${feedback}`;
+        task = `${req.task}\n\n${reinstruction}`;
         roundTrips++;
+        store.insertDelegationRound(delegationId, "reinstruct", reinstruction, now().toISOString());
         store.db.prepare("UPDATE delegations SET round_trips = ? WHERE id = ?").run(roundTrips, delegationId);
       }
     }
-    store.finishDelegation(delegationId, status);
+    store.finishDelegation(delegationId, status, output);
     event("delegation.finished", { delegationId, status });
     finished = true;
     return { delegationId, traceId: trace.traceId, spanId: trace.spanId, status,

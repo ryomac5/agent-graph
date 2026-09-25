@@ -9,12 +9,15 @@ agent-graph は AI エージェント間の委譲を記録し、可視化し、�
 
 pnpm workspace のモノレポ。`packages/core`、`daemon`、`dashboard`、`adapters`、`planner` に分ける。
 責務と依存してよい先は設計書の「部品の責務と境界」の表を参照する。
-1 段目は `packages/core` だけを実装する。
+2 段目は `packages/core` の実行アダプタと委譲処理、`packages/daemon` の MCP・ソケット・エントリ、および双方向 e2e を実装する。
 
 ## 開発コマンド
 
 - 依存の解決: `npx --yes pnpm@10 install`
 - テスト: `npx --yes pnpm@10 test`
+- デーモン: `npx --yes pnpm@10 daemon`
+- 実機の双方向 e2e（claude と codex の認証が必要、API 利用費用が発生）: `AGENT_GRAPH_E2E=1 bash scripts/e2e-stage2.sh`
+- e2e は未指定時 skip。状態と作業リポジトリは一時ディレクトリに隔離する
 - pnpm は常に `npx --yes pnpm@10` で呼ぶ
 
 ## 規則

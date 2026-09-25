@@ -4,18 +4,18 @@ export interface GraphNode {
   title: string;
   role?: string;
   status?: string;
-  executor?: string;
-  model?: string;
-  family?: string;
-  startedAt?: string;
-  endedAt?: string;
+  executor?: string | null;
+  model?: string | null;
+  family?: string | null;
+  startedAt?: string | null;
+  endedAt?: string | null;
 }
 
 export interface GraphEdge {
   from: string;
   to: string;
-  fromFamily?: string;
-  toFamily?: string;
+  fromFamily?: string | null;
+  toFamily?: string | null;
   title?: string;
 }
 

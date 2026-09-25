@@ -53,6 +53,15 @@ test("handler restores caller and reuses repository store across nested cwd", as
       assert.equal(span.parent_span_id, "b".repeat(16));
       assert.equal(span.trace_state, hello.tracestate);
     }
+    for (const client of ["claude", "codex"] as const) {
+      await handler(request, { type: "hello", cwd: root, pid: process.pid, session: client, client });
+      assert.equal(store.db.prepare("SELECT client FROM sessions WHERE id = ?").get(client)?.client, client);
+    }
+    await handler(request, { type: "hello", cwd: root, pid: process.pid, session: "session", client: "codex" });
+    assert.equal(store.db.prepare("SELECT client FROM sessions WHERE id = 'session'").get()?.client, "codex");
+    await handler(request, { ...hello, client: "claude" });
+    assert.equal(store.db.prepare("SELECT client FROM sessions WHERE id = 'session'").get()?.client, "codex",
+      "nested clients must not overwrite the root client");
   } finally {
     for (const store of stores.values()) store.close();
     if (oldState === undefined) delete process.env.XDG_STATE_HOME; else process.env.XDG_STATE_HOME = oldState;

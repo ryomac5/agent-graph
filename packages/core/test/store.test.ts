@@ -152,3 +152,18 @@ test("onChange のリスナー例外は書き込みと他のリスナーを妨�
   assert.equal(changes, 1);
   assert.equal(store.db.prepare("SELECT COUNT(*) AS count FROM delegations").get()!.count, 1);
 });
+
+test("セッションの作成と client の変更を通知し、同値更新は通知しない", (t) => {
+  const store = openStore(":memory:");
+  t.after(() => store.close());
+  store.upsertRepo(repo);
+  let changes = 0;
+  store.onChange(() => { changes++; });
+  store.insertSession({ id: "session", repoKey: repo.key, name: "repo-1", client: "mcp",
+    traceId: trace.traceId, startedAt: ts });
+  store.updateSessionClient("session", "codex");
+  store.updateSessionClient("session", "codex");
+  store.updateSessionClient("missing", "claude");
+  assert.equal(changes, 2);
+  assert.equal(store.db.prepare("SELECT client FROM sessions WHERE id = 'session'").get()?.client, "codex");
+});

@@ -70,6 +70,12 @@ export class Store {
       INSERT INTO sessions (id, repo_key, name, client, trace_id, started_at)
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(session.id, session.repoKey, session.name, session.client, session.traceId, session.startedAt);
+    this.notifyChange();
+  }
+
+  updateSessionClient(id: string, client: "claude" | "codex"): void {
+    const result = this.db.prepare("UPDATE sessions SET client = ? WHERE id = ? AND client != ?").run(client, id, client);
+    if (result.changes > 0) this.notifyChange();
   }
 
   appendEvent(event: Event): void {

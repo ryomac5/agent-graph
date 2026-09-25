@@ -36,7 +36,7 @@ export AGENT_GRAPH_POLICY_JSON="$TEMP/policy.json"
 export E2E_REAL_CLAUDE E2E_REAL_CODEX E2E_LOG_DIR="$TEMP"
 E2E_REAL_CLAUDE=$(command -v claude)
 E2E_REAL_CODEX=$(command -v codex)
-unset AGENT_GRAPH_CLAUDE_BIN AGENT_GRAPH_CODEX_BIN TRACEPARENT TRACESTATE AGENT_GRAPH_SESSION AGENT_GRAPH_DELEGATION
+unset AGENT_GRAPH_CLAUDE_BIN AGENT_GRAPH_CODEX_BIN TRACEPARENT TRACESTATE AGENT_GRAPH_SESSION AGENT_GRAPH_DELEGATION AGENT_GRAPH_CLIENT
 cat > "$AGENT_GRAPH_POLICY_JSON" <<'JSON'
 {"roles":{"orchestrate":[],"research":[],"implement":[{"executor":"codex","model":"gpt-6-luna","family":"openai","tier":"low"}],"document":[{"executor":"claude","model":"haiku","family":"anthropic","tier":"low"}],"review":[{"executor":"claude","model":"haiku","family":"anthropic","tier":"low"}]}}
 JSON
@@ -69,11 +69,9 @@ done
 export TRACEPARENT=00-11111111111111111111111111111111-1111111111111111-01
 export TRACESTATE='agent-graph=session:e2e-claude;delegation:parent-claude'
 export AGENT_GRAPH_SESSION=e2e-claude
+export AGENT_GRAPH_CLIENT=claude
 node "$ROOT/scripts/e2e-stage2-state.ts" seed implement claude
-node --input-type=module - "$ROOT" > "$TEMP/mcp.json" <<'JS'
-const env = Object.fromEntries(['AGENT_GRAPH_SOCKET', 'TRACEPARENT', 'TRACESTATE', 'AGENT_GRAPH_SESSION'].map(k => [k, process.env[k]]));
-console.log(JSON.stringify({mcpServers: {'agent-graph': {command: process.execPath, args: [process.argv[2] + '/packages/daemon/src/shim.ts'], env}}}));
-JS
+node "$ROOT/scripts/e2e-mcp-config.ts" claude > "$TEMP/mcp.json"
 MCP_TOOL_TIMEOUT=1800000 claude -p --model haiku --strict-mcp-config --mcp-config "$TEMP/mcp.json" \
   --allowedTools mcp__agent-graph__delegate --setting-sources project --no-session-persistence \
   'Call mcp__agent-graph__delegate exactly once with {"role":"implement","title":"e2e hello","task":"Write hello followed by a newline to hello.txt in the current repository.","accept":["test -f hello.txt"],"review":false}. Do not write the file yourself. Wait for the result and report its status and output.' > "$TEMP/claude-parent.log" 2>&1
@@ -82,13 +80,9 @@ test "$(cat hello.txt)" = hello
 export TRACEPARENT=00-22222222222222222222222222222222-2222222222222222-01
 export TRACESTATE='agent-graph=session:e2e-codex;delegation:parent-codex'
 export AGENT_GRAPH_SESSION=e2e-codex
+export AGENT_GRAPH_CLIENT=codex
 node "$ROOT/scripts/e2e-stage2-state.ts" seed document codex
-MCP_CONFIG=$(node --input-type=module - "$ROOT" <<'JS'
-const env = Object.fromEntries(['AGENT_GRAPH_SOCKET', 'TRACEPARENT', 'TRACESTATE', 'AGENT_GRAPH_SESSION'].map(k => [k, process.env[k]]));
-const pairs = Object.entries(env).map(([k,v]) => `${k} = ${JSON.stringify(v)}`).join(', ');
-console.log(`mcp_servers.agent-graph={command=${JSON.stringify(process.execPath)},args=[${JSON.stringify(process.argv[2] + '/packages/daemon/src/shim.ts')}],env={${pairs}},tool_timeout_sec=1800}`);
-JS
-)
+MCP_CONFIG=$(node "$ROOT/scripts/e2e-mcp-config.ts" codex)
 # approval_policy=never は承認要求を拒否するため、委譲ツールだけ事前承認する。
 codex exec --ignore-user-config --ephemeral -m gpt-6-luna --sandbox workspace-write \
   -c 'approval_policy="never"' -c "$MCP_CONFIG" \

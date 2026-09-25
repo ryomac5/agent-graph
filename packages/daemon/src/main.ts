@@ -96,7 +96,8 @@ export function createHandler(stores: Map<string, Store>, latest = new Map<strin
     const session = store.db.prepare("SELECT trace_id FROM sessions WHERE id = ?").get(caller.sessionId);
     if (session && session.trace_id !== caller.traceId) throw new Error("Session trace does not match hello");
     if (!session) store.insertSession({ id: caller.sessionId, repoKey: key, name: caller.sessionId,
-      client: "mcp", traceId: caller.traceId, startedAt: new Date().toISOString() });
+      client: hello.client ?? "mcp", traceId: caller.traceId, startedAt: new Date().toISOString() });
+    if (session && hello.client && !state.delegationId) store.updateSessionClient(caller.sessionId, hello.client);
     return runDelegation(request, { repoKey: key, repoRoot, sessionId: caller.sessionId,
       trace: { traceId: caller.traceId, spanId: caller.spanId, traceState: hello.tracestate },
       parentDelegationId: state.delegationId }, { store, usageSamples: [...latest.values()] });

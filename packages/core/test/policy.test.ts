@@ -39,3 +39,31 @@ test("XDG_CONFIG_HOME を優先し、JSON が TOML より優先する", () => {
   assert.equal(loadPolicy({ home: root, env: { XDG_CONFIG_HOME: xdg } }).quota.softLimitPercent, 60);
   assert.equal(loadPolicy({ home: root, env: { XDG_CONFIG_HOME: xdg, AGENT_GRAPH_POLICY_JSON: jsonPath } }).quota.softLimitPercent, 55);
 });
+
+test("JSON の不正な constraints を拒否する", () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-graph-policy-"));
+  const jsonPath = join(root, "policy.json");
+  for (const constraints of [
+    {},
+    [{ kind: "unknown" }],
+    [{ kind: "minTierForRole", role: "implement", tier: "hgh" }],
+    [{ kind: "minTierForRole", role: "unknown", tier: "high" }],
+  ]) {
+    writeFileSync(jsonPath, JSON.stringify({ constraints }));
+    assert.throws(() => loadPolicy({ home: root, env: { AGENT_GRAPH_POLICY_JSON: jsonPath } }), TypeError);
+  }
+});
+
+test("TOML の不正な constraints を拒否する", () => {
+  for (const constraint of [
+    'kind = "unknown"',
+    'kind = "minTierForRole"\nrole = "implement"\ntier = "hgh"',
+    'kind = "minTierForRole"\nrole = "unknown"\ntier = "high"',
+  ]) {
+    assert.throws(() => parsePolicyToml(`[[constraints]]\n${constraint}\n`), TypeError);
+  }
+  const root = mkdtempSync(join(tmpdir(), "agent-graph-policy-"));
+  const path = join(root, "policy.toml");
+  writeFileSync(path, '[[constraints]]\nkind = "minTierForRole"\nrole = "implement"\ntier = "hgh"\n');
+  assert.throws(() => loadPolicy({ path, env: {}, home: root }), TypeError);
+});

@@ -89,6 +89,19 @@ function validateOverride(value: unknown): Partial<Policy> {
       }
     }
   }
+  if (object.constraints !== undefined) {
+    if (!Array.isArray(object.constraints)) throw new TypeError("Invalid constraints");
+    for (const entry of object.constraints) {
+      const constraint = record(entry, "constraints entry");
+      if (constraint.kind === "minTierForRole") {
+        if (!ROLES.includes(constraint.role as Role) || !["high", "mid", "low"].includes(constraint.tier as string)) {
+          throw new TypeError("Invalid constraints entry");
+        }
+      } else if (constraint.kind !== "reviewerDifferentFamily" && constraint.kind !== "implementerNotOrchestrator") {
+        throw new TypeError("Invalid constraints entry");
+      }
+    }
+  }
   return object as Partial<Policy>;
 }
 
@@ -96,6 +109,7 @@ export function parsePolicyToml(text: string): Partial<Policy> {
   const result: Partial<Policy> = {};
   let section = "";
   let candidate: Partial<Candidate> | undefined;
+  let constraint: Record<string, string> | undefined;
   for (const [index, raw] of text.split(/\r?\n/).entries()) {
     const line = raw.trim();
     if (!line || line.startsWith("#")) continue;
@@ -110,6 +124,13 @@ export function parsePolicyToml(text: string): Partial<Policy> {
       section = "role";
       continue;
     }
+    if (line === "[[constraints]]") {
+      result.constraints ??= [];
+      constraint = {};
+      result.constraints.push(constraint as unknown as Constraint);
+      section = "constraint";
+      continue;
+    }
     if (["[quota]", "[performance]", "[performance.weights]"].includes(line)) {
       section = line.slice(1, -1);
       continue;
@@ -117,6 +138,13 @@ export function parsePolicyToml(text: string): Partial<Policy> {
     const pair = /^(\w+)\s*=\s*(.+)$/.exec(line);
     if (!pair) throw new SyntaxError(`Unsupported TOML at line ${index + 1}`);
     const [, key, rawValue] = pair;
+    if (section === "constraint" && constraint) {
+      if (!["kind", "role", "tier"].includes(key)) throw new SyntaxError(`Unsupported TOML at line ${index + 1}`);
+      const value = /^"([^"\\]*)"$/.exec(rawValue)?.[1];
+      if (value === undefined) throw new SyntaxError(`Unsupported TOML at line ${index + 1}`);
+      constraint[key] = value;
+      continue;
+    }
     if (section === "role" && candidate && FIELDS.includes(key as typeof FIELDS[number])) {
       const value = /^"([^"\\]*)"$/.exec(rawValue)?.[1];
       if (value === undefined || (key === "executor" && !["claude", "codex"].includes(value)) ||
@@ -151,7 +179,7 @@ export function parsePolicyToml(text: string): Partial<Policy> {
       throw new SyntaxError("Incomplete TOML role candidate");
     }
   }
-  return result;
+  return validateOverride(result);
 }
 
 export function loadPolicy(options: { path?: string; env?: NodeJS.ProcessEnv; home?: string } = {}): Policy {

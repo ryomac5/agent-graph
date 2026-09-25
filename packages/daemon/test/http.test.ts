@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -59,12 +59,13 @@ test("HTTP graph と SSE は委譲を配信し、静的ファイルを制限す�
     reason: [], policyVersion: "1" });
   const staticDir = join(directory, "public");
   mkdirSync(staticDir);
-  writeFileSync(join(staticDir, "index.html"), "hello");
+  writeFileSync(join(staticDir, "index.html"), "<!doctype html><html><head><meta charset=\"utf-8\"></head><body>hello</body></html>");
   writeFileSync(join(directory, "secret"), "private content");
+  const tokenPath = join(directory, "run", "dashboard.token");
   let server;
   try {
     server = await startHttpServer({ port: 0, openStores: new Map([["repo", store]]),
-      listRepos: () => [{ key: "repo", rootPath: directory, name: "repo" }], staticDir });
+      listRepos: () => [{ key: "repo", rootPath: directory, name: "repo" }], staticDir, tokenPath });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "EPERM") { t.skip("HTTP listen is prohibited by the sandbox"); return; }
     throw error;
@@ -77,7 +78,15 @@ test("HTTP graph と SSE は委譲を配信し、静的ファイルを制限す�
   const graph = await (await fetch(`${base}/api/graph?repo=repo&session=session`)).json();
   assert.equal(graph.nodes.length, 2);
   assert.deepEqual(graph.edges, [{ from: "session", to: "first", fromFamily: "anthropic", toFamily: "openai" }]);
-  assert.equal((await fetch(`${base}/`)).status, 200);
+  const index = await fetch(`${base}/`);
+  assert.equal(index.status, 200);
+  const token = readFileSync(tokenPath, "utf8").trim();
+  assert.ok(token.length >= 32);
+  assert.equal(statSync(tokenPath).mode & 0o777, 0o600);
+  assert.match(await index.text(), new RegExp(`<head>\\s*<meta name="agent-graph-token" content="${token}">`));
+  assert.equal((await fetch(`${base}/api/overview`)).status, 501);
+  assert.equal((await fetch(`${base}/api/project?repo=repo`)).status, 501);
+  assert.equal((await fetch(`${base}/api/repos`)).status, 200);
   for (const path of ["/%2e%2e%2fsecret", "/../secret"]) {
     const result = await getRawPath(address.port, path);
     assert.equal(result.status, 403);

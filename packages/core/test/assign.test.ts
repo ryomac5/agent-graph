@@ -71,12 +71,15 @@ test("policy 制約と依頼の minTier を適用する", () => {
   const input = { policy: defaultPolicy(), quota: () => undefined, performance: () => undefined };
   const reviewer = decide(request("review"), { ...input, implementerFamily: "anthropic" as const });
   assert.equal(reviewer.ok && reviewer.assignment.family, "openai");
+  if (reviewer.ok) assert.match(reviewer.assignment.reason.join(" "), /reviewerDifferentFamily: fable excluded/);
   const implementer = decide(request("implement"), { ...input, orchestratorModel: "gpt-6-astra" });
   assert.equal(implementer.ok && implementer.assignment.model, "gpt-6-sol");
+  if (implementer.ok) assert.match(implementer.assignment.reason.join(" "), /implementerNotOrchestrator: gpt-6-astra excluded/);
   const policy = defaultPolicy();
   policy.constraints.push({ kind: "minTierForRole", role: "document", tier: "high" });
-  const tier = decide(request("document", { minTier: "high" }), { ...input, policy });
+  const tier = decide(request("document"), { ...input, policy });
   assert.equal(tier.ok && tier.assignment.model, "opus");
+  if (tier.ok) assert.match(tier.assignment.reason.join(" "), /minTierForRole: sonnet excluded/);
 });
 
 test("系統除外と最低 tier を適用する", () => {
@@ -106,6 +109,8 @@ test("環境変数の JSON で表を置き換える", () => {
     assert.equal(defaultPolicyTable().implement[0].model, "custom");
     writeFileSync(path, "invalid");
     assert.throws(() => defaultPolicyTable());
+    writeFileSync(path, JSON.stringify({ roles: { implement: [{ executor: "wrong", model: "custom", family: "anthropic", tier: "low" }] } }));
+    assert.throws(() => defaultPolicyTable(), TypeError);
   } finally {
     if (previous === undefined) delete process.env.AGENT_GRAPH_POLICY_JSON;
     else process.env.AGENT_GRAPH_POLICY_JSON = previous;

@@ -53,15 +53,34 @@ export function decide(
   } else reason.push(`stage 3 performance: static order (minimum ${policy.performance.minSamples} samples unavailable)`);
   const { excludeFamily = [], excludeModels = [], minTier } = req.constraints ?? {};
   candidates = candidates.filter((candidate) => {
-    if (excludeFamily.includes(candidate.family) || excludeModels.includes(candidate.model) ||
-      (minTier && TIER_RANK[candidate.tier] < TIER_RANK[minTier])) return false;
+    if (excludeFamily.includes(candidate.family)) {
+      reason.push(`stage 4 excludeFamily: ${candidate.model} excluded (${candidate.family})`);
+      return false;
+    }
+    if (excludeModels.includes(candidate.model)) {
+      reason.push(`stage 4 excludeModels: ${candidate.model} excluded`);
+      return false;
+    }
+    if (minTier && TIER_RANK[candidate.tier] < TIER_RANK[minTier]) {
+      reason.push(`stage 4 minTier: ${candidate.model} excluded (${candidate.tier} < ${minTier})`);
+      return false;
+    }
     for (const constraint of policy.constraints) {
       if (constraint.kind === "reviewerDifferentFamily" && req.role === "review" &&
-        input.implementerFamily === candidate.family) return false;
+        input.implementerFamily === candidate.family) {
+        reason.push(`stage 4 reviewerDifferentFamily: ${candidate.model} excluded (${candidate.family})`);
+        return false;
+      }
       if (constraint.kind === "implementerNotOrchestrator" && req.role === "implement" &&
-        input.orchestratorModel === candidate.model) return false;
+        input.orchestratorModel === candidate.model) {
+        reason.push(`stage 4 implementerNotOrchestrator: ${candidate.model} excluded`);
+        return false;
+      }
       if (constraint.kind === "minTierForRole" && req.role === constraint.role &&
-        TIER_RANK[candidate.tier] < TIER_RANK[constraint.tier]) return false;
+        TIER_RANK[candidate.tier] < TIER_RANK[constraint.tier]) {
+        reason.push(`stage 4 minTierForRole: ${candidate.model} excluded (${candidate.tier} < ${constraint.tier})`);
+        return false;
+      }
     }
     return true;
   });

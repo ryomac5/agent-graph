@@ -3,7 +3,29 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Candidate, Role, Tier } from "../delegate/types.ts";
-import { staticPolicyTable } from "./static.ts";
+
+export function staticPolicyTable(): Record<Role, Candidate[]> {
+  return {
+    implement: [
+      { executor: "codex", model: "gpt-6-astra", family: "openai", tier: "high" },
+      { executor: "codex", model: "gpt-6-sol", family: "openai", tier: "mid" },
+      { executor: "claude", model: "opus", family: "anthropic", tier: "high" },
+    ],
+    review: [
+      { executor: "claude", model: "fable", family: "anthropic", tier: "high" },
+      { executor: "codex", model: "gpt-6-astra", family: "openai", tier: "high" },
+    ],
+    research: [
+      { executor: "claude", model: "sonnet", family: "anthropic", tier: "mid" },
+      { executor: "codex", model: "gpt-6-sol", family: "openai", tier: "mid" },
+    ],
+    document: [
+      { executor: "claude", model: "sonnet", family: "anthropic", tier: "mid" },
+      { executor: "claude", model: "opus", family: "anthropic", tier: "high" },
+    ],
+    orchestrate: [{ executor: "claude", model: "fable", family: "anthropic", tier: "high" }],
+  };
+}
 
 export type Constraint =
   | { kind: "reviewerDifferentFamily" }
@@ -25,6 +47,50 @@ export function defaultPolicy(): Policy {
 }
 const ROLES: Role[] = ["orchestrate", "implement", "research", "document", "review"];
 const FIELDS = ["executor", "model", "family", "tier"] as const;
+
+function validateOverride(value: unknown): Partial<Policy> {
+  const record = (input: unknown, name: string): Record<string, unknown> => {
+    if (!input || typeof input !== "object" || Array.isArray(input)) throw new TypeError(`Invalid ${name}`);
+    return input as Record<string, unknown>;
+  };
+  const object = record(value, "policy");
+  if (object.roles !== undefined) {
+    const roles = record(object.roles, "roles");
+    for (const [role, entries] of Object.entries(roles)) {
+      if (!ROLES.includes(role as Role) || !Array.isArray(entries)) throw new TypeError(`Invalid roles.${role}`);
+      for (const entry of entries) {
+        const candidate = record(entry, `roles.${role} candidate`);
+        if (!FIELDS.every((field) => typeof candidate[field] === "string") ||
+          !["claude", "codex"].includes(candidate.executor as string) ||
+          !["anthropic", "openai"].includes(candidate.family as string) ||
+          !["high", "mid", "low"].includes(candidate.tier as string)) {
+          throw new TypeError(`Invalid roles.${role} candidate`);
+        }
+      }
+    }
+  }
+  for (const [name, fields] of [
+    ["quota", ["softLimitPercent", "hardLimitPercent"]],
+    ["performance", ["minSamples"]],
+  ] as const) {
+    if (object[name] === undefined) continue;
+    const section = record(object[name], name);
+    for (const field of fields) if (section[field] !== undefined &&
+      (typeof section[field] !== "number" || !Number.isFinite(section[field]))) throw new TypeError(`Invalid ${name}.${field}`);
+  }
+  if (object.performance !== undefined) {
+    const performance = record(object.performance, "performance");
+    if (performance.weights !== undefined) {
+      const weights = record(performance.weights, "performance.weights");
+      for (const field of ["acceptRate", "reviewApprove", "roundTrips", "tokens"]) {
+        if (weights[field] !== undefined && (typeof weights[field] !== "number" || !Number.isFinite(weights[field]))) {
+          throw new TypeError(`Invalid performance.weights.${field}`);
+        }
+      }
+    }
+  }
+  return object as Partial<Policy>;
+}
 
 export function parsePolicyToml(text: string): Partial<Policy> {
   const result: Partial<Policy> = {};
@@ -94,7 +160,7 @@ export function loadPolicy(options: { path?: string; env?: NodeJS.ProcessEnv; ho
   const path = options.path ?? join(env.XDG_CONFIG_HOME || join(home, ".config"), "agent-graph", "policy.toml");
   const policy = defaultPolicy();
   const toml = existsSync(path) ? parsePolicyToml(readFileSync(path, "utf8")) : {};
-  const json = env.AGENT_GRAPH_POLICY_JSON ? JSON.parse(readFileSync(env.AGENT_GRAPH_POLICY_JSON, "utf8")) as Partial<Policy> : {};
+  const json = env.AGENT_GRAPH_POLICY_JSON ? validateOverride(JSON.parse(readFileSync(env.AGENT_GRAPH_POLICY_JSON, "utf8"))) : {};
   for (const override of [toml, json]) {
     if (override.roles) policy.roles = { ...policy.roles, ...override.roles };
     if (override.quota) policy.quota = { ...policy.quota, ...override.quota };

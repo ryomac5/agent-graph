@@ -3,7 +3,7 @@ import { realpath, stat } from "node:fs/promises";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import { extname, relative, resolve, sep } from "node:path";
 import type { Repo, Store } from "../../../core/src/store/store.ts";
-import { buildGraph } from "./graph.ts";
+import { buildGraph, diffGraph } from "./graph.ts";
 
 const KEEP_ALIVE_MS = 15_000;
 const POLL_MS = 500;
@@ -77,18 +77,15 @@ export async function startHttpServer(options: HttpOptions): Promise<Server> {
           "cache-control": "no-cache", connection: "keep-alive" });
         response.flushHeaders();
         const graph = () => buildGraph(store.db);
-        sendEvent(response, "snapshot", graph());
-        let previous = JSON.stringify(graph());
-        let maxRowid = Number(store.db.prepare("SELECT COALESCE(MAX(rowid), 0) AS value FROM delegations").get()?.value);
+        let previous = graph();
+        sendEvent(response, "snapshot", previous);
         const emit = (): void => {
-          const next = JSON.stringify(graph());
-          if (next !== previous) { previous = next; sendEvent(response, "delegation", JSON.parse(next)); }
+          const next = graph();
+          for (const change of diffGraph(previous, next)) sendEvent(response, "delegation", change);
+          previous = next;
         };
         const unsubscribe = store.onChange(emit);
-        const poll = setInterval(() => {
-          const next = Number(store.db.prepare("SELECT COALESCE(MAX(rowid), 0) AS value FROM delegations").get()?.value);
-          if (next !== maxRowid) { maxRowid = next; emit(); }
-        }, POLL_MS);
+        const poll = setInterval(emit, POLL_MS);
         const keepAlive = setInterval(() => response.write(": keep-alive\n\n"), KEEP_ALIVE_MS);
         response.once("close", () => { unsubscribe(); clearInterval(poll); clearInterval(keepAlive); });
         return;

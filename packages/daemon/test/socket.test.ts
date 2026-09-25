@@ -25,7 +25,7 @@ test("socket is private and shim forwards hello", async (t) => {
     const traceparent = "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01";
     const child = spawn(process.execPath, ["src/shim.ts"], {
       cwd: join(import.meta.dirname, ".."),
-      env: { ...process.env, AGENT_GRAPH_SOCKET: socketPath, TRACEPARENT: traceparent },
+      env: { ...process.env, AGENT_GRAPH_SOCKET: socketPath, AGENT_GRAPH_CLIENT: "codex", TRACEPARENT: traceparent },
       stdio: ["pipe", "pipe", "pipe"],
     });
     let output = "";
@@ -38,8 +38,9 @@ test("socket is private and shim forwards hello", async (t) => {
       child.once("error", reject);
       child.once("exit", (code) => { if (!output.includes("\n")) reject(new Error(`shim exited ${code}: ${stderr}`)); });
     });
-    const result = JSON.parse(output.trim()) as { result: { structuredContent: { traceparent: string; cwd: string } } };
+    const result = JSON.parse(output.trim()) as { result: { structuredContent: { traceparent: string; cwd: string; client: string } } };
     assert.equal(result.result.structuredContent.traceparent, traceparent);
+    assert.equal(result.result.structuredContent.client, "codex");
     assert.equal(result.result.structuredContent.cwd, join(import.meta.dirname, ".."));
     child.kill();
   } finally {

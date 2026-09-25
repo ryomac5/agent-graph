@@ -7,9 +7,14 @@ fi
 ROOT=$(builtin cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 TEMP=$(mktemp -d /tmp/agent-graph-e2e.XXXXXX)
 DAEMON_PID=''
+SSE_PID=''
 cleanup() {
   result=$?
   trap - EXIT INT TERM
+  if [[ -n "$SSE_PID" ]]; then
+    kill "$SSE_PID" 2>/dev/null || true
+    wait "$SSE_PID" 2>/dev/null || true
+  fi
   if [[ -n "$DAEMON_PID" ]]; then
     kill "$DAEMON_PID" 2>/dev/null || true
     wait "$DAEMON_PID" 2>/dev/null || true
@@ -33,7 +38,7 @@ export AGENT_GRAPH_SOCKET="$TEMP/daemon.sock"
 export AGENT_GRAPH_USAGE_PROBE=0
 export AGENT_GRAPH_PORT=0
 export AGENT_GRAPH_POLICY_JSON="$TEMP/policy.json"
-export E2E_REAL_CLAUDE E2E_REAL_CODEX E2E_LOG_DIR="$TEMP"
+export E2E_REAL_CLAUDE E2E_REAL_CODEX E2E_LOG_DIR="$TEMP" E2E_ROOT="$ROOT"
 E2E_REAL_CLAUDE=$(command -v claude)
 E2E_REAL_CODEX=$(command -v codex)
 unset AGENT_GRAPH_CLAUDE_BIN AGENT_GRAPH_CODEX_BIN TRACEPARENT TRACESTATE AGENT_GRAPH_SESSION AGENT_GRAPH_DELEGATION AGENT_GRAPH_CLIENT
@@ -50,7 +55,9 @@ cat > "$TEMP/codex-child" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 shift
-"$E2E_REAL_CODEX" exec --ignore-user-config --ephemeral -c 'approval_policy="never"' "$@" 2> >(tee -a "$E2E_LOG_DIR/codex-child.stderr.log" >&2) | tee -a "$E2E_LOG_DIR/codex-child.stdout.log"
+export AGENT_GRAPH_CLIENT=codex
+MCP_CONFIG=$(node "$E2E_ROOT/scripts/e2e-mcp-config.ts" codex)
+"$E2E_REAL_CODEX" exec --ignore-user-config --ephemeral -c 'approval_policy="never"' -c "$MCP_CONFIG" -c 'mcp_servers.agent-graph.tools.delegate.approval_mode="approve"' "$@" 2> >(tee -a "$E2E_LOG_DIR/codex-child.stderr.log" >&2) | tee -a "$E2E_LOG_DIR/codex-child.stdout.log"
 SH
 chmod +x "$TEMP/claude-child" "$TEMP/codex-child"
 export AGENT_GRAPH_CLAUDE_BIN="$TEMP/claude-child" AGENT_GRAPH_CODEX_BIN="$TEMP/codex-child"
@@ -66,28 +73,74 @@ for ((attempt=0; attempt<100; attempt++)); do
   sleep 0.1
 done
 [[ -S "$AGENT_GRAPH_SOCKET" ]] || { echo 'daemon startup timed out'; exit 1; }
+LOG="$TEMP/state/agent-graph/run/daemon.log"
+for ((attempt=0; attempt<100; attempt++)); do
+  URL=$(sed -n 's/.*dashboard \(http:\/\/127\.0\.0\.1:[0-9]*\/\).*/\1/p' "$LOG" | tail -1)
+  [[ -n "$URL" ]] && break
+  sleep 0.1
+done
+[[ -n "$URL" ]] || { echo 'dashboard URL missing'; exit 1; }
+node "$ROOT/scripts/e2e-stage4-check.ts" listen "$URL" "$TEMP/sse.jsonl" > "$TEMP/sse-listener.log" 2>&1 &
+SSE_PID=$!
+for ((attempt=0; attempt<100; attempt++)); do
+  [[ -f "$TEMP/sse.jsonl.ready" ]] && break
+  kill -0 "$SSE_PID" 2>/dev/null || { echo 'SSE listener exited'; exit 1; }
+  sleep 0.1
+done
+[[ -f "$TEMP/sse.jsonl.ready" ]] || { echo 'SSE connection timed out'; exit 1; }
 export TRACEPARENT=00-11111111111111111111111111111111-1111111111111111-01
-export TRACESTATE='agent-graph=session:e2e-claude;delegation:parent-claude'
+unset TRACESTATE
 export AGENT_GRAPH_SESSION=e2e-claude
 export AGENT_GRAPH_CLIENT=claude
-node "$ROOT/scripts/e2e-stage2-state.ts" seed implement claude
 node "$ROOT/scripts/e2e-mcp-config.ts" claude > "$TEMP/mcp.json"
 MCP_TOOL_TIMEOUT=1800000 claude -p --model haiku --strict-mcp-config --mcp-config "$TEMP/mcp.json" \
   --allowedTools mcp__agent-graph__delegate --setting-sources project --no-session-persistence \
   'Call mcp__agent-graph__delegate exactly once with {"role":"implement","title":"e2e hello","task":"Write hello followed by a newline to hello.txt in the current repository.","accept":["test -f hello.txt"],"review":false}. Do not write the file yourself. Wait for the result and report its status and output.' > "$TEMP/claude-parent.log" 2>&1
-node "$ROOT/scripts/e2e-stage2-state.ts" check implement codex
+node "$ROOT/scripts/e2e-stage2-state.ts" check-root implement codex
 test "$(cat hello.txt)" = hello
 export TRACEPARENT=00-22222222222222222222222222222222-2222222222222222-01
-export TRACESTATE='agent-graph=session:e2e-codex;delegation:parent-codex'
+unset TRACESTATE
 export AGENT_GRAPH_SESSION=e2e-codex
 export AGENT_GRAPH_CLIENT=codex
-node "$ROOT/scripts/e2e-stage2-state.ts" seed document codex
 MCP_CONFIG=$(node "$ROOT/scripts/e2e-mcp-config.ts" codex)
 # approval_policy=never は承認要求を拒否するため、委譲ツールだけ事前承認する。
 codex exec --ignore-user-config --ephemeral -m gpt-6-luna --sandbox workspace-write \
   -c 'approval_policy="never"' -c "$MCP_CONFIG" \
   -c 'mcp_servers.agent-graph.tools.delegate.approval_mode="approve"' \
   'Call the agent-graph delegate MCP tool exactly once with {"role":"document","title":"e2e notes","task":"Create notes.md in the current repository with exactly one line: e2e notes. Do not ask for clarification.","accept":["test -f notes.md"],"review":false}. Do not write the file yourself. Wait for the result and report its status and output.' > "$TEMP/codex-parent.log" 2>&1
-node "$ROOT/scripts/e2e-stage2-state.ts" check document claude
+node "$ROOT/scripts/e2e-stage2-state.ts" check-root document claude
 test -f notes.md
-echo 'PASS: stage 2 bidirectional e2e'
+if node "$ROOT/scripts/e2e-stage4-check.ts" has-reverse "$URL"; then
+  :
+else
+  result=$?
+  [[ $result -eq 2 ]] || exit "$result"
+  MCP_TOOL_TIMEOUT=1800000 claude -p --model haiku --strict-mcp-config --mcp-config "$TEMP/mcp.json" \
+    --allowedTools mcp__agent-graph__delegate --setting-sources project --no-session-persistence \
+    'Call delegate once with {"role":"implement","title":"nested reverse edge","task":"Call the agent-graph delegate MCP tool exactly once with role document, title nested notes, task Create nested.md containing nested notes, accept [test -f nested.md], review false. Wait for the result. Do not create the file yourself.","accept":["test -f nested.md"],"review":false}.' > "$TEMP/nested-parent.log" 2>&1
+  test -f nested.md
+fi
+# 完了直後に届く最終更新まで待ち、受信プロセスの失敗も検出する。
+for ((attempt=0; attempt<20; attempt++)); do
+  kill -0 "$SSE_PID" 2>/dev/null || { echo 'SSE listener exited'; exit 1; }
+  if node "$ROOT/scripts/e2e-stage4-check.ts" verify "$URL" "$TEMP/sse.jsonl" > "$TEMP/verify.log" 2>&1; then
+    break
+  fi
+  sleep 0.1
+done
+cat "$TEMP/verify.log"
+node "$ROOT/scripts/e2e-stage4-check.ts" verify "$URL" "$TEMP/sse.jsonl"
+CHROME='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+if [[ -x "$CHROME" ]]; then
+  "$CHROME" --headless=new --user-data-dir="$TEMP/chrome-profile" --timeout=15000 --virtual-time-budget=5000 --no-first-run --no-default-browser-check --dump-dom "$URL" > "$TEMP/chrome.html" 2> "$TEMP/chrome.log"
+  node --input-type=module - "$TEMP/chrome.html" <<'JS'
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+const html = readFileSync(process.argv[2], 'utf8');
+const svg = html.match(/<svg\b[^>]*id="graph"[\s\S]*?<\/svg>/)?.[0] ?? '';
+assert.ok((svg.match(/<path\b[^>]*marker-end=/g) ?? []).length >= 2, 'dashboard must render at least two edges');
+JS
+else
+  echo 'skip: Google Chrome is not installed in /Applications'
+fi
+echo 'PASS: stage 4 dashboard e2e'

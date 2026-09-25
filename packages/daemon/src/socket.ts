@@ -9,6 +9,7 @@ export type Hello = {
   traceparent?: string;
   tracestate?: string;
   session?: string;
+  client?: "claude" | "codex";
   cwd: string;
   pid: number;
 };
@@ -28,7 +29,8 @@ function acceptConnection(socket: Socket, handler: DelegateHandler<Hello>): void
       socket.destroy();
       return;
     }
-    if (hello.type !== "hello" || typeof hello.cwd !== "string" || !Number.isInteger(hello.pid)) {
+    if (hello.type !== "hello" || typeof hello.cwd !== "string" || !Number.isInteger(hello.pid) ||
+      (hello.client !== undefined && hello.client !== "claude" && hello.client !== "codex")) {
       socket.destroy();
       return;
     }

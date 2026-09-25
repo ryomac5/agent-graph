@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 export interface GraphNode {
   id: string;
+  kind: "session" | "delegation";
   title: string;
   role: string;
   status: string;
@@ -34,8 +35,8 @@ export function buildGraph(db: DatabaseSync, options: { session?: string } = {})
     : db.prepare(`SELECT d.*, a.executor, a.model, a.family FROM delegations d
       LEFT JOIN assignments a ON a.delegation_id = d.id WHERE d.session_id = ? ORDER BY d.rowid`).all(options.session);
   const nodes: GraphNode[] = sessions.map((row) => ({
-    id: String(row.id), title: String(row.name), role: "root", status: "running",
-    executor: String(row.client), model: null, family: null,
+    id: String(row.id), kind: "session", title: String(row.name), role: "root", status: "running",
+    executor: String(row.client), model: null, family: row.client === "claude" ? "anthropic" : row.client === "codex" ? "openai" : null,
     startedAt: String(row.started_at), endedAt: null,
   }));
   const family = new Map<string, string | null>(nodes.map((node) => [node.id, node.family]));
@@ -45,7 +46,7 @@ export function buildGraph(db: DatabaseSync, options: { session?: string } = {})
   for (const row of delegations) {
     const id = String(row.id);
     const node: GraphNode = {
-      id, title: String(row.title), role: String(row.role), status: String(row.status),
+      id, kind: "delegation", title: String(row.title), role: String(row.role), status: String(row.status),
       executor: row.executor === null ? null : String(row.executor),
       model: row.model === null ? null : String(row.model),
       family: row.family === null ? null : String(row.family),
@@ -62,4 +63,15 @@ export function buildGraph(db: DatabaseSync, options: { session?: string } = {})
       toFamily: family.get(String(row.id)) ?? null });
   }
   return { nodes, edges };
+}
+
+export function diffGraph(previous: Graph, next: Graph): { node: GraphNode; edge?: GraphEdge }[] {
+  const nodes = new Map(previous.nodes.map((node) => [node.id, JSON.stringify(node)]));
+  const edges = new Map(previous.edges.map((edge) => [edge.to, JSON.stringify(edge)]));
+  const incoming = new Map(next.edges.map((edge) => [edge.to, edge]));
+  return next.nodes.flatMap((node) => {
+    const edge = incoming.get(node.id);
+    if (nodes.get(node.id) === JSON.stringify(node) && edges.get(node.id) === JSON.stringify(edge)) return [];
+    return [{ node, ...(edge ? { edge } : {}) }];
+  });
 }

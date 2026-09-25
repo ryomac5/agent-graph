@@ -10,6 +10,8 @@ agent-graph は AI エージェント間の委譲を記録し、可視化し、�
 pnpm workspace のモノレポ。`packages/core`、`daemon`、`dashboard`、`adapters`、`planner` に分ける。
 責務と依存してよい先は設計書の「部品の責務と境界」の表を参照する。
 2 段目は `packages/core` の実行アダプタと委譲処理、`packages/daemon` の MCP・ソケット・エントリ、および双方向 e2e を実装する。
+3 段目は core の割り当て層と daemon の利用枠取得を結線する。
+個人の割り当て設定は `~/.config/agent-graph/policy.toml`（`XDG_CONFIG_HOME` 優先）に置く。
 
 ## 開発コマンド
 

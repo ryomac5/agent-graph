@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { appendFileSync, realpathSync } from "node:fs";
 import { mkdir, open, readFile, unlink } from "node:fs/promises";
 import { basename, join } from "node:path";
+import { homedir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { runDelegation } from "../../core/src/delegate/run.ts";
@@ -10,13 +11,64 @@ import { repoKey, stateDbPath } from "../../core/src/paths.ts";
 import { openStore, type Store } from "../../core/src/store/store.ts";
 import { newSpanId, newTraceId, parseTraceparent, parseTracestate } from "../../core/src/trace.ts";
 import { ulid } from "../../core/src/ulid.ts";
+import { readCodexUsage } from "../../core/src/usage/codex.ts";
+import { probeClaudeUsage } from "../../core/src/usage/claude.ts";
+import type { UsageSample } from "../../core/src/usage/types.ts";
 import type { DelegateHandler } from "./mcp/server.ts";
 import { runDir } from "./paths.ts";
 import { startSocketServer, type Hello } from "./socket.ts";
 
 const execFileAsync = promisify(execFile);
+const CODEX_INTERVAL_MS = 60_000;
+const CLAUDE_INTERVAL_MS = 300_000;
+const CLAUDE_TIMEOUT_MS = 30_000;
 
-export function createHandler(stores: Map<string, Store>): DelegateHandler<Hello> {
+function saveUsage(store: Store, repo: string, value: UsageSample): void {
+  store.appendUsageSample(value);
+  store.appendEvent({ id: ulid(), ts: value.ts, kind: "usage.sampled", repo,
+    trace: { traceId: newTraceId(), spanId: newSpanId() },
+    payload: { provider: value.provider, window: value.window, percent: value.percent,
+      ...(value.model ? { model: value.model } : {}) } });
+}
+
+export function startUsageProbe(stores: Map<string, Store>, options: {
+  env?: NodeJS.ProcessEnv;
+  readCodex?: () => UsageSample[];
+  probeClaude?: (cwd: string) => Promise<UsageSample[]>;
+  setIntervalImpl?: typeof setInterval;
+  clearIntervalImpl?: typeof clearInterval;
+  latest?: Map<string, UsageSample>;
+} = {}): { stop: () => Promise<void> } {
+  const env = options.env ?? process.env;
+  if (env.AGENT_GRAPH_USAGE_PROBE === "0") return { stop: async () => {} };
+  const schedule = options.setIntervalImpl ?? setInterval;
+  const clear = options.clearIntervalImpl ?? clearInterval;
+  const inflight = new Map<"openai" | "anthropic", Promise<void>>();
+  const latest = options.latest;
+  const sample = (provider: "openai" | "anthropic", read: () => Promise<UsageSample[]>): void => {
+    if (inflight.has(provider)) return;
+    const task = (async () => {
+      const samples = await read();
+      for (const value of samples) {
+        const sampleKey = `${value.provider}\0${value.model ?? ""}\0${value.window}`;
+        const previous = latest?.get(sampleKey);
+        if (!previous || value.ts > previous.ts) latest?.set(sampleKey, value);
+        for (const [key, store] of stores) saveUsage(store, key, value);
+      }
+    })();
+    inflight.set(provider, task);
+    void task.catch((error) => console.error(error)).finally(() => inflight.delete(provider));
+  };
+  const codex = schedule(() => sample("openai", async () => (options.readCodex ?? readCodexUsage)()), CODEX_INTERVAL_MS);
+  const claude = schedule(() => sample("anthropic", async () => {
+    const cwd = join(env.XDG_CACHE_HOME || join(homedir(), ".cache"), "agent-graph", "usage-probe");
+    await mkdir(cwd, { recursive: true });
+    return (options.probeClaude ?? ((path) => probeClaudeUsage({ cwd: path, timeoutMs: CLAUDE_TIMEOUT_MS })))(cwd);
+  }), CLAUDE_INTERVAL_MS);
+  return { stop: async () => { clear(codex); clear(claude); await Promise.allSettled(inflight.values()); } };
+}
+
+export function createHandler(stores: Map<string, Store>, latest = new Map<string, UsageSample>()): DelegateHandler<Hello> {
   const callers = new WeakMap<Hello, { sessionId: string; traceId: string; spanId: string }>();
   return async (request, hello) => {
     const repoRoot = (await execFileAsync("git", ["rev-parse", "--show-toplevel"], { cwd: hello.cwd })).stdout.trim();
@@ -25,6 +77,7 @@ export function createHandler(stores: Map<string, Store>): DelegateHandler<Hello
     if (!store) {
       store = openStore(stateDbPath(key));
       store.upsertRepo({ key, rootPath: repoRoot, name: basename(repoRoot) });
+      for (const value of latest.values()) saveUsage(store, key, value);
       stores.set(key, store);
     }
     const state = parseTracestate(hello.tracestate);
@@ -44,7 +97,7 @@ export function createHandler(stores: Map<string, Store>): DelegateHandler<Hello
       client: "mcp", traceId: caller.traceId, startedAt: new Date().toISOString() });
     return runDelegation(request, { repoKey: key, repoRoot, sessionId: caller.sessionId,
       trace: { traceId: caller.traceId, spanId: caller.spanId, traceState: hello.tracestate },
-      parentDelegationId: state.delegationId }, { store });
+      parentDelegationId: state.delegationId }, { store, usageSamples: [...latest.values()] });
   };
 }
 
@@ -89,7 +142,9 @@ export async function startDaemon(): Promise<{ stop: () => Promise<void> }> {
   const log = (message: string): void => appendFileSync(logPath, `${new Date().toISOString()} ${message}\n`, { mode: 0o600 });
   await claimPid(pidPath);
   const stores = new Map<string, Store>();
-  const handler = createHandler(stores);
+  const latest = new Map<string, UsageSample>();
+  const usageProbe = startUsageProbe(stores, { latest });
+  const handler = createHandler(stores, latest);
   const pending = new Set<Promise<unknown>>();
   try {
     const server = await startSocketServer({ socketPath: process.env.AGENT_GRAPH_SOCKET || join(dir, "daemon.sock"),
@@ -116,6 +171,7 @@ export async function startDaemon(): Promise<{ stop: () => Promise<void> }> {
       for (const socket of sockets) socket.destroy();
       await closed;
       await Promise.allSettled(pending);
+      await usageProbe.stop();
       for (const store of stores.values()) store.close();
       await unlink(pidPath);
       log("stopped");
@@ -124,6 +180,7 @@ export async function startDaemon(): Promise<{ stop: () => Promise<void> }> {
     return { stop };
   } catch (error) {
     log(String(error));
+    await usageProbe.stop();
     for (const store of stores.values()) store.close();
     await unlink(pidPath);
     throw error;

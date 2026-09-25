@@ -15,8 +15,8 @@ function buildSlot(project, index, ctx) {
   return slot;
 }
 
-export function updateOrb(slot, project) {
-  const state = orbState(project);
+export function updateOrb(slot, project, unavailable = false) {
+  const state = orbState(project, unavailable);
   const orb = slot.firstElementChild;
   orb.className = "orb" + (state.key ? ` on-${state.key}` : state.quiet ? " quiet" : "");
   orb.title = project.rootPath || project.name;
@@ -26,8 +26,9 @@ export function updateOrb(slot, project) {
   orb.children[2].textContent = state.text;
 }
 
-// slots は key → slot。消えたプロジェクトだけ外し、残りは文言と状態だけ書き換える
-export function renderOverview(canvas, overview, ctx) {
+// slots は key → slot。消えたプロジェクトだけ外し、残りは文言と状態だけ書き換える。
+// unavailable は /api/project の取得に失敗した key の集まり
+export function renderOverview(canvas, overview, ctx, unavailable = new Map()) {
   canvas.classList.add("overview");
   const projects = (overview && overview.projects) || [];
   if (!projects.length) {
@@ -46,6 +47,6 @@ export function renderOverview(canvas, overview, ctx) {
     let slot = ctx.orbSlots.get(project.key);
     if (!slot) { slot = buildSlot(project, index, ctx); ctx.orbSlots.set(project.key, slot); }
     if (slot.parentNode !== inner) inner.append(slot);
-    updateOrb(slot, project);
+    updateOrb(slot, project, unavailable.has(project.key));
   });
 }

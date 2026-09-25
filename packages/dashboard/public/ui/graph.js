@@ -11,11 +11,12 @@ const FRESH_MS = 4000;
 const WRAP_SLACK = 1.4;
 // 前向きの辺のラベルは届く先の近くに置く。隣り合う子で高さを互い違いにして重ねない
 const LABEL_T = [0.58, 0.72, 0.86];
-// 戻りの辺のラベルは親の近くに置き、前向きの辺のラベルと高さをずらす
-const BACK_LABEL_T = 0.78;
+// 戻りの辺のラベルは親の近く（子から 82%）に置く。前向きの辺のラベルは子の近くなので重ならない
+const BACK_LABEL_T = 0.82;
 // ノードに触れたとき、出る辺の文字を出すのはこの本数まで
 const HOT_OUT_MAX = 3;
-const LABEL_W = 184, LABEL_H = 22;
+// ラベルの箱。中身は文字に合わせて縮み、本文だけを省略する。向きの語は切らない
+const LABEL_W = 260, LABEL_H = 22;
 const CHIP_DOTS = 3, CHIP_DOT_GAP = 10, CHIP_PAD = 9;
 const ORB_STATUS_CLASS = { running: "on-running", waiting: "on-waiting", failed: "on-failed", done: "on-done", ended: "on-ended", planned: "on-planned" };
 const FAMILY_WORD = { anthropic: "Claude", openai: "Codex" };
@@ -25,8 +26,9 @@ function edgeLabel(text, direction, mid) {
   const holder = svgEl("foreignObject", { x: mid.x - LABEL_W / 2, y: mid.y - LABEL_H / 2, width: LABEL_W, height: LABEL_H, "pointer-events": "none" });
   const box = el("div", undefined, "edge-label");
   box.setAttribute("xmlns", XHTML_NS);
-  const span = el("span", text);
-  if (direction) span.append(el("i", direction, "dir"));
+  const span = el("span", undefined, "edge-pill");
+  if (text) span.append(el("span", text, "txt"));
+  if (direction) span.append(el("span", direction, "dir"));
   box.append(span);
   holder.append(box);
   return holder;

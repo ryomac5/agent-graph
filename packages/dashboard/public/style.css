@@ -200,12 +200,14 @@ aside { padding: 18px 20px; overflow: auto; background: var(--surface); scrollba
   50% { opacity: .78; filter: drop-shadow(0 0 6px rgba(242, 180, 65, .55)); }
 }
 .graph .edge-label { opacity: 0; transition: opacity 120ms var(--ease); display: flex; align-items: center; justify-content: center; height: 100%; }
-.graph .edge-label span {
+/* 箱は文字に合わせる。本文だけを省略し、向きの語は縮めない */
+.graph .edge-label .edge-pill {
+  display: inline-flex; align-items: baseline; gap: 6px; max-width: 100%; min-width: 0;
   font-size: 11px; line-height: 1.4; color: var(--text); background: rgba(12, 16, 24, .86);
-  border: 1px solid rgba(154, 165, 180, .22); border-radius: 7px; padding: 1px 8px;
-  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  border: 1px solid rgba(154, 165, 180, .22); border-radius: 7px; padding: 1px 8px; white-space: nowrap;
 }
-.graph .edge-label .dir { color: var(--muted); margin-left: 6px; font-style: normal; }
+.graph .edge-label .txt { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.graph .edge-label .dir { flex: none; color: var(--muted); }
 .graph .edge:hover .edge-label, .graph .edge.hot .edge-label { opacity: 1; }
 .graph .node { cursor: pointer; outline: none; }
 .graph .node foreignObject { overflow: visible; }

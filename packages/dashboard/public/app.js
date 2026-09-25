@@ -9,9 +9,9 @@ import { renderOverview } from "./ui/overview.js";
 import { buildProjectSection, scopesOf } from "./ui/project.js";
 import { setupSplitter } from "./ui/splitter.js";
 import { toast } from "./ui/toast.js";
+import { readToken, sendAction } from "./ui/action.js";
 
-const TOKEN = (document.querySelector('meta[name="agent-graph-token"]') || {}).content || "";
-const POST_HEADERS = { "Content-Type": "application/json", "X-Agent-Graph-Token": TOKEN };
+const TOKEN = readToken(document);
 const PROJECT_KEY = "agent-graph:project";
 const DISMISS_KEY = "agent-graph:dismissed";
 const CANVAS_MARGIN = 64;
@@ -28,7 +28,7 @@ function loadSelectedProjects() {
 }
 
 const state = {
-  overview: null, views: new Map(), feeds: new Map(), feedState: new Map(), updatedAt: "",
+  overview: null, views: new Map(), feeds: new Map(), feedState: new Map(), unavailable: new Map(), updatedAt: "",
   selectedProjects: loadSelectedProjects(), selectedScope: null, selectedNode: null,
   dismissed: new Set(loadJson(DISMISS_KEY, [])), expandedArchive: new Set(),
   knownEdges: new Map(), knownNodes: new Map(), fresh: new Map(), zoom: new Map(),
@@ -40,25 +40,12 @@ let previousDetail = "";
 const canvas = document.getElementById("canvas");
 const aside = document.getElementById("detail");
 
-// 403 やエラーページで JSON を読めないことがある。文面に落として画面を止めない
-async function readMessage(res) {
-  try { const body = await res.json(); return body.message || body.error || `HTTP ${res.status}`; }
-  catch { return `Server error ${res.status}`; }
-}
-
+// 操作の送信。契約の ActionRequest だけを送り、失敗はトーストに出す
 async function postAction(body) {
-  try {
-    const res = await fetch("/api/action", { method: "POST", headers: POST_HEADERS, body: JSON.stringify(body) });
-    const message = await readMessage(res);
-    toast(res.ok ? message : `Failed: ${message}`);
-    return message;
-  } catch (err) {
-    toast(`Failed: ${err.message}`);
-    return `Failed: ${err.message}`;
-  } finally {
-    previousCanvas = "";
-    previousDetail = "";
-  }
+  const result = await sendAction(body, { token: TOKEN, notify: toast });
+  previousCanvas = "";
+  previousDetail = "";
+  return result;
 }
 
 function projectKeyOf(scopeId) {
@@ -123,15 +110,15 @@ const ctx = {
     previousCanvas = "";
     render();
   },
-  onAction: async (body) => {
+  // body は契約の ActionRequest の項目。nodeId は画面の中で隠し設定を外すためだけに使い、送らない
+  onAction: async (body, nodeId) => {
     const repo = projectKeyOf(state.selectedScope) || state.selectedProjects[0] || "";
-    const message = await postAction({ repo, ...body });
-    // 動かし直したノードは隠し設定を外す
-    if (["approve", "retry"].includes(body.action) && body.nodeId && state.selectedScope) {
-      if (state.dismissed.delete(dismissKey(state.selectedScope, body.nodeId))) localStorage.setItem(DISMISS_KEY, JSON.stringify([...state.dismissed]));
+    const result = await postAction({ repo, ...body });
+    if (result.ok && ["approve", "retry"].includes(body.action) && nodeId && state.selectedScope) {
+      if (state.dismissed.delete(dismissKey(state.selectedScope, nodeId))) localStorage.setItem(DISMISS_KEY, JSON.stringify([...state.dismissed]));
     }
     render();
-    return message;
+    return result.message;
   },
   onHideTurn: async (scope, turnId) => {
     // 先に画面から外し、サーバに記録できなければ戻す
@@ -139,8 +126,8 @@ const ctx = {
     state.hiddenTurns.add(key);
     previousDetail = "";
     render();
-    const message = await postAction({ repo: projectKeyOf(scope.id), action: "hide_turn", sessionId: scope.sessionId, turnId });
-    if (/^Failed/.test(message)) { state.hiddenTurns.delete(key); previousDetail = ""; render(); }
+    const result = await postAction({ repo: projectKeyOf(scope.id), action: "hide_turn", sessionId: scope.sessionId, turnId });
+    if (!result.ok) { state.hiddenTurns.delete(key); previousDetail = ""; render(); }
   },
 };
 
@@ -167,11 +154,13 @@ function syncFeeds() {
     if (state.feeds.has(key)) continue;
     state.feeds.set(key, openFeed(key, {
       onData: (data) => {
-        if (key) state.views.set(key, data); else state.overview = data;
+        if (key) { state.views.set(key, data); state.unavailable.delete(key); } else state.overview = data;
         state.updatedAt = data.updatedAt || new Date().toISOString();
         render();
       },
       onState: (s) => { state.feedState.set(key, s); renderHead(); },
+      // /api/project の取得に失敗したプロジェクトは Unavailable にする
+      onError: (message) => { if (key) { state.unavailable.set(key, message); previousCanvas = ""; render(); } },
     }));
   }
 }
@@ -195,7 +184,7 @@ function renderHead() {
 function renderCanvas(enter) {
   if (!state.selectedProjects.length) {
     previousCanvas = "";
-    renderOverview(canvas, state.overview, ctx);
+    renderOverview(canvas, state.overview, ctx, state.unavailable);
     return;
   }
   canvas.classList.remove("overview");
@@ -207,10 +196,11 @@ function renderCanvas(enter) {
   const view = el("div", undefined, "project-view" + (enter ? " enter" : ""));
   for (const key of state.selectedProjects) {
     const data = state.views.get(key);
-    if (data) { view.append(buildProjectSection(data, ctx)); continue; }
+    const failure = state.unavailable.get(key);
+    if (data) { view.append(buildProjectSection(data, ctx, failure)); continue; }
     const summary = projects().find((p) => p.key === key);
     const section = el("section", undefined, "project");
-    section.append(el("h2", summary ? summary.name : key), el("p", "Loading…", "empty"));
+    section.append(el("h2", summary ? summary.name : key), el("p", failure ? `Unavailable: ${failure}` : "Loading…", failure ? "hint" : "empty"));
     view.append(section);
   }
   const scrollTop = canvas.scrollTop;

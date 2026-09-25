@@ -181,7 +181,8 @@ export function renderNodeDetail(aside, scope, node, ctx) {
         // reject は取り消せない。誤クリックで走らないよう確認を挟む
         if (action === "reject" && !ctx.confirm(`${node.id} を却下します。取り消せません。`)) return;
         for (const b of bar.children) b.disabled = true;
-        const message = await ctx.onAction({ action, graphId: scope.graphId, taskId: node.id, sessionId: scope.sessionId, nodeId: node.id });
+        // 契約の ActionRequest の項目だけ。2 つ目の引数は画面の隠し設定を外す鍵
+        const message = await ctx.onAction({ action, graphId: scope.graphId, taskId: node.id, sessionId: scope.sessionId }, node.id);
         result.textContent = message || "";
         for (const b of bar.children) b.disabled = false;
       }));

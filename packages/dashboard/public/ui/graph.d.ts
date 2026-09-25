@@ -35,7 +35,7 @@ export interface RenderContext {
   onSelect: (scope: Scope, nodeId: string) => void;
   onToggleDismiss: (scope: Scope, nodeId: string) => void;
   onToggleArchive: (scope: Scope) => void;
-  onAction: (body: Record<string, unknown>) => Promise<string>;
+  onAction: (body: Record<string, unknown>, nodeId?: string) => Promise<string>;
   onHideTurn: (scope: Scope, turnId: string) => void;
 }
 export type Ctx = RenderContext | Record<string, unknown>;

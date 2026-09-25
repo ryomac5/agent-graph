@@ -31,6 +31,7 @@ test("worktree の作成、限定コミット、マージ、衝突、退避", ()
   const backup = removeTaskWorktree(repo, "s1", "t1");
   assert.ok(backup && existsSync(join(backup, "outside.txt")));
   assert.equal(existsSync(task), false);
+  assert.equal(git(repo, "stash", "list"), "");
   const second = createTaskWorktree(repo, "s1", "t2");
   writeFileSync(join(second, "in.txt"), "second\n");
   commitScoped(second, "second", ["in.txt"]);
@@ -38,4 +39,38 @@ test("worktree の作成、限定コミット、マージ、衝突、退避", ()
   commitScoped(integration, "integration", ["in.txt"]);
   assert.deepEqual(mergeIntoIntegration(repo, "s1", "t2"), { conflict: true, files: ["in.txt"] });
   assert.equal(git(integration, "status", "--porcelain"), "");
+});
+
+test("session と taskId が同じでも統合ブランチから作成する", () => {
+  const repo = mkdtempSync(join(tmpdir(), "planner-repo-"));
+  process.env.XDG_CACHE_HOME = mkdtempSync(join(tmpdir(), "planner-cache-"));
+  git(repo, "init", "-b", "main");
+  git(repo, "config", "user.name", "Test");
+  git(repo, "config", "user.email", "test@example.com");
+  writeFileSync(join(repo, "in.txt"), "base\n");
+  git(repo, "add", ".");
+  git(repo, "commit", "-m", "initial");
+  const integration = prepareIntegration(repo, "same", "main");
+  writeFileSync(join(integration, "in.txt"), "integration\n");
+  commitScoped(integration, "integration", ["in.txt"]);
+  const task = createTaskWorktree(repo, "same", "same");
+  assert.equal(readFileSync(join(task, "in.txt"), "utf8"), "integration\n");
+});
+
+test("glob のブレースと文字クラスを scope に使用できる", () => {
+  const repo = mkdtempSync(join(tmpdir(), "planner-repo-"));
+  process.env.XDG_CACHE_HOME = mkdtempSync(join(tmpdir(), "planner-cache-"));
+  git(repo, "init", "-b", "main");
+  git(repo, "config", "user.name", "Test");
+  git(repo, "config", "user.email", "test@example.com");
+  writeFileSync(join(repo, "initial.txt"), "base\n");
+  git(repo, "add", ".");
+  git(repo, "commit", "-m", "initial");
+  prepareIntegration(repo, "glob", "main");
+  const task = createTaskWorktree(repo, "glob", "task");
+  writeFileSync(join(task, "a.ts"), "a\n");
+  writeFileSync(join(task, "b.js"), "b\n");
+  writeFileSync(join(task, "c.txt"), "c\n");
+  assert.deepEqual(commitScoped(task, "glob", ["{a,b}.[jt]s"]), ["c.txt"]);
+  assert.deepEqual(git(task, "show", "--format=", "--name-only", "HEAD").split("\n"), ["a.ts", "b.js"]);
 });

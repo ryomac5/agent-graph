@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join, matchesGlob } from "node:path";
 import { repoKey } from "../../core/src/paths.ts";
 
 function git(cwd: string, ...args: string[]): string {
@@ -36,17 +36,6 @@ function statusPaths(worktree: string): string[] {
   return paths;
 }
 
-function matches(path: string, pattern: string): boolean {
-  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&")
-    .replace(/\*\*\//g, "\u0000")
-    .replace(/\*\*/g, "\u0001")
-    .replace(/\*/g, "[^/]*")
-    .replace(/\?/g, "[^/]")
-    .replace(/\u0000/g, "(?:.*/)?")
-    .replace(/\u0001/g, ".*");
-  return new RegExp(`^${escaped}$`).test(path);
-}
-
 export function prepareIntegration(repo: string, session: string, baseBranch: string): string {
   const path = join(root(repo, session), "integration");
   const name = branch(session, "integration");
@@ -64,13 +53,13 @@ export function createTaskWorktree(repo: string, session: string, taskId: string
   const name = branch(session, taskId);
   if (existsSync(path)) return path;
   if (git(repo, "branch", "--list", name)) git(repo, "worktree", "add", path, name);
-  else git(repo, "worktree", "add", "-b", name, path, name.replace(`/${taskId}`, "/integration"));
+  else git(repo, "worktree", "add", "-b", name, path, branch(session, "integration"));
   return path;
 }
 
 export function commitScoped(worktree: string, message: string, patterns: string[]): string[] {
   const paths = statusPaths(worktree);
-  const included = paths.filter((path) => patterns.some((pattern) => matches(path, pattern)));
+  const included = paths.filter((path) => patterns.some((pattern) => matchesGlob(path, pattern)));
   const excluded = paths.filter((path) => !included.includes(path));
   if (included.length) {
     git(worktree, "add", "-A", "--", ...included);

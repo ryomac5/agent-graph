@@ -101,3 +101,17 @@ test("親ディレクトリを作成し WAL と外部キーを有効にして再
     reopened.close();
   }
 });
+
+test("利用枠を追記してプロバイダ・モデル・枠ごとの最新値を読む", (t) => {
+  const store = openStore(":memory:");
+  t.after(() => store.close());
+  const first = { ts: "2026-09-25T00:00:00Z", provider: "openai" as const,
+    window: "300m", percent: 20 };
+  const latest = { ...first, ts: "2026-09-25T01:00:00Z", percent: 40 };
+  const model = { ...first, model: "gpt", percent: 30 };
+  store.appendUsageSample(first);
+  store.appendUsageSample(latest);
+  store.appendUsageSample(model);
+  assert.deepEqual(store.latestUsageSamples(), [latest, model]);
+  assert.equal(store.db.prepare("SELECT COUNT(*) AS count FROM usage_samples").get()!.count, 3);
+});

@@ -37,7 +37,7 @@ function eventsOf(store: Store, delegationId: string) {
 
 test("observers は turn の 3 種を残し、サブエージェントの種類を足す", () => {
   assert.deepEqual(Object.keys(observers), ["turn_start", "turn_done", "waiting",
-    "subagent_request", "subagent_start", "subagent_message", "subagent_stop", "resumed"]);
+    "subagent_request", "subagent_done", "subagent_start", "subagent_message", "subagent_stop", "resumed"]);
 });
 
 test("Agent の呼び出しは kind subagent の行になり、SubagentStop で done と報告になる", async (t) => {
@@ -56,7 +56,9 @@ test("Agent の呼び出しは kind subagent の行になり、SubagentStop で 
   assert.equal(rows[0].family, "anthropic");
   assert.equal(rows[0].tier, "mid");
   assert.equal(rows[0].parent_id, null);
-  // 委譲の観測は根の待ちを解除する
+  // サブエージェントの観測は根の待ちを解除しない
+  assert.equal(store.getSession("s")?.status, "waiting");
+  observe({ kind: "resumed", sessionId: "s" }, stores, at(1));
   assert.equal(store.getSession("s")?.status, "running");
   const id = String(rows[0].id);
   observe({ kind: "subagent_start", sessionId: "s", agentId: "agent-1", agentType: "Explore" }, stores, at(2));

@@ -43,7 +43,7 @@ test("Claude plugin の JSON と hook", () => {
   assert.equal(manifest.name, "agent-graph");
   assert.deepEqual(mcp.mcpServers["agent-graph"], { command: process.execPath, args: [options.shimPath], env: { AGENT_GRAPH_CLIENT: "claude" } });
   assert.deepEqual(Object.keys(hooks.hooks), ["SessionStart", "SessionEnd", "UserPromptSubmit", "Stop", "Notification",
-    "PreToolUse", "PostToolUse", "SubagentStart", "SubagentStop"]);
+    "PreToolUse", "PostToolUse", "PostToolUseFailure", "SubagentStart", "SubagentStop"]);
   const command = (args: string) => `${JSON.stringify(process.execPath)} ${JSON.stringify("/tmp/agent graph/hook.ts")} ${args}`;
   assert.equal(hooks.hooks.SessionStart[0].hooks[0].command, command("session-start"));
   assert.equal(hooks.hooks.SessionEnd[0].hooks[0].command, command("session-end"));
@@ -53,7 +53,10 @@ test("Claude plugin の JSON と hook", () => {
   assert.equal(hooks.hooks.PreToolUse[0].hooks[0].command, command("observe tool_start"));
   assert.equal(hooks.hooks.PreToolUse[0].matcher, "Agent|SendMessage|AskUserQuestion");
   assert.equal(hooks.hooks.PostToolUse[0].hooks[0].command, command("observe tool_done"));
-  assert.equal(hooks.hooks.PostToolUse[0].matcher, "AskUserQuestion");
+  assert.equal(hooks.hooks.PostToolUse[0].matcher, "AskUserQuestion|Agent");
+  // O1 ③ 起動しなかった Agent 呼び出しは PostToolUseFailure でも閉じる
+  assert.equal(hooks.hooks.PostToolUseFailure[0].hooks[0].command, command("observe tool_done"));
+  assert.equal(hooks.hooks.PostToolUseFailure[0].matcher, "Agent");
   assert.equal(hooks.hooks.SubagentStart[0].hooks[0].command, command("observe subagent_start"));
   assert.equal(hooks.hooks.SubagentStop[0].hooks[0].command, command("observe subagent_stop"));
   for (const event of ["SessionStart", "SessionEnd", "UserPromptSubmit", "Stop", "Notification", "SubagentStart", "SubagentStop"]) {
@@ -163,7 +166,13 @@ test("観測の本文。Agent と SendMessage と AskUserQuestion と SubagentSt
   assert.equal(observeBody("tool_start", { session_id: "s", tool_name: "Bash", tool_input: { command: "ls" } }), undefined);
   assert.equal(observeBody("tool_start", { tool_name: "Agent" }), undefined);
   assert.deepEqual(observeBody("tool_done", { session_id: "s", tool_name: "AskUserQuestion" }), { kind: "resumed", sessionId: "s" });
-  assert.equal(observeBody("tool_done", { session_id: "s", tool_name: "Agent" }), undefined);
+  // 起動しなかった Agent 呼び出しは failed で閉じる（O1 ③）
+  assert.deepEqual(observeBody("tool_done", { session_id: "s", tool_name: "Agent" }),
+    { kind: "subagent_done", sessionId: "s", toolUseId: "", failed: false });
+  assert.deepEqual(observeBody("tool_done", { session_id: "s", tool_name: "Agent", tool_use_id: "toolu_1", tool_response: { agent_id: "a1" } }),
+    { kind: "subagent_done", sessionId: "s", toolUseId: "toolu_1", agentId: "a1", failed: false });
+  assert.deepEqual(observeBody("tool_done", { session_id: "s", tool_name: "Agent", hook_event_name: "PostToolUseFailure" }),
+    { kind: "subagent_done", sessionId: "s", toolUseId: "", failed: true });
   assert.deepEqual(observeBody("subagent_start", { session_id: "s", agent_id: "a1", agent_type: "Explore" }),
     { kind: "subagent_start", sessionId: "s", agentId: "a1", agentType: "Explore" });
   assert.deepEqual(observeBody("subagent_start", { session_id: "s", agent_id: "a1", tool_use_id: "toolu_1" }),

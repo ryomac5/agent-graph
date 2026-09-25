@@ -1,0 +1,114 @@
+goal: |
+  docs/agents/architecture.md の「作る順序」5 段目を完成させる。
+  Claude Code プラグインと Codex 設定を生成する adapters を作る。
+  生成物を入れた新規リポジトリで、手作業なしに delegate が見えることを e2e で確かめる。
+base_branch: agent/agent-graph-001-s4/integration
+
+tasks:
+  - id: P1
+    title: プラグインと Codex 設定の生成器
+    executor: codex
+    model: gpt-6-sol
+    model_reason: ファイル生成と TOML の追記で、出力先を注入してテストできる
+    review_model: fable
+    scope:
+      - "packages/adapters/**"
+      - "pnpm-lock.yaml"
+    outputs: ["packages/adapters/src/claude-plugin.ts", "packages/adapters/src/codex-config.ts", "packages/adapters/src/cli.ts"]
+    accept:
+      - "test -f packages/adapters/src/claude-plugin.ts && test -f packages/adapters/src/codex-config.ts"
+      - "npx --yes pnpm@10 install --frozen-lockfile=false"
+      - "npx --yes pnpm@10 --filter @agent-graph/adapters test"
+    prompt: |
+      packages/adapters に Claude Code プラグインと Codex 設定の生成器を実装する。設計は docs/agents/architecture.md の「部品の責務と境界」「呼び出し側の識別」「セキュリティの考え方」「置き場」と未確認事項 U6, U7, U10。
+      ls と cd は command ls と builtin cd を使う。最初に AGENTS.md と設計書を読む。
+      adapters は登録だけを行い、実行時の処理を含めない。core の型だけに依存してよい。
+      Claude Code のプラグインの形式は、`claude --help` と `claude plugin --help` と手元の `~/.claude/plugins/` にある既存プラグインの構成で確かめる。Codex の mcp_servers の書式は `~/.codex/config.toml` の既存の書き方と `codex mcp --help` で確かめる。秘密情報を含むファイルは読まない。
+
+      作るもの:
+      - src/claude-plugin.ts。`generateClaudePlugin({ outDir, shimPath, nodePath })`
+        - `.claude-plugin/plugin.json` と `.mcp.json` を書く。MCP サーバ名は agent-graph。command は nodePath、args は shimPath。env に AGENT_GRAPH_CLIENT=claude
+        - hooks は SessionStart だけ置く。hook は `agent-graph-hook session-start` を呼び、根の起動をデーモンに登録する。危険操作の制止は既存の利用者の hook に任せ、ここでは入れない
+        - 推奨の deny を settings の例として `recommended-settings.json` に置く。自動では適用しない
+      - src/codex-config.ts
+        - `renderCodexConfig({ shimPath, nodePath }): string`。`[mcp_servers.agent_graph]` の command, args, env の AGENT_GRAPH_CLIENT=codex、tool_timeout_sec を十分に長く、delegate ツールの承認を不要にする設定。承認の設定キーは、packages/daemon と scripts/e2e-stage2.sh ですでに使っている codex の -c の指定と同じものにする
+        - `renderCodexOverrides(...)`: 同じ内容を `codex exec -c key=value` の引数の配列として返す
+        - `installCodexConfig({ configPath, ... })`。既存の config.toml を読み、`[mcp_servers.agent_graph]` の節だけを置き換えるか追記する。ほかの行は 1 文字も変えない。書く前に `config.toml.agent-graph.bak` に写す
+      - src/hook.ts。実行可能なエントリ `agent-graph-hook`。先頭に `#!/usr/bin/env node`
+        - `session-start` で stdin の hook 入力の JSON を読み、session_id と cwd を取り出す。デーモンの HTTP の `POST /api/sessions` に `{ id, cwd, client: "claude" }` を送る。ポートは daemon の設定と同じ規則で決める。届かなくても終了コード 0 で黙って終わる。hook で Claude Code を止めない
+      - src/cli.ts。実行可能なエントリ `agent-graph-install`
+        - `--claude-plugin-dir <dir>` でプラグインを書く。`--codex-config <path>` で Codex 設定を入れる。`--print-codex-overrides` で -c の引数を 1 行ずつ出す。`--dry-run` は書かずに内容を表示する
+        - shimPath は @agent-graph/daemon の shim.ts の絶対パスを解決して使う。nodePath は process.execPath
+      - package.json に bin の agent-graph-install と agent-graph-hook を足す。@agent-graph/daemon と @agent-graph/core に workspace:* で依存してよい
+
+      テスト。node:test で、出力先はすべて一時ディレクトリ:
+      - プラグインの各ファイルの内容と JSON の妥当性
+      - Codex 設定の追記、置き換え、ほかの行が変わらないこと、バックアップ
+      - hook がデーモンに届かなくても 0 で終わること。偽の HTTP サーバに POST が届くこと
+
+      制約: 依存を追加しない。enum と namespace を使わない。scope 外に触らない。利用者の本物の ~/.claude と ~/.codex に書かない。
+      サンドボックスでは npm registry に届かない。検証は packages/adapters で `node --test "test/**/*.test.ts"` を走らせ、結果を報告に載せる。報告は実際の差分と一致させる。
+
+  - id: P2
+    title: セッション登録口と 5 段目の e2e
+    executor: codex
+    model: gpt-6-sol
+    model_reason: 前回の実装は e2e 合格済みで、残りは設定 1 行の移動とテストの分割
+    review_model: fable
+    depends_on: [P1]
+    timeout_sec: 3600
+    scope:
+      - "packages/daemon/**"
+      - "packages/adapters/**"
+      - "packages/core/src/store/**"
+      - "packages/core/test/store.test.ts"
+      - "scripts/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "AGENTS.md"
+    outputs: ["scripts/e2e-stage5.sh"]
+    accept:
+      - "test -x scripts/e2e-stage5.sh"
+      - "npx --yes pnpm@10 install --frozen-lockfile=false"
+      - "npx --yes pnpm@10 test"
+      - "AGENT_GRAPH_E2E=1 bash scripts/e2e-stage4.sh"
+      - "AGENT_GRAPH_E2E=1 bash scripts/e2e-stage5.sh"
+    prompt: |
+      デーモンにセッションの登録口を足し、5 段目の完了条件を確かめる e2e を作る。
+      ls と cd は command ls と builtin cd を使う。最初に AGENTS.md と docs/agents/architecture.md の「作る順序と完了条件」と未確認事項 U7, U10 を読む。
+      部品は揃っている。adapters の generateClaudePlugin, installCodexConfig, renderCodexOverrides, agent-graph-hook, agent-graph-install。daemon の HTTP と main.ts。
+
+      作るもの:
+      - daemon の HTTP に `POST /api/sessions` を足す。body は `{ id, cwd, client }`。cwd から repoRoot と repoKey を求め、sessions 表に登録し、session.started のイベントを記録する。127.0.0.1 からだけ受ける。不正な body は 400
+      - scripts/e2e-stage5.sh。AGENT_GRAPH_E2E=1 のときだけ動き、それ以外は skip と表示して 0 で終わる
+        - e2e-stage4.sh と同じく、状態とソケットとポートを一時ディレクトリに隔離し、AGENT_GRAPH_USAGE_PROBE=0 と安いモデルの割り当て表を使う
+        - 新規の一時 git リポジトリを作る。そのリポジトリに agent-graph 固有のファイルを手で置かない
+        - `agent-graph-install --claude-plugin-dir <一時dir>` でプラグインを生成する
+        - claude は `--plugin-dir <一時dir>` だけで起こす。`--mcp-config` を手で渡さない。delegate が見え、呼べることを確かめる。SessionStart の hook で sessions 表に client claude の行ができることも確かめる。`-p` で hook が動かなければ、その事実を報告に書き、代わりに実行アダプタの記録で session があることを確かめる
+        - codex は `agent-graph-install --print-codex-overrides` の出力をそのまま `codex exec` の -c に渡して起こす。利用者の本物の ~/.codex/config.toml は変えない。delegate が見え、呼べることを確かめる
+        - 各委譲が status done で状態 DB に入ることを確かめる
+        - 失敗したら daemon.log と子の出力を表示して非 0 で終わる。終了時にデーモンを止める
+      - AGENTS.md に 5 段目の範囲と、`agent-graph-install` の使い方を 2〜3 行で足す
+
+      未確認事項の扱い:
+      - U7 と U10 の確かめた結果は docs/agents/architecture.md に書かず、報告に書く
+      - 秘密情報を含むファイルを読まない、写さない
+
+      制約: 依存を追加しない。enum と namespace を使わない。scope 外に触らない。利用者の本物の ~/.claude と ~/.codex に書かない。
+      サンドボックスでは npm registry に届かず、本物の claude と codex も起こせない。e2e は受け入れ検証でサンドボックスの外から走る。単体の検証は `node --test` を各パッケージで走らせ、結果を報告に載せる。受け入れコマンドは受け入れ検証が走らせると書く。報告は実際の差分と一致させる。
+
+      前回の実装は受け入れの e2e まで合格している。レビューの指摘だけを直す。それ以外は変えない:
+      - packages/adapters/src/codex-config.ts の renderCodexConfig から `required = true` を外す。恒久導入した利用者の Codex が、デーモン停止中に起動できなくなるため。e2e で接続失敗を明示する目的の required は renderCodexOverrides の側か e2e の -c にだけ残す
+      - packages/adapters/test/generators.test.ts の required の検査を、恒久設定には無く上書きには有る、の 2 つに分ける
+
+  - id: G5
+    title: 5 段目の統合結果を確認
+    executor: human
+    depends_on: [P2]
+    prompt: |
+      統合ブランチで `npx --yes pnpm@10 test` と 4 段目と 5 段目の e2e が通れば承認する。
+
+  - id: PR
+    title: PR を作成
+    executor: pr
+    depends_on: [G5]

@@ -2,6 +2,7 @@
   "name": "@agent-graph/planner",
   "private": true,
   "type": "module",
+  "bin": { "agent-graph-plan": "src/cli.ts" },
   "scripts": {
     "test": "node --test \"test/**/*.test.ts\""
   }

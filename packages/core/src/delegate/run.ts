@@ -70,6 +70,7 @@ export async function runDelegation(
   let status: DelegateResult["status"] = "failed";
   let review: DelegateResult["review"];
   let finished = false;
+  let roundTrips = 0;
   store.insertDelegation({ id: delegationId, repoKey: caller.repoKey,
     sessionId: caller.sessionId, parentId: caller.parentDelegationId,
     role: req.role, title: req.title, status: "requested" });
@@ -86,8 +87,9 @@ export async function runDelegation(
     }
     const latestSamples = [...samples.values()];
     const performance = aggregatePerformance(store.db, { role: req.role });
+    const policy = deps.policy ?? loadPolicy();
     const decision = (deps.decide ?? decide)(req, {
-      policy: deps.policy ?? loadPolicy(),
+      policy,
       quota: (candidate) => {
         const modelWords = candidate.model.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
         const scoped = candidate.family === "anthropic"
@@ -115,54 +117,73 @@ export async function runDelegation(
         "agent.executor": assignment.executor, "agent.model": assignment.model,
       });
       const baseRef = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd })).stdout.trim();
-      const workDir = await mkdtemp(join(tmpdir(), "agent-graph-delegate-"));
-      let execution: ExecResult;
-      try {
-        event("execution.started", { delegationId });
-        execution = await (deps.execute ?? runExecute)({
-          executor: assignment.executor, model: assignment.model, task: req.task, cwd, trace,
-          sessionId: caller.sessionId, delegationId,
-          timeoutMs: (req.timeoutSec ?? DEFAULT_TIMEOUT_SEC) * 1000, workDir,
-        });
-      } finally {
-        await rm(workDir, { recursive: true, force: true });
-      }
-      output = execution.output;
-      usage = execution.usage;
-      store.insertTokenUsage(delegationId, usage, assignment.model);
-      event("execution.finished", { delegationId, exitCode: execution.exitCode });
-      if (execution.timedOut) {
-        status = "timeout";
-      } else {
-        acceptance = await (deps.accept ?? runAcceptance)({
-          commands: req.accept, cwd, scope: req.scope, baseRef,
-          timeoutMs: (req.timeoutSec ?? DEFAULT_TIMEOUT_SEC) * 1000,
-        });
-        store.insertAcceptance(delegationId, acceptance);
-        event("acceptance.evaluated", { delegationId, passed: acceptance.passed });
-        status = execution.exitCode === 0 && acceptance.passed ? "done" : "failed";
-        if (status === "done" && (req.review ?? req.role === "implement")) {
-          const diff = (await execFileAsync("git", ["diff"], { cwd, maxBuffer: 10 * 1024 * 1024 })).stdout;
-          const reviewResult = await runDelegation({
-            role: "review", title: `Review: ${req.title}`, cwd,
-            task: `元の依頼:\n${req.task}\n\n受け入れ結果:\n${JSON.stringify(acceptance)}\n\ngit diff:\n${diff}\n\n最終行に VERDICT: approve または VERDICT: request_changes を書いてください。`,
-            accept: ["true"], review: false,
-            constraints: { excludeFamily: [assignment.family] },
-          }, { ...caller, trace, parentDelegationId: delegationId, implementerFamily: assignment.family }, deps);
-          const verdict = reviewResult.status === "done"
-            ? readVerdict(reviewResult.output) : "request_changes";
-          review = { verdict, reviewer: reviewResult.assignment, comment: reviewResult.output };
-          store.insertReview(delegationId, reviewResult.delegationId, verdict, reviewResult.output);
-          event("review.evaluated", { delegationId, verdict });
-          if (verdict === "request_changes") status = "failed";
+      let task = req.task;
+      while (true) {
+        const executeTrace = childContext(trace);
+        store.insertSpan({ trace: executeTrace, name: "execute", startedAt: now().toISOString(), status: "unset", attributes: { "agent.role": req.role, "agent.executor": assignment.executor, "agent.model": assignment.model, "agent.session": caller.sessionId, "agent.delegation": delegationId, "agent.roundTrips": roundTrips } });
+        const workDir = await mkdtemp(join(tmpdir(), "agent-graph-delegate-"));
+        let execution: ExecResult;
+        try {
+          event("execution.started", { delegationId });
+          execution = await (deps.execute ?? runExecute)({
+            executor: assignment.executor, model: assignment.model, task, cwd, trace: executeTrace,
+            sessionId: caller.sessionId, delegationId,
+            timeoutMs: (req.timeoutSec ?? DEFAULT_TIMEOUT_SEC) * 1000, workDir,
+          });
+          store.endSpan(executeTrace.traceId, executeTrace.spanId, now().toISOString(), execution.exitCode === 0 ? "ok" : "error");
+        } catch (error) {
+          store.endSpan(executeTrace.traceId, executeTrace.spanId, now().toISOString(), "error");
+          throw error;
+        } finally {
+          await rm(workDir, { recursive: true, force: true });
         }
+        output = execution.output;
+        usage = { inputTokens: usage.inputTokens + execution.usage.inputTokens, outputTokens: usage.outputTokens + execution.usage.outputTokens };
+        if (roundTrips === 0) store.insertTokenUsage(delegationId, usage, assignment.model);
+        else store.db.prepare("UPDATE token_usage SET input_tokens = ?, output_tokens = ? WHERE delegation_id = ?").run(usage.inputTokens, usage.outputTokens, delegationId);
+        event("execution.finished", { delegationId, exitCode: execution.exitCode });
+        if (execution.timedOut) {
+          status = "timeout";
+        } else {
+          acceptance = await (deps.accept ?? runAcceptance)({
+            commands: req.accept, cwd, scope: req.scope, baseRef,
+            timeoutMs: (req.timeoutSec ?? DEFAULT_TIMEOUT_SEC) * 1000,
+          });
+          if (roundTrips === 0) store.insertAcceptance(delegationId, acceptance);
+          else store.db.prepare("UPDATE acceptances SET passed = ?, results = ?, scope_violations = ? WHERE delegation_id = ?").run(Number(acceptance.passed), JSON.stringify(acceptance.results), JSON.stringify(acceptance.scopeViolations), delegationId);
+          event("acceptance.evaluated", { delegationId, passed: acceptance.passed });
+          status = execution.exitCode === 0 && acceptance.passed ? "done" : "failed";
+          if (status === "done" && (req.review ?? req.role === "implement")) {
+            const diff = (await execFileAsync("git", ["diff"], { cwd, maxBuffer: 10 * 1024 * 1024 })).stdout;
+            const reviewResult = await runDelegation({
+              role: "review", title: `Review: ${req.title}`, cwd,
+              task: `元の依頼:\n${req.task}\n\n受け入れ結果:\n${JSON.stringify(acceptance)}\n\ngit diff:\n${diff}\n\n最終行に VERDICT: approve または VERDICT: request_changes を書いてください。`,
+              accept: ["true"], review: false,
+              constraints: { excludeFamily: [assignment.family] },
+            }, { ...caller, trace, parentDelegationId: delegationId, implementerFamily: assignment.family }, deps);
+            const verdict = reviewResult.status === "done"
+              ? readVerdict(reviewResult.output) : "request_changes";
+            review = { verdict, reviewer: reviewResult.assignment, comment: reviewResult.output };
+            if (!store.db.prepare("SELECT 1 FROM reviews WHERE delegation_id = ?").get(delegationId)) store.insertReview(delegationId, reviewResult.delegationId, verdict, reviewResult.output);
+            else store.db.prepare("UPDATE reviews SET reviewer_delegation_id = ?, verdict = ?, comment = ? WHERE delegation_id = ?").run(reviewResult.delegationId, verdict, reviewResult.output, delegationId);
+            event("review.evaluated", { delegationId, verdict });
+            if (verdict === "request_changes") status = "failed";
+          }
+        }
+        if (status === "done" || status === "timeout" || roundTrips >= policy.maxRoundTrips) break;
+        const feedback = !acceptance.passed || execution.exitCode !== 0
+          ? `受け入れ失敗 (exitCode: ${execution.exitCode}):\n${JSON.stringify(acceptance)}`
+          : `レビューの修正依頼:\n${review?.comment ?? ""}`;
+        task = `${req.task}\n\n前回の結果を踏まえて修正してください。\n${feedback}`;
+        roundTrips++;
+        store.db.prepare("UPDATE delegations SET round_trips = ? WHERE id = ?").run(roundTrips, delegationId);
       }
     }
     store.finishDelegation(delegationId, status);
     event("delegation.finished", { delegationId, status });
     finished = true;
     return { delegationId, traceId: trace.traceId, spanId: trace.spanId, status,
-      assignment, output, acceptance, ...(review ? { review } : {}), usage, roundTrips: 0 };
+      assignment, output, acceptance, ...(review ? { review } : {}), usage, roundTrips };
   } catch (error) {
     if (!finished) {
       status = "failed";

@@ -14,7 +14,7 @@ const root = mkdtempSync(join(tmpdir(), "agent-graph-adapters-"));
 
 test("Claude plugin の JSON と hook", () => {
   const outDir = join(root, "plugin");
-  generateClaudePlugin({ outDir, ...options });
+  generateClaudePlugin({ outDir, hookPath: "/tmp/agent graph/hook.ts", ...options });
   const manifest = JSON.parse(readFileSync(join(outDir, ".claude-plugin/plugin.json"), "utf8"));
   const mcp = JSON.parse(readFileSync(join(outDir, ".mcp.json"), "utf8"));
   const hooks = JSON.parse(readFileSync(join(outDir, "hooks/hooks.json"), "utf8"));
@@ -22,7 +22,7 @@ test("Claude plugin の JSON と hook", () => {
   assert.equal(manifest.name, "agent-graph");
   assert.deepEqual(mcp.mcpServers["agent-graph"], { command: process.execPath, args: [options.shimPath], env: { AGENT_GRAPH_CLIENT: "claude" } });
   assert.deepEqual(Object.keys(hooks.hooks), ["SessionStart"]);
-  assert.match(hooks.hooks.SessionStart[0].hooks[0].command, /agent-graph-hook session-start/);
+  assert.equal(hooks.hooks.SessionStart[0].hooks[0].command, `${JSON.stringify(process.execPath)} ${JSON.stringify("/tmp/agent graph/hook.ts")} session-start`);
   assert.ok(settings.permissions.deny.length);
 });
 
@@ -43,6 +43,11 @@ test("Codex 設定の追記、置換、バックアップ", () => {
   assert.ok(second.startsWith(original));
   assert.equal(readFileSync(`${configPath}.agent-graph.bak`, "utf8"), first);
   assert.ok(renderCodexOverrides(options).includes('mcp_servers.agent-graph.tools.delegate.approval_mode="approve"'));
+  const trailing = "[other2]\nvalue = 2 # keep exactly\n";
+  writeFileSync(configPath, `${second}${trailing}`);
+  installCodexConfig({ configPath, shimPath: "/tmp/next.ts", nodePath: process.execPath });
+  assert.equal(readFileSync(configPath, "utf8"), `${second}${trailing}`);
+  assert.equal(readFileSync(`${configPath}.agent-graph.bak`, "utf8"), `${second}${trailing}`);
 });
 
 test("hook は到達不能でも 0 で終わる", () => {

@@ -5,6 +5,7 @@ import { generateClaudePlugin, renderClaudePlugin } from "./claude-plugin.ts";
 import { installCodexConfig, mergeCodexConfig, renderCodexOverrides } from "./codex-config.ts";
 
 const shimPath = fileURLToPath(new URL("../../daemon/src/shim.ts", import.meta.url));
+const hookPath = fileURLToPath(new URL("./hook.ts", import.meta.url));
 const nodePath = process.execPath;
 const args = process.argv.slice(2);
 const dryRun = args.includes("--dry-run");
@@ -19,8 +20,8 @@ for (let i = 0; i < args.length; i++) {
   const path = args[++i];
   if (!path) throw new Error(`Missing value for ${flag}`);
   if (flag === "--claude-plugin-dir") {
-    if (dryRun) process.stdout.write(JSON.stringify(renderClaudePlugin({ outDir: path, shimPath, nodePath }), null, 2) + "\n");
-    else generateClaudePlugin({ outDir: path, shimPath, nodePath });
+    if (dryRun) process.stdout.write(JSON.stringify(renderClaudePlugin({ outDir: path, shimPath, hookPath, nodePath }), null, 2) + "\n");
+    else generateClaudePlugin({ outDir: path, shimPath, hookPath, nodePath });
   } else if (flag === "--codex-config") {
     if (dryRun) {
       let existing = "";

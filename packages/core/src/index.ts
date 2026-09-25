@@ -16,7 +16,7 @@ export { repoKey, stateDbPath } from "./paths.ts";
 export { fingerprint } from "./store/fingerprint.ts";
 export { migrations, type Migration } from "./store/migrations.ts";
 export { migrate } from "./store/migrate.ts";
-export { openStore, Store, type Repo, type Session, type GraphRecord, type TaskRecord, type TaskState } from "./store/store.ts";
+export { openStore, Store, decisionAllowed, type Repo, type Session, type GraphRecord, type TaskRecord, type TaskState, type TaskDecision, type TaskDecisionRow } from "./store/store.ts";
 export type * from "./delegate/types.ts";
 export { runDelegation, type DelegationDeps, type DelegationCaller } from "./delegate/run.ts";
 export { assign, defaultPolicyTable } from "./assign/static.ts";

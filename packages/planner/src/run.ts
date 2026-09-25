@@ -2,7 +2,8 @@ import { execFileSync } from "node:child_process";
 import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, matchesGlob, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { newTraceId, openStore, repoKey, stateDbPath, ulid, type GraphRecord, type Store, type TaskRecord } from "../../core/src/index.ts";
+import { decisionAllowed, newTraceId, openStore, repoKey, stateDbPath, ulid, type GraphRecord, type Store, type TaskRecord } from "../../core/src/index.ts";
+import { isDecision, markApplied, pendingDecisions, recordDecision, DECISION_POLL_MS } from "./decisions.ts";
 import { connectDelegate } from "./mcp-client.ts";
 import { graphFingerprint, loadSpec, roleForExecutor, validateSpec, type TaskSpec } from "./spec.ts";
 import { commitScoped, createTaskWorktree, mergeIntoIntegration, prepareIntegration } from "./worktree.ts";
@@ -59,28 +60,24 @@ export function requestDecision(options: RunOptions, taskId: string, decision: "
   try {
     const graph = store.findGraph(context.key, options.session, context.fingerprint);
     if (!graph) throw new Error("Graph not found; run it first");
-    const task = store.listTasks(graph.id).find((row) => row.id === taskId);
-    if (!task) throw new Error(`Task not found: ${taskId}`);
-    if (!WAITING_STATES.has(task.state) && !(decision === "retry" && task.state === "failed")) {
-      throw new Error(`${taskId} is not waiting (state: ${task.state})`);
-    }
-    store.appendGraphEvent(graph, "decision", { taskId, decision, state: task.state });
+    recordDecision(store, graph, taskId, decision);
   } finally { store.close(); }
 }
 
+// task_decisions の未適用分を状態に反映する。approve は統合、retry は再実行、reject は却下。
 function applyDecisions(repo: string, store: Store, graph: GraphRecord, tasks: TaskSpec[]): void {
-  const applied = new Set(store.listGraphEvents(graph.id, "decision.applied").map((event) => event.payload.decisionId));
-  for (const event of store.listGraphEvents(graph.id, "decision")) {
-    if (applied.has(event.id)) continue;
-    const task = tasks.find((task) => task.id === event.payload.taskId);
-    const current = store.listTasks(graph.id).find((row) => row.id === task?.id);
-    if (task && current && (WAITING_STATES.has(current.state) || (current.state === "failed" && event.payload.decision === "retry"))) {
-      if (event.payload.decision === "retry") store.updateTask(graph.id, task.id, "planned", current.state === "failed" ? current.attempts : 0);
-      else if (event.payload.decision === "reject") store.updateTask(graph.id, task.id, "rejected");
+  for (const decision of pendingDecisions(store, graph)) {
+    const task = tasks.find((task) => task.id === decision.taskId);
+    const current = task && store.getTask(graph.id, task.id);
+    let effect = "skipped";
+    if (task && current && isDecision(decision.action) && decisionAllowed(current.state, decision.action)) {
+      effect = "applied";
+      if (decision.action === "retry") store.updateTask(graph.id, task.id, "planned", current.state === "failed" ? current.attempts : 0);
+      else if (decision.action === "reject") store.updateTask(graph.id, task.id, "rejected");
       else if (task.executor === "human") store.updateTask(graph.id, task.id, "done");
       else integrateTask(repo, store, graph, task);
     }
-    store.appendGraphEvent(graph, "decision.applied", { decisionId: event.id });
+    markApplied(store, graph, decision, effect);
   }
 }
 
@@ -170,8 +167,13 @@ export async function runGraph(options: RunOptions, dependencies: { connect?: ty
         store.appendGraphEvent(currentGraph, "task.failed", { taskId: task.id, reason: String(error) });
       }
     };
+    // 判断待ちの表は 1 秒ごとに見る。起動直後は待たずに拾う。
+    let decisionsCheckedAt = 0;
     for (;;) {
-      applyDecisions(root, store, graph, spec.tasks);
+      if (Date.now() - decisionsCheckedAt >= DECISION_POLL_MS) {
+        applyDecisions(root, store, graph, spec.tasks);
+        decisionsCheckedAt = Date.now();
+      }
       const rows = store.listTasks(graph.id);
       const states = new Map(rows.map((task) => [task.id, task.state]));
       for (const task of spec.tasks) {

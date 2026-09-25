@@ -18,6 +18,15 @@ export interface GraphRecord {
 export interface TaskRecord {
   graphId: string; id: string; title: string; role: string; dependsOn: string[]; state: TaskState; attempts: number;
 }
+export type TaskDecision = "approve" | "reject" | "retry";
+export interface TaskDecisionRow {
+  id: number; graphId: string; taskId: string; action: string; at: string;
+}
+
+// 判断を受けられる状態。retry だけは failed も受ける。
+export function decisionAllowed(state: TaskState, action: TaskDecision): boolean {
+  return state === "waiting_human" || state === "conflict" || (state === "failed" && action === "retry");
+}
 
 export interface Repo {
   key: string;
@@ -286,6 +295,32 @@ export class Store {
   insertTaskDecision(graphId: string, taskId: string, action: string, at: string): void {
     this.db.prepare("INSERT INTO task_decisions (graph_id, task_id, action, at) VALUES (?, ?, ?, ?)").run(graphId, taskId, action, at);
     this.notifyChange();
+  }
+
+  // 記録順。id は rowid で、planner が適用済みの印に使う。
+  listTaskDecisions(graphId: string): TaskDecisionRow[] {
+    return this.db.prepare("SELECT rowid AS id, task_id, action, at FROM task_decisions WHERE graph_id = ? ORDER BY rowid").all(graphId)
+      .map((row) => ({ id: Number(row.id), graphId, taskId: String(row.task_id), action: String(row.action), at: String(row.at) }));
+  }
+
+  getGraph(id: string): GraphRecord | undefined {
+    const row = this.db.prepare("SELECT * FROM graphs WHERE id = ?").get(id);
+    return row ? { id: String(row.id), repoKey: String(row.repo_key), sessionId: String(row.session_id),
+      goal: String(row.goal), fingerprint: String(row.fingerprint), createdAt: String(row.created_at) } : undefined;
+  }
+
+  getTask(graphId: string, id: string): TaskRecord | undefined {
+    return this.listTasks(graphId).find((task) => task.id === id);
+  }
+
+  getTurn(id: string): TurnRow | undefined {
+    const row = this.db.prepare("SELECT * FROM turns WHERE id = ?").get(id);
+    return row ? {
+      id: String(row.id), sessionId: String(row.session_id), at: String(row.at), prompt: String(row.prompt),
+      ...(row.summary === null ? {} : { summary: String(row.summary) }),
+      ...(row.reply === null ? {} : { reply: String(row.reply) }),
+      hidden: Number(row.hidden) === 1,
+    } : undefined;
   }
 
   findGraph(repo: string, session: string, fingerprint?: string): GraphRecord | undefined {

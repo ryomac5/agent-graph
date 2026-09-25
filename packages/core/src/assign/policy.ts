@@ -32,6 +32,7 @@ export type Constraint =
   | { kind: "implementerNotOrchestrator" }
   | { kind: "minTierForRole"; role: Role; tier: Tier };
 export interface Policy {
+  maxRoundTrips: number;
   roles: Record<Role, Candidate[]>;
   quota: { softLimitPercent: number; hardLimitPercent: number };
   performance: { minSamples: number; weights: { acceptRate: number; reviewApprove: number; roundTrips: number; tokens: number } };
@@ -39,6 +40,7 @@ export interface Policy {
 }
 export function defaultPolicy(): Policy {
   return {
+    maxRoundTrips: 2,
     roles: staticPolicyTable(),
     quota: { softLimitPercent: 70, hardLimitPercent: 90 },
     performance: { minSamples: 20, weights: { acceptRate: 0.4, reviewApprove: 0.3, roundTrips: 0.2, tokens: 0.1 } },
@@ -54,6 +56,10 @@ function validateOverride(value: unknown): Partial<Policy> {
     return input as Record<string, unknown>;
   };
   const object = record(value, "policy");
+  if (object.maxRoundTrips !== undefined && (typeof object.maxRoundTrips !== "number" ||
+    !Number.isInteger(object.maxRoundTrips) || object.maxRoundTrips < 0)) {
+    throw new TypeError("Invalid maxRoundTrips");
+  }
   if (object.roles !== undefined) {
     const roles = record(object.roles, "roles");
     for (const [role, entries] of Object.entries(roles)) {
@@ -131,7 +137,7 @@ export function parsePolicyToml(text: string): Partial<Policy> {
       section = "constraint";
       continue;
     }
-    if (["[quota]", "[performance]", "[performance.weights]"].includes(line)) {
+    if (["[quota]", "[performance]", "[performance.weights]", "[review]"].includes(line)) {
       section = line.slice(1, -1);
       continue;
     }
@@ -159,6 +165,10 @@ export function parsePolicyToml(text: string): Partial<Policy> {
       quota: ["softLimitPercent", "hardLimitPercent"], performance: ["minSamples"],
       "performance.weights": ["acceptRate", "reviewApprove", "roundTrips", "tokens"],
     };
+    if (section === "review" && key === "max_round_trips" && /^\d+$/.test(rawValue)) {
+      result.maxRoundTrips = Number(rawValue);
+      continue;
+    }
     if (!numeric[section]?.includes(key) || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(rawValue)) {
       throw new SyntaxError(`Unsupported TOML at line ${index + 1}`);
     }
@@ -190,6 +200,7 @@ export function loadPolicy(options: { path?: string; env?: NodeJS.ProcessEnv; ho
   const toml = existsSync(path) ? parsePolicyToml(readFileSync(path, "utf8")) : {};
   const json = env.AGENT_GRAPH_POLICY_JSON ? validateOverride(JSON.parse(readFileSync(env.AGENT_GRAPH_POLICY_JSON, "utf8"))) : {};
   for (const override of [toml, json]) {
+    if (override.maxRoundTrips !== undefined) policy.maxRoundTrips = override.maxRoundTrips;
     if (override.roles) policy.roles = { ...policy.roles, ...override.roles };
     if (override.quota) policy.quota = { ...policy.quota, ...override.quota };
     if (override.performance) policy.performance = {

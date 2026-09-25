@@ -67,3 +67,9 @@ test("TOML の不正な constraints を拒否する", () => {
   writeFileSync(path, '[[constraints]]\nkind = "minTierForRole"\nrole = "implement"\ntier = "hgh"\n');
   assert.throws(() => loadPolicy({ path, env: {}, home: root }), TypeError);
 });
+
+test("レビュー往復の既定値と TOML 上書きを読む", () => {
+  assert.equal(loadPolicy({ path: "/nonexistent/policy.toml", env: {} }).maxRoundTrips, 2);
+  assert.equal(parsePolicyToml("[review]\nmax_round_trips = 3\n").maxRoundTrips, 3);
+  assert.throws(() => parsePolicyToml("[review]\nmax_round_trips = -1\n"), /line 2/);
+});

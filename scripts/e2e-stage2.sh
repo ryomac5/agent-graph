@@ -30,6 +30,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 export XDG_STATE_HOME="$TEMP/state" XDG_CACHE_HOME="$TEMP/cache"
 export AGENT_GRAPH_SOCKET="$TEMP/daemon.sock"
+export AGENT_GRAPH_USAGE_PROBE=0
 export AGENT_GRAPH_POLICY_JSON="$TEMP/policy.json"
 export E2E_REAL_CLAUDE E2E_REAL_CODEX E2E_LOG_DIR="$TEMP"
 E2E_REAL_CLAUDE=$(command -v claude)

@@ -97,3 +97,17 @@ test("caller.trace を渡すと traceId と親 span を引き継ぐ", async (t) 
     .get(result.spanId)!;
   assert.equal(span.parent_span_id, parent.spanId);
 });
+
+test("最新利用枠が hard 以上の候補を外し理由と版を保存する", async (t) => {
+  const deps = setup(t);
+  deps.store.appendUsageSample({ ts: new Date().toISOString(), provider: "openai", window: "5h", percent: 95 });
+  const result = await runDelegation({ ...request, role: "implement", review: false }, caller, deps);
+  assert.equal(result.assignment.model, "opus");
+  assert.match(result.assignment.reason.join(" "), /hard: gpt-6-astra excluded at 95%/);
+  const saved = deps.store.db.prepare("SELECT reason, policy_version FROM assignments").get()!;
+  assert.deepEqual(JSON.parse(saved.reason as string), result.assignment.reason);
+  assert.equal(saved.policy_version, result.assignment.policyVersion);
+  const decided = deps.store.listEvents().find((event) => event.kind === "assignment.decided")!;
+  assert.deepEqual((decided.payload as { reason: string[] }).reason, result.assignment.reason);
+  assert.equal((decided.payload as { policyVersion: string }).policyVersion, result.assignment.policyVersion);
+});

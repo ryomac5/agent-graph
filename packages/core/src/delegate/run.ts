@@ -3,14 +3,16 @@ import { promisify } from "node:util";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assign as staticAssign, defaultPolicyTable } from "../assign/static.ts";
+import { decide, type DecisionInput } from "../assign/assign.ts";
+import { loadPolicy } from "../assign/policy.ts";
+import { aggregatePerformance } from "../store/performance.ts";
 import { runAcceptance } from "../accept/run.ts";
 import { execute as runExecute, type ExecRequest, type ExecResult } from "../exec/types.ts";
 import type { Event, EventKind, EventPayload } from "../events.ts";
 import type { Store } from "../store/store.ts";
 import { childContext, newSpanId, newTraceId, type TraceContext } from "../trace.ts";
 import { ulid } from "../ulid.ts";
-import type { AcceptanceResult, Assignment, DelegateRequest, DelegateResult } from "./types.ts";
+import type { AcceptanceResult, Assignment, DelegateRequest, DelegateResult, ModelFamily } from "./types.ts";
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_TIMEOUT_SEC = 1800;
@@ -19,7 +21,8 @@ const EMPTY_USAGE = { inputTokens: 0, outputTokens: 0 };
 
 export interface DelegationDeps {
   store: Store;
-  assign?: typeof staticAssign;
+  decide?: typeof decide;
+  policy?: DecisionInput["policy"];
   execute?: (request: ExecRequest) => Promise<ExecResult>;
   accept?: typeof runAcceptance;
   now?: () => Date;
@@ -31,6 +34,8 @@ export interface DelegationCaller {
   sessionId: string;
   trace?: TraceContext;
   parentDelegationId?: string;
+  orchestratorModel?: string;
+  implementerFamily?: ModelFamily;
 }
 
 function readVerdict(output: string): "approve" | "request_changes" {
@@ -71,14 +76,32 @@ export async function runDelegation(
       "agent.session": caller.sessionId, "agent.delegation": delegationId } });
   try {
     event("delegation.requested", { delegationId, task: req.task });
-    const decision = (deps.assign ?? staticAssign)(req, defaultPolicyTable());
+    const samples = store.latestUsageSamples();
+    const performance = aggregatePerformance(store.db, { role: req.role });
+    const decision = (deps.decide ?? decide)(req, {
+      policy: deps.policy ?? loadPolicy(),
+      quota: (candidate) => {
+        const scoped = candidate.family === "anthropic"
+          ? samples.filter((sample) => sample.provider === "anthropic" && sample.model?.toLowerCase() === candidate.model.toLowerCase())
+          : [];
+        const relevant = scoped.length ? scoped : samples.filter((sample) =>
+          sample.provider === candidate.family && sample.model === undefined);
+        const highest = relevant.reduce((best, sample) => !best || sample.percent > best.percent ? sample : best, undefined as typeof samples[number] | undefined);
+        return highest && { percent: highest.percent, source: `${highest.provider} ${highest.model ?? highest.window}` };
+      },
+      performance: (role, model) => performance.find((item) => item.role === role && item.model === model),
+      orchestratorModel: caller.orchestratorModel,
+      implementerFamily: caller.implementerFamily,
+    });
     if (!decision.ok) {
       assignment = { ...deniedAssignment, reason: decision.reason };
       status = "denied";
     } else {
       assignment = decision.assignment;
       store.insertAssignment(delegationId, assignment);
-      event("assignment.decided", { delegationId, executor: assignment.executor, model: assignment.model });
+      const decidedPayload = { delegationId, executor: assignment.executor, model: assignment.model,
+        reason: assignment.reason, policyVersion: assignment.policyVersion };
+      event("assignment.decided", decidedPayload);
       store.updateSpanAttributes(trace.traceId, trace.spanId, {
         "agent.executor": assignment.executor, "agent.model": assignment.model,
       });
@@ -116,7 +139,7 @@ export async function runDelegation(
             task: `元の依頼:\n${req.task}\n\n受け入れ結果:\n${JSON.stringify(acceptance)}\n\ngit diff:\n${diff}\n\n最終行に VERDICT: approve または VERDICT: request_changes を書いてください。`,
             accept: ["true"], review: false,
             constraints: { excludeFamily: [assignment.family] },
-          }, { ...caller, trace, parentDelegationId: delegationId }, deps);
+          }, { ...caller, trace, parentDelegationId: delegationId, implementerFamily: assignment.family }, deps);
           const verdict = reviewResult.status === "done"
             ? readVerdict(reviewResult.output) : "request_changes";
           review = { verdict, reviewer: reviewResult.assignment, comment: reviewResult.output };

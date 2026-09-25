@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { createHandler, startDaemon } from "../src/main.ts";
+import { createHandler, startDaemon, startUsageProbe } from "../src/main.ts";
 import { repoKey, stateDbPath } from "../../core/src/paths.ts";
 import { openStore, type Store } from "../../core/src/store/store.ts";
 import { existsSync } from "node:fs";
@@ -116,4 +116,34 @@ test("daemon bin starts through a symlink", async () => {
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("周期取得を保存し、環境変数で停止する", async () => {
+  const store = openStore(":memory:");
+  store.upsertRepo({ key: "repo", rootPath: process.cwd(), name: "repo" });
+  const stores = new Map([["repo", store]]);
+  const timers: Array<() => void> = [];
+  const intervals: number[] = [];
+  let codexCalls = 0;
+  let claudeCalls = 0;
+  const options = {
+    env: { XDG_CACHE_HOME: "/tmp" },
+    readCodex: () => { codexCalls++; return [{ ts: new Date().toISOString(), provider: "openai" as const, window: "5h", percent: 42 }]; },
+    probeClaude: async (cwd: string) => { claudeCalls++; assert.equal(cwd, "/tmp/agent-graph/usage-probe");
+      return [{ ts: new Date().toISOString(), provider: "anthropic" as const, window: "5h", percent: 32 }]; },
+    setIntervalImpl: ((fn: () => void, ms: number) => { timers.push(fn); intervals.push(ms); return 1; }) as typeof setInterval,
+    clearIntervalImpl: (() => {}) as typeof clearInterval,
+  };
+  try {
+    const probe = startUsageProbe(stores, options);
+    assert.deepEqual(intervals, [60_000, 300_000]);
+    for (const timer of timers) timer();
+    await probe.stop();
+    assert.equal(codexCalls, 1);
+    assert.equal(claudeCalls, 1);
+    assert.equal(store.latestUsageSamples().length, 2);
+    assert.equal(store.listEvents().filter((event) => event.kind === "usage.sampled").length, 2);
+    startUsageProbe(stores, { ...options, env: { AGENT_GRAPH_USAGE_PROBE: "0" } });
+    assert.equal(timers.length, 2);
+  } finally { store.close(); }
 });

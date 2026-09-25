@@ -36,6 +36,7 @@ export function openStore(path: string): Store {
 
 export class Store {
   readonly db: DatabaseSync;
+  private readonly changeListeners = new Set<() => void>();
 
   constructor(db: DatabaseSync) {
     this.db = db;
@@ -43,6 +44,15 @@ export class Store {
 
   close(): void {
     this.db.close();
+  }
+
+  onChange(listener: () => void): () => void {
+    this.changeListeners.add(listener);
+    return () => this.changeListeners.delete(listener);
+  }
+
+  private notifyChange(): void {
+    for (const listener of this.changeListeners) listener();
   }
 
   upsertRepo(repo: Repo): void {
@@ -69,6 +79,7 @@ export class Store {
       event.trace.traceId, event.trace.spanId, event.trace.parentSpanId ?? null,
       event.trace.traceState ?? null, JSON.stringify(event.payload),
     );
+    this.notifyChange();
   }
 
   listEvents(repoKey?: string): Event[] {
@@ -122,10 +133,12 @@ export class Store {
     this.db.prepare(`INSERT INTO delegations (id, repo_key, session_id, parent_id, role, title, status)
       VALUES (?, ?, ?, ?, ?, ?, ?)`)
       .run(row.id, row.repoKey, row.sessionId, row.parentId ?? null, row.role, row.title, row.status);
+    this.notifyChange();
   }
 
   finishDelegation(id: string, status: string): void {
-    this.db.prepare("UPDATE delegations SET status = ? WHERE id = ?").run(status, id);
+    const result = this.db.prepare("UPDATE delegations SET status = ? WHERE id = ?").run(status, id);
+    if (result.changes > 0) this.notifyChange();
   }
 
   insertAssignment(id: string, assignment: Assignment): void {
@@ -134,6 +147,7 @@ export class Store {
       VALUES (?, ?, ?, ?, ?, ?, ?)`)
       .run(id, assignment.executor, assignment.model, assignment.family, assignment.tier,
         JSON.stringify(assignment.reason), assignment.policyVersion);
+    this.notifyChange();
   }
 
   insertAcceptance(id: string, acceptance: AcceptanceResult): void {

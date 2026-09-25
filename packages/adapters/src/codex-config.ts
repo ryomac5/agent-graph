@@ -6,17 +6,16 @@ export interface CodexInstallOptions extends CodexOptions { configPath: string }
 const TOOL_TIMEOUT_SEC = 1800;
 const SERVER = "agent-graph";
 const TOOL_KEY = "mcp_servers.agent-graph.tools.delegate.approval_mode";
+// 値を生成時に固定せず、各セッションの接続先とトレース文脈を shim に渡す。
+const SHIM_ENV_VARS = ["AGENT_GRAPH_SOCKET", "XDG_STATE_HOME", "TRACEPARENT", "TRACESTATE", "AGENT_GRAPH_SESSION"];
 
 export function renderCodexConfig(options: CodexOptions): string {
-  return `[mcp_servers.${SERVER}]\ncommand = ${JSON.stringify(options.nodePath)}\nargs = [${JSON.stringify(options.shimPath)}]\ntool_timeout_sec = ${TOOL_TIMEOUT_SEC}\n\n[mcp_servers.${SERVER}.env]\nAGENT_GRAPH_CLIENT = "codex"\n\n[mcp_servers.${SERVER}.tools.delegate]\napproval_mode = "approve"\n`;
+  return `[mcp_servers.${SERVER}]\ncommand = ${JSON.stringify(options.nodePath)}\nargs = [${JSON.stringify(options.shimPath)}]\nenv_vars = ${JSON.stringify(SHIM_ENV_VARS)}\ntool_timeout_sec = ${TOOL_TIMEOUT_SEC}\nrequired = true\n\n[mcp_servers.${SERVER}.env]\nAGENT_GRAPH_CLIENT = "codex"\n\n[mcp_servers.${SERVER}.tools.delegate]\napproval_mode = "approve"\n`;
 }
 
 export function renderCodexOverrides(options: CodexOptions): string[] {
   return [
-    "-c", `mcp_servers.${SERVER}.command=${JSON.stringify(options.nodePath)}`,
-    "-c", `mcp_servers.${SERVER}.args=[${JSON.stringify(options.shimPath)}]`,
-    "-c", `mcp_servers.${SERVER}.env.AGENT_GRAPH_CLIENT="codex"`,
-    "-c", `mcp_servers.${SERVER}.tool_timeout_sec=${TOOL_TIMEOUT_SEC}`,
+    "-c", `mcp_servers.${SERVER}={command=${JSON.stringify(options.nodePath)},args=[${JSON.stringify(options.shimPath)}],env={AGENT_GRAPH_CLIENT="codex"},env_vars=${JSON.stringify(SHIM_ENV_VARS)},tool_timeout_sec=${TOOL_TIMEOUT_SEC},required=true}`,
     "-c", `${TOOL_KEY}="approve"`,
   ];
 }

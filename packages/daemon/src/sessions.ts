@@ -15,7 +15,7 @@ const GOAL_LIMIT = 200;
 const PROMPT_LIMIT = 20_000;
 
 export type ObserveKind = "turn_start" | "turn_done" | "waiting"
-  | "subagent_request" | "subagent_start" | "subagent_message" | "subagent_stop" | "resumed";
+  | "subagent_request" | "subagent_done" | "subagent_start" | "subagent_message" | "subagent_stop" | "resumed";
 
 export interface ObserveInput {
   kind: ObserveKind;

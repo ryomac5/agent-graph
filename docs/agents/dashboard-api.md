@@ -52,9 +52,10 @@ pid は hook から送らない。hook の親は shell のことがあり、根�
 | `waiting` | `reason` | `status` を `waiting` にし、`waitingReason` に `permission` か `question` を入れる |
 | `resumed` | なし | 待ちを解除する。PostToolUse の AskUserQuestion |
 | `subagent_request` | `toolUseId`, `title`, `task`, `subagentType?`, `name?`, `model?`, `parentAgentId?` | PreToolUse の Agent。`delegations` に `kind: subagent` の行を作る。同じ `toolUseId` は無視する |
+| `subagent_done` | `toolUseId`, `failed`, `agentId?` | PostToolUse と PostToolUseFailure の Agent。失敗なら `failed` で閉じる。未束縛の行は `agentId` で結ぶか `failed` で閉じる |
 | `subagent_start` | `agentId`, `agentType`, `toolUseId?` | SubagentStart。`agentId` を同じ `agentType` の未束縛の行に古い順で結ぶ。既知の `agentId` なら `running` に戻す |
 | `subagent_message` | `toolUseId`, `to`, `text` | PreToolUse の SendMessage。宛先の子の往復に再指示を足し、`roundTrips` を増やす。同じ `toolUseId` は無視する |
-| `subagent_stop` | `agentId?`, `agentType`, `report`, `summary?`, `task?` | SubagentStop。報告を積んで `status` を `done` にする。同じ報告の二重送信は無視する |
+| `subagent_stop` | `agentId?`, `agentType`, `report`, `summary?`, `task?` | SubagentStop。報告を積んで `status` を `done` にする。`task` の合う行に結び直す。同じ報告の二重送信は無視する |
 
 turn の 3 種は `packages/daemon/src/sessions.ts`、サブエージェントの種類は `packages/daemon/src/observe.ts` にある。
 
@@ -69,13 +70,15 @@ Claude Code の Agent ツールで起こした子は `delegations` の `kind: su
 | --- | --- | --- |
 | `delegation.requested` | `{ delegationId, task }` | `request` |
 | `subagent.dispatched` | `{ delegationId, toolUseId, agentType, name?, parentAgentId? }` | なし |
-| `subagent.started` | `{ delegationId, agentId, agentType }` | なし |
+| `subagent.started` | `{ delegationId, agentId, agentType }` | なし。最後の値が束縛。`agentId` が空なら未束縛に戻す |
 | `subagent.reinstructed` | `{ delegationId, agentId, toolUseId, text }` | `reinstruct` |
 | `subagent.reported` | `{ delegationId, agentId?, output, summary, task? }` | `report` |
-| `delegation.finished` | `{ delegationId, status: "done" }` | なし |
+| `delegation.finished` | `{ delegationId, status }` | なし。`done` か `failed` |
 
 `execution.started` と `execution.finished` も MCP の委譲と同じ形で積む。
-`subagent_start` に記録も `agentType` も無い子は Claude Code 内部のものとみなし、行を作らない。
+`subagent_start` と `subagent_stop` に記録も `agentType` も無い子は Claude Code 内部のものとみなし、行を作らず既存の行にも結ばない。
+サブエージェント由来の観測は根の `waitingReason` を消さない。待ちを解くのは `turn_start` と `turn_done` と `resumed` だけ。
+`subagent_stop` の `task` は子の transcript の最初の user 本文。前後の空白を除いた完全一致か先頭 200 字の一致で `delegation.requested` の `task` と突き合わせ、並列の同じ種別の取り違えを直す。
 hook はデーモンに届かなくても 0 で終わる。
 
 ## セッションの状態

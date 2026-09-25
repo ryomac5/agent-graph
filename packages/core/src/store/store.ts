@@ -267,6 +267,14 @@ export class Store {
     return changed > 0;
   }
 
+  // 親が生きている前提で動いている委譲の数。画面からの終了を断る判断に使う。
+  countActiveDelegations(sessionId: string): number {
+    const placeholders = ACTIVE_DELEGATION_STATUSES.map(() => "?").join(", ");
+    const row = this.db.prepare(`SELECT COUNT(*) AS n FROM delegations WHERE session_id = ? AND status IN (${placeholders})`)
+      .get(sessionId, ...ACTIVE_DELEGATION_STATUSES);
+    return Number(row?.n ?? 0);
+  }
+
   insertTurn(turn: { id: string; sessionId: string; at: string; prompt: string; summary?: string; reply?: string }): void {
     this.db.prepare("INSERT INTO turns (id, session_id, at, prompt, summary, reply) VALUES (?, ?, ?, ?, ?, ?)")
       .run(turn.id, turn.sessionId, turn.at, turn.prompt, turn.summary ?? null, turn.reply ?? null);

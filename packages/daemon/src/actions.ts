@@ -2,8 +2,10 @@ import { decisionAllowed, type GraphRecord, type Store, type TaskDecision } from
 import type { ActionRequest, ActionResult } from "./http/contract.ts";
 import { NotFoundError } from "./sessions.ts";
 
-// 識別子は英数字と . - _ だけ。repo の key は <名前>-<hash>、task は spec の規則、session と turn は uuid か ulid。
+// 識別子は英数字と . - _ だけ。task は spec の規則、session と turn は uuid か ulid。
+// repo の key は repoKey が basename と hash で作るので日本語や空白を含む。空でない文字列とだけ検べ、stores の完全一致で引く。
 const IDENT = /^[A-Za-z0-9._-]{1,128}$/;
+const REPO_MAX = 256;
 const ACTIONS = new Set<ActionRequest["action"]>(["approve", "retry", "reject", "end_session", "hide_turn"]);
 const DECISIONS = new Set<TaskDecision>(["approve", "retry", "reject"]);
 
@@ -12,12 +14,17 @@ function ident(value: unknown, name: string): string {
   return value;
 }
 
+function repoKeyOf(value: unknown): string {
+  if (typeof value !== "string" || !value || value.length > REPO_MAX || value.includes("\0")) throw new TypeError("Invalid repo");
+  return value;
+}
+
 // body を検べて ActionRequest にする。不正なら TypeError。
 export function parseAction(body: unknown): ActionRequest {
   if (!body || typeof body !== "object" || Array.isArray(body)) throw new TypeError("Invalid action body");
   const { action, repo, graphId, taskId, sessionId, turnId } = body as Record<string, unknown>;
   if (typeof action !== "string" || !ACTIONS.has(action as ActionRequest["action"])) throw new TypeError(`Unknown action: ${String(action)}`);
-  const request: ActionRequest = { action: action as ActionRequest["action"], repo: ident(repo, "repo") };
+  const request: ActionRequest = { action: action as ActionRequest["action"], repo: repoKeyOf(repo) };
   if (DECISIONS.has(action as TaskDecision)) {
     request.graphId = ident(graphId, "graphId");
     request.taskId = ident(taskId, "taskId");
@@ -50,11 +57,14 @@ function decide(store: Store, request: ActionRequest, now: Date): ActionResult {
   return { ok: true, message: `${task.id} を${label}した。planner が反映する` };
 }
 
+// 走っている委譲があるセッションは終えない。終えると子が lost と記録され、実際の状態と食い違う。
 function endSession(store: Store, request: ActionRequest, now: Date): ActionResult {
   const id = request.sessionId!;
   const session = store.getSession(id);
   if (!session || session.repoKey !== request.repo) throw new NotFoundError(`Session not found: ${id}`);
   if (session.status === "ended") return { ok: false, message: `${session.name} は終了済み` };
+  const active = store.countActiveDelegations(id);
+  if (active > 0) return { ok: false, message: `${session.name} は走っている委譲が ${active} 件あるので終えられない` };
   store.endSession(id, now.toISOString());
   return { ok: true, message: `${session.name} を終了した` };
 }

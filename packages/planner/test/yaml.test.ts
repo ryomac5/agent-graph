@@ -12,7 +12,13 @@ test("scalar forms", () => {
     a: ["one", "two, three", "four"], b: true, c: -12, d: "hello\nworld\n",
   });
 });
+test("block scalar preserves tabs and odd indentation", () => {
+  assert.deepEqual(parseYaml("prompt: |\n  first\n   odd\n  \tindented\nnext: true\n"), {
+    prompt: "first\n odd\n\tindented\n", next: true,
+  });
+});
 test("unsupported syntax reports line", () => {
   assert.throws(() => parseYaml("ok: yes\nbad: {x: 1}\n"), /line 2/);
   assert.throws(() => parseYaml("ok: yes\n  bad: value\n"), /line 2/);
+  assert.throws(() => parseYaml("ok: yes\n\tbad: value\n"), /line 2/);
 });

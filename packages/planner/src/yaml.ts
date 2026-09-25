@@ -5,15 +5,17 @@ export function parseYaml(text: string): unknown {
   const lines: Line[] = [];
   for (let index = 0; index < source.length; index++) {
     const raw = source[index]!;
-    if (raw.includes("\t")) throw new Error(`line ${index + 1}: tabs are unsupported`);
     const content = raw.trim();
     if (!content || content.startsWith("#")) continue;
     const indent = raw.length - raw.trimStart().length;
-    if (indent % 2) throw new Error(`line ${index + 1}: invalid indentation`);
     lines.push({ indent, content, number: index + 1 });
   }
   let position = 0;
   const fail = (line: Line, message: string): never => { throw new Error(`line ${line.number}: ${message}`); };
+  const checkStructure = (line: Line): void => {
+    if (source[line.number - 1]!.includes("\t")) fail(line, "tabs are unsupported");
+    if (line.indent % 2) fail(line, "invalid indentation");
+  };
   const stripComment = (value: string): string => {
     let quote = "";
     for (let i = 0; i < value.length; i++) {
@@ -64,10 +66,12 @@ export function parseYaml(text: string): unknown {
   const block = (indent: number): unknown => {
     const first = lines[position];
     if (!first || first.indent !== indent) fail(first ?? { indent, content: "", number: source.length }, "invalid indentation");
+    checkStructure(first);
     if (first.content.startsWith("- ")) {
       const result: unknown[] = [];
       while (position < lines.length && lines[position]!.indent === indent) {
         const line = lines[position++]!;
+        checkStructure(line);
         if (!line.content.startsWith("- ")) fail(line, "mixed map and sequence");
         const value = line.content.slice(2);
         const match = /^([A-Za-z_][\w-]*):(?:\s+(.*))?$/.exec(value);
@@ -92,6 +96,7 @@ export function parseYaml(text: string): unknown {
       const line = lines[position]!;
       const expected = first ? indent - 2 : indent;
       if (line.indent < expected || (sequenceItem && !first && line.indent === indent - 2)) break;
+      checkStructure(line);
       if (line.indent !== expected) fail(line, "invalid indentation");
       const content = first ? line.content.slice(2) : line.content;
       if (first && !line.content.startsWith("- ")) fail(line, "expected sequence item");

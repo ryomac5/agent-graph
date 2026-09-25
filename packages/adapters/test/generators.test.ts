@@ -8,7 +8,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { generateClaudePlugin } from "../src/claude-plugin.ts";
 import { installCodexConfig, renderCodexConfig, renderCodexOverrides } from "../src/codex-config.ts";
-import { endSession, lastAssistantText, observe, observeBody, registerSession, REPLY_LIMIT } from "../src/hook.ts";
+import { endSession, firstUserText, handbackMessage, lastAssistantText, observe, observeBody, registerSession, REPLY_LIMIT, REPORT_LIMIT, TASK_LIMIT } from "../src/hook.ts";
 
 const options = { shimPath: "/tmp/shim.ts", nodePath: process.execPath };
 const root = mkdtempSync(join(tmpdir(), "agent-graph-adapters-"));
@@ -42,13 +42,23 @@ test("Claude plugin の JSON と hook", () => {
   const settings = JSON.parse(readFileSync(join(outDir, "recommended-settings.json"), "utf8"));
   assert.equal(manifest.name, "agent-graph");
   assert.deepEqual(mcp.mcpServers["agent-graph"], { command: process.execPath, args: [options.shimPath], env: { AGENT_GRAPH_CLIENT: "claude" } });
-  assert.deepEqual(Object.keys(hooks.hooks), ["SessionStart", "SessionEnd", "UserPromptSubmit", "Stop", "Notification"]);
+  assert.deepEqual(Object.keys(hooks.hooks), ["SessionStart", "SessionEnd", "UserPromptSubmit", "Stop", "Notification",
+    "PreToolUse", "PostToolUse", "SubagentStart", "SubagentStop"]);
   const command = (args: string) => `${JSON.stringify(process.execPath)} ${JSON.stringify("/tmp/agent graph/hook.ts")} ${args}`;
   assert.equal(hooks.hooks.SessionStart[0].hooks[0].command, command("session-start"));
   assert.equal(hooks.hooks.SessionEnd[0].hooks[0].command, command("session-end"));
   assert.equal(hooks.hooks.UserPromptSubmit[0].hooks[0].command, command("observe turn_start"));
   assert.equal(hooks.hooks.Stop[0].hooks[0].command, command("observe turn_done"));
   assert.equal(hooks.hooks.Notification[0].hooks[0].command, command("observe notification"));
+  assert.equal(hooks.hooks.PreToolUse[0].hooks[0].command, command("observe tool_start"));
+  assert.equal(hooks.hooks.PreToolUse[0].matcher, "Agent|SendMessage|AskUserQuestion");
+  assert.equal(hooks.hooks.PostToolUse[0].hooks[0].command, command("observe tool_done"));
+  assert.equal(hooks.hooks.PostToolUse[0].matcher, "AskUserQuestion");
+  assert.equal(hooks.hooks.SubagentStart[0].hooks[0].command, command("observe subagent_start"));
+  assert.equal(hooks.hooks.SubagentStop[0].hooks[0].command, command("observe subagent_stop"));
+  for (const event of ["SessionStart", "SessionEnd", "UserPromptSubmit", "Stop", "Notification", "SubagentStart", "SubagentStop"]) {
+    assert.equal(hooks.hooks[event][0].matcher, undefined);
+  }
   for (const event of Object.keys(hooks.hooks)) assert.equal(hooks.hooks[event][0].hooks[0].timeout, 5);
   assert.ok(settings.permissions.deny.length);
 });
@@ -86,6 +96,14 @@ test("hook はどの経路でも到達不能や不正な入力で 0 で終わる
     [["observe", "turn_start"], JSON.stringify({ session_id: "s1", prompt: "hi" })],
     [["observe", "turn_done"], JSON.stringify({ session_id: "s1", last_assistant_message: "done" })],
     [["observe", "notification"], JSON.stringify({ session_id: "s1", notification_type: "permission_prompt" })],
+    [["observe", "tool_start"], JSON.stringify({ session_id: "s1", tool_name: "Agent", tool_use_id: "t", tool_input: { description: "d", prompt: "p" } })],
+    [["observe", "tool_start"], JSON.stringify({ session_id: "s1", tool_name: "Agent", tool_input: "broken" })],
+    [["observe", "tool_start"], JSON.stringify({ session_id: "s1", tool_name: "SendMessage", tool_input: { to: "a", message: "m" } })],
+    [["observe", "tool_start"], JSON.stringify({ session_id: "s1", tool_name: "AskUserQuestion", tool_input: {} })],
+    [["observe", "tool_done"], JSON.stringify({ session_id: "s1", tool_name: "AskUserQuestion", tool_response: {} })],
+    [["observe", "subagent_start"], JSON.stringify({ session_id: "s1", agent_id: "a", agent_type: "Explore" })],
+    [["observe", "subagent_stop"], JSON.stringify({ session_id: "s1", agent_id: "a", agent_type: "Explore", agent_transcript_path: join(root, "missing.jsonl") })],
+    [["observe", "subagent_stop"], JSON.stringify({ session_id: "s1" })],
     [["observe", "unknown"], JSON.stringify({ session_id: "s1" })],
     [["session-start"], "{"],
     [[], ""],
@@ -123,6 +141,65 @@ test("観測の本文。turn の 2 種と許可待ちだけを送り、サブエ
     { kind: "waiting", sessionId: "s", reason: "permission" });
   assert.equal(observeBody("notification", { session_id: "s", notification_type: "idle_prompt" }), undefined);
   assert.equal(observeBody("unknown", { session_id: "s" }), undefined);
+});
+
+test("観測の本文。Agent と SendMessage と AskUserQuestion と SubagentStart と SubagentStop", () => {
+  const agent = { session_id: "s", tool_name: "Agent", tool_use_id: "toolu_1",
+    tool_input: { description: "契約を調べる", prompt: "contract.ts を読む", subagent_type: "Explore", model: "sonnet", name: "finder" } };
+  assert.deepEqual(observeBody("tool_start", agent), { kind: "subagent_request", sessionId: "s", toolUseId: "toolu_1",
+    title: "契約を調べる", task: "contract.ts を読む", subagentType: "Explore", name: "finder", model: "sonnet" });
+  // サブエージェントの中からの委譲は親の agent_id を付ける
+  assert.deepEqual(observeBody("tool_start", { ...agent, agent_id: "parent", tool_input: { prompt: "x".repeat(TASK_LIMIT + 1) } }),
+    { kind: "subagent_request", sessionId: "s", toolUseId: "toolu_1", title: "", task: "x".repeat(TASK_LIMIT), parentAgentId: "parent" });
+  assert.deepEqual(observeBody("tool_start", { session_id: "s", tool_name: "Agent" }),
+    { kind: "subagent_request", sessionId: "s", toolUseId: "", title: "", task: "" });
+  assert.deepEqual(observeBody("tool_start", { session_id: "s", tool_name: "SendMessage", tool_use_id: "toolu_2", tool_input: { to: "a1", message: "続き", summary: "s" } }),
+    { kind: "subagent_message", sessionId: "s", toolUseId: "toolu_2", to: "a1", text: "続き" });
+  assert.deepEqual(observeBody("tool_start", { session_id: "s", tool_name: "SendMessage", tool_input: { to: "a1", summary: "要約だけ" } }),
+    { kind: "subagent_message", sessionId: "s", toolUseId: "", to: "a1", text: "要約だけ" });
+  assert.equal(observeBody("tool_start", { session_id: "s", tool_name: "SendMessage", tool_input: {} }), undefined);
+  assert.deepEqual(observeBody("tool_start", { session_id: "s", tool_name: "AskUserQuestion", tool_input: { questions: [] } }),
+    { kind: "waiting", sessionId: "s", reason: "question" });
+  assert.equal(observeBody("tool_start", { session_id: "s", tool_name: "Bash", tool_input: { command: "ls" } }), undefined);
+  assert.equal(observeBody("tool_start", { tool_name: "Agent" }), undefined);
+  assert.deepEqual(observeBody("tool_done", { session_id: "s", tool_name: "AskUserQuestion" }), { kind: "resumed", sessionId: "s" });
+  assert.equal(observeBody("tool_done", { session_id: "s", tool_name: "Agent" }), undefined);
+  assert.deepEqual(observeBody("subagent_start", { session_id: "s", agent_id: "a1", agent_type: "Explore" }),
+    { kind: "subagent_start", sessionId: "s", agentId: "a1", agentType: "Explore" });
+  assert.deepEqual(observeBody("subagent_start", { session_id: "s", agent_id: "a1", tool_use_id: "toolu_1" }),
+    { kind: "subagent_start", sessionId: "s", agentId: "a1", agentType: "", toolUseId: "toolu_1" });
+  assert.equal(observeBody("subagent_start", { session_id: "s" }), undefined);
+
+  const transcript = join(root, "agent-transcript.jsonl");
+  writeFileSync(transcript, [
+    JSON.stringify({ type: "user", message: { content: "最初の指示\n詳細" } }),
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "途中" }] } }),
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "SubagentHandback", input: { message: "古い報告" } }] } }),
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "SubagentHandback", input: { message: "報告\n- 1\n- 2\n- 3\n- 4" } }] } }),
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "最終応答" }] } }),
+    "壊れた行 }",
+  ].join("\n"));
+  assert.equal(handbackMessage(transcript), "報告\n- 1\n- 2\n- 3\n- 4");
+  assert.equal(firstUserText(transcript), "最初の指示\n詳細");
+  assert.equal(handbackMessage(join(root, "missing.jsonl")), "");
+  assert.equal(firstUserText(undefined), "");
+  assert.deepEqual(observeBody("subagent_stop", { session_id: "s", agent_id: "a1", agent_type: "Explore", agent_transcript_path: transcript, last_assistant_message: "最終応答" }),
+    { kind: "subagent_stop", sessionId: "s", agentId: "a1", agentType: "Explore", summary: "報告\n- 1\n- 2", report: "報告\n- 1\n- 2\n- 3\n- 4", task: "最初の指示\n詳細" });
+  // SubagentHandback が無ければ最終応答
+  const plain = join(root, "agent-plain.jsonl");
+  writeFileSync(plain, [
+    JSON.stringify({ type: "user", message: { content: [{ type: "text", text: "依頼" }] } }),
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "x".repeat(REPORT_LIMIT + 10) }] } }),
+  ].join("\n"));
+  const stop = observeBody("subagent_stop", { session_id: "s", agent_id: "a1", agent_type: "general-purpose", agent_transcript_path: plain })!;
+  assert.equal((stop.report as string).length, REPORT_LIMIT);
+  assert.equal(stop.task, "依頼");
+  assert.deepEqual(observeBody("subagent_stop", { session_id: "s", agent_id: "a1", last_assistant_message: " 本文 " }),
+    { kind: "subagent_stop", sessionId: "s", agentId: "a1", agentType: "", summary: "本文", report: "本文" });
+  assert.deepEqual(observeBody("subagent_stop", { session_id: "s" }), { kind: "subagent_stop", sessionId: "s", agentType: "", summary: "", report: "" });
+  // turn と通知はサブエージェントの中では送らない
+  assert.equal(observeBody("turn_done", { session_id: "s", agent_id: "a1", last_assistant_message: "x" }), undefined);
+  assert.equal(observeBody("notification", { session_id: "s", agent_id: "a1", notification_type: "permission_prompt" }), undefined);
 });
 
 test("hook は POST で session の登録と終了と観測を送る", async (t) => {

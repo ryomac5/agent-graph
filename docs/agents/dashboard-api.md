@@ -16,7 +16,7 @@
 | `POST /api/action` | `ActionRequest` | `ActionResult` | Host, JSON, Origin, token | 承認、再試行、却下、終了、turn の非表示 |
 | `POST /api/sessions` | `{ id, cwd, client, pid?, model? }` | 201 `{ ok: true }` | Host, JSON, Origin, loopback | hook の SessionStart と MCP の根登録 |
 | `POST /api/sessions/<id>/end` | `{}` | 200 `{ ok: true }` | Host, JSON, Origin, loopback | hook の SessionEnd |
-| `POST /api/observe` | `{ kind, sessionId, ... }` | 200 `{ ok: true }` | Host, JSON, Origin, loopback | hook の turn と待ちの観測 |
+| `POST /api/observe` | `{ kind, sessionId, ... }` | 200 `{ ok: true }` | Host, JSON, Origin, loopback | hook の turn と待ちとサブエージェントの観測 |
 | `GET /api/repos` | なし | `Repo[]` | Host | 互換のため残す |
 | `GET /api/graph?repo=<key>&session=<id>` | query | `Graph` | Host | 互換のため残す |
 
@@ -47,8 +47,33 @@
 | `turn_start` | `prompt` | `turns` に行を作る。最初の `prompt` を `goal` にする。待ちを解除する |
 | `turn_done` | `summary?`, `reply` | 直近の未完の turn に `summary` を付ける。`summary` が無ければ `reply` の先頭 3 行。`reply` は 6000 字まで。待ちを解除する |
 | `waiting` | `reason` | `status` を `waiting` にし、`waitingReason` に `permission` か `question` を入れる |
+| `resumed` | なし | 待ちを解除する。PostToolUse の AskUserQuestion |
+| `subagent_request` | `toolUseId`, `title`, `task`, `subagentType?`, `name?`, `model?`, `parentAgentId?` | PreToolUse の Agent。`delegations` に `kind: subagent` の行を作る。同じ `toolUseId` は無視する |
+| `subagent_start` | `agentId`, `agentType`, `toolUseId?` | SubagentStart。`agentId` を同じ `agentType` の未束縛の行に古い順で結ぶ。既知の `agentId` なら `running` に戻す |
+| `subagent_message` | `toolUseId`, `to`, `text` | PreToolUse の SendMessage。宛先の子の往復に再指示を足し、`roundTrips` を増やす。同じ `toolUseId` は無視する |
+| `subagent_stop` | `agentId?`, `agentType`, `report`, `summary?`, `task?` | SubagentStop。報告を積んで `status` を `done` にする。同じ報告の二重送信は無視する |
 
-ほかの `kind` は観測のタスクが `packages/daemon/src/sessions.ts` の `observers` に足す。
+turn の 3 種は `packages/daemon/src/sessions.ts`、サブエージェントの種類は `packages/daemon/src/observe.ts` にある。
+
+## サブエージェントの記録
+
+Claude Code の Agent ツールで起こした子は `delegations` の `kind: subagent` の行になる。`title` は Agent の `description`、`role` は `subagent_type` と `description` から推定する。`assignments` には `executor: claude`、`model` は Agent の `model` か根の `model`、`family: anthropic` を入れる。
+入れ子の委譲は `parentAgentId` から親の行を引き、`parent_id` に入れる。`SendMessage` の宛先は `agentId` か Agent の `name` で引く。
+
+往復は `events` に積む。`payload.delegationId` で行に結ぶ。`NodeDetail.rounds` はここから組む。
+
+| `kind` | `payload` | 往復 |
+| --- | --- | --- |
+| `delegation.requested` | `{ delegationId, task }` | `request` |
+| `subagent.dispatched` | `{ delegationId, toolUseId, agentType, name?, parentAgentId? }` | なし |
+| `subagent.started` | `{ delegationId, agentId, agentType }` | なし |
+| `subagent.reinstructed` | `{ delegationId, agentId, toolUseId, text }` | `reinstruct` |
+| `subagent.reported` | `{ delegationId, agentId?, output, summary, task? }` | `report` |
+| `delegation.finished` | `{ delegationId, status: "done" }` | なし |
+
+`execution.started` と `execution.finished` も MCP の委譲と同じ形で積む。
+`subagent_start` に記録も `agentType` も無い子は Claude Code 内部のものとみなし、行を作らない。
+hook はデーモンに届かなくても 0 で終わる。
 
 ## セッションの状態
 

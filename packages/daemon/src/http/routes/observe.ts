@@ -1,9 +1,10 @@
 import { sendJson, type Route } from "../route.ts";
-import { NotFoundError, observe } from "../../sessions.ts";
+import { NotFoundError } from "../../sessions.ts";
+import { observe } from "../../observe.ts";
 
-const MAX_OBSERVE_BODY_BYTES = 65_536;
+const MAX_OBSERVE_BODY_BYTES = 262_144;
 
-// POST /api/observe。hook の turn と待ちの観測。種類ごとの取り込みは sessions.ts の observers にある。
+// POST /api/observe。hook の turn と待ちとサブエージェントの観測。種類ごとの取り込みは observe.ts の observers にある。
 export const observeRoute: Route = {
   method: "POST", path: "/api/observe", auth: "loopback",
   handle: async ({ options, response, readJson }) => {

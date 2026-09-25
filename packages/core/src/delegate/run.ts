@@ -10,6 +10,7 @@ import { runAcceptance } from "../accept/run.ts";
 import { execute as runExecute, type ExecRequest, type ExecResult } from "../exec/types.ts";
 import type { Event, EventKind, EventPayload } from "../events.ts";
 import type { Store } from "../store/store.ts";
+import type { UsageSample } from "../usage/types.ts";
 import { childContext, newSpanId, newTraceId, type TraceContext } from "../trace.ts";
 import { ulid } from "../ulid.ts";
 import type { AcceptanceResult, Assignment, DelegateRequest, DelegateResult, ModelFamily } from "./types.ts";
@@ -26,6 +27,7 @@ export interface DelegationDeps {
   execute?: (request: ExecRequest) => Promise<ExecResult>;
   accept?: typeof runAcceptance;
   now?: () => Date;
+  usageSamples?: UsageSample[];
 }
 
 export interface DelegationCaller {
@@ -76,17 +78,25 @@ export async function runDelegation(
       "agent.session": caller.sessionId, "agent.delegation": delegationId } });
   try {
     event("delegation.requested", { delegationId, task: req.task });
-    const samples = store.latestUsageSamples();
+    const samples = new Map<string, UsageSample>();
+    for (const sample of [...store.latestUsageSamples(), ...(deps.usageSamples ?? [])]) {
+      const key = `${sample.provider}\0${sample.model ?? ""}\0${sample.window}`;
+      const previous = samples.get(key);
+      if (!previous || sample.ts > previous.ts) samples.set(key, sample);
+    }
+    const latestSamples = [...samples.values()];
     const performance = aggregatePerformance(store.db, { role: req.role });
     const decision = (deps.decide ?? decide)(req, {
       policy: deps.policy ?? loadPolicy(),
       quota: (candidate) => {
+        const modelWords = candidate.model.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
         const scoped = candidate.family === "anthropic"
-          ? samples.filter((sample) => sample.provider === "anthropic" && sample.model?.toLowerCase() === candidate.model.toLowerCase())
+          ? latestSamples.filter((sample) => sample.provider === "anthropic" && sample.model &&
+            modelWords.every((word) => sample.model!.toLowerCase().split(/[^a-z0-9]+/).includes(word)))
           : [];
-        const relevant = scoped.length ? scoped : samples.filter((sample) =>
+        const relevant = scoped.length ? scoped : latestSamples.filter((sample) =>
           sample.provider === candidate.family && sample.model === undefined);
-        const highest = relevant.reduce((best, sample) => !best || sample.percent > best.percent ? sample : best, undefined as typeof samples[number] | undefined);
+        const highest = relevant.reduce((best, sample) => !best || sample.percent > best.percent ? sample : best, undefined as UsageSample | undefined);
         return highest && { percent: highest.percent, source: `${highest.provider} ${highest.model ?? highest.window}` };
       },
       performance: (role, model) => performance.find((item) => item.role === role && item.model === model),
@@ -99,9 +109,8 @@ export async function runDelegation(
     } else {
       assignment = decision.assignment;
       store.insertAssignment(delegationId, assignment);
-      const decidedPayload = { delegationId, executor: assignment.executor, model: assignment.model,
-        reason: assignment.reason, policyVersion: assignment.policyVersion };
-      event("assignment.decided", decidedPayload);
+      event("assignment.decided", { delegationId, executor: assignment.executor, model: assignment.model,
+        reason: assignment.reason, policyVersion: assignment.policyVersion });
       store.updateSpanAttributes(trace.traceId, trace.spanId, {
         "agent.executor": assignment.executor, "agent.model": assignment.model,
       });

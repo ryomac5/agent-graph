@@ -23,29 +23,37 @@ const CODEX_INTERVAL_MS = 60_000;
 const CLAUDE_INTERVAL_MS = 300_000;
 const CLAUDE_TIMEOUT_MS = 30_000;
 
+function saveUsage(store: Store, repo: string, value: UsageSample): void {
+  store.appendUsageSample(value);
+  store.appendEvent({ id: ulid(), ts: value.ts, kind: "usage.sampled", repo,
+    trace: { traceId: newTraceId(), spanId: newSpanId() },
+    payload: { provider: value.provider, window: value.window, percent: value.percent,
+      ...(value.model ? { model: value.model } : {}) } });
+}
+
 export function startUsageProbe(stores: Map<string, Store>, options: {
   env?: NodeJS.ProcessEnv;
   readCodex?: () => UsageSample[];
   probeClaude?: (cwd: string) => Promise<UsageSample[]>;
   setIntervalImpl?: typeof setInterval;
   clearIntervalImpl?: typeof clearInterval;
+  latest?: Map<string, UsageSample>;
 } = {}): { stop: () => Promise<void> } {
   const env = options.env ?? process.env;
   if (env.AGENT_GRAPH_USAGE_PROBE === "0") return { stop: async () => {} };
   const schedule = options.setIntervalImpl ?? setInterval;
   const clear = options.clearIntervalImpl ?? clearInterval;
   const inflight = new Map<"openai" | "anthropic", Promise<void>>();
+  const latest = options.latest;
   const sample = (provider: "openai" | "anthropic", read: () => Promise<UsageSample[]>): void => {
     if (inflight.has(provider)) return;
     const task = (async () => {
       const samples = await read();
-      for (const [key, store] of stores) for (const value of samples) {
-        store.appendUsageSample(value);
-        const payload = { provider: value.provider, window: value.window, percent: value.percent,
-          ...(value.model ? { model: value.model } : {}) };
-        store.appendEvent({ id: ulid(), ts: value.ts, kind: "usage.sampled", repo: key,
-          trace: { traceId: newTraceId(), spanId: newSpanId() },
-          payload });
+      for (const value of samples) {
+        const sampleKey = `${value.provider}\0${value.model ?? ""}\0${value.window}`;
+        const previous = latest?.get(sampleKey);
+        if (!previous || value.ts > previous.ts) latest?.set(sampleKey, value);
+        for (const [key, store] of stores) saveUsage(store, key, value);
       }
     })();
     inflight.set(provider, task);
@@ -60,7 +68,7 @@ export function startUsageProbe(stores: Map<string, Store>, options: {
   return { stop: async () => { clear(codex); clear(claude); await Promise.allSettled(inflight.values()); } };
 }
 
-export function createHandler(stores: Map<string, Store>): DelegateHandler<Hello> {
+export function createHandler(stores: Map<string, Store>, latest = new Map<string, UsageSample>()): DelegateHandler<Hello> {
   const callers = new WeakMap<Hello, { sessionId: string; traceId: string; spanId: string }>();
   return async (request, hello) => {
     const repoRoot = (await execFileAsync("git", ["rev-parse", "--show-toplevel"], { cwd: hello.cwd })).stdout.trim();
@@ -69,6 +77,7 @@ export function createHandler(stores: Map<string, Store>): DelegateHandler<Hello
     if (!store) {
       store = openStore(stateDbPath(key));
       store.upsertRepo({ key, rootPath: repoRoot, name: basename(repoRoot) });
+      for (const value of latest.values()) saveUsage(store, key, value);
       stores.set(key, store);
     }
     const state = parseTracestate(hello.tracestate);
@@ -88,7 +97,7 @@ export function createHandler(stores: Map<string, Store>): DelegateHandler<Hello
       client: "mcp", traceId: caller.traceId, startedAt: new Date().toISOString() });
     return runDelegation(request, { repoKey: key, repoRoot, sessionId: caller.sessionId,
       trace: { traceId: caller.traceId, spanId: caller.spanId, traceState: hello.tracestate },
-      parentDelegationId: state.delegationId }, { store });
+      parentDelegationId: state.delegationId }, { store, usageSamples: [...latest.values()] });
   };
 }
 
@@ -133,8 +142,9 @@ export async function startDaemon(): Promise<{ stop: () => Promise<void> }> {
   const log = (message: string): void => appendFileSync(logPath, `${new Date().toISOString()} ${message}\n`, { mode: 0o600 });
   await claimPid(pidPath);
   const stores = new Map<string, Store>();
-  const usageProbe = startUsageProbe(stores);
-  const handler = createHandler(stores);
+  const latest = new Map<string, UsageSample>();
+  const usageProbe = startUsageProbe(stores, { latest });
+  const handler = createHandler(stores, latest);
   const pending = new Set<Promise<unknown>>();
   try {
     const server = await startSocketServer({ socketPath: process.env.AGENT_GRAPH_SOCKET || join(dir, "daemon.sock"),

@@ -65,8 +65,10 @@ test("daemon rejects duplicate PID and cleans runtime files", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "ag-life-"));
   const oldState = process.env.XDG_STATE_HOME;
   const oldSocket = process.env.AGENT_GRAPH_SOCKET;
+  const oldProbe = process.env.AGENT_GRAPH_USAGE_PROBE;
   process.env.XDG_STATE_HOME = dir;
   process.env.AGENT_GRAPH_SOCKET = join(dir, "daemon.sock");
+  process.env.AGENT_GRAPH_USAGE_PROBE = "0";
   let daemon;
   try {
     const pidPath = join(dir, "agent-graph/run/daemon.pid");
@@ -96,6 +98,7 @@ test("daemon rejects duplicate PID and cleans runtime files", async (t) => {
     await daemon?.stop();
     if (oldState === undefined) delete process.env.XDG_STATE_HOME; else process.env.XDG_STATE_HOME = oldState;
     if (oldSocket === undefined) delete process.env.AGENT_GRAPH_SOCKET; else process.env.AGENT_GRAPH_SOCKET = oldSocket;
+    if (oldProbe === undefined) delete process.env.AGENT_GRAPH_USAGE_PROBE; else process.env.AGENT_GRAPH_USAGE_PROBE = oldProbe;
     await rm(dir, { recursive: true, force: true });
   }
 });
@@ -109,7 +112,7 @@ test("daemon bin starts through a symlink", async () => {
     const binPath = join(dir, "agent-graph-daemon");
     await symlink(fileURLToPath(new URL("../src/main.ts", import.meta.url)), binPath);
     const result = spawnSync(process.execPath, [binPath], {
-      env: { ...process.env, XDG_STATE_HOME: dir }, encoding: "utf8",
+      env: { ...process.env, XDG_STATE_HOME: dir, AGENT_GRAPH_USAGE_PROBE: "0" }, encoding: "utf8",
     });
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /Daemon is already running/);
@@ -147,4 +150,48 @@ test("周期取得を保存し、環境変数で停止する", async () => {
     startUsageProbe(stores, { ...options, env: { AGENT_GRAPH_USAGE_PROBE: "0" } });
     assert.equal(timers.length, 2);
   } finally { store.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test("store 作成前の取得値を初回委譲時に保存して割り当てへ渡す", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "ag-early-"));
+  const oldState = process.env.XDG_STATE_HOME;
+  const oldPolicy = process.env.AGENT_GRAPH_POLICY_JSON;
+  const stores = new Map<string, Store>();
+  const latest = new Map();
+  const timers: Array<() => void> = [];
+  try {
+    process.env.XDG_STATE_HOME = join(dir, "state");
+    process.env.AGENT_GRAPH_POLICY_JSON = join(dir, "policy.json");
+    await writeFile(process.env.AGENT_GRAPH_POLICY_JSON, JSON.stringify({ roles: {
+      research: [{ executor: "claude", model: "sonnet", family: "anthropic", tier: "mid" }],
+    } }));
+    const root = join(dir, "repo");
+    await mkdir(root);
+    execFileSync("git", ["init", "-q", root]);
+    const probe = startUsageProbe(stores, {
+      latest,
+      env: { XDG_CACHE_HOME: dir },
+      readCodex: () => [],
+      probeClaude: async () => [{ ts: new Date().toISOString(), provider: "anthropic", window: "5h", percent: 95 }],
+      setIntervalImpl: ((fn: () => void) => { timers.push(fn); return 1; }) as typeof setInterval,
+      clearIntervalImpl: (() => {}) as typeof clearInterval,
+    });
+    timers[1]();
+    await probe.stop();
+    assert.equal(stores.size, 0);
+    const result = await createHandler(stores, latest)(
+      { role: "research", title: "調査", task: "調べる", accept: ["true"], review: false },
+      { type: "hello", cwd: root, pid: process.pid },
+    );
+    assert.equal(result.status, "denied");
+    assert.match(result.assignment.reason.join(" "), /sonnet excluded at 95%/);
+    const store = [...stores.values()][0];
+    assert.equal(store.latestUsageSamples()[0].percent, 95);
+    assert.equal(store.listEvents().filter((event) => event.kind === "usage.sampled").length, 1);
+  } finally {
+    for (const store of stores.values()) store.close();
+    if (oldState === undefined) delete process.env.XDG_STATE_HOME; else process.env.XDG_STATE_HOME = oldState;
+    if (oldPolicy === undefined) delete process.env.AGENT_GRAPH_POLICY_JSON; else process.env.AGENT_GRAPH_POLICY_JSON = oldPolicy;
+    await rm(dir, { recursive: true, force: true });
+  }
 });

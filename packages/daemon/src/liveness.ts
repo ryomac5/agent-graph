@@ -34,20 +34,28 @@ export async function isProcessAlive(pid: number, startedAt: string | undefined)
 export interface LivenessOptions {
   now?: () => Date;
   isAlive?: (pid: number, startedAt: string | undefined) => Promise<boolean>;
+  startedAtOf?: (pid: number) => Promise<string | undefined>;
   staleMs?: number;
 }
 
 // running か waiting のセッションの生死を確かめ、死んでいれば ended にする。
 // pid があればプロセスの実在で、無ければ最後の記録からの経過時間で判定する。
+// 起動時刻が空のまま残った pid は、生きていれば見回りで起動時刻を補い、以後の pid の再利用を見分けられるようにする。
 export async function reconcileLiveness(store: Store, options: LivenessOptions = {}): Promise<string[]> {
   const now = (options.now ?? (() => new Date()))();
   const isAlive = options.isAlive ?? isProcessAlive;
+  const startedAtOf = options.startedAtOf ?? processStartedAt;
   const staleMs = options.staleMs ?? STALE_SESSION_MS;
   const ended: string[] = [];
   for (const session of store.listLiveSessions()) {
     let dead: boolean;
-    if (session.pid !== undefined) dead = !(await isAlive(session.pid, session.pidStartedAt));
-    else dead = now.getTime() - Date.parse(session.lastSeenAt) > staleMs;
+    if (session.pid !== undefined) {
+      dead = !(await isAlive(session.pid, session.pidStartedAt));
+      if (!dead && session.pidStartedAt === undefined) {
+        const startedAt = await startedAtOf(session.pid);
+        if (startedAt) store.setSessionProcess(session.id, session.pid, startedAt, session.lastSeenAt);
+      }
+    } else dead = now.getTime() - Date.parse(session.lastSeenAt) > staleMs;
     if (!dead) continue;
     const endedAt = session.pid !== undefined ? now.toISOString() : session.lastSeenAt;
     if (store.endSession(session.id, endedAt)) ended.push(session.id);

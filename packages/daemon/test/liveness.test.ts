@@ -37,6 +37,22 @@ test("pid が死んでいれば ended にし、その委譲を lost にする。
   assert.deepEqual(await reconcileLiveness(store, { now: () => now, isAlive: async () => true }), []);
 });
 
+test("起動時刻が空の pid は、生きていれば見回りで起動時刻を補う", async (t) => {
+  const store = fixture(t);
+  store.insertNamedSession({ id: "s", repoKey: "r", client: "claude", traceId: "a".repeat(32), startedAt: ts, pid: 44,
+    lastSeenAt: "2026-09-25T00:05:00.000Z" });
+  const asked: number[] = [];
+  await reconcileLiveness(store, { isAlive: async () => true, startedAtOf: async (pid) => { asked.push(pid); return undefined; } });
+  assert.equal(store.getSession("s")?.pidStartedAt, undefined);
+  await reconcileLiveness(store, { isAlive: async () => true, startedAtOf: async (pid) => { asked.push(pid); return "start"; } });
+  const session = store.getSession("s")!;
+  assert.equal(session.pidStartedAt, "start");
+  assert.equal(session.lastSeenAt, "2026-09-25T00:05:00.000Z", "見回りは last_seen_at を進めない");
+  await reconcileLiveness(store, { isAlive: async () => true, startedAtOf: async (pid) => { asked.push(pid); return "again"; } });
+  assert.equal(store.getSession("s")?.pidStartedAt, "start");
+  assert.deepEqual(asked, [44, 44]);
+});
+
 test("pid の無いセッションは 30 分記録が無ければ最後の記録の時刻で ended にする", async (t) => {
   const store = fixture(t);
   const base = { repoKey: "r", client: "claude", traceId: "a".repeat(32), startedAt: ts };

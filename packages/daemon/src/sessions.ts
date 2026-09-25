@@ -5,7 +5,6 @@ import { repoKey, stateDbPath } from "../../core/src/paths.ts";
 import { openStore, type Store, type WaitingReason } from "../../core/src/store/store.ts";
 import { newSpanId, newTraceId } from "../../core/src/trace.ts";
 import { ulid } from "../../core/src/ulid.ts";
-import { processStartedAt } from "./liveness.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -44,19 +43,18 @@ export function summarize(text: string, lines = SUMMARY_LINES): string {
   return text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(0, lines).join("\n");
 }
 
+// pid は受けない。根の pid は shim の hello だけで記録する。
 export async function registerSession(body: unknown, stores: Map<string, Store>): Promise<void> {
   if (!body || typeof body !== "object" || Array.isArray(body)) throw new TypeError("Invalid session body");
-  const { id, cwd, client, pid, model } = body as Record<string, unknown>;
+  const { id, cwd, client, model } = body as Record<string, unknown>;
   if (typeof id !== "string" || !id.trim() || id.includes("\0") ||
       typeof cwd !== "string" || !isAbsolute(cwd) || cwd.includes("\0") ||
       (client !== "claude" && client !== "codex" && client !== "planner") ||
-      (pid !== undefined && (!Number.isSafeInteger(pid) || (pid as number) <= 0)) ||
       (model !== undefined && typeof model !== "string")) throw new TypeError("Invalid session body");
   let root: string;
   try {
     root = (await execFileAsync("git", ["rev-parse", "--show-toplevel"], { cwd })).stdout.trim();
   } catch { throw new TypeError("cwd must be an existing git working directory"); }
-  const pidStartedAt = typeof pid === "number" ? await processStartedAt(pid) : undefined;
   const key = repoKey(root);
   let store = stores.get(key);
   if (!store) {
@@ -69,14 +67,12 @@ export async function registerSession(body: unknown, stores: Map<string, Store>)
   const ts = new Date().toISOString();
   // claude --resume などで同じ id が戻ってきたら running に戻す
   if (existing) store.resumeSession(id, ts);
-  if (typeof pid === "number") store.setSessionProcess(id, pid, pidStartedAt, ts);
   if (typeof model === "string" && model) store.setSessionModel(id, model);
   // hook の再送や MCP による先行登録でも、開始イベントは一度だけ記録する。
   if (store.db.prepare("SELECT 1 FROM events WHERE kind = 'session.started' AND session_id = ?").get(id)) return;
   const traceId = existing ? String(existing.trace_id) : newTraceId();
   if (!existing) {
     store.insertNamedSession({ id, repoKey: key, client, traceId, startedAt: ts,
-      ...(typeof pid === "number" ? { pid, pidStartedAt } : {}),
       ...(typeof model === "string" && model ? { model } : {}) });
   }
   store.appendEvent({ id: ulid(), ts, kind: "session.started", repo: key, session: id,

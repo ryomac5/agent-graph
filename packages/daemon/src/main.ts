@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { execFile } from "node:child_process";
-import { appendFileSync, realpathSync } from "node:fs";
+import { appendFileSync, existsSync, readdirSync, realpathSync } from "node:fs";
 import { mkdir, open, readFile, unlink } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
@@ -96,12 +96,13 @@ export function createHandler(stores: Map<string, Store>, latest = new Map<strin
         }) };
       callers.set(hello, caller);
     }
+    // 根の pid と起動時刻は生死判定に使う。委譲の子からの hello では親の記録を上書きしない。
+    const rootHello = !state.delegationId;
+    // 起動時刻の取得は await を挟む。同じ hello の並行した要求が片方の挿入を見落とさないよう、セッションの読み取りはこの後で行う。
+    const pidStartedAt = rootHello && firstRequest ? await processStartedAt(hello.pid) : undefined;
     const session = store.db.prepare("SELECT trace_id FROM sessions WHERE id = ?").get(caller.sessionId);
     if (session && session.trace_id !== caller.traceId) throw new Error("Session trace does not match hello");
     const now = new Date().toISOString();
-    // 根の pid と起動時刻は生死判定に使う。委譲の子からの hello では親の記録を上書きしない。
-    const rootHello = !state.delegationId;
-    const pidStartedAt = rootHello && firstRequest ? await processStartedAt(hello.pid) : undefined;
     if (!session) store.insertNamedSession({ id: caller.sessionId, repoKey: key,
       client: hello.client ?? "mcp", traceId: caller.traceId, startedAt: now,
       ...(rootHello ? { pid: hello.pid, pidStartedAt } : {}) });
@@ -116,6 +117,27 @@ export function createHandler(stores: Map<string, Store>, latest = new Map<strin
       trace: { traceId: caller.traceId, spanId: caller.spanId, traceState: hello.tracestate },
       parentDelegationId: state.delegationId }, { store, usageSamples: [...latest.values()] });
   };
+}
+
+// 状態置き場にある全リポジトリの store を開く。開けなかったものは例外を返し、起動は止めない。
+export function openAllStores(stores: Map<string, Store>, env: NodeJS.ProcessEnv = process.env): Error[] {
+  const errors: Error[] = [];
+  let keys: string[];
+  try { keys = readdirSync(dirname(dirname(stateDbPath("probe", env))), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory()).map((entry) => entry.name); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return errors;
+    return [error as Error];
+  }
+  for (const key of keys) {
+    if (stores.has(key)) continue;
+    let path: string;
+    try { path = stateDbPath(key, env); } catch { continue; }
+    if (!existsSync(path)) continue;
+    try { stores.set(key, openStore(path)); }
+    catch (error) { errors.push(error as Error); }
+  }
+  return errors;
 }
 
 async function claimPid(path: string): Promise<void> {
@@ -166,11 +188,13 @@ export async function startDaemon(): Promise<{ stop: () => Promise<void> }> {
   const pending = new Set<Promise<unknown>>();
   let http: Awaited<ReturnType<typeof startHttpServer>> | undefined;
   try {
+    // 再起動のあとも、状態置き場にある全リポジトリを見回りの対象にする
+    for (const error of openAllStores(stores)) log(String(error));
     const repoRoot = await execFileAsync("git", ["rev-parse", "--show-toplevel"], { cwd: process.cwd() })
       .then(({ stdout }) => stdout.trim(), () => undefined);
     if (repoRoot) {
       const key = repoKey(repoRoot);
-      const store = openStore(stateDbPath(key));
+      const store = stores.get(key) ?? openStore(stateDbPath(key));
       store.upsertRepo({ key, rootPath: repoRoot, name: basename(repoRoot) });
       stores.set(key, store);
     }

@@ -14,7 +14,7 @@
 | `GET /api/project?repo=<key>` | query `repo` | `ProjectView` | Host | 1 リポジトリの全体 |
 | `GET /api/events?repo=<key>` | query `repo` は省略可 | SSE | Host | 変化の配信 |
 | `POST /api/action` | `ActionRequest` | `ActionResult` | Host, JSON, Origin, token | 承認、再試行、却下、終了、turn の非表示 |
-| `POST /api/sessions` | `{ id, cwd, client, pid?, model? }` | 201 `{ ok: true }` | Host, JSON, Origin, loopback | hook の SessionStart と MCP の根登録 |
+| `POST /api/sessions` | `{ id, cwd, client, model? }` | 201 `{ ok: true }` | Host, JSON, Origin, loopback | hook の SessionStart |
 | `POST /api/sessions/<id>/end` | `{}` | 200 `{ ok: true }` | Host, JSON, Origin, loopback | hook の SessionEnd |
 | `POST /api/observe` | `{ kind, sessionId, ... }` | 200 `{ ok: true }` | Host, JSON, Origin, loopback | hook の turn と待ちの観測 |
 | `GET /api/repos` | なし | `Repo[]` | Host | 互換のため残す |
@@ -32,13 +32,16 @@
 | `id` | Claude Code の `session_id` |
 | `cwd` | 絶対パス。git のルートを解決して repo を決める |
 | `client` | `claude` `codex` `planner` |
-| `pid?` | 根のプロセスの pid。hook は `process.ppid` を送る。デーモンは `ps` の起動時刻と組で記録し、生死判定に使う |
 | `model?` | 根のモデル名 |
 
+pid は hook から送らない。hook の親は shell のことがあり、根のプロセスとは限らない。
+根の pid は shim の hello だけで記録し、デーモンは `ps` の起動時刻と組で保存して生死判定に使う。起動時刻が取れずに空のまま残った pid は、生きていれば 30 秒ごとの見回りで起動時刻を補う。
 初回の登録で `<repo名>-NNN` の名前を振る。同じ `id` の再登録では名前を変えず、`session.started` も再記録しない。
 終了済みのセッションが同じ `id` で再登録されたら `status` を `running` に戻し、`endedAt` を消す。`lost` にした委譲は戻さない。MCP の根の hello も同じ扱い。
 
-`POST /api/sessions/<id>/end` は body `{}` で受け、`status` を `ended` にして `endedAt` を入れる。そのセッションで走っていた委譲は `lost` にする。すでに終わっていれば何もせず 200 を返す。
+`POST /api/sessions/<id>/end` は body `{}` で受け、`status` を `ended` にして `endedAt` を入れる。すでに終わっていれば何もせず 200 を返す。
+そのセッションで走っていた委譲は `lost` にし、委譲ごとに `delegation.lost` を events に追記する。`lost` はあくまで推定で、その委譲があとで実際に完了したときは事実を優先し、`done` か `failed` で上書きする。
+デーモンは起動時に状態置き場の全リポジトリの store を開く。再起動のあとも、まだ接続の無いリポジトリのセッションを見回りの対象にする。
 
 `POST /api/observe` の body は `kind` で分ける。`sessionId` は必須。未知の `kind` は 400、未知のセッションは 404。
 

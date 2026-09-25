@@ -8,6 +8,11 @@
   "packageManager": "pnpm@10.34.5",
   "scripts": {
     "test": "pnpm -r test",
+    "typecheck": "tsc -p packages/core --noEmit && tsc -p packages/daemon --noEmit && tsc -p packages/dashboard --noEmit && tsc -p packages/adapters --noEmit && tsc -p packages/planner --noEmit && tsc -p scripts --noEmit",
     "daemon": "node packages/daemon/src/main.ts"
+  },
+  "devDependencies": {
+    "@types/node": "24.0.0",
+    "typescript": "5.9.3"
   }
 }

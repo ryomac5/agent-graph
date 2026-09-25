@@ -7,6 +7,7 @@ import { homedir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { runDelegation } from "../../core/src/delegate/run.ts";
+import type { DelegateResult } from "../../core/src/delegate/types.ts";
 import { repoKey, stateDbPath } from "../../core/src/paths.ts";
 import { openStore, type Store } from "../../core/src/store/store.ts";
 import { newSpanId, newTraceId, parseTraceparent, parseTracestate } from "../../core/src/trace.ts";
@@ -70,7 +71,7 @@ export function startUsageProbe(stores: Map<string, Store>, options: {
   return { stop: async () => { clear(codex); clear(claude); await Promise.allSettled(inflight.values()); } };
 }
 
-export function createHandler(stores: Map<string, Store>, latest = new Map<string, UsageSample>()): DelegateHandler<Hello> {
+export function createHandler(stores: Map<string, Store>, latest = new Map<string, UsageSample>()): DelegateHandler<Hello, DelegateResult> {
   const callers = new WeakMap<Hello, { sessionId: string; traceId: string; spanId: string }>();
   return async (request, hello) => {
     const repoRoot = (await execFileAsync("git", ["rev-parse", "--show-toplevel"], { cwd: hello.cwd })).stdout.trim();
@@ -202,8 +203,9 @@ export async function startDaemon(): Promise<{ stop: () => Promise<void> }> {
   } catch (error) {
     log(String(error));
     if (http) {
-      http.closeAllConnections();
-      await new Promise<void>((resolve) => http.close(() => resolve()));
+      const server = http;
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
     }
     await usageProbe.stop();
     for (const store of stores.values()) store.close();

@@ -17,14 +17,14 @@ export interface LaunchdOptions {
 
 export function renderInstallCommands(options: Pick<LaunchdOptions, "plistDir" | "label" | "uid">): string[][] {
   const label = options.label ?? DEFAULT_LABEL;
-  const uid = options.uid ?? process.getuid();
+  const uid = options.uid ?? process.getuid?.() ?? 0;
   return [["bootout", `gui/${uid}/${label}`], ["bootstrap", `gui/${uid}`, join(options.plistDir, `${label}.plist`)]];
 }
 
 export function renderUninstallCommands(options: Pick<LaunchdOptions, "plistDir" | "label" | "uid">): { commands: string[][]; plistPath: string } {
   const label = options.label ?? DEFAULT_LABEL;
   const plistPath = join(options.plistDir, `${label}.plist`);
-  return { commands: [["bootout", `gui/${options.uid ?? process.getuid()}`, plistPath]], plistPath };
+  return { commands: [["bootout", `gui/${options.uid ?? process.getuid?.() ?? 0}`, plistPath]], plistPath };
 }
 
 function escapeXml(value: string): string {

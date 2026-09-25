@@ -14,7 +14,8 @@ export const SUMMARY_LINES = 3;
 const GOAL_LIMIT = 200;
 const PROMPT_LIMIT = 20_000;
 
-export type ObserveKind = "turn_start" | "turn_done" | "waiting";
+export type ObserveKind = "turn_start" | "turn_done" | "waiting"
+  | "subagent_request" | "subagent_start" | "subagent_message" | "subagent_stop" | "resumed";
 
 export interface ObserveInput {
   kind: ObserveKind;
@@ -23,7 +24,7 @@ export interface ObserveInput {
   body: Record<string, unknown>;
 }
 
-// 観測の種類ごとの取り込み。後続のタスクはここに種類を足す。
+// 観測の種類ごとの取り込み。サブエージェントの種類は observe.ts が足す。
 export type Observer = (store: Store, input: ObserveInput) => void;
 
 export class NotFoundError extends Error {}
@@ -107,12 +108,13 @@ export const observers: Record<string, Observer> = {
 };
 
 // POST /api/observe の本文を取り込む。不正な body は TypeError、未知のセッションは NotFoundError。
-export function observe(body: unknown, stores: Map<string, Store>, now = new Date()): void {
+// table は観測の種類の表。observe.ts がサブエージェントの種類を足した表を渡す。
+export function observe(body: unknown, stores: Map<string, Store>, now = new Date(), table: Record<string, Observer> = observers): void {
   if (!body || typeof body !== "object" || Array.isArray(body)) throw new TypeError("Invalid observe body");
   const { kind, sessionId } = body as Record<string, unknown>;
-  if (typeof kind !== "string" || !Object.hasOwn(observers, kind)) throw new TypeError(`Unknown observe kind: ${String(kind)}`);
+  if (typeof kind !== "string" || !Object.hasOwn(table, kind)) throw new TypeError(`Unknown observe kind: ${String(kind)}`);
   if (typeof sessionId !== "string" || !sessionId.trim()) throw new TypeError("Invalid observe body");
   const store = findStore(sessionId, stores);
   if (!store) throw new NotFoundError(`Session not found: ${sessionId}`);
-  observers[kind](store, { kind: kind as ObserveKind, sessionId, at: now.toISOString(), body: body as Record<string, unknown> });
+  table[kind](store, { kind: kind as ObserveKind, sessionId, at: now.toISOString(), body: body as Record<string, unknown> });
 }

@@ -1,0 +1,135 @@
+{
+  "project": { "key": "agent-graph", "name": "agent-graph", "rootPath": "/Users/r/00_project/agent-graph" },
+  "sessions": [
+    {
+      "id": "s10", "name": "agent-graph-001-s10", "client": "claude", "status": "running",
+      "startedAt": "2026-09-25T01:36:00.000Z", "model": "claude-fable-5-1[1m]",
+      "goal": "旧版のダッシュボードの画面を新版に移植し、新版の強みを足して旧版を超える。\n契約の型 contract.ts だけからデータを取り、planner のグラフも同じ言葉で描く。",
+      "turns": [
+        { "id": "t1", "at": "2026-09-25T01:36:10.000Z", "prompt": "ダッシュボード API の契約を固定して。経路と入出力の型を contract.ts に置き、文書は docs/agents/dashboard-api.md に書く。", "summary": "contract.ts に Overview, ProjectView, ActionRequest の型を置き、routes/ を経路ごとに分けました。守りは security.ts で Host, Origin, token, loopback を検べます。" },
+        { "id": "t2", "at": "2026-09-25T02:10:00.000Z", "prompt": "旧版の画面を移植して。見た目の言葉は変えない。暗い地、丸いノード、光で状態を示す縁と輝き、細いベジェの辺、触れたときだけ出る辺のラベル。\n\n移すもの:\n- ヘッダー 2 段\n- Overview の丸と漂う動き\n- プロジェクトのページと複数選択\n- グラフの段組みとベジェの辺と光の粒\n- 右の詳細パネルの Accept と Scope と Review と Output\n- 判断待ちの Approve, Retry, Reject\n\n足すもの:\n- 割り当ての理由と policyVersion\n- planner のグラフ\n- SSE で全体を受けて描き直す\n- 拡大と移動と全体表示", "summary": "V2 として Codex に投げました。public/ を index.html, style.css, app.js, lib/, ui/ に分け、fixture と preview を足しています。段組みの決定性とモデル名の整形のテストが通っています。" },
+        { "id": "t3", "at": "2026-09-25T03:05:00.000Z", "prompt": "なんかモデル名が切れてるんだけど。GPT 5.6 Te… みたいに。丸の中で 3 語とも読めるようにして。", "summary": "fitWords で 2 行に折り、行の長さで文字を詰める段を決めるようにしました。GPT 6 Astra は「GPT 6」と「Astra」の 2 行、Fable 5.1 は 1 行のままです。" },
+        { "id": "t4", "at": "2026-09-25T06:30:00.000Z", "prompt": "子が 8 つ並ぶと右端が切れる件も直して。あとホイールで拡大、ドラッグで移動、ダブルクリックで全体表示。" }
+      ],
+      "nodes": [
+        { "id": "s10", "kind": "root", "title": "agent-graph-001-s10", "status": "running", "family": "anthropic", "model": "claude-fable-5-1[1m]", "startedAt": "2026-09-25T01:36:00.000Z" },
+        { "id": "C0", "kind": "delegation", "title": "契約を固定する", "status": "done", "executor": "codex", "model": "gpt-6-sol", "family": "openai", "parentId": "s10",
+          "startedAt": "2026-09-25T01:40:00.000Z", "endedAt": "2026-09-25T01:58:00.000Z", "attempts": 1, "roundTrips": 1,
+          "task": "ダッシュボード HTTP API の契約を contract.ts に置く。経路ごとにファイルを分け、routes/index.ts で登録する。",
+          "output": "contract.ts と routes/ と security.ts を追加。テスト 17 件が通過。",
+          "tokens": { "input": 48210, "output": 6120 },
+          "assignment": { "reason": ["段 1: 契約の固定は正確さが要るので上位の系統を選ぶ", "段 2: 系統は Claude と別にしてレビューの盲点を避ける", "段 3: gpt-6-sol は利用枠に余裕がある"], "policyVersion": "2026-09-20.3" },
+          "acceptance": { "passed": true, "scopeViolations": [], "results": [
+            { "command": "npx --yes pnpm@10 --filter @agent-graph/daemon test", "exitCode": 0, "output": "ok 17 tests", "durationMs": 8200 },
+            { "command": "npx --yes pnpm@10 typecheck", "exitCode": 0, "output": "", "durationMs": 6100 } ] },
+          "review": { "verdict": "approve", "comment": "契約は文書と一致している。501 の扱いも妥当。", "reviewer": { "executor": "claude", "model": "claude-fable-5-1" } },
+          "scope": ["packages/daemon/src/http/**", "docs/agents/dashboard-api.md"], "outputs": ["packages/daemon/src/http/contract.ts"],
+          "rounds": [
+            { "kind": "request", "at": "2026-09-25T01:40:00.000Z", "text": "ダッシュボード HTTP API の契約を contract.ts に置く。経路ごとにファイルを分け、routes/index.ts で登録する。" },
+            { "kind": "report", "at": "2026-09-25T01:58:00.000Z", "text": "contract.ts と routes/ と security.ts を追加。テスト 17 件が通過。" } ] },
+        { "id": "V1a", "kind": "delegation", "title": "Overview の組み立て", "status": "running", "executor": "codex", "model": "gpt-6-astra", "family": "openai", "parentId": "s10",
+          "startedAt": "2026-09-25T06:32:00.000Z", "attempts": 1, "roundTrips": 0, "task": "views.ts に Overview の組み立てを置く。",
+          "assignment": { "reason": ["段 1: 読み取りの組み立ては中程度の難しさ", "段 2: Codex の 5 時間枠は 21% で余裕がある"], "policyVersion": "2026-09-20.3" },
+          "scope": ["packages/daemon/src/http/views.ts"], "tokens": { "input": 12000, "output": 800 } },
+        { "id": "V1c", "kind": "delegation", "title": "SSE の project と overview", "status": "running", "executor": "codex", "model": "gpt-6-astra", "family": "openai", "parentId": "s10",
+          "startedAt": "2026-09-25T06:33:00.000Z", "task": "events.ts を project と overview の全体送信に切り替える。", "scope": ["packages/daemon/src/http/routes/events.ts"] },
+        { "id": "V2", "kind": "delegation", "title": "旧版の画面を新版に移植して超える", "status": "running", "executor": "codex", "model": "gpt-6-astra", "family": "openai", "parentId": "s10",
+          "startedAt": "2026-09-25T06:34:00.000Z", "attempts": 2, "roundTrips": 3,
+          "task": "旧版のダッシュボードの画面を新版に移植し、新版の強みを足して旧版を超える。手を抜かない。",
+          "feedback": "モデル名が切れている。子が 7 つ以上で右端が切れる。",
+          "tokens": { "input": 210400, "output": 31200 },
+          "assignment": { "reason": ["段 1: 画面の移植は難しいので最上位を選ぶ", "段 2: 系統は Claude と別にする", "段 3: gpt-6-astra は models_cache で最新"], "policyVersion": "2026-09-20.3" },
+          "scope": ["packages/dashboard/**"],
+          "rounds": [
+            { "kind": "request", "at": "2026-09-25T06:34:00.000Z", "text": "旧版のダッシュボードの画面を新版に移植し、新版の強みを足して旧版を超える。手を抜かない。" },
+            { "kind": "report", "at": "2026-09-25T06:50:00.000Z", "text": "lib/ と ui/ に分けて移植しました。モデル名は 1 行のままです。" },
+            { "kind": "reinstruct", "at": "2026-09-25T06:52:00.000Z", "text": "モデル名が切れている。子が 7 つ以上で右端が切れる。直して。" } ] },
+        { "id": "P1", "kind": "delegation", "title": "planner の昇格と指示文", "status": "waiting_human", "executor": "codex", "model": "gpt-6-sol", "family": "openai", "parentId": "s10",
+          "startedAt": "2026-09-25T05:10:00.000Z", "task": "planner に昇格・指示文・レポートを足す。", "scope": ["packages/planner/src/**"] },
+        { "id": "F1", "kind": "delegation", "title": "レビューの差分に新規ファイルを含める", "status": "failed", "executor": "codex", "model": "gpt-6-sol", "family": "openai", "parentId": "s10",
+          "startedAt": "2026-09-25T05:12:00.000Z", "endedAt": "2026-09-25T05:30:00.000Z", "attempts": 2,
+          "task": "run.ts の差分に未追跡ファイルを含める。", "feedback": "テストが落ちた。",
+          "acceptance": { "passed": false, "scopeViolations": ["packages/core/src/paths.ts"], "results": [
+            { "command": "npx --yes pnpm@10 --filter @agent-graph/core test", "exitCode": 1, "output": "not ok 3 - 未追跡の新規ファイルが差分に入る\n  AssertionError: expected diff to include new.ts", "durationMs": 4200 } ] },
+          "review": { "verdict": "request_changes", "comment": "scope 外の paths.ts に触っている。", "reviewer": { "executor": "claude", "model": "claude-fable-5-1" } },
+          "scope": ["packages/core/src/delegate/**"] },
+        { "id": "R1", "kind": "subagent", "title": "旧版の画面を調べる", "status": "done", "executor": "Explore", "model": "claude-sonnet-5", "family": "anthropic", "parentId": "s10",
+          "startedAt": "2026-09-25T01:37:00.000Z", "endedAt": "2026-09-25T01:39:00.000Z", "task": "旧版 graph.html の構成を洗い出す。", "output": "1908 行。SVG と foreignObject。" },
+        { "id": "D1", "kind": "subagent", "title": "dashboard-api.md を書く", "status": "done", "executor": "doc-light", "model": "claude-sonnet-5", "family": "anthropic", "parentId": "s10",
+          "startedAt": "2026-09-25T01:50:00.000Z", "endedAt": "2026-09-25T01:56:00.000Z", "task": "契約の文書を書く。" },
+        { "id": "L1", "kind": "delegation", "title": "e2e の見回り", "status": "lost", "executor": "codex", "model": "gpt-6-sol", "family": "openai", "parentId": "s10",
+          "startedAt": "2026-09-25T04:00:00.000Z", "task": "e2e-stage6 を見回る。" },
+        { "id": "X1", "kind": "delegation", "title": "危険な操作", "status": "denied", "executor": "codex", "model": "gpt-6-sol", "family": "openai", "parentId": "s10",
+          "startedAt": "2026-09-25T04:30:00.000Z", "endedAt": "2026-09-25T04:30:05.000Z", "task": "git push を試みる。", "feedback": "hook が拒否した。" },
+        { "id": "RV", "kind": "subagent", "title": "C0 のレビュー", "status": "done", "executor": "reviewer", "model": "claude-fable-5-1", "family": "anthropic", "parentId": "C0",
+          "startedAt": "2026-09-25T01:58:30.000Z", "endedAt": "2026-09-25T02:02:00.000Z", "task": "C0 の差分をレビューする。", "output": "VERDICT: approve" }
+      ],
+      "edges": [
+        { "id": "s10->C0", "from": "s10", "to": "C0", "kind": "delegate", "label": "契約を固定する", "fromFamily": "anthropic", "toFamily": "openai" },
+        { "id": "C0->s10", "from": "C0", "to": "s10", "kind": "return", "label": "報告", "fromFamily": "openai", "toFamily": "anthropic" },
+        { "id": "s10->V1a", "from": "s10", "to": "V1a", "kind": "delegate", "label": "Overview の組み立て", "fromFamily": "anthropic", "toFamily": "openai" },
+        { "id": "s10->V1c", "from": "s10", "to": "V1c", "kind": "delegate", "label": "SSE の切り替え", "fromFamily": "anthropic", "toFamily": "openai" },
+        { "id": "s10->V2", "from": "s10", "to": "V2", "kind": "delegate", "label": "画面の移植", "fromFamily": "anthropic", "toFamily": "openai" },
+        { "id": "s10->P1", "from": "s10", "to": "P1", "kind": "delegate", "label": "planner の昇格", "fromFamily": "anthropic", "toFamily": "openai" },
+        { "id": "s10->F1", "from": "s10", "to": "F1", "kind": "delegate", "label": "差分の修正", "fromFamily": "anthropic", "toFamily": "openai" },
+        { "id": "s10->R1", "from": "s10", "to": "R1", "kind": "delegate", "label": "旧版の調査", "fromFamily": "anthropic", "toFamily": "anthropic" },
+        { "id": "s10->D1", "from": "s10", "to": "D1", "kind": "delegate", "label": "文書", "fromFamily": "anthropic", "toFamily": "anthropic" },
+        { "id": "s10->L1", "from": "s10", "to": "L1", "kind": "delegate", "label": "見回り", "fromFamily": "anthropic", "toFamily": "openai" },
+        { "id": "s10->X1", "from": "s10", "to": "X1", "kind": "delegate", "label": "危険な操作", "fromFamily": "anthropic", "toFamily": "openai" },
+        { "id": "C0->RV", "from": "C0", "to": "RV", "kind": "delegate", "label": "レビュー", "fromFamily": "openai", "toFamily": "anthropic" },
+        { "id": "RV->C0", "from": "RV", "to": "C0", "kind": "return", "label": "VERDICT", "fromFamily": "anthropic", "toFamily": "openai" }
+      ]
+    },
+    {
+      "id": "s9", "name": "agent-graph-001-s9", "client": "codex", "status": "ended",
+      "startedAt": "2026-09-24T10:00:00.000Z", "endedAt": "2026-09-24T18:30:00.000Z", "model": "gpt-6-astra",
+      "goal": "段 6 の planner を e2e で確かめる。",
+      "turns": [ { "id": "u1", "at": "2026-09-24T10:00:10.000Z", "prompt": "planner の e2e を通して。", "summary": "e2e-stage6.sh が通過。" } ],
+      "nodes": [
+        { "id": "s9", "kind": "root", "title": "agent-graph-001-s9", "status": "ended", "family": "openai", "model": "gpt-6-astra", "startedAt": "2026-09-24T10:00:00.000Z", "endedAt": "2026-09-24T18:30:00.000Z" },
+        { "id": "E6", "kind": "delegation", "title": "e2e の修正", "status": "done", "executor": "claude", "model": "claude-opus-5", "family": "anthropic", "parentId": "s9", "startedAt": "2026-09-24T10:05:00.000Z", "endedAt": "2026-09-24T11:00:00.000Z" }
+      ],
+      "edges": [ { "id": "s9->E6", "from": "s9", "to": "E6", "kind": "delegate", "label": "e2e の修正", "fromFamily": "openai", "toFamily": "anthropic" } ]
+    }
+  ],
+  "graphs": [
+    {
+      "id": "agent-graph-001-s10", "sessionId": "s10", "goal": "ダッシュボードを作り直す",
+      "nodes": [
+        { "id": "C0", "kind": "task", "title": "契約", "status": "done", "executor": "codex", "model": "gpt-6-sol", "family": "openai", "startedAt": "2026-09-25T01:40:00.000Z", "endedAt": "2026-09-25T01:58:00.000Z", "scope": ["packages/daemon/src/http/**"] },
+        { "id": "V1a", "kind": "task", "title": "Overview", "status": "running", "executor": "codex", "model": "gpt-6-astra", "family": "openai", "dependsOn": ["C0"] },
+        { "id": "V1c", "kind": "task", "title": "SSE", "status": "running", "executor": "codex", "model": "gpt-6-astra", "family": "openai", "dependsOn": ["C0"] },
+        { "id": "V2", "kind": "task", "title": "画面", "status": "running", "executor": "codex", "model": "gpt-6-astra", "family": "openai", "dependsOn": ["C0"] },
+        { "id": "P1", "kind": "task", "title": "planner", "status": "waiting_human", "executor": "codex", "model": "gpt-6-sol", "family": "openai", "attempts": 2,
+          "task": "planner に昇格・指示文・レポートを足す。", "feedback": "retry の上限に達した。人の判断を待つ。",
+          "acceptance": { "passed": false, "scopeViolations": [], "results": [ { "command": "npx --yes pnpm@10 --filter @agent-graph/planner test", "exitCode": 1, "output": "not ok 2 - 昇格の順序", "durationMs": 3100 } ] },
+          "scope": ["packages/planner/src/**"], "outputs": ["packages/planner/src/prompt.ts"],
+          "assignment": { "reason": ["段 1: 規則の移植は中程度", "段 2: 系統を Claude と分ける"], "policyVersion": "2026-09-20.3" } },
+        { "id": "E10", "kind": "task", "title": "結線と撮影", "status": "planned", "executor": "codex", "model": "gpt-6-astra", "family": "openai", "dependsOn": ["V1a", "V1c", "V2", "P1"] },
+        { "id": "G10", "kind": "task", "title": "確認", "status": "planned", "executor": "human", "dependsOn": ["E10"] },
+        { "id": "PR", "kind": "task", "title": "PR", "status": "planned", "executor": "pr", "dependsOn": ["G10"] }
+      ],
+      "edges": [
+        { "id": "C0->V1a", "from": "C0", "to": "V1a", "kind": "depends" },
+        { "id": "C0->V1c", "from": "C0", "to": "V1c", "kind": "depends" },
+        { "id": "C0->V2", "from": "C0", "to": "V2", "kind": "depends" },
+        { "id": "V1a->E10", "from": "V1a", "to": "E10", "kind": "depends" },
+        { "id": "V1c->E10", "from": "V1c", "to": "E10", "kind": "depends" },
+        { "id": "V2->E10", "from": "V2", "to": "E10", "kind": "depends" },
+        { "id": "P1->E10", "from": "P1", "to": "E10", "kind": "depends" },
+        { "id": "E10->G10", "from": "E10", "to": "G10", "kind": "depends" },
+        { "id": "G10->PR", "from": "G10", "to": "PR", "kind": "depends" }
+      ]
+    }
+  ],
+  "usage": {
+    "ts": "2026-09-25T06:40:00.000Z",
+    "windows": [
+      { "key": "anthropic:5h", "label": "Session", "provider": "anthropic", "percent": 73, "resetsAt": "2026-09-25T07:10:00.000Z" },
+      { "key": "anthropic:7d", "label": "Week", "provider": "anthropic", "percent": 36, "resetsAt": "2026-09-30T22:10:00.000Z" },
+      { "key": "anthropic:7d:fable", "label": "Week Fable", "provider": "anthropic", "percent": 92, "resetsAt": "2026-09-30T22:10:00.000Z" },
+      { "key": "openai:5h", "label": "Codex", "provider": "openai", "percent": 21, "resetsAt": "2026-09-25T09:00:00.000Z" }
+    ]
+  },
+  "updatedAt": "2026-09-25T06:40:12.000Z"
+}

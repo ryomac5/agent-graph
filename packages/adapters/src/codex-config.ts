@@ -10,7 +10,7 @@ const TOOL_KEY = "mcp_servers.agent-graph.tools.delegate.approval_mode";
 const SHIM_ENV_VARS = ["AGENT_GRAPH_SOCKET", "XDG_STATE_HOME", "TRACEPARENT", "TRACESTATE", "AGENT_GRAPH_SESSION"];
 
 export function renderCodexConfig(options: CodexOptions): string {
-  return `[mcp_servers.${SERVER}]\ncommand = ${JSON.stringify(options.nodePath)}\nargs = [${JSON.stringify(options.shimPath)}]\nenv_vars = ${JSON.stringify(SHIM_ENV_VARS)}\ntool_timeout_sec = ${TOOL_TIMEOUT_SEC}\nrequired = true\n\n[mcp_servers.${SERVER}.env]\nAGENT_GRAPH_CLIENT = "codex"\n\n[mcp_servers.${SERVER}.tools.delegate]\napproval_mode = "approve"\n`;
+  return `[mcp_servers.${SERVER}]\ncommand = ${JSON.stringify(options.nodePath)}\nargs = [${JSON.stringify(options.shimPath)}]\nenv_vars = ${JSON.stringify(SHIM_ENV_VARS)}\ntool_timeout_sec = ${TOOL_TIMEOUT_SEC}\n\n[mcp_servers.${SERVER}.env]\nAGENT_GRAPH_CLIENT = "codex"\n\n[mcp_servers.${SERVER}.tools.delegate]\napproval_mode = "approve"\n`;
 }
 
 export function renderCodexOverrides(options: CodexOptions): string[] {

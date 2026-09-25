@@ -53,6 +53,16 @@ test("不正なセッション入力を保存しない", async (t) => {
   assert.equal(store.listEvents().length, 0);
 });
 
+test("planner のセッション登録と再送を受け付ける", async (t) => {
+  const { cwd, store, stores } = createFixture(t);
+  const body = { id: "planner", cwd, client: "planner" };
+  await registerSession(body, stores);
+  await registerSession(body, stores);
+  assert.equal(store.db.prepare("SELECT client FROM sessions WHERE id = ?").get(body.id)?.client, "planner");
+  assert.equal(store.listEvents().length, 1);
+  await assert.rejects(registerSession({ ...body, client: "codex" }, stores), /client does not match/);
+});
+
 test("未接続のリポジトリも状態ディレクトリへ登録する", async (t) => {
   const { root, cwd, key } = createFixture(t);
   const state = mkdtempSync(join(tmpdir(), "agent-graph-session-state-"));

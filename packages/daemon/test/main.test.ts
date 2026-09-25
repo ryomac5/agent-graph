@@ -53,7 +53,7 @@ test("handler restores caller and reuses repository store across nested cwd", as
       assert.equal(span.parent_span_id, "b".repeat(16));
       assert.equal(span.trace_state, hello.tracestate);
     }
-    for (const client of ["claude", "codex"] as const) {
+    for (const client of ["claude", "codex", "planner"] as const) {
       await handler(request, { type: "hello", cwd: root, pid: process.pid, session: client, client });
       assert.equal(store.db.prepare("SELECT client FROM sessions WHERE id = ?").get(client)?.client, client);
     }

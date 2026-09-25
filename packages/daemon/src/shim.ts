@@ -4,9 +4,9 @@ import { execFileSync } from "node:child_process";
 import { basename, join } from "node:path";
 import { runDir } from "./paths.ts";
 
-function detectClient(): "claude" | "codex" | undefined {
+function detectClient(): "claude" | "codex" | "planner" | undefined {
   const configured = process.env.AGENT_GRAPH_CLIENT;
-  if (configured === "claude" || configured === "codex") return configured;
+  if (configured === "claude" || configured === "codex" || configured === "planner") return configured;
   try {
     const executable = basename(execFileSync("ps", ["-p", String(process.ppid), "-o", "comm="], { encoding: "utf8" }).trim());
     if (executable === "claude" || executable === "codex") return executable;
@@ -34,4 +34,7 @@ socket.once("error", (error) => {
   process.stderr.write(`agent-graph-shim: ${error.message}\n`);
   process.exitCode = 1;
 });
-socket.once("close", () => { process.stdin.unpipe(socket); });
+socket.once("close", () => {
+  process.stdin.unpipe(socket);
+  process.stdin.destroy();
+});

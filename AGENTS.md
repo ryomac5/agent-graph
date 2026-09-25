@@ -16,6 +16,9 @@ pnpm workspace のモノレポ。`packages/core`、`daemon`、`dashboard`、`ada
 `agent-graph-install --claude-plugin-dir <dir>` で生成し、Claude Code に `--plugin-dir <dir>` を渡す。
 Codex は `agent-graph-install --codex-config <path>` で指定先に導入するか、`--print-codex-overrides` の出力を 1 行 1 引数として `codex exec` に渡す（既存の設定を書き換えない）。
 個人の割り当て設定は `~/.config/agent-graph/policy.toml`（`XDG_CONFIG_HOME` 優先）に置く。
+6 段目は planner のグラフ実行・承認ゲート・PR と旧版比較を `AGENT_GRAPH_E2E=1 bash scripts/e2e-stage6.sh` で確認する。
+`agent-graph-plan run --session <id> [--spec path] [--max-parallel n] [--no-pr]` で実行する。spec の既定は `.agents/graph/<id>/tasks.yaml`。
+`agent-graph-plan status|approve|reject|retry [task] --session <id>` で状態確認・判断を行う。失敗したタスクも retry できる。
 
 ## 開発コマンド
 

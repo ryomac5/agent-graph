@@ -117,6 +117,17 @@ test("登録はリポジトリごとの連番で名前を振り、再登録で�
   assert.equal(first.model, "fable");
   assert.equal(store.getSession("second")?.name, "test-002");
   assert.equal(store.getSession("second")?.pid, undefined);
+  // 終了済みのセッションの再登録は running に戻す。名前は変えず、lost の委譲は戻さない
+  store.insertDelegation({ id: "d", repoKey: store.getSession("first")!.repoKey, sessionId: "first", role: "implement", title: "d", status: "running" });
+  assert.equal(store.endSession("first", "2026-09-25T00:00:00.000Z"), true);
+  await registerSession({ id: "first", cwd, client: "claude", pid: process.pid }, stores);
+  const resumed = store.getSession("first")!;
+  assert.equal(resumed.status, "running");
+  assert.equal(resumed.endedAt, undefined);
+  assert.equal(resumed.name, "test-001");
+  assert.ok(resumed.lastSeenAt > "2026-09-25T00:00:00.000Z");
+  assert.equal(store.db.prepare("SELECT status FROM delegations WHERE id = 'd'").get()?.status, "lost");
+  assert.equal(store.listEvents().filter((event) => event.session === "first").length, 1);
   await assert.rejects(registerSession({ id: "third", cwd, client: "claude", pid: 0 }, stores), TypeError);
   await assert.rejects(registerSession({ id: "third", cwd, client: "claude", model: 1 }, stores), TypeError);
 });

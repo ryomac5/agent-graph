@@ -105,7 +105,11 @@ export function createHandler(stores: Map<string, Store>, latest = new Map<strin
     if (!session) store.insertNamedSession({ id: caller.sessionId, repoKey: key,
       client: hello.client ?? "mcp", traceId: caller.traceId, startedAt: now,
       ...(rootHello ? { pid: hello.pid, pidStartedAt } : {}) });
-    else if (rootHello && firstRequest) store.setSessionProcess(caller.sessionId, hello.pid, pidStartedAt, now);
+    else if (rootHello && firstRequest) {
+      // 終了済みのセッションが同じ id で戻ってきたら running に戻す
+      store.resumeSession(caller.sessionId, now);
+      store.setSessionProcess(caller.sessionId, hello.pid, pidStartedAt, now);
+    }
     else if (rootHello) store.touchSession(caller.sessionId, now);
     if (session && hello.client && rootHello) store.updateSessionClient(caller.sessionId, hello.client);
     return runDelegation(request, { repoKey: key, repoRoot, sessionId: caller.sessionId,

@@ -14,14 +14,55 @@
 | `GET /api/project?repo=<key>` | query `repo` | `ProjectView` | Host | 1 リポジトリの全体 |
 | `GET /api/events?repo=<key>` | query `repo` は省略可 | SSE | Host | 変化の配信 |
 | `POST /api/action` | `ActionRequest` | `ActionResult` | Host, JSON, Origin, token | 承認、再試行、却下、終了、turn の非表示 |
-| `POST /api/sessions` | `{ id, cwd, client }` | `{ ok: true }` | Host, JSON, Origin, loopback | hook の SessionStart |
-| `POST /api/sessions/<id>/end` | `{}` | `{ ok: true }` | Host, JSON, Origin, loopback | hook の SessionEnd |
-| `POST /api/observe` | 観測の種類ごとの body | `{ ok: true }` | Host, JSON, Origin, loopback | hook の turn と待ちの観測 |
+| `POST /api/sessions` | `{ id, cwd, client, pid?, model? }` | 201 `{ ok: true }` | Host, JSON, Origin, loopback | hook の SessionStart と MCP の根登録 |
+| `POST /api/sessions/<id>/end` | `{}` | 200 `{ ok: true }` | Host, JSON, Origin, loopback | hook の SessionEnd |
+| `POST /api/observe` | `{ kind, sessionId, ... }` | 200 `{ ok: true }` | Host, JSON, Origin, loopback | hook の turn と待ちの観測 |
 | `GET /api/repos` | なし | `Repo[]` | Host | 互換のため残す |
 | `GET /api/graph?repo=<key>&session=<id>` | query | `Graph` | Host | 互換のため残す |
 
-失敗は `ErrorResult` `{ error: string }` を JSON で返す。状態は 400 が不正な body、403 が守りの拒否、404 が未知の repo、501 が未実装。
+失敗は `ErrorResult` `{ error: string }` を JSON で返す。状態は 400 が不正な body、403 が守りの拒否、404 が未知の repo やセッション、501 が未実装。
 経路に合わない POST は 405、`/api/` 配下の未知の GET は 404。
+
+## hook の経路
+
+`POST /api/sessions` の body。
+
+| 項目 | 内容 |
+| --- | --- |
+| `id` | Claude Code の `session_id` |
+| `cwd` | 絶対パス。git のルートを解決して repo を決める |
+| `client` | `claude` `codex` `planner` |
+| `pid?` | 根のプロセスの pid。hook は `process.ppid` を送る。デーモンは `ps` の起動時刻と組で記録し、生死判定に使う |
+| `model?` | 根のモデル名 |
+
+初回の登録で `<repo名>-NNN` の名前を振る。同じ `id` の再登録では名前を変えず、`session.started` も再記録しない。
+終了済みのセッションが同じ `id` で再登録されたら `status` を `running` に戻し、`endedAt` を消す。`lost` にした委譲は戻さない。MCP の根の hello も同じ扱い。
+
+`POST /api/sessions/<id>/end` は body `{}` で受け、`status` を `ended` にして `endedAt` を入れる。そのセッションで走っていた委譲は `lost` にする。すでに終わっていれば何もせず 200 を返す。
+
+`POST /api/observe` の body は `kind` で分ける。`sessionId` は必須。未知の `kind` は 400、未知のセッションは 404。
+
+| `kind` | 項目 | 効果 |
+| --- | --- | --- |
+| `turn_start` | `prompt` | `turns` に行を作る。最初の `prompt` を `goal` にする。待ちを解除する |
+| `turn_done` | `summary?`, `reply` | 直近の未完の turn に `summary` を付ける。`summary` が無ければ `reply` の先頭 3 行。`reply` は 6000 字まで。待ちを解除する |
+| `waiting` | `reason` | `status` を `waiting` にし、`waitingReason` に `permission` か `question` を入れる |
+
+ほかの `kind` は観測のタスクが `packages/daemon/src/sessions.ts` の `observers` に足す。
+
+## セッションの状態
+
+`SessionView.status` は `running` `waiting` `ended` の 3 つを取る。
+
+| 遷移 | 契機 |
+| --- | --- |
+| 登録 → `running` | `POST /api/sessions` か MCP の根の hello |
+| `running` → `waiting` | `observe` の `waiting`。`waitingReason` を入れる |
+| `waiting` → `running` | 次の `turn_start` か `turn_done`。後続の tool の観測も解除する |
+| `running` / `waiting` → `ended` | `POST /api/sessions/<id>/end`。または 30 秒ごとの見回りで pid のプロセスが死んでいたとき。pid が無ければ 30 分記録が無いとき |
+| `ended` → `running` | 同じ `id` の再登録か根の hello。`claude --resume` で戻る |
+
+`ended` のセッションは `turn` や `waiting` の観測では戻らない。
 
 ## 型
 

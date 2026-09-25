@@ -196,6 +196,14 @@ export class Store {
     if (result.changes > 0) this.notifyChange();
   }
 
+  // 同じ id の再登録。終了済みなら running に戻す。名前は変えず、lost にした委譲も戻さない。
+  resumeSession(id: string, seenAt: string): boolean {
+    const result = this.db.prepare(`UPDATE sessions SET status = 'running', ended_at = NULL, waiting_reason = NULL, last_seen_at = ?
+      WHERE id = ? AND status = 'ended'`).run(seenAt, id);
+    if (result.changes > 0) this.notifyChange();
+    return result.changes > 0;
+  }
+
   setSessionModel(id: string, model: string): void {
     const result = this.db.prepare("UPDATE sessions SET model = ? WHERE id = ? AND model IS NOT ?").run(model, id, model);
     if (result.changes > 0) this.notifyChange();

@@ -57,6 +57,18 @@ test("終了は status と ended_at を記録し、走っていた委譲を lost
   store.setSessionWaiting("s1", "permission", later);
   store.setSessionProcess("s1", 1, undefined, later);
   assert.equal(store.getSession("s1")?.status, "ended");
+  // 再登録だけが running に戻す。名前は変えず、lost の委譲は戻さない
+  const resumedAt = "2026-09-25T03:00:00.000Z";
+  assert.equal(store.resumeSession("s1", resumedAt), true);
+  assert.equal(store.resumeSession("s1", resumedAt), false);
+  assert.equal(store.resumeSession("missing", resumedAt), false);
+  const resumed = store.getSession("s1")!;
+  assert.equal(resumed.status, "running");
+  assert.equal(resumed.endedAt, undefined);
+  assert.equal(resumed.lastSeenAt, resumedAt);
+  assert.equal(resumed.name, "repo-001");
+  assert.equal(status("d1"), "lost");
+  assert.deepEqual(store.listLiveSessions().map((row) => row.id), ["s1", "s2"]);
 });
 
 test("待ちの設定と解除、pid と goal と model の記録", (t) => {

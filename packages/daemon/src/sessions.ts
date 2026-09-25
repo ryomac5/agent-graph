@@ -67,6 +67,8 @@ export async function registerSession(body: unknown, stores: Map<string, Store>)
   const existing = store.db.prepare("SELECT client, trace_id FROM sessions WHERE id = ?").get(id);
   if (existing && existing.client !== client) throw new TypeError("Session client does not match");
   const ts = new Date().toISOString();
+  // claude --resume などで同じ id が戻ってきたら running に戻す
+  if (existing) store.resumeSession(id, ts);
   if (typeof pid === "number") store.setSessionProcess(id, pid, pidStartedAt, ts);
   if (typeof model === "string" && model) store.setSessionModel(id, model);
   // hook の再送や MCP による先行登録でも、開始イベントは一度だけ記録する。

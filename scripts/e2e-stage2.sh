@@ -72,7 +72,7 @@ node --input-type=module - "$ROOT" > "$TEMP/mcp.json" <<'JS'
 const env = Object.fromEntries(['AGENT_GRAPH_SOCKET', 'TRACEPARENT', 'TRACESTATE', 'AGENT_GRAPH_SESSION'].map(k => [k, process.env[k]]));
 console.log(JSON.stringify({mcpServers: {'agent-graph': {command: process.execPath, args: [process.argv[2] + '/packages/daemon/src/shim.ts'], env}}}));
 JS
-claude -p --model haiku --strict-mcp-config --mcp-config "$TEMP/mcp.json" \
+MCP_TOOL_TIMEOUT=1800000 claude -p --model haiku --strict-mcp-config --mcp-config "$TEMP/mcp.json" \
   --allowedTools mcp__agent-graph__delegate --setting-sources project --no-session-persistence \
   'Call mcp__agent-graph__delegate exactly once with {"role":"implement","title":"e2e hello","task":"Write hello followed by a newline to hello.txt in the current repository.","accept":["test -f hello.txt"],"review":false}. Do not write the file yourself. Wait for the result and report its status and output.' > "$TEMP/claude-parent.log" 2>&1
 node "$ROOT/scripts/e2e-stage2-state.ts" check implement codex
@@ -91,7 +91,7 @@ JS
 codex exec --ignore-user-config --ephemeral -m gpt-6-luna --sandbox workspace-write \
   -c 'approval_policy="never"' -c "$MCP_CONFIG" \
   -c 'mcp_servers.agent-graph.tools.delegate.approval_mode="approve"' \
-  'Call the agent-graph delegate MCP tool exactly once with {"role":"document","title":"e2e notes","task":"Write one line of notes to notes.md in the current repository.","accept":["test -f notes.md"],"review":false}. Do not write the file yourself. Wait for the result and report its status and output.' > "$TEMP/codex-parent.log" 2>&1
+  'Call the agent-graph delegate MCP tool exactly once with {"role":"document","title":"e2e notes","task":"Create notes.md in the current repository with exactly one line: e2e notes. Do not ask for clarification.","accept":["test -f notes.md"],"review":false}. Do not write the file yourself. Wait for the result and report its status and output.' > "$TEMP/codex-parent.log" 2>&1
 node "$ROOT/scripts/e2e-stage2-state.ts" check document claude
 test -f notes.md
 echo 'PASS: stage 2 bidirectional e2e'

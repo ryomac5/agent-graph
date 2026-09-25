@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { execFile } from "node:child_process";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, realpathSync } from "node:fs";
 import { mkdir, open, readFile, unlink } from "node:fs/promises";
-import { basename, join, resolve } from "node:path";
+import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { runDelegation } from "../../core/src/delegate/run.ts";
@@ -49,26 +49,36 @@ export function createHandler(stores: Map<string, Store>): DelegateHandler<Hello
 }
 
 async function claimPid(path: string): Promise<void> {
-  let file;
-  try {
-    file = await open(path, "wx", 0o600);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    const value = await readFile(path, "utf8");
-    const pid = Number(value.trim());
-    if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error(`Invalid daemon PID file: ${path}`);
+  for (;;) {
+    let file;
     try {
-      process.kill(pid, 0);
+      file = await open(path, "wx", 0o600);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-      // 同時起動時に他プロセスが取得した PID ファイルを消さない。
-      throw new Error(`Stale daemon PID file; remove it before restarting: ${path}`);
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      let value;
+      try { value = await readFile(path, "utf8"); }
+      catch (readError) {
+        if ((readError as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw readError;
+      }
+      const pid = Number(value.trim());
+      if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error(`Invalid daemon PID file: ${path}`);
+      try {
+        process.kill(pid, 0);
+      } catch (killError) {
+        if ((killError as NodeJS.ErrnoException).code !== "ESRCH") throw killError;
+        try { await unlink(path); }
+        catch (unlinkError) {
+          if ((unlinkError as NodeJS.ErrnoException).code !== "ENOENT") throw unlinkError;
+        }
+        continue;
+      }
+      throw new Error(`Daemon is already running (pid ${pid})`);
     }
-    throw new Error(`Daemon is already running (pid ${pid})`);
+    await file.writeFile(`${process.pid}\n`);
+    await file.close();
+    return;
   }
-  await file.writeFile(`${process.pid}\n`);
-  await file.close();
-  return;
 }
 
 export async function startDaemon(): Promise<{ stop: () => Promise<void> }> {
@@ -120,7 +130,7 @@ export async function startDaemon(): Promise<{ stop: () => Promise<void> }> {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   startDaemon().then(({ stop }) => {
     const shutdown = (): void => { void stop().catch((error) => { console.error(error); process.exitCode = 1; }); };
     process.once("SIGTERM", shutdown);

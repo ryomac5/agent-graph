@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { createHandler, startDaemon } from "../src/main.ts";
 import { repoKey, stateDbPath } from "../../core/src/paths.ts";
 import { openStore, type Store } from "../../core/src/store/store.ts";
@@ -73,7 +74,8 @@ test("daemon rejects duplicate PID and cleans runtime files", async (t) => {
     await writeFile(pidPath, `${process.pid}\n`);
     await assert.rejects(startDaemon(), /already running/);
     assert.equal(existsSync(pidPath), true);
-    await rm(pidPath);
+    await writeFile(pidPath, "99999999\n");
+    assert.throws(() => process.kill(99999999, 0), { code: "ESRCH" });
     try { daemon = await startDaemon(); }
     catch (error) {
       assert.equal(existsSync(join(dir, "agent-graph/run/daemon.pid")), false);
@@ -84,6 +86,7 @@ test("daemon rejects duplicate PID and cleans runtime files", async (t) => {
       throw error;
     }
     await assert.rejects(startDaemon(), /already running/);
+    assert.equal(await readFile(pidPath, "utf8"), `${process.pid}\n`);
     assert.equal(existsSync(process.env.AGENT_GRAPH_SOCKET), true);
     await daemon.stop();
     assert.equal(existsSync(process.env.AGENT_GRAPH_SOCKET), false);
@@ -93,6 +96,24 @@ test("daemon rejects duplicate PID and cleans runtime files", async (t) => {
     await daemon?.stop();
     if (oldState === undefined) delete process.env.XDG_STATE_HOME; else process.env.XDG_STATE_HOME = oldState;
     if (oldSocket === undefined) delete process.env.AGENT_GRAPH_SOCKET; else process.env.AGENT_GRAPH_SOCKET = oldSocket;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("daemon bin starts through a symlink", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "ag-bin-"));
+  try {
+    const pidPath = join(dir, "agent-graph/run/daemon.pid");
+    await mkdir(join(dir, "agent-graph/run"), { recursive: true });
+    await writeFile(pidPath, `${process.pid}\n`);
+    const binPath = join(dir, "agent-graph-daemon");
+    await symlink(fileURLToPath(new URL("../src/main.ts", import.meta.url)), binPath);
+    const result = spawnSync(process.execPath, [binPath], {
+      env: { ...process.env, XDG_STATE_HOME: dir }, encoding: "utf8",
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Daemon is already running/);
+  } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });

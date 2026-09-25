@@ -30,6 +30,8 @@ test("正常系は各段階を順に記録して span を閉じる", async (t) =
   assert.equal(span.name, "delegate");
   assert.equal(span.status, "ok");
   assert.ok(span.ended_at);
+  assert.deepEqual(JSON.parse(span.attributes as string)["agent.executor"], result.assignment.executor);
+  assert.deepEqual(JSON.parse(span.attributes as string)["agent.model"], result.assignment.model);
   for (const table of ["delegations", "assignments", "acceptances", "token_usage"]) {
     assert.equal(deps.store.db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()!.count, 1);
   }
@@ -69,8 +71,22 @@ for (const verdict of ["approve", "request_changes"] as const) {
       .get(review.reviewer_delegation_id as string)!;
     assert.equal(child.parent_id, result.delegationId);
     assert.equal(result.roundTrips, 0);
+    const parentEvents = deps.store.listEvents().filter((event) =>
+      "delegationId" in event.payload && event.payload.delegationId === result.delegationId);
+    assert.deepEqual(parentEvents.map((event) => event.kind).slice(-3), [
+      "acceptance.evaluated", "review.evaluated", "delegation.finished",
+    ]);
   });
 }
+
+test("execute の例外でも委譲を failed で閉じる", async (t) => {
+  const deps = setup(t);
+  deps.execute = async () => { throw new Error("execute failed"); };
+  await assert.rejects(runDelegation(request, caller, deps), /execute failed/);
+  assert.equal(deps.store.db.prepare("SELECT status FROM delegations").get()!.status, "failed");
+  assert.equal(deps.store.listEvents().at(-1)!.kind, "delegation.finished");
+  assert.equal(deps.store.db.prepare("SELECT status FROM spans").get()!.status, "error");
+});
 
 test("caller.trace を渡すと traceId と親 span を引き継ぐ", async (t) => {
   const deps = setup(t);

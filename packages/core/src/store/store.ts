@@ -102,6 +102,14 @@ export class Store {
     );
   }
 
+  updateSpanAttributes(traceId: string, spanId: string, attributes: Span["attributes"]): void {
+    const row = this.db.prepare("SELECT attributes FROM spans WHERE trace_id = ? AND span_id = ?")
+      .get(traceId, spanId);
+    if (!row) throw new Error("Span not found");
+    this.db.prepare("UPDATE spans SET attributes = ? WHERE trace_id = ? AND span_id = ?")
+      .run(JSON.stringify({ ...JSON.parse(row.attributes as string), ...attributes }), traceId, spanId);
+  }
+
   endSpan(traceId: string, spanId: string, endedAt: string, status: Span["status"]): void {
     const result = this.db.prepare(`
       UPDATE spans SET ended_at = ?, status = ? WHERE trace_id = ? AND span_id = ?

@@ -62,6 +62,7 @@ export async function runDelegation(
   let usage = EMPTY_USAGE;
   let status: DelegateResult["status"] = "failed";
   let review: DelegateResult["review"];
+  let finished = false;
   store.insertDelegation({ id: delegationId, repoKey: caller.repoKey,
     sessionId: caller.sessionId, parentId: caller.parentDelegationId,
     role: req.role, title: req.title, status: "requested" });
@@ -78,6 +79,9 @@ export async function runDelegation(
       assignment = decision.assignment;
       store.insertAssignment(delegationId, assignment);
       event("assignment.decided", { delegationId, executor: assignment.executor, model: assignment.model });
+      store.updateSpanAttributes(trace.traceId, trace.spanId, {
+        "agent.executor": assignment.executor, "agent.model": assignment.model,
+      });
       const baseRef = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd })).stdout.trim();
       const workDir = await mkdtemp(join(tmpdir(), "agent-graph-delegate-"));
       let execution: ExecResult;
@@ -124,8 +128,16 @@ export async function runDelegation(
     }
     store.finishDelegation(delegationId, status);
     event("delegation.finished", { delegationId, status });
+    finished = true;
     return { delegationId, traceId: trace.traceId, spanId: trace.spanId, status,
       assignment, output, acceptance, ...(review ? { review } : {}), usage, roundTrips: 0 };
+  } catch (error) {
+    if (!finished) {
+      status = "failed";
+      store.finishDelegation(delegationId, status);
+      event("delegation.finished", { delegationId, status });
+    }
+    throw error;
   } finally {
     store.endSpan(trace.traceId, trace.spanId, now().toISOString(), status === "done" ? "ok" : "error");
   }

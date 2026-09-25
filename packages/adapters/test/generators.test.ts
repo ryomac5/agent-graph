@@ -7,10 +7,30 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { generateClaudePlugin } from "../src/claude-plugin.ts";
-import { installCodexConfig, renderCodexOverrides } from "../src/codex-config.ts";
+import { installCodexConfig, renderCodexConfig, renderCodexOverrides } from "../src/codex-config.ts";
 
 const options = { shimPath: "/tmp/shim.ts", nodePath: process.execPath };
 const root = mkdtempSync(join(tmpdir(), "agent-graph-adapters-"));
+
+test("Codex の生成設定は実行時のソケットと親文脈を転送し、上書き時のみ MCP 起動を必須にする", () => {
+  const config = renderCodexConfig(options);
+  const overrides = renderCodexOverrides(options);
+  assert.equal(overrides[0], "-c");
+  assert.ok(overrides[1].startsWith("mcp_servers.agent-graph={command="));
+  for (const output of [config, overrides[1]]) {
+    const forwarded = JSON.parse(output.match(/env_vars\s*=\s*(\[[^\]]*\])/)![1]);
+    assert.deepEqual(forwarded, ["AGENT_GRAPH_SOCKET", "XDG_STATE_HOME", "TRACEPARENT", "TRACESTATE", "AGENT_GRAPH_SESSION"]);
+  }
+  assert.doesNotMatch(config, /\brequired\s*=/);
+  assert.match(overrides[1], /required\s*=\s*true/);
+  const cli = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
+  const printed = spawnSync(process.execPath, [cli, "--print-codex-overrides"], { encoding: "utf8" });
+  assert.equal(printed.status, 0, printed.stderr);
+  assert.deepEqual(printed.stdout.trimEnd().split("\n"), renderCodexOverrides({
+    nodePath: process.execPath,
+    shimPath: fileURLToPath(new URL("../../daemon/src/shim.ts", import.meta.url)),
+  }));
+});
 
 test("Claude plugin の JSON と hook", () => {
   const outDir = join(root, "plugin");

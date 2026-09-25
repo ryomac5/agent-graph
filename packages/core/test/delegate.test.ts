@@ -1,4 +1,8 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { childContext, openStore, runDelegation, type DelegationDeps, type DelegateRequest } from "../src/index.ts";
 
@@ -17,6 +21,63 @@ function setup(t: { after: (fn: () => void) => void }): DelegationDeps {
     accept: async () => ({ passed: true, results: [], scopeViolations: [] }),
   };
 }
+
+function createRepo(t: { after: (fn: () => void) => void }): string {
+  const cwd = mkdtempSync(join(tmpdir(), "agent-graph-review-test-"));
+  t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  const git = (...args: string[]) => execFileSync("git", args, { cwd });
+  git("init", "-q");
+  git("config", "user.name", "Test");
+  git("config", "user.email", "test@example.com");
+  writeFileSync(join(cwd, "committed.txt"), "before\n");
+  writeFileSync(join(cwd, "working.txt"), "before\n");
+  git("add", ".");
+  git("commit", "-qm", "baseline");
+  return cwd;
+}
+
+test("レビュー差分に開始後のコミット、未コミット、新規ファイルを含める", async (t) => {
+  const deps = setup(t);
+  const cwd = createRepo(t);
+  let reviewTask = "";
+  deps.execute = async (req) => {
+    if (req.task.includes("元の依頼:")) reviewTask = req.task;
+    else {
+      writeFileSync(join(cwd, "committed.txt"), "committed change\n");
+      execFileSync("git", ["add", "committed.txt"], { cwd });
+      execFileSync("git", ["commit", "-qm", "change"], { cwd });
+      writeFileSync(join(cwd, "working.txt"), "working change\n");
+      writeFileSync(join(cwd, "new.txt"), "new file content\n");
+    }
+    return { exitCode: 0, output: req.task.includes("元の依頼:") ? "VERDICT: approve" : "実装完了",
+      timedOut: false, usage: { inputTokens: 1, outputTokens: 1 }, durationMs: 1,
+      childTrace: childContext(req.trace) };
+  };
+  const result = await runDelegation({ ...request, role: "implement", cwd }, { ...caller, repoRoot: cwd }, deps);
+  assert.equal(result.status, "done");
+  assert.match(reviewTask, /\+committed change/);
+  assert.match(reviewTask, /\+working change/);
+  assert.match(reviewTask, /\+new file content/);
+  assert.match(reviewTask, /new file mode/);
+  assert.equal(execFileSync("git", ["status", "--porcelain", "--", "new.txt"], { cwd }).toString(), "?? new.txt\n");
+});
+
+test("長いレビュー差分は30000字で切って末尾に省略を記す", async (t) => {
+  const deps = setup(t);
+  const cwd = createRepo(t);
+  let reviewTask = "";
+  deps.execute = async (req) => {
+    if (req.task.includes("元の依頼:")) reviewTask = req.task;
+    else writeFileSync(join(cwd, "working.txt"), `${"x".repeat(31000)}\n`);
+    return { exitCode: 0, output: req.task.includes("元の依頼:") ? "VERDICT: approve" : "実装完了",
+      timedOut: false, usage: { inputTokens: 1, outputTokens: 1 }, durationMs: 1,
+      childTrace: childContext(req.trace) };
+  };
+  await runDelegation({ ...request, role: "implement", cwd }, { ...caller, repoRoot: cwd }, deps);
+  const diff = reviewTask.split("\ngit diff:\n")[1]!.split("\n\n最終行に")[0]!;
+  assert.equal(diff, `${diff.slice(0, 30000)}\n…(以降省略)`);
+  assert.equal(diff.length, 30000 + "\n…(以降省略)".length);
+});
 
 test("正常系は各段階を順に記録して span を閉じる", async (t) => {
   const deps = setup(t);

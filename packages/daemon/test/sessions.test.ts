@@ -84,9 +84,9 @@ test("未接続のリポジトリも状態ディレクトリへ登録する", as
 });
 
 test("POST /api/sessions は登録に 201、不正な body に 400 を返す", async (t) => {
-  const { cwd, stores } = createFixture(t);
+  const { root, cwd, stores } = createFixture(t);
   let server;
-  try { server = await startHttpServer({ port: 0, openStores: stores, listRepos: () => [] }); }
+  try { server = await startHttpServer({ port: 0, openStores: stores, listRepos: () => [], tokenPath: join(root, "dashboard.token") }); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === "EPERM") { t.skip("HTTP listen is prohibited by the sandbox"); return; }
     throw error;
@@ -96,8 +96,9 @@ test("POST /api/sessions は登録に 201、不正な body に 400 を返す", a
   assert.ok(address && typeof address !== "string");
   assert.equal(address.address, "127.0.0.1");
   const url = `http://127.0.0.1:${address.port}/api/sessions`;
+  const headers = { "content-type": "application/json" };
   for (const body of ["{", "null", "{}", "x".repeat(16_385)]) {
-    assert.equal((await fetch(url, { method: "POST", body })).status, 400);
+    assert.equal((await fetch(url, { method: "POST", headers, body })).status, 400);
   }
-  assert.equal((await fetch(url, { method: "POST", body: JSON.stringify({ id: "s", cwd, client: "claude" }) })).status, 201);
+  assert.equal((await fetch(url, { method: "POST", headers, body: JSON.stringify({ id: "s", cwd, client: "claude" }) })).status, 201);
 });

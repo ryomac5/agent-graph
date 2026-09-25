@@ -5,6 +5,19 @@ import type { Event, Span } from "../events.ts";
 import type { AcceptanceResult, Assignment, Role, TokenUsage } from "../delegate/types.ts";
 import type { UsageSample } from "../usage/types.ts";
 import { migrate } from "./migrate.ts";
+import { ulid } from "../ulid.ts";
+import { newSpanId } from "../trace.ts";
+
+const BUSY_TIMEOUT_MS = 5000;
+const OPEN_RETRY_MS = 20;
+
+export type TaskState = "planned" | "running" | "verifying" | "reviewing" | "merging" | "waiting_human" | "conflict" | "done" | "failed" | "rejected";
+export interface GraphRecord {
+  id: string; repoKey: string; sessionId: string; goal: string; fingerprint: string; createdAt: string;
+}
+export interface TaskRecord {
+  graphId: string; id: string; title: string; role: string; dependsOn: string[]; state: TaskState; attempts: number;
+}
 
 export interface Repo {
   key: string;
@@ -23,14 +36,19 @@ export interface Session {
 
 export function openStore(path: string): Store {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
-  const db = new DatabaseSync(path);
-  try {
-    db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
-    migrate(db);
-    return new Store(db);
-  } catch (error) {
-    db.close();
-    throw error;
+  const deadline = Date.now() + BUSY_TIMEOUT_MS;
+  for (;;) {
+    const db = new DatabaseSync(path);
+    try {
+      db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}; PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;`);
+      migrate(db);
+      return new Store(db);
+    } catch (error) {
+      db.close();
+      // 初回 WAL 切替の競合は busy_timeout を待たずに SQLITE_BUSY を返す場合がある。
+      if ((error as { errcode?: number }).errcode !== 5 || Date.now() >= deadline) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, OPEN_RETRY_MS);
+    }
   }
 }
 
@@ -73,9 +91,59 @@ export class Store {
     this.notifyChange();
   }
 
-  updateSessionClient(id: string, client: "claude" | "codex"): void {
+  updateSessionClient(id: string, client: "claude" | "codex" | "planner"): void {
     const result = this.db.prepare("UPDATE sessions SET client = ? WHERE id = ? AND client != ?").run(client, id, client);
     if (result.changes > 0) this.notifyChange();
+  }
+
+  findGraph(repo: string, session: string, fingerprint?: string): GraphRecord | undefined {
+    const row = this.db.prepare(`SELECT * FROM graphs WHERE repo_key = ? AND session_id = ?
+      ${fingerprint === undefined ? "" : "AND fingerprint = ?"} ORDER BY rowid DESC LIMIT 1`)
+      .get(...(fingerprint === undefined ? [repo, session] : [repo, session, fingerprint]));
+    return row ? { id: String(row.id), repoKey: String(row.repo_key), sessionId: String(row.session_id),
+      goal: String(row.goal), fingerprint: String(row.fingerprint), createdAt: String(row.created_at) } : undefined;
+  }
+
+  insertGraph(graph: GraphRecord, tasks: TaskRecord[]): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("INSERT INTO graphs (id, repo_key, session_id, goal, fingerprint, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+        .run(graph.id, graph.repoKey, graph.sessionId, graph.goal, graph.fingerprint, graph.createdAt);
+      const insert = this.db.prepare("INSERT INTO tasks (graph_id, id, title, role, depends_on, state, attempts) VALUES (?, ?, ?, ?, ?, ?, ?)");
+      for (const task of tasks) insert.run(graph.id, task.id, task.title, task.role, JSON.stringify(task.dependsOn), task.state, task.attempts);
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+    this.notifyChange();
+  }
+
+  listTasks(graphId: string): TaskRecord[] {
+    return this.db.prepare("SELECT * FROM tasks WHERE graph_id = ? ORDER BY rowid").all(graphId).map((row) => ({
+      graphId, id: String(row.id), title: String(row.title), role: String(row.role),
+      dependsOn: JSON.parse(String(row.depends_on)), state: row.state as TaskState, attempts: Number(row.attempts),
+    }));
+  }
+
+  updateTask(graphId: string, id: string, state: TaskState, attempts?: number): void {
+    const result = this.db.prepare("UPDATE tasks SET state = ?, attempts = COALESCE(?, attempts) WHERE graph_id = ? AND id = ?")
+      .run(state, attempts ?? null, graphId, id);
+    if (!result.changes) throw new Error(`Task not found: ${id}`);
+    this.notifyChange();
+  }
+
+  appendGraphEvent(graph: GraphRecord, kind: string, payload: Record<string, unknown>): string {
+    const id = ulid();
+    const session = this.db.prepare("SELECT trace_id FROM sessions WHERE id = ?").get(graph.sessionId);
+    if (!session) throw new Error("Session not found");
+    this.db.prepare(`INSERT INTO events (id, ts, kind, repo_key, session_id, trace_id, span_id, payload)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(id, new Date().toISOString(), `planner.${kind}`,
+      graph.repoKey, graph.sessionId, String(session.trace_id), newSpanId(), JSON.stringify({ ...payload, graphId: graph.id }));
+    this.notifyChange();
+    return id;
+  }
+
+  listGraphEvents(graphId: string, kind: string): { id: string; payload: Record<string, unknown> }[] {
+    return this.db.prepare("SELECT id, payload FROM events WHERE kind = ? AND json_extract(payload, '$.graphId') = ? ORDER BY rowid")
+      .all(`planner.${kind}`, graphId).map((row) => ({ id: String(row.id), payload: JSON.parse(String(row.payload)) }));
   }
 
   appendEvent(event: Event): void {

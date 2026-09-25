@@ -13,7 +13,7 @@ export async function registerSession(body: unknown, stores: Map<string, Store>)
   const { id, cwd, client } = body as Record<string, unknown>;
   if (typeof id !== "string" || !id.trim() || id.includes("\0") ||
       typeof cwd !== "string" || !isAbsolute(cwd) || cwd.includes("\0") ||
-      (client !== "claude" && client !== "codex")) throw new TypeError("Invalid session body");
+      (client !== "claude" && client !== "codex" && client !== "planner")) throw new TypeError("Invalid session body");
   let root: string;
   try {
     root = (await execFileAsync("git", ["rev-parse", "--show-toplevel"], { cwd })).stdout.trim();

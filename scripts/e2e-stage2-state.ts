@@ -29,7 +29,7 @@ try {
       .get(sessionId)?.n, 1, "delegate must be called exactly once, including unsuccessful calls");
     const rows = store.db.prepare(`SELECT d.*, a.executor, s.trace_id, s.parent_span_id
       FROM delegations d JOIN assignments a ON a.delegation_id = d.id
-      JOIN spans s ON json_extract(s.attributes, '$."agent.delegation"') = d.id
+      JOIN spans s ON json_extract(s.attributes, '$."agent.delegation"') = d.id AND s.name = 'delegate'
       WHERE d.session_id = ?`).all(sessionId);
     assert.equal(rows.length, 1, "delegate must be called exactly once");
     assert.equal(rows[0].role, role);
@@ -47,7 +47,7 @@ try {
     const rows = store.db.prepare(`SELECT d.status, d.parent_id, a.executor, s.trace_id, s.parent_span_id,
       p.trace_id AS parent_trace_id, p.span_id AS parent_span
       FROM delegations d JOIN assignments a ON a.delegation_id = d.id
-      JOIN spans s ON json_extract(s.attributes, '$."agent.delegation"') = d.id
+      JOIN spans s ON json_extract(s.attributes, '$."agent.delegation"') = d.id AND s.name = 'delegate'
       JOIN spans p ON json_extract(p.attributes, '$."agent.delegation"') = d.parent_id
       WHERE d.role = ? AND d.session_id = ?`).all(role, sessionId);
     assert.equal(rows.length, 1, "delegate must be called exactly once");

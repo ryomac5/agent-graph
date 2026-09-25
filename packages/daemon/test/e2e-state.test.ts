@@ -49,9 +49,19 @@ for (const mode of ["root", "session-only", "nested"] as const) {
     store.insertSpan({ trace: { traceId, spanId: "3".repeat(16), parentSpanId: spanId },
       name: "delegate", startedAt: new Date().toISOString(), status: "ok",
       attributes: { "agent.delegation": "child" } });
+    // 実行・再指示の span が増えても委譲は一回として検証する。
+    for (const id of ["4", "5"]) store.insertSpan({
+      trace: { traceId, spanId: id.repeat(16), parentSpanId: "3".repeat(16) },
+      name: "execute", startedAt: new Date().toISOString(), status: "ok",
+      attributes: { "agent.delegation": "child" },
+    });
     const args = [mode === "nested" ? "check" : "check-root", "implement", "codex"];
     const checked = run(args);
     assert.equal(checked.status, 0, checked.stderr);
+    store.insertDelegation({ id: "duplicate", repoKey: key, sessionId: "session",
+      role: "implement", title: "duplicate", status: "denied" });
+    assert.notEqual(run(args).status, 0, "duplicate calls without assignments must fail validation");
+    store.db.prepare("DELETE FROM delegations WHERE id = 'duplicate'").run();
     store.finishDelegation("child", "failed");
     assert.notEqual(run(args).status, 0, "unsuccessful delegations must still fail validation");
   });

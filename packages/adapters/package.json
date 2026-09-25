@@ -4,5 +4,9 @@
   "type": "module",
   "scripts": {
     "test": "node --test \"test/**/*.test.ts\""
+  },
+  "bin": {
+    "agent-graph-install": "./src/cli.ts",
+    "agent-graph-hook": "./src/hook.ts"
   }
 }

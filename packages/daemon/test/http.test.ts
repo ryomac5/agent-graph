@@ -152,3 +152,14 @@ test("SSE 差分を画面のモデルで反映し、新規の根・双方向・�
   assert.equal(changes.find((change) => change.edge)?.edge?.fromFamily, "openai");
   assert.deepEqual(sync(), []);
 });
+
+test("planner の根と辺はモデル系統を持たない", (t) => {
+  const store = openStore(":memory:"); t.after(() => store.close());
+  store.upsertRepo({ key: "repo", rootPath: "/repo", name: "repo" });
+  store.insertSession({ id: "planner", repoKey: "repo", name: "planner", client: "planner", traceId: "a".repeat(32), startedAt });
+  store.insertDelegation({ id: "child", repoKey: "repo", sessionId: "planner", role: "implement", title: "child", status: "done" });
+  const graph = buildGraph(store.db);
+  assert.equal(graph.nodes[0].executor, "planner");
+  assert.equal(graph.nodes[0].family, null);
+  assert.equal(graph.edges[0].fromFamily, null);
+});

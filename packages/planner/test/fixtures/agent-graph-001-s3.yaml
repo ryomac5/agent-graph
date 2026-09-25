@@ -1,0 +1,188 @@
+goal: |
+  docs/agents/architecture.md の「作る順序」3 段目を完成させる。
+  割り当て層をコードのポリシーとして実装し、Assignment と reason を返す。
+  利用枠の hard 超で候補が外れるテストが通る。2 段目の e2e も引き続き通る。
+base_branch: agent/agent-graph-001/integration
+
+tasks:
+  - id: F1
+    title: claude アダプタに権限とサンドボックスを渡す
+    executor: codex
+    model: gpt-6-sol
+    model_reason: 引数 2 つと依頼文の前置きを足す局所修正
+    review_model: fable
+    scope:
+      - "packages/core/src/exec/claude.ts"
+      - "packages/core/test/exec.test.ts"
+      - "packages/core/test/fixtures/**"
+    accept:
+      - "grep -q 'permission-mode' packages/core/src/exec/claude.ts"
+      - "npx --yes pnpm@10 --filter @agent-graph/core test"
+    prompt: |
+      packages/core/src/exec/claude.ts が無人の claude の子に権限のモードを渡しておらず、子がファイルを書けず聞き返して止まる事例が出た。これを直す。
+      ls と cd は command ls と builtin cd を使う。最初に AGENTS.md と docs/agents/architecture.md の「セキュリティの考え方」を読む。
+      実際の引数は `claude --help` で確かめる。
+
+      直すこと:
+      - `--permission-mode acceptEdits` を渡す
+      - `--settings` にサンドボックスの JSON を渡す。形は `{"sandbox":{"enabled":true,"allowUnsandboxedCommands":false}}`
+      - 子への task の先頭に「無人実行である。質問せずに作業を完了し、最後に結果を報告する」旨を 1 行足す
+      - exec.test.ts の期待を合わせ、引数に上の 2 つが含まれること、task の前置きが stdin に入ることを確かめる
+
+      制約: 依存を追加しない。scope 外に触らない。本物の claude はテストで起こさない。
+      サンドボックスでは npm registry に届かない。検証は packages/core で `node --test "test/**/*.test.ts"` を走らせ、結果を報告に載せる。報告は実際の差分と一致させる。
+
+  - id: A1
+    title: 割り当て層の 4 段の判断
+    executor: codex
+    model: gpt-6-sol
+    model_reason: 設計書に型と 4 段の流れが確定しており、入力を注入する純粋関数で検証できる
+    review_model: fable
+    scope:
+      - "packages/core/src/assign/**"
+      - "packages/core/test/assign.test.ts"
+      - "packages/core/test/policy.test.ts"
+    outputs: ["packages/core/src/assign/policy.ts", "packages/core/src/assign/assign.ts"]
+    accept:
+      - "test -f packages/core/src/assign/policy.ts && test -f packages/core/src/assign/assign.ts"
+      - "grep -qi 'hard' packages/core/test/assign.test.ts"
+      - "npx --yes pnpm@10 --filter @agent-graph/core test"
+    prompt: |
+      packages/core に割り当て層の 4 段の判断を実装する。設計は docs/agents/architecture.md の「割り当て層の判断」。
+      ls と cd は command ls と builtin cd を使う。最初に AGENTS.md と設計書を読む。
+      既存の src/assign/static.ts と src/delegate/types.ts を土台にする。既存の assign の呼び出し側を壊さない。
+
+      作るもの:
+      - src/assign/policy.ts
+        - 設計書の Policy と Constraint の型
+        - `defaultPolicy(): Policy`。roles は static.ts の既定表。quota は soft 70 と hard 90。performance は minSamples 20、weights は acceptRate 0.4, reviewApprove 0.3, roundTrips 0.2, tokens 0.1。constraints は reviewerDifferentFamily と implementerNotOrchestrator
+        - `parsePolicyToml(text: string): Partial<Policy>`。依存なしの最小の TOML 読み取り。対応するのは `[quota]` と `[performance]` と `[performance.weights]` の数値、および `[[roles.<role>]]` の配列テーブルの executor, model, family, tier の文字列だけ。対応外の構文は例外で行番号を知らせる
+        - `loadPolicy({ path?, env?, home? }): Policy`。既定は `~/.config/agent-graph/policy.toml`。XDG_CONFIG_HOME を優先する。ファイルが無ければ defaultPolicy。あれば defaultPolicy に上書きする。roles は役割ごとに丸ごと置き換える。既存の AGENT_GRAPH_POLICY_JSON も引き続き効かせ、TOML より優先する
+      - src/assign/assign.ts。`decide(req, input): { ok: true; assignment } | { ok: false; reason: string[] }`
+        - input は `{ policy, quota: QuotaView, performance: PerformanceView, orchestratorModel?: string, implementerFamily?: ModelFamily }`
+        - QuotaView は候補ごとに使用率を返す。`(candidate) => { percent: number; source: string } | undefined`。未知なら調整しない
+        - PerformanceView は役割とモデルの組ごとに `{ samples, acceptRate, reviewApprove, avgRoundTrips, avgTokens } | undefined`
+        - 段 1。役割で候補を絞る
+        - 段 2。hard 以上は除外、soft 以上は末尾へ降格。理由に使用率と出典を書く
+        - 段 3。全候補が minSamples 以上のときだけ、重み付きスコアで並べ替える。roundTrips と tokens は少ないほど良い。足りなければ静的な順位を保つと理由に書く
+        - 段 4。req.constraints と policy.constraints を当てる。reviewerDifferentFamily は role review のとき implementerFamily と別系統に限る。implementerNotOrchestrator は role implement のとき orchestratorModel と同じモデルを外す。minTierForRole
+        - 各段で残った理由を reason に積む。候補が尽きたら ok: false と全段の理由
+        - policyVersion は policy の内容から決まる短いハッシュ。`policy-<8 桁>`
+      - 既存の static.ts の assign は decide を既定の入力で呼ぶ薄い互換層にする
+
+      テスト:
+      - assign.test.ts に、hard 超で候補が外れる、soft 超で降格、全候補が外れて ok: false、reason の各段の記載
+      - 実績が minSamples 未満なら静的順位、以上ならスコア順
+      - reviewerDifferentFamily、implementerNotOrchestrator、minTierForRole
+      - policy.test.ts に、TOML の読み取り、対応外構文の例外、XDG_CONFIG_HOME の優先、JSON の優先
+
+      制約: 依存を追加しない。enum と namespace を使わない。scope 外に触らない。src/index.ts は触らない。
+      サンドボックスでは npm registry に届かない。検証は packages/core で `node --test "test/**/*.test.ts"` を走らせ、結果を報告に載せる。報告は実際の差分と一致させる。
+
+  - id: A2
+    title: 利用枠の取得と実績の集計
+    executor: codex
+    model: gpt-6-sol
+    model_reason: ファイル読み取りと SQL 集計が中心で、偽のデータで検証できる
+    review_model: fable
+    scope:
+      - "packages/core/src/usage/**"
+      - "packages/core/src/store/**"
+      - "packages/core/test/usage.test.ts"
+      - "packages/core/test/performance.test.ts"
+      - "packages/core/test/store.test.ts"
+      - "packages/core/test/fixtures/usage/**"
+    outputs: ["packages/core/src/usage/codex.ts", "packages/core/src/usage/claude.ts", "packages/core/src/store/performance.ts"]
+    accept:
+      - "test -f packages/core/src/usage/codex.ts && test -f packages/core/src/usage/claude.ts"
+      - "npx --yes pnpm@10 --filter @agent-graph/core test"
+    prompt: |
+      packages/core に利用枠の取得と実績の集計を実装する。設計は docs/agents/architecture.md の「利用枠の取得元」「実績」「SQLite の主な表」と未確認事項 U3, U4。
+      ls と cd は command ls と builtin cd を使う。最初に AGENTS.md と設計書を読む。
+
+      作るもの:
+      - src/usage/types.ts。`UsageSample { ts, provider: "anthropic" | "openai", window: string, percent: number, resetsAt?: string, model?: string }`
+      - src/usage/codex.ts。`readCodexUsage({ home?, now? }): UsageSample[]`
+        - `~/.codex/sessions/YYYY/MM/DD/*.jsonl` のうち最新の日付から新しい順にファイルを見て、`payload.rate_limits` を持つ最後の行を読む
+        - `primary` と `secondary` の `used_percent`, `window_minutes`, `resets_at` を UsageSample にする。window は `<分>m`。resets_at は Unix 秒を ISO にする
+        - 形が違う、欠けている、壊れている行は無視する。見つからなければ空配列
+        - 実データの形は、手元の `~/.codex/sessions/` の最新ファイルで `rate_limits` を grep して確かめる。個人情報を含む行をテストの fixture に写さない。fixture は形だけを真似て作る
+      - src/usage/claude.ts。`probeClaudeUsage({ bin?, cwd, timeoutMs, spawnImpl? }): Promise<UsageSample[]>`
+        - `claude -p --input-format stream-json --output-format stream-json --verbose` を起こし、stdin に `control_request` の `get_usage` を 1 行送る。応答の `five_hour` と `seven_day` の `utilization` と `model_scoped` を UsageSample にする
+        - 応答の正確な形は未確認事項 U3 である。取れなければ空配列を返し、例外にしない。spawnImpl を注入してテストする
+        - cwd は呼び出し側が渡す。設計書の「置き場」の利用枠の探索用 cwd を想定する
+      - src/store/ に usage_samples の追記と、プロバイダとモデルごとの最新値の読み取りを足す
+      - src/store/performance.ts。`aggregatePerformance(db, { role?, since? })`。delegations と assignments と acceptances と reviews と token_usage から、役割とモデルの組ごとに samples, acceptRate, reviewApprove, avgRoundTrips, avgTokens を返す
+      - src/store/store.ts の updateSpanAttributes の引数型を `Partial<Span["attributes"]>` にする。前段のレビューで、必須キー 5 つを要求する型が 2 キーだけ渡す呼び出しと矛盾すると指摘された
+      - src/index.ts は触らない
+
+      テスト:
+      - usage.test.ts。codex の jsonl の fixture から primary と secondary を読む。壊れた行と欠けた値を無視する。claude は spawnImpl の偽物で正常な応答、未知の応答、タイムアウト
+      - performance.test.ts。:memory: の store に委譲を数件入れ、集計値を確かめる
+      - store.test.ts。usage_samples の追記と最新値
+
+      制約: 依存を追加しない。enum と namespace を使わない。scope 外に触らない。本物の claude はテストで起こさない。
+      サンドボックスでは npm registry に届かない。検証は packages/core で `node --test "test/**/*.test.ts"` を走らせ、結果を報告に載せる。報告は実際の差分と一致させる。
+
+  - id: A3
+    title: 割り当て層をデーモンに結線
+    executor: codex
+    model: gpt-6-sol
+    model_reason: 部品は A1 と A2 に揃い、結線と周期取得の実装が中心。失敗したら上位に上げる
+    review_model: fable
+    depends_on: [F1, A1, A2]
+    timeout_sec: 3600
+    scope:
+      - "packages/core/src/index.ts"
+      - "packages/core/src/events.ts"
+      - "packages/core/test/events.test.ts"
+      - "packages/core/src/delegate/**"
+      - "packages/core/test/delegate.test.ts"
+      - "packages/core/test/smoke.test.ts"
+      - "packages/daemon/**"
+      - "scripts/**"
+      - "AGENTS.md"
+    accept:
+      - "npx --yes pnpm@10 install --frozen-lockfile=false"
+      - "npx --yes pnpm@10 test"
+      - "AGENT_GRAPH_E2E=1 bash scripts/e2e-stage2.sh"
+    prompt: |
+      割り当て層をデーモンに結線し、利用枠を周期的に取得して割り当てに反映する。3 段目の仕上げである。
+      ls と cd は command ls と builtin cd を使う。最初に AGENTS.md と docs/agents/architecture.md 全体を読む。
+      部品は揃っている。core の loadPolicy, decide, readCodexUsage, probeClaudeUsage, aggregatePerformance, usage_samples の store 操作, runDelegation。daemon の main.ts。
+
+      作るもの:
+      - core の runDelegation が割り当てに decide を使うようにする。入力は deps から受け取る。quota は store の最新の usage_samples から、performance は aggregatePerformance から作る。assignment.decided のイベントと assignments 表に reason と policyVersion を残す
+      - review の委譲には implementerFamily を渡す。呼び出し側の orchestratorModel は hello に無ければ未指定でよい
+      - QuotaView の対応づけ。codex の候補は openai の最大の percent を使う。claude の候補は model_scoped にモデル名が一致すればそれ、無ければ anthropic の最大の percent を使う
+      - daemon に利用枠の周期取得を足す。codex は 60 秒ごと、claude は 5 分に 1 回を上限にする。取得した値を usage.sampled のイベントと usage_samples 表に記録する。claude の探索用 cwd は設計書の「置き場」の usage-probe を XDG_CACHE_HOME 優先で作る
+      - 環境変数 AGENT_GRAPH_USAGE_PROBE=0 なら周期取得を止める。e2e とテストではこれを使い、本物の claude を余計に起こさない
+      - core の index.ts から A1 と A2 の部品を公開し、smoke.test.ts を合わせる
+      - scripts/e2e-stage2.sh に AGENT_GRAPH_USAGE_PROBE=0 を足す。2 段目の e2e が引き続き通ること
+      - AGENTS.md に 3 段目の範囲と policy.toml の置き場を 1〜2 行で足す
+
+      テスト:
+      - delegate.test.ts。usage_samples に hard 超の値を入れると、その候補が外れて次の候補に割り当たる。reason に利用枠の記載がある
+      - daemon のテストで、周期取得が偽の取得関数で呼ばれ、usage_samples に入る。AGENT_GRAPH_USAGE_PROBE=0 で呼ばれない
+
+      制約: 依存を追加しない。enum と namespace を使わない。scope 外に触らない。
+      サンドボックスでは npm registry に届かず、本物の claude と codex も起こせない。e2e は受け入れ検証でサンドボックスの外から走る。単体の検証は `node --test` を各パッケージで走らせ、結果を報告に載せる。報告は実際の差分と一致させる。
+
+      前回のレビューの指摘。すべて直す:
+      - packages/core/src/events.ts の EventPayload に、assignment.decided の `reason: string[]` と `policyVersion: string`、usage.sampled の `model?: string` を足す。run.ts と main.ts で変数を経由して型検査を避けている箇所をやめ、リテラルで渡す。events.ts は今回 scope に入れた
+      - packages/daemon/test/main.test.ts で startDaemon を起こすテストと bin の spawnSync に AGENT_GRAPH_USAGE_PROBE=0 を渡す
+      - anthropic の model_scoped との照合を、候補の model 名が display_name か model 識別子に語として含まれるかの判定にする。大文字小文字は無視する。例: 候補 opus は "Claude Opus 5.5" に一致する。scoped の一致と anthropic 最大値への fallback の 2 ケースを delegate.test.ts に足す
+      - デーモン起動直後に store が無い間の取得値を捨てない。daemon は provider ごとの最新の取得値をメモリに持つ。store を初めて開いたときにそれを usage_samples に書き込む。QuotaView はメモリの最新値と store の最新値のうち新しい方を使う。テストを足す
+      - 報告には、サンドボックス内で走らせた `node --test` の結果だけを載せ、受け入れコマンドは受け入れ検証が走らせると書く
+
+  - id: G3
+    title: 3 段目の統合結果を確認
+    executor: human
+    depends_on: [A3]
+    prompt: |
+      統合ブランチで `npx --yes pnpm@10 test` と `AGENT_GRAPH_E2E=1 bash scripts/e2e-stage2.sh` が通れば承認する。
+
+  - id: PR
+    title: PR を作成
+    executor: pr
+    depends_on: [G3]

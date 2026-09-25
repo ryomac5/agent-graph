@@ -4,7 +4,9 @@ import { createServer, type Server, type ServerResponse } from "node:http";
 import { extname, relative, resolve, sep } from "node:path";
 import type { Repo, Store } from "../../../core/src/store/store.ts";
 import { buildGraph, diffGraph } from "./graph.ts";
+import { registerSession } from "./sessions.ts";
 
+const MAX_SESSION_BODY_BYTES = 16_384;
 const KEEP_ALIVE_MS = 15_000;
 const POLL_MS = 500;
 const MIME: Record<string, string> = {
@@ -60,6 +62,32 @@ export async function startHttpServer(options: HttpOptions): Promise<Server> {
   const server = createServer((request, response) => {
     void (async () => {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
+      if (request.method === "POST" && url.pathname === "/api/sessions") {
+        if (request.socket.remoteAddress !== "127.0.0.1") {
+          sendJson(response, 403, { error: "Local requests only" });
+          return;
+        }
+        let body = "";
+        let size = 0;
+        request.setEncoding("utf8");
+        for await (const chunk of request) {
+          size += Buffer.byteLength(chunk);
+          if (size > MAX_SESSION_BODY_BYTES) {
+            sendJson(response, 400, { error: "Session body too large" });
+            return;
+          }
+          body += chunk;
+        }
+        try {
+          await registerSession(JSON.parse(body), options.openStores);
+        } catch (error) {
+          if (!(error instanceof SyntaxError || error instanceof TypeError)) throw error;
+          sendJson(response, 400, { error: error.message });
+          return;
+        }
+        sendJson(response, 201, { ok: true });
+        return;
+      }
       if (request.method !== "GET") { response.writeHead(405).end(); return; }
       if (url.pathname === "/api/repos") {
         sendJson(response, 200, options.listRepos());

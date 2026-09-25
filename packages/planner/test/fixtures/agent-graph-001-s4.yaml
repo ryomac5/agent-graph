@@ -1,0 +1,190 @@
+goal: |
+  docs/agents/architecture.md の「作る順序」4 段目を完成させる。
+  デーモンの HTTP と SSE と、依存なしのダッシュボードを作る。
+  SSE で delegations の追加が 2 秒以内に画面へ出る。Claude と Codex の双方向の辺が描かれる。
+  これを実際の claude と codex で確かめる e2e が合格すること。
+base_branch: agent/agent-graph-001-s3/integration
+
+tasks:
+  - id: F2
+    title: ポリシー上書きの constraints を検証
+    executor: codex
+    model: gpt-6-sol
+    model_reason: 入力検証 1 関数と不要な再 export の削除という局所修正
+    review_model: fable
+    scope:
+      - "packages/core/src/assign/**"
+      - "packages/core/test/assign.test.ts"
+      - "packages/core/test/policy.test.ts"
+    accept:
+      - "npx --yes pnpm@10 --filter @agent-graph/core test"
+    prompt: |
+      割り当てポリシーの上書きの検証漏れと、前段のレビューで記録された食い違いを直す。
+      ls と cd は command ls と builtin cd を使う。最初に AGENTS.md と docs/agents/architecture.md の「割り当て層の判断」を読む。
+
+      直すこと:
+      - packages/core/src/assign/policy.ts の validateOverride が constraints を検証していない。`{ kind: "minTierForRole", role: "implement", tier: "hgh" }` のような誤記が例外にならず、decide で制約が黙って無効になる
+        - constraints が配列であること、各要素の kind が reviewerDifferentFamily, implementerNotOrchestrator, minTierForRole のいずれかであること、minTierForRole のとき role が Role の値で tier が high, mid, low のいずれかであることを検証する。違えば TypeError を投げる
+        - TOML と JSON の両方の経路で効かせる
+      - static.ts の assign が defaultPolicy() を使うため、TOML から読んだ roles と quota や performance が食い違う。loadPolicy() の結果を使うよう揃える
+      - static.ts の未使用の staticPolicyTable の再 export を消す。利用者がいないことを grep で確かめる
+
+      テスト: 不正な constraints で TypeError になるケースを JSON と TOML の両方で足す。
+
+      制約: 依存を追加しない。enum と namespace を使わない。scope 外に触らない。
+      サンドボックスでは npm registry に届かない。検証は packages/core で `node --test "test/**/*.test.ts"` を走らせ、結果を報告に載せる。報告は実際の差分と一致させる。
+
+  - id: H1
+    title: デーモンの HTTP と SSE
+    executor: codex
+    model: gpt-6-sol
+    model_reason: node:http の API と SSE の配信で、仕様が明確でテストで遅延を測れる
+    review_model: fable
+    scope:
+      - "packages/daemon/src/http/**"
+      - "packages/daemon/src/config.ts"
+      - "packages/daemon/test/http.test.ts"
+      - "packages/daemon/test/config.test.ts"
+      - "packages/core/src/store/**"
+      - "packages/core/test/store.test.ts"
+    outputs: ["packages/daemon/src/http/server.ts", "packages/daemon/src/http/graph.ts"]
+    accept:
+      - "test -f packages/daemon/src/http/server.ts"
+      - "npx --yes pnpm@10 --filter @agent-graph/core test"
+      - "npx --yes pnpm@10 --filter @agent-graph/daemon test"
+    prompt: |
+      デーモンにダッシュボード用の HTTP と SSE を実装する。設計は docs/agents/architecture.md の「全体の構成」「SQLite の主な表」「置き場」「セキュリティの考え方」。
+      ls と cd は command ls と builtin cd を使う。最初に AGENTS.md と設計書を読む。既存の packages/daemon/src/main.ts と packages/core/src/store/ の書き方に合わせる。
+
+      作るもの:
+      - packages/daemon/src/config.ts。`~/.config/agent-graph/config.toml` の `[dashboard]` の `port` を読む。XDG_CONFIG_HOME を優先する。無ければ 7420。環境変数 AGENT_GRAPH_PORT があれば最優先。0 なら空きポート。TOML は `[dashboard]` の整数だけ読めればよい
+      - packages/daemon/src/http/graph.ts。store から画面用のグラフを作る純粋な関数
+        - `buildGraph(db, { session? }): { nodes, edges }`
+        - node は根のセッションと各委譲。委譲の node は id, title, role, status, executor, model, family, startedAt, endedAt
+        - edge は親から子。親は parent_id の委譲、無ければ session の根。edge に from の family と to の family を持たせ、向きが分かるようにする
+      - packages/daemon/src/http/server.ts。`startHttpServer({ port, openStores, listRepos })`
+        - 127.0.0.1 にだけ bind する
+        - GET /api/repos はリポジトリの一覧
+        - GET /api/graph?repo=<key>&session=<id> は buildGraph の結果
+        - GET /api/events?repo=<key> は SSE。delegations の追加と状態の変化、assignments の追加を `event: delegation` で配信する。接続直後に `event: snapshot` で現在のグラフを送る。15 秒ごとに comment の keep-alive
+        - 変化の検出は、store への書き込みを購読する仕組みを core の store に足して行う。`store.onChange(listener)` の形で、delegations, assignments, events への書き込みのたびに呼ぶ。別プロセスからの書き込みに備え、500ms ごとに delegations の最大 rowid を見る補助も付ける
+        - GET / と静的ファイルは、`staticDir` を引数で受け取れば配信する。無ければ 404。パスの正規化で staticDir の外を読ませない
+        - main.ts への結線は後続のタスクが行う。ここでは触らない
+      - core の store への onChange の追加は packages/core/src/store/ の中で行う
+
+      テスト:
+      - http.test.ts。:memory: か一時ファイルの store に委譲を入れ、/api/graph の nodes と edges。SSE に接続してから委譲を 1 件足し、`event: delegation` が 2000ms 以内に届くことを時間を測って確かめる。127.0.0.1 にだけ bind していること。静的ファイルのパス越え拒否
+      - config.test.ts。既定値、TOML、環境変数の優先
+
+      制約: 依存を追加しない。enum と namespace を使わない。scope 外に触らない。
+      サンドボックスでは npm registry に届かない。ソケットが禁じられる場合は報告に書く。検証は各パッケージで `node --test "test/**/*.test.ts"` を走らせ、結果を報告に載せる。報告は実際の差分と一致させる。
+
+  - id: W1
+    title: 依存なしのダッシュボード画面
+    executor: codex
+    model: gpt-6-sol
+    model_reason: 静的な HTML と SVG 描画で、描画モデルは純粋関数としてテストできる
+    review_model: fable
+    scope:
+      - "packages/dashboard/**"
+    outputs: ["packages/dashboard/public/index.html", "packages/dashboard/public/app.js", "packages/dashboard/src/model.ts"]
+    accept:
+      - "test -f packages/dashboard/public/index.html && test -f packages/dashboard/public/app.js"
+      - "npx --yes pnpm@10 --filter @agent-graph/dashboard test"
+    prompt: |
+      依存なしのダッシュボード画面を packages/dashboard に作る。設計は docs/agents/architecture.md の「目的」「部品の責務と境界」。dashboard は daemon の HTTP だけに依存する。
+      ls と cd は command ls と builtin cd を使う。最初に AGENTS.md と設計書を読む。
+
+      daemon の HTTP の約束。並行して別タスクが実装する:
+      - GET /api/repos は `[{ key, name, rootPath }]`
+      - GET /api/graph?repo=<key>&session=<id> は `{ nodes, edges }`。node は `{ id, kind: "session" | "delegation", title, role?, status?, executor?, model?, family?, startedAt?, endedAt? }`。edge は `{ from, to, fromFamily?, toFamily?, title? }`
+      - GET /api/events?repo=<key> は SSE。`event: snapshot` の data は上の graph、`event: delegation` の data は変化した 1 件の node と、あれば 1 本の edge
+
+      作るもの:
+      - packages/dashboard/src/model.ts。画面の状態を扱う純粋な関数
+        - `applySnapshot(state, graph)` と `applyDelegation(state, change)`。node と edge を id で重ねる
+        - `layout(state): { nodes: { id, x, y }[] }`。根を左に置き、委譲の深さで列を分ける層状の配置。同じ入力なら同じ出力
+        - `edgeDirection(edge): "anthropic→openai" | "openai→anthropic" | "same" | "unknown"`
+      - packages/dashboard/public/index.html と app.js と style.css。ビルドなしでブラウザが直接読む
+        - app.js はブラウザ向けの ES module。model.ts と同じ処理を持つ。重複を避けるため、model.ts を型注釈なしで書ける範囲に留め、app.js からは `../src/model.js` を読まず、public/model.js に同じ実装を置いて model.ts はそれを型付きで再公開する形でもよい。どちらにするかは報告に書く
+        - リポジトリの選択、SVG のグラフ、委譲の詳細パネル。node の色は family で分ける。edge に title を出し、Claude から Codex と Codex から Claude の向きが区別できるようにする
+        - EventSource で /api/events を購読し、変化を 2 秒以内に反映する。切断したら再接続する
+        - 外部の CDN や font を読まない
+      - package.json の test は既存のまま node --test
+
+      テスト:
+      - model.test.ts。snapshot と差分の適用、layout の決定性、edgeDirection の 4 種
+      - public/model.js と src/model.ts の結果が同じ入力で一致すること
+
+      制約: 依存を追加しない。enum と namespace を使わない。scope 外に触らない。
+      サンドボックスでは npm registry に届かない。検証は packages/dashboard で `node --test "test/**/*.test.ts"` を走らせ、結果を報告に載せる。報告は実際の差分と一致させる。
+
+  - id: E4
+    title: ダッシュボードの結線と 4 段目の e2e
+    executor: codex
+    model: gpt-6-astra
+    review_model: fable
+    depends_on: [F2, H1, W1]
+    timeout_sec: 3600
+    scope:
+      - "packages/daemon/**"
+      - "packages/dashboard/**"
+      - "packages/core/src/store/**"
+      - "packages/core/test/store.test.ts"
+      - "scripts/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "AGENTS.md"
+    outputs: ["scripts/e2e-stage4.sh"]
+    accept:
+      - "test -x scripts/e2e-stage4.sh"
+      - "npx --yes pnpm@10 install --frozen-lockfile=false"
+      - "npx --yes pnpm@10 test"
+      - "AGENT_GRAPH_E2E=1 bash scripts/e2e-stage2.sh"
+      - "AGENT_GRAPH_E2E=1 bash scripts/e2e-stage4.sh"
+    prompt: |
+      デーモンに HTTP とダッシュボードを結線し、4 段目の完了条件を確かめる e2e を作る。
+      ls と cd は command ls と builtin cd を使う。最初に AGENTS.md と docs/agents/architecture.md の「作る順序と完了条件」を読む。
+      部品は揃っている。daemon の startHttpServer, loadConfig, buildGraph。core の store.onChange。dashboard の public/。
+
+      作るもの:
+      - packages/daemon/src/main.ts で startHttpServer を起こす。ポートは loadConfig。staticDir は packages/dashboard/public を、main.ts の位置から解決する。開いた store を HTTP に渡す。起動時に URL を daemon.log に書く。停止時に HTTP も閉じる
+      - scripts/e2e-stage4.sh。AGENT_GRAPH_E2E=1 のときだけ動き、それ以外は skip と表示して 0 で終わる
+        - e2e-stage2.sh と同じく、状態とソケットを一時ディレクトリに隔離し、AGENT_GRAPH_USAGE_PROBE=0 と安いモデルの割り当て表を使う。AGENT_GRAPH_PORT=0 で起こし、daemon.log から URL を読む
+        - 共通部分は scripts/ に切り出してよい。e2e-stage2.sh は通るまま保つ
+        - 先に /api/events に接続し、各イベントの受信時刻を記録する
+        - e2e-stage2.sh と同じ 2 向きの委譲を実際の claude と codex で行う
+        - 各委譲について、状態 DB の delegations 行の作成時刻から SSE の受信までが 2000ms 以内であることを確かめる
+        - /api/graph を読み、anthropic から openai の辺と openai から anthropic の辺が 1 本以上ずつあることを確かめる。後者が無ければ、codex の子が delegate を呼ぶ入れ子の委譲を 1 回足して作る
+        - / を取得し、index.html と app.js が返ることを確かめる。Google Chrome が /Applications にあれば `--headless=new --dump-dom` で画面を開き、SVG に辺の要素が 2 本以上あることを確かめる。無ければその確認を skip と表示する
+        - 失敗したら daemon.log と子の出力を表示して非 0 で終わる。終了時にデーモンを止める
+      - AGENTS.md に 4 段目の範囲と、ダッシュボードの開き方と e2e-stage4 の走らせ方を足す
+
+      制約: 依存を追加しない。enum と namespace を使わない。scope 外に触らない。
+      サンドボックスでは npm registry に届かず、本物の claude と codex も起こせない。e2e は受け入れ検証でサンドボックスの外から走る。単体の検証は `node --test` を各パッケージで走らせ、結果を報告に載せる。報告は実際の差分と一致させる。
+
+      前回のレビューで次の 2 点が見つかった。根の判断で scope を daemon と dashboard と core の store に広げた。両方を根本から直す:
+      - SSE の約束の食い違い。server.ts は `event: delegation` にグラフ全体を送り、画面の app.js と model.js の applyDelegation は `{ node, edge? }` を要求する。最初の更新で画面が TypeError を起こし、更新されない
+        - 約束は dashboard 側に合わせる。`event: delegation` の data は変化した 1 件の node と、あれば 1 本の edge。`event: snapshot` は全体のまま
+        - server.ts の変化の検出で、変化した委譲を特定して差分を作る
+        - http.test.ts を新しい形に合わせる
+        - e2e の SSE 検査は、受信した data を packages/dashboard/public/model.js の applySnapshot と applyDelegation に通し、画面と同じ経路で状態に反映されることまで確かめる
+      - openai から anthropic への辺を、DB への手書きで作っていた。実データでは根のセッションの family が空で、この向きの辺が描かれない
+        - shim は環境変数 AGENT_GRAPH_CLIENT を hello の client に入れる。値は claude か codex。無ければ親プロセスの実行ファイル名から推定し、わからなければ省く
+        - デーモンは hello の client を sessions 表の client に記録する。session が無ければ作る
+        - buildGraph は session 根の family を client から決める。claude なら anthropic、codex なら openai
+        - e2e の登録設定で、claude の MCP 設定と codex の mcp_servers にそれぞれ AGENT_GRAPH_CLIENT を env で渡す
+        - e2e の向き 2 で codex の親が claude の子に委譲すれば、openai から anthropic の辺が実データで描かれる。DB への手書きをやめる
+      - 前回の報告は受け入れコマンドを未実行としていた。サンドボックス内で走らせた node --test の結果だけを載せ、受け入れコマンドは受け入れ検証が走らせると書く
+
+  - id: G4
+    title: 4 段目の統合結果を確認
+    executor: human
+    depends_on: [E4]
+    prompt: |
+      統合ブランチで `npx --yes pnpm@10 test` と 2 段目と 4 段目の e2e が通れば承認する。
+
+  - id: PR
+    title: PR を作成
+    executor: pr
+    depends_on: [G4]

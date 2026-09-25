@@ -2,9 +2,47 @@
 import { parseArgs } from "node:util";
 import { execFileSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { repoKey, stateDbPath } from "../../core/src/paths.ts";
 import { compareRuns, loadLegacyState, loadPlannerState } from "./compare.ts";
 import { openPlanner, requestDecision, runGraph, type RunOptions } from "./run.ts";
+import { loadSpec, validateSpec } from "./spec.ts";
+
+const EXAMPLE_TASKS = `# タスクグラフの雛形。agent-graph-plan validate --session <識別子> で検証する
+goal: |
+  ここに達成したいゴールを書く。
+# base_branch: main
+tasks:
+  - id: T1
+    title: 実装タスクの例
+    executor: codex
+    scope: ["src/**"]
+    outputs: ["src/example.ts"]
+    accept:
+      - "node --test"
+    prompt: |
+      何を実装するかをここに書く。
+  - id: D1
+    title: 文書タスクの例
+    executor: doc-light
+    scope: ["docs/agents/**"]
+    outputs: ["docs/agents/example.md"]
+    accept:
+      - "test -s docs/agents/example.md"
+    prompt: |
+      何を書くかをここに書く。
+  - id: G1
+    title: 統合結果の最終確認
+    executor: human
+    depends_on: [T1, D1]
+    prompt: |
+      統合ブランチの差分とレポートを確認する。
+  - id: PR
+    title: PR を作成
+    executor: pr
+    depends_on: [G1]
+`;
 
 try {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: {
@@ -12,7 +50,21 @@ try {
     "legacy-state": { type: "string" }, graph: { type: "string" }, json: { type: "boolean" },
   } });
   const [command, task] = positionals;
-  if (command === "compare") {
+  if (command === "init" || command === "validate") {
+    if (!values.session || !/^[A-Za-z0-9_-]+$/.test(values.session) || positionals.length !== 1)
+      throw new Error(`Usage: agent-graph-plan ${command} --session <id> [--spec path]`);
+    const path = values.spec ? resolve(values.spec) : join(process.cwd(), ".agents", "graph", values.session, "tasks.yaml");
+    if (command === "init") {
+      if (existsSync(path)) throw new Error(`既にあります: ${path}`);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, EXAMPLE_TASKS, { flag: "wx" });
+      console.log(`雛形を置きました: ${path}`);
+    } else {
+      const errors = validateSpec(loadSpec(path));
+      if (errors.length) throw new Error(`NG:\n- ${errors.join("\n- ")}`);
+      console.log(`OK: ${values.session} の tasks.yaml は有効です`);
+    }
+  } else if (command === "compare") {
     if (positionals.length !== 1 || !values["legacy-state"] || (values.graph && values.session))
       throw new Error("Usage: agent-graph-plan compare --legacy-state <path> [--graph <id> | --session <id>] [--json]");
     const root = execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd: process.cwd(), encoding: "utf8" }).trim();

@@ -134,10 +134,14 @@ X-Agent-Graph-Token: <index.html の meta の値>
 | 状態 | 本文 | 契機 |
 | --- | --- | --- |
 | 200 | `ActionResult` の `ok: true` | 記録した。approve、retry、reject は task_decisions に書き、planner が反映する |
-| 409 | `ActionResult` の `ok: false` | 対象の状態が合わない。失敗したタスクの approve、終了済みのセッションの end_session など |
+| 409 | `ActionResult` の `ok: false` | 対象の状態が合わない。失敗したタスクの approve、終了済みのセッションの end_session、走っている委譲があるセッションの end_session など |
 | 400 | `{ error }` | 不正な body。未知の `action`、識別子の欠落や文字種違い |
 | 404 | `{ error }` | 未知の repo、graph、task、session、turn |
 | 403 | `{ error }` | 守りの拒否 |
+
+`end_session` は `status` を `ended` にするだけで、プロセスには触らない。
+そのセッションに `requested` `planned` `running` `waiting` の委譲が 1 つでもあれば 409 で断り、`message` に件数を書く。
+終えると子が `lost` と記録されるので、生きている子がいる間は画面から終えられない。
 
 ## SSE
 

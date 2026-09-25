@@ -59,9 +59,17 @@ test("end_session は状態だけ ended にし、hide_turn は hidden を立て�
   const { store, stores } = fixture();
   t.after(() => store.close());
   store.insertDelegation({ id: "d1", repoKey: repo, sessionId: "s1", role: "implement", title: "d1", status: "running" });
+  store.insertDelegation({ id: "d2", repoKey: repo, sessionId: "s1", role: "implement", title: "d2", status: "requested" });
+  // 走っている委譲があれば断る。委譲は lost にしない
+  const busy = performAction({ action: "end_session", repo, sessionId: "s1" }, stores, now);
+  assert.equal(busy.ok, false); assert.match(busy.message, /2 件/);
+  assert.equal(store.getSession("s1")?.status, "running");
+  assert.equal(store.db.prepare("SELECT status FROM delegations WHERE id = 'd1'").get()?.status, "running");
+  store.finishDelegation("d1", "done"); store.finishDelegation("d2", "failed");
   assert.deepEqual(performAction({ action: "end_session", repo, sessionId: "s1" }, stores, now), { ok: true, message: "repo-001 を終了した" });
   const session = store.getSession("s1");
   assert.equal(session?.status, "ended"); assert.equal(session?.endedAt, now.toISOString());
+  assert.equal(store.db.prepare("SELECT status FROM delegations WHERE id = 'd1'").get()?.status, "done");
   assert.equal(performAction({ action: "end_session", repo, sessionId: "s1" }, stores, now).ok, false);
   assert.throws(() => performAction({ action: "end_session", repo, sessionId: "s9" }, stores), NotFoundError);
 
@@ -75,7 +83,9 @@ test("body と識別子の文字種を検べる", () => {
   assert.throws(() => parseAction(null), TypeError);
   assert.throws(() => parseAction([]), TypeError);
   assert.throws(() => parseAction({ action: "rerun", repo }), /Unknown action/);
-  assert.throws(() => parseAction({ action: "approve", repo: "a b", graphId: "G1", taskId: "gate" }), /Invalid repo/);
+  assert.throws(() => parseAction({ action: "approve", repo: "", graphId: "G1", taskId: "gate" }), /Invalid repo/);
+  assert.throws(() => parseAction({ action: "approve", repo: "r".repeat(257), graphId: "G1", taskId: "gate" }), /Invalid repo/);
+  assert.throws(() => parseAction({ action: "approve", repo: 1, graphId: "G1", taskId: "gate" }), /Invalid repo/);
   assert.throws(() => parseAction({ action: "approve", repo, graphId: "G1" }), /Invalid taskId/);
   assert.throws(() => parseAction({ action: "approve", repo, graphId: "../x", taskId: "gate" }), /Invalid graphId/);
   assert.throws(() => parseAction({ action: "end_session", repo }), /Invalid sessionId/);
@@ -84,6 +94,21 @@ test("body と識別子の文字種を検べる", () => {
   assert.deepEqual(parseAction({ action: "approve", repo, graphId: "G1", taskId: "gate", extra: 1 }),
     { action: "approve", repo, graphId: "G1", taskId: "gate" });
   assert.throws(() => performAction({ action: "approve", repo: "unknown-0", graphId: "G1", taskId: "gate" }, new Map()), NotFoundError);
+});
+
+test("日本語や空白を含む repo の key でも操作できる", (t) => {
+  const key = "作業 領域-abc123";
+  const store = openStore(":memory:");
+  t.after(() => store.close());
+  store.upsertRepo({ key, rootPath: "/作業 領域", name: "作業 領域" });
+  store.insertSession({ id: "s1", repoKey: key, name: "作業 領域-001", client: "planner", traceId: "a".repeat(32), startedAt });
+  store.insertGraph({ id: "G1", repoKey: key, sessionId: "s1", goal: "goal", fingerprint: "f", createdAt: startedAt },
+    [{ graphId: "G1", id: "gate", title: "gate", role: "human", dependsOn: [], state: "waiting_human", attempts: 0 }]);
+  const stores = new Map([[key, store]]);
+  assert.equal(parseAction({ action: "approve", repo: key, graphId: "G1", taskId: "gate" }).repo, key);
+  assert.equal(performAction({ action: "approve", repo: key, graphId: "G1", taskId: "gate" }, stores, now).ok, true);
+  assert.equal(performAction({ action: "end_session", repo: key, sessionId: "s1" }, stores, now).ok, true);
+  assert.throws(() => performAction({ action: "end_session", repo: "作業領域-abc123", sessionId: "s1" }, stores, now), NotFoundError);
 });
 
 function raw(port: number, headers: Record<string, string>, body: string): Promise<{ status: number; body: string }> {

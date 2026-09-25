@@ -80,6 +80,9 @@ test("役割の推定と系統の題名", () => {
   assert.equal(lib.roleLabel({ kind: "delegation", executor: "codex", title: "契約を固定する" }), "Coding");
   assert.equal(lib.roleLabel({ kind: "delegation", executor: "codex", title: "旧版を調査する" }), "Research");
   assert.equal(lib.roleLabel({ kind: "delegation", executor: "codex", role: "review" }), "Review");
+  assert.equal(lib.roleLabel({ kind: "delegation", executor: "codex", role: "implement" }), "Coding");
+  assert.equal(lib.roleLabel({ kind: "subagent", executor: "claude", role: "document" }), "Docs");
+  assert.equal(lib.roleLabel({ kind: "task", role: "implement" }), "Coding");
   assert.equal(lib.roleLabel({ kind: "task" }), "Task");
   assert.equal(lib.kindTitle({ kind: "root", family: "anthropic" }), "Claude");
   assert.equal(lib.kindTitle({ kind: "delegation", executor: "codex" }), "Codex");
@@ -130,14 +133,18 @@ test("新しい辺とノードは 2 回目以降だけ拾う", () => {
   assert.ok(second.known.has("c"));
 });
 
-test("状態の優先表示。Waiting > Failed > Running > Done、Quiet と Idle と Unavailable", () => {
-  assert.deepEqual(lib.orbState({ counts: { running: 2, waiting: 1, failed: 3, done: 4 }, liveSessions: 1 }), { key: "waiting", text: "Waiting 1", quiet: false });
-  assert.deepEqual(lib.orbState({ counts: { running: 2, waiting: 0, failed: 3, done: 4 }, liveSessions: 1 }), { key: "failed", text: "Failed 3", quiet: false });
-  assert.deepEqual(lib.orbState({ counts: { running: 2, waiting: 0, failed: 0, done: 4 }, liveSessions: 1 }), { key: "running", text: "Running 2", quiet: false });
-  assert.deepEqual(lib.orbState({ counts: { running: 0, waiting: 0, failed: 0, done: 4 }, liveSessions: 1 }), { key: "done", text: "Done 4", quiet: false });
-  assert.deepEqual(lib.orbState({ counts: { running: 0, waiting: 0, failed: 0, done: 0 }, liveSessions: 1 }), { key: "", text: "Idle", quiet: false });
-  assert.deepEqual(lib.orbState({ counts: { running: 0, waiting: 0, failed: 0, done: 9 }, liveSessions: 0 }), { key: "", text: "Quiet", quiet: true });
-  assert.deepEqual(lib.orbState({ counts: {}, liveSessions: 1, error: "boom" }), { key: "", text: "Unavailable", quiet: true });
+test("丸の状態はサーバーの ProjectSummary.status を正にし、Unavailable は取得の失敗で出す", () => {
+  const counts = { running: 2, waiting: 1, failed: 3, done: 4 };
+  assert.deepEqual(lib.orbState({ counts, liveSessions: 1, status: "waiting" }), { key: "waiting", text: "Waiting 1", quiet: false });
+  assert.deepEqual(lib.orbState({ counts, liveSessions: 1, status: "failed" }), { key: "failed", text: "Failed 3", quiet: false });
+  assert.deepEqual(lib.orbState({ counts, liveSessions: 1, status: "running" }), { key: "running", text: "Running 2", quiet: false });
+  assert.deepEqual(lib.orbState({ counts, liveSessions: 1, status: "done" }), { key: "done", text: "Done 4", quiet: false });
+  // 件数が無くても状態の語は出す
+  assert.deepEqual(lib.orbState({ counts: { running: 0, waiting: 0, failed: 0, done: 0 }, liveSessions: 1, status: "running" }), { key: "running", text: "Running", quiet: false });
+  assert.deepEqual(lib.orbState({ counts, liveSessions: 1, status: "idle" }), { key: "", text: "Idle", quiet: false });
+  assert.deepEqual(lib.orbState({ counts, liveSessions: 0, status: "quiet" }), { key: "", text: "Quiet", quiet: true });
+  assert.deepEqual(lib.orbState({ counts, liveSessions: 1, status: "running" }, true), { key: "", text: "Unavailable", quiet: true });
+  assert.deepEqual(lib.orbState({ counts, liveSessions: 1 }), { key: "", text: "Idle", quiet: false });
 });
 
 test("件数の集計は root と隠したノードを除き、終了したセッションを数えない", () => {

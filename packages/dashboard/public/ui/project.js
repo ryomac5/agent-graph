@@ -49,14 +49,15 @@ function buildGroup(scope, ctx) {
   return group;
 }
 
-// view は契約の ProjectView。終了したセッションは畳んで、生きているものだけを常に見せる
-export function buildProjectSection(view, ctx) {
+// view は契約の ProjectView。終了したセッションは畳んで、生きているものだけを常に見せる。
+// failure は /api/project の取得に失敗した理由。あれば Unavailable を出す
+export function buildProjectSection(view, ctx, failure = "") {
   const section = el("section", undefined, "project");
   section.setAttribute("data-project", view.project.key);
   const heading = el("div", undefined, "project-heading");
   heading.append(el("h2", view.project.name), el("span", view.project.rootPath, "project-path"));
   section.append(heading);
-  if (view.error) section.append(el("p", `Unavailable: ${view.error}`, "hint"));
+  if (failure) section.append(el("p", `Unavailable: ${failure}`, "hint"));
   const sessions = view.sessions || [];
   const graphs = view.graphs || [];
   const endedBox = el("details", undefined, "ended-sessions");

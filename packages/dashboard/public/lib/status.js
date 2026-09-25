@@ -37,13 +37,17 @@ export function sumCounts(list) {
   return counts;
 }
 
-// Overview の丸に出す言葉。Unavailable > Quiet > 優先状態 > Idle
-export function orbState(summary) {
-  const counts = summary.counts || {};
-  const key = ORB_PRIORITY.find((k) => counts[k]) || "";
-  if (summary.status === "unavailable" || summary.error) return { key: "", text: "Unavailable", quiet: true };
-  if (!summary.liveSessions) return { key: "", text: "Quiet", quiet: true };
-  if (key) return { key, text: `${STATE_TEXT[key]} ${counts[key]}`, quiet: false };
+// Overview の丸に出す言葉。状態はサーバーの ProjectSummary.status を正とする。
+// unavailable はそのプロジェクトの /api/project の取得に失敗したときにクライアントが立てる
+export function orbState(summary, unavailable = false) {
+  if (unavailable) return { key: "", text: "Unavailable", quiet: true };
+  const status = summary.status;
+  if (status === "quiet") return { key: "", text: "Quiet", quiet: true };
+  if (status === "idle") return { key: "", text: "Idle", quiet: false };
+  if (Object.prototype.hasOwnProperty.call(STATE_TEXT, status)) {
+    const count = (summary.counts || {})[status] || 0;
+    return { key: status, text: count ? `${STATE_TEXT[status]} ${count}` : STATE_TEXT[status], quiet: false };
+  }
   return { key: "", text: "Idle", quiet: false };
 }
 

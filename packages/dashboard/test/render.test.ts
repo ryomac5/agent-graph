@@ -30,7 +30,7 @@ test("Overview は fixture の全プロジェクトを丸で描き、状態の�
   const c = ctx();
   renderOverview(canvas, overview, c);
   const html = String(canvas);
-  for (const word of ["Kaggriculture", "agent-graph", "dotfiles", "fde-lecture", "obsidian", "Failed 7", "Waiting 1", "Running 1", "Quiet", "Done 18", "on-failed", "on-waiting", "on-running", "on-done", "quiet", "orb-slot", "--orb-dur"]) {
+  for (const word of ["Kaggriculture", "agent-graph", "dotfiles", "fde-lecture", "obsidian", "Failed 7", "Waiting 1", "Running 1", "Quiet", "Idle", "on-failed", "on-waiting", "on-running", "quiet", "orb-slot", "--orb-dur"]) {
     assert.ok(html.includes(word), `${word} が無い`);
   }
   assert.ok(canvas.classList.contains("overview"));
@@ -59,7 +59,7 @@ test("グラフは root と子の丸を 3 語で描き、辺と矢印と戻り�
   const scope = scopesOf(project)[0];
   const holder = renderGraph(scope, ctx({ selectedScope: scope.id, selectedNode: "C0" }));
   const html = String(holder);
-  for (const word of ["orb-root", "Claude", "Fable 5.1 1M".split(" ")[0], "orb-node", "Codex", "GPT 6", "Astra", "Coding", "Gate".length ? "on-running" : "", "on-waiting", "on-failed", "on-done", "on-ended",
+  for (const word of ["orb-root", "Claude", "orb-node", "Codex", "GPT 6", "Astra", "Coding", "on-running", "on-waiting", "on-failed", "on-done", "on-ended",
     "edge-back", "marker-end", "edge-label", "Claude → Codex", "Codex → Claude", "契約を固定する", "chip", "3 hidden", "dismiss", "to-running", "node running", "class=\"edge sel\"", "graph-hint"]) {
     assert.ok(html.includes(word), `${word} が無い`);
   }
@@ -69,6 +69,30 @@ test("グラフは root と子の丸を 3 語で描き、辺と矢印と戻り�
   assert.ok(Number(svg.getAttribute("width")) <= 900);
   // モデル名を切らない
   assert.ok(!html.includes("…"));
+});
+
+test("辺のラベルは本文と向きの語を分け、向きの語は縮めない。行きと戻りのラベルは別の位置に置く", () => {
+  const scope = scopesOf(project)[0];
+  const holder = renderGraph(scope, ctx());
+  const labels = holder.querySelectorAll("foreignObject").filter((fo: FakeElement) => fo.querySelector(".edge-label"));
+  const byEdge = new Map<string, FakeElement>();
+  for (const label of labels) byEdge.set(label.parentNode!.getAttribute("data-edge")!, label);
+  const forward = byEdge.get("s10->C0")!;
+  const back = byEdge.get("C0->s10")!;
+  assert.ok(forward && back, "行きと戻りのラベルが無い");
+  // 向きの語は本文と別の要素。本文だけが省略の対象
+  assert.equal(forward.querySelector(".dir")!.textContent, "Claude → Codex");
+  assert.equal(forward.querySelector(".txt")!.textContent, "契約を固定する");
+  assert.equal(back.querySelector(".dir")!.textContent, "Codex → Claude");
+  assert.equal(back.querySelector(".txt")!.textContent, "報告");
+  // 同じ 2 つのノードをつなぐ行きと戻りは、はっきり違う高さに置く
+  const gap = Math.abs(Number(forward.getAttribute("y")) - Number(back.getAttribute("y")));
+  assert.ok(gap >= 22, `行きと戻りのラベルの高さの差が ${gap}px しか無い`);
+  // 箱は本文に合わせて縮み、向きの語は flex: none で守る
+  const css = readFileSync(new URL("../public/style.css", import.meta.url), "utf8");
+  assert.match(css, /\.edge-label \.dir \{[^}]*flex: none/);
+  assert.match(css, /\.edge-label \.txt \{[^}]*text-overflow: ellipsis/);
+  assert.match(css, /\.edge-label \.edge-pill \{[^}]*max-width: 100%/);
 });
 
 test("planner のグラフは task を同じ丸で描き、waiting_human を紫にする", () => {

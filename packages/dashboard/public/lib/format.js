@@ -40,11 +40,13 @@ export function kindTitle(node) {
 }
 
 // 丸の 3 行目。役割を 1 語で出す
+// 契約の role（implement, research, document, review, orchestrate）と旧版の executor 名の両方を引く
 const ROLE_LABEL = {
+  implement: "Coding", coding: "Coding",
   reviewer: "Review", review: "Review",
-  "doc-light": "Docs", "doc-heavy": "Docs", docs: "Docs",
+  "doc-light": "Docs", "doc-heavy": "Docs", docs: "Docs", document: "Docs",
   Explore: "Research", Plan: "Research", "claude-code-guide": "Research", research: "Research",
-  human: "Gate", pr: "PR", coding: "Coding", planner: "Plan",
+  human: "Gate", pr: "PR", planner: "Plan", orchestrate: "Root", root: "Root",
 };
 const ROLE_KEYWORDS = {
   Research: ["調査", "探す", "確認", "特定", "洗い出し", "Investigate", "Research", "Find"],

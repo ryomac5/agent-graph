@@ -17,6 +17,11 @@ export { fingerprint } from "./store/fingerprint.ts";
 export { migrations, type Migration } from "./store/migrations.ts";
 export { migrate } from "./store/migrate.ts";
 export { openStore, Store, decisionAllowed, type Repo, type Session, type GraphRecord, type TaskRecord, type TaskState, type TaskDecision, type TaskDecisionRow } from "./store/store.ts";
+export {
+  getRepo, listRepos, listSessions, listRecentTurns, listDelegations, listGraphs, listGraphEvents,
+  latestUsageSamples, lastActivityAt,
+  type DelegationRow, type DelegationStatus, type GraphRow, type GraphEventRow,
+} from "./store/queries.ts";
 export type * from "./delegate/types.ts";
 export { runDelegation, type DelegationDeps, type DelegationCaller } from "./delegate/run.ts";
 export { assign, defaultPolicyTable } from "./assign/static.ts";

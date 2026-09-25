@@ -84,8 +84,8 @@ test("HTTP graph と SSE は委譲を配信し、静的ファイルを制限す�
   assert.ok(token.length >= 32);
   assert.equal(statSync(tokenPath).mode & 0o777, 0o600);
   assert.match(await index.text(), new RegExp(`<head>\\s*<meta name="agent-graph-token" content="${token}">`));
-  assert.equal((await fetch(`${base}/api/overview`)).status, 501);
-  assert.equal((await fetch(`${base}/api/project?repo=repo`)).status, 501);
+  assert.equal((await fetch(`${base}/api/overview`)).status, 200);
+  assert.equal((await fetch(`${base}/api/project?repo=repo`)).status, 200);
   assert.equal((await fetch(`${base}/api/repos`)).status, 200);
   for (const path of ["/%2e%2e%2fsecret", "/../secret"]) {
     const result = await getRawPath(address.port, path);
@@ -99,29 +99,23 @@ test("HTTP graph と SSE は委譲を配信し、静的ファイルを制限す�
   assert.equal(stream.status, 200);
   const reader = stream.body!.getReader();
   const firstChunk = await reader.read();
-  const snapshot = new TextDecoder().decode(firstChunk.value);
-  assert.match(snapshot, /event: snapshot/);
-  let state = applySnapshot({ nodes: [], edges: [] }, JSON.parse(snapshot.split("data: ")[1]));
+  const initial = new TextDecoder().decode(firstChunk.value);
+  assert.match(initial, /^event: project\n/);
+  assert.equal(JSON.parse(initial.split("data: ")[1]).sessions[0].nodes.length, 2);
   const began = performance.now();
   store.insertDelegation({ id: "second", repoKey: "repo", sessionId: "session", parentId: "first",
     role: "review", title: "second", status: "running" });
+  store.insertAssignment("second", { executor: "claude", model: "haiku", family: "anthropic", tier: "low", reason: [], policyVersion: "1" });
   const next = await Promise.race([
     reader.read(),
     new Promise<never>((_, reject) => setTimeout(() => reject(new Error("SSE timed out")), 2000)),
   ]);
   const message = new TextDecoder().decode(next.value);
-  assert.match(message, /event: delegation/);
-  const change = JSON.parse(message.split("data: ")[1]);
-  assert.equal(change.node.id, "second");
-  assert.equal(change.edge.from, "first");
-  assert.equal(change.nodes, undefined);
-  state = applyDelegation(state, change);
-  assert.equal(state.nodes.find((node) => node.id === "second")?.status, "running");
-  store.insertAssignment("second", { executor: "claude", model: "haiku", family: "anthropic", tier: "low", reason: [], policyVersion: "1" });
-  const assigned = await reader.read();
-  state = applyDelegation(state, JSON.parse(new TextDecoder().decode(assigned.value).split("data: ")[1]));
-  assert.equal(state.edges.find((edge) => edge.to === "second")?.toFamily, "anthropic");
-  assert.ok(performance.now() - began < 2000);
+  assert.match(message, /^event: project\n/);
+  const view = JSON.parse(message.split("data: ")[1]);
+  assert.equal(view.sessions[0].nodes.find((node: { id: string }) => node.id === "second")?.status, "running");
+  assert.equal(view.sessions[0].edges.find((edge: { to: string }) => edge.to === "second")?.toFamily, "anthropic");
+  assert.ok(performance.now() - began < 1000);
   controller.abort();
 });
 

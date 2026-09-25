@@ -44,14 +44,16 @@ function fakeSpawn(response?: string): { spawnImpl: any; stdin: PassThrough } {
 }
 
 test("Claude の既知・未知の応答とタイムアウト", async () => {
-  const valid = fakeSpawn(JSON.stringify({ response: { usage: {
+  const valid = fakeSpawn(JSON.stringify({ type: "control_response", response: { response: { rate_limits: {
     five_hour: { utilization: 30 }, seven_day: { utilization: 40 },
-    model_scoped: { opus: { utilization: 50 } },
-  } } }));
+    model_scoped: [{ display_name: "Fable", utilization: 50, resets_at: "2026-09-25T01:00:00Z" },
+      { display_name: "", utilization: 60 }],
+  } } } }));
   const samples = await probeClaudeUsage({ cwd: "/tmp", timeoutMs: 1000, spawnImpl: valid.spawnImpl });
   assert.deepEqual(samples.map(({ window, percent, model }) => [window, percent, model]), [
-    ["5h", 30, undefined], ["7d", 40, undefined], ["7d", 50, "opus"],
+    ["5h", 30, undefined], ["7d", 40, undefined], ["7d", 50, "Fable"],
   ]);
+  assert.equal(samples[2]?.resetsAt, "2026-09-25T01:00:00.000Z");
   assert.match(valid.stdin.read()?.toString() ?? "", /get_usage/);
   assert.deepEqual(await probeClaudeUsage({ cwd: "/tmp", timeoutMs: 1000,
     spawnImpl: fakeSpawn('{"unknown":true}').spawnImpl }), []);

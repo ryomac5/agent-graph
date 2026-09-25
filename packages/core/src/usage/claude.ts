@@ -18,12 +18,13 @@ function readUsage(value: unknown, ts: string): UsageSample[] {
     }
     samples.push(sample);
   }
-  if (typeof usage.model_scoped === "object" && usage.model_scoped !== null) {
-    for (const [model, value] of Object.entries(usage.model_scoped)) {
+  if (Array.isArray(usage.model_scoped)) {
+    for (const value of usage.model_scoped) {
       if (typeof value !== "object" || value === null) continue;
       const row = value as Record<string, unknown>;
+      if (typeof row.display_name !== "string" || row.display_name.trim() === "") continue;
       if (typeof row.utilization !== "number" || !Number.isFinite(row.utilization)) continue;
-      const sample: UsageSample = { ts, provider: "anthropic", window: "7d", percent: row.utilization, model };
+      const sample: UsageSample = { ts, provider: "anthropic", window: "7d", percent: row.utilization, model: row.display_name };
       if (typeof row.resets_at === "string" && !Number.isNaN(Date.parse(row.resets_at))) {
         sample.resetsAt = new Date(row.resets_at).toISOString();
       }
@@ -62,7 +63,8 @@ export async function probeClaudeUsage(options: {
       for (const line of output.split(/\r?\n/)) {
         let event: any;
         try { event = JSON.parse(line); } catch { continue; }
-        const usage = event?.response?.usage ?? event?.response ?? event?.usage;
+        if (event?.type !== "control_response") continue;
+        const usage = event?.response?.response?.rate_limits;
         const samples = readUsage(usage, new Date().toISOString());
         if (samples.length > 0) { finish(samples); return; }
       }

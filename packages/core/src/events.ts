@@ -16,13 +16,13 @@ export type EventKind =
 export interface EventPayload {
   "session.started": { sessionId: string };
   "delegation.requested": { delegationId: string; task: string };
-  "assignment.decided": { delegationId: string; executor: "claude" | "codex"; model: string };
+  "assignment.decided": { delegationId: string; executor: "claude" | "codex"; model: string; reason: string[]; policyVersion: string };
   "execution.started": { delegationId: string };
   "execution.finished": { delegationId: string; exitCode: number };
   "acceptance.evaluated": { delegationId: string; passed: boolean };
   "review.evaluated": { delegationId: string; verdict: "approve" | "request_changes" };
   "delegation.finished": { delegationId: string; status: "done" | "failed" | "timeout" | "denied" };
-  "usage.sampled": { provider: string; window: string; percent: number };
+  "usage.sampled": { provider: string; window: string; percent: number; model?: string };
   "guard.denied": { command: string; reason: string };
 }
 

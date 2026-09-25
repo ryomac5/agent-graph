@@ -1,0 +1,14 @@
+#!/usr/bin/env node
+import fs from "node:fs";
+const input = fs.readFileSync(0, "utf8");
+const args = process.argv.slice(2);
+fs.writeFileSync(process.env.FIXTURE_CAPTURE, JSON.stringify({
+  args,
+  input,
+  traceparent: process.env.TRACEPARENT,
+  tracestate: process.env.TRACESTATE,
+  session: process.env.AGENT_GRAPH_SESSION,
+  delegation: process.env.AGENT_GRAPH_DELEGATION,
+}));
+if (process.env.FIXTURE_HANG === "1") setInterval(() => {}, 1_000);
+else fs.writeFileSync(args[args.indexOf("--output-last-message") + 1], "Codex result");

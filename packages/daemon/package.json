@@ -2,6 +2,10 @@
   "name": "@agent-graph/daemon",
   "private": true,
   "type": "module",
+  "bin": {
+    "agent-graph-shim": "./src/shim.ts",
+    "agent-graph-daemon": "./src/main.ts"
+  },
   "scripts": {
     "test": "node --test \"test/**/*.test.ts\""
   }

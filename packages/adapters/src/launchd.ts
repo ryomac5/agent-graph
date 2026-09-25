@@ -15,6 +15,18 @@ export interface LaunchdOptions {
   launchctl?: (args: string[]) => number;
 }
 
+export function renderInstallCommands(options: Pick<LaunchdOptions, "plistDir" | "label" | "uid">): string[][] {
+  const label = options.label ?? DEFAULT_LABEL;
+  const uid = options.uid ?? process.getuid();
+  return [["bootout", `gui/${uid}/${label}`], ["bootstrap", `gui/${uid}`, join(options.plistDir, `${label}.plist`)]];
+}
+
+export function renderUninstallCommands(options: Pick<LaunchdOptions, "plistDir" | "label" | "uid">): { commands: string[][]; plistPath: string } {
+  const label = options.label ?? DEFAULT_LABEL;
+  const plistPath = join(options.plistDir, `${label}.plist`);
+  return { commands: [["bootout", `gui/${options.uid ?? process.getuid()}`, plistPath]], plistPath };
+}
+
 function escapeXml(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 }
@@ -34,22 +46,20 @@ export function renderLaunchdPlist(options: Omit<LaunchdOptions, "plistDir" | "u
 }
 
 export function installLaunchd(options: LaunchdOptions): void {
-  const label = options.label ?? DEFAULT_LABEL;
-  const uid = options.uid ?? process.getuid();
   const run = options.launchctl ?? callLaunchctl;
-  const plistPath = join(options.plistDir, `${label}.plist`);
+  const [bootout, bootstrap] = renderInstallCommands(options);
+  const plistPath = bootstrap[2];
   mkdirSync(options.plistDir, { recursive: true });
   mkdirSync(options.logDir, { recursive: true });
-  run(["bootout", `gui/${uid}/${label}`]);
+  run(bootout);
   writeFileSync(plistPath, renderLaunchdPlist(options));
-  if (run(["bootstrap", `gui/${uid}`, plistPath]) !== 0) throw new Error(`launchctl bootstrap failed: ${plistPath}`);
+  if (run(bootstrap) !== 0) throw new Error(`launchctl bootstrap failed: ${plistPath}`);
 }
 
 export function uninstallLaunchd(options: Pick<LaunchdOptions, "plistDir" | "label" | "uid" | "launchctl">): void {
-  const label = options.label ?? DEFAULT_LABEL;
-  const plistPath = join(options.plistDir, `${label}.plist`);
+  const { commands, plistPath } = renderUninstallCommands(options);
   if (!existsSync(plistPath)) return;
   const run = options.launchctl ?? callLaunchctl;
-  if (run(["bootout", `gui/${options.uid ?? process.getuid()}`, plistPath]) !== 0) throw new Error(`launchctl bootout failed: ${plistPath}`);
+  run(commands[0]);
   unlinkSync(plistPath);
 }

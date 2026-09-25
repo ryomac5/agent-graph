@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { generateClaudePlugin, renderClaudePlugin } from "./claude-plugin.ts";
 import { installCodexConfig, mergeCodexConfig, removeCodexConfig, renderCodexOverrides, uninstallCodexConfig } from "./codex-config.ts";
-import { installLaunchd, renderLaunchdPlist, uninstallLaunchd } from "./launchd.ts";
+import { installLaunchd, renderInstallCommands, renderLaunchdPlist, renderUninstallCommands, uninstallLaunchd } from "./launchd.ts";
 import { generateMarketplace, renderMarketplace } from "./marketplace.ts";
 
 const shimPath = fileURLToPath(new URL("../../daemon/src/shim.ts", import.meta.url));
@@ -38,12 +38,15 @@ for (let i = 0; i < args.length; i++) {
   }
   if (flag === "--launchd") {
     const options = { plistDir, nodePath, daemonPath, logDir, env: launchdEnv };
-    if (dryRun) process.stdout.write(renderLaunchdPlist(options));
+    if (dryRun) process.stdout.write(`${renderLaunchdPlist(options)}${renderInstallCommands(options).map((command) => `launchctl ${command.join(" ")}`).join("\n")}\n`);
     else installLaunchd(options);
     continue;
   }
   if (flag === "--uninstall-launchd") {
-    if (dryRun) process.stdout.write(`launchctl bootout gui/${process.getuid()}/dev.agent-graph.daemon\n`);
+    if (dryRun) {
+      const { commands, plistPath } = renderUninstallCommands({ plistDir });
+      process.stdout.write(`${commands.map((command) => `launchctl ${command.join(" ")}`).join("\n")}\nrm ${plistPath}\n`);
+    }
     else uninstallLaunchd({ plistDir });
     continue;
   }
@@ -53,7 +56,7 @@ for (let i = 0; i < args.length; i++) {
     if (dryRun) process.stdout.write(JSON.stringify(renderClaudePlugin({ outDir: path, ...pluginOptions }), null, 2) + "\n");
     else generateClaudePlugin({ outDir: path, ...pluginOptions });
   } else if (flag === "--claude-marketplace-dir") {
-    const options = { outDir: path, pluginDir: pluginOptions };
+    const options = { outDir: path, plugin: pluginOptions };
     if (dryRun) process.stdout.write(JSON.stringify(renderMarketplace(options), null, 2) + "\n");
     else generateMarketplace(options);
     process.stdout.write(`claude plugin marketplace add ${JSON.stringify(path)}\nclaude plugin install agent-graph@agent-graph-local\n`);

@@ -4,8 +4,9 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { installCodexConfig, removeCodexConfig, uninstallCodexConfig } from "../src/codex-config.ts";
-import { installLaunchd, renderLaunchdPlist, uninstallLaunchd } from "../src/launchd.ts";
+import { installLaunchd, renderInstallCommands, renderLaunchdPlist, renderUninstallCommands, uninstallLaunchd } from "../src/launchd.ts";
 import { generateMarketplace } from "../src/marketplace.ts";
 
 const root = mkdtempSync(join(tmpdir(), "agent-graph-install-"));
@@ -30,8 +31,18 @@ test("launchd plist と呼び出し", () => {
   assert.equal(existsSync(path), false);
 });
 
+test("bootout が非 0 でも plist を削除する", () => {
+  const options = { plistDir: join(root, "failed-bootout"), logDir: join(root, "failed-logs"), nodePath: "/node", daemonPath: "/daemon", uid: 42, launchctl: (args: string[]): number => args[0] === "bootout" ? 1 : 0 };
+  installLaunchd(options);
+  const { commands, plistPath } = renderUninstallCommands(options);
+  assert.deepEqual(commands, [["bootout", "gui/42", plistPath]]);
+  assert.deepEqual(renderInstallCommands(options), [["bootout", "gui/42/dev.agent-graph.daemon"], ["bootstrap", "gui/42", plistPath]]);
+  uninstallLaunchd(options);
+  assert.equal(existsSync(plistPath), false);
+});
+
 test("launchd の dry-run に未知の環境変数を載せない", () => {
-  const result = spawnSync(process.execPath, [new URL("../src/cli.ts", import.meta.url).pathname, "--launchd", "--dry-run"], {
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL("../src/cli.ts", import.meta.url)), "--launchd", "--dry-run"], {
     encoding: "utf8",
     env: { ...process.env, AGENT_GRAPH_TEST_SECRET: "must-not-appear" },
   });
@@ -42,7 +53,7 @@ test("launchd の dry-run に未知の環境変数を載せない", () => {
 
 test("marketplace と plugin の配置", () => {
   const outDir = join(root, "marketplace");
-  generateMarketplace({ outDir, pluginDir: { shimPath: "/tmp/shim.ts", hookPath: "/tmp/hook.ts", nodePath: process.execPath } });
+  generateMarketplace({ outDir, plugin: { shimPath: "/tmp/shim.ts", hookPath: "/tmp/hook.ts", nodePath: process.execPath } });
   const manifest = JSON.parse(readFileSync(join(outDir, ".claude-plugin/marketplace.json"), "utf8"));
   assert.equal(manifest.name, "agent-graph-local");
   assert.deepEqual(manifest.plugins.map((plugin: { name: string; source: string }) => [plugin.name, plugin.source]), [["agent-graph", "./plugins/agent-graph"]]);

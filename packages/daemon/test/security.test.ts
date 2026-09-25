@@ -103,8 +103,9 @@ test("HTTP は Host、Origin、トークン、hook 経路をそれぞれ守る",
   assert.equal((await raw(port, { method: "POST", path: "/api/action", headers: json, body: action })).status, 403);
   assert.equal((await raw(port, { method: "POST", path: "/api/action",
     headers: { ...json, [TOKEN_HEADER]: "wrong" }, body: action })).status, 403);
+  // トークンが合えば守りを通り、本文の検査に進む（graphId と taskId が無いので 400）
   assert.equal((await raw(port, { method: "POST", path: "/api/action",
-    headers: { ...json, [TOKEN_HEADER]: token }, body: action })).status, 501);
+    headers: { ...json, [TOKEN_HEADER]: token }, body: action })).status, 400);
 
   // hook 用の 3 経路はトークン無しで通る。登録したセッションの終了は 200、不正な観測は 400
   assert.equal((await raw(port, { method: "POST", path: "/api/sessions", headers: json, body: session })).status, 201);

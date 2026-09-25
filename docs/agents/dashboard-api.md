@@ -124,6 +124,17 @@ X-Agent-Graph-Token: <index.html の meta の値>
 ```
 
 応答は `{ "ok": true, "message": "C0 を承認した" }`。
+`graphId` は `GraphView.id` の値で、`graphs.id` の ULID を入れる。planner のセッション識別子でも引ける。
+
+`POST /api/action` の応答の状態。
+
+| 状態 | 本文 | 契機 |
+| --- | --- | --- |
+| 200 | `ActionResult` の `ok: true` | 記録した。approve、retry、reject は task_decisions に書き、planner が反映する |
+| 409 | `ActionResult` の `ok: false` | 対象の状態が合わない。失敗したタスクの approve、終了済みのセッションの end_session など |
+| 400 | `{ error }` | 不正な body。未知の `action`、識別子の欠落や文字種違い |
+| 404 | `{ error }` | 未知の repo、graph、task、session、turn |
+| 403 | `{ error }` | 守りの拒否 |
 
 ## SSE
 

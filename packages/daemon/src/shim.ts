@@ -24,7 +24,8 @@ socket.once("connect", () => {
     tracestate: process.env.TRACESTATE,
     session: process.env.AGENT_GRAPH_SESSION,
     cwd: process.cwd(),
-    pid: process.pid,
+    // 親プロセスの pid。claude や codex 本体を指し、デーモンが生死判定に使う
+    pid: process.ppid,
   })}\n`);
   process.stdin.pipe(socket);
   socket.pipe(process.stdout);

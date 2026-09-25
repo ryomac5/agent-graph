@@ -62,6 +62,21 @@ test("handler restores caller and reuses repository store across nested cwd", as
     await handler(request, { ...hello, client: "claude" });
     assert.equal(store.db.prepare("SELECT client FROM sessions WHERE id = 'session'").get()?.client, "codex",
       "nested clients must not overwrite the root client");
+    // 終了済みのセッションが同じ id の根の hello で戻ると running に戻る。名前は変わらず、lost の委譲は戻らない
+    store.insertDelegation({ id: "orphan", repoKey: key, sessionId: "claude", role: "implement", title: "orphan", status: "running" });
+    assert.equal(store.endSession("claude", new Date().toISOString()), true);
+    const name = store.getSession("claude")!.name;
+    await handler(request, { type: "hello", cwd: root, pid: process.pid, session: "claude", client: "claude" });
+    const resumed = store.getSession("claude")!;
+    assert.equal(resumed.status, "running");
+    assert.equal(resumed.endedAt, undefined);
+    assert.equal(resumed.name, name);
+    assert.equal(resumed.pid, process.pid);
+    assert.equal(store.db.prepare("SELECT status FROM delegations WHERE id = 'orphan'").get()?.status, "lost");
+    // 委譲の子からの hello では戻さない
+    assert.equal(store.endSession("session", new Date().toISOString()), true);
+    await handler(request, { ...hello, client: "claude" });
+    assert.equal(store.getSession("session")?.status, "ended");
   } finally {
     for (const store of stores.values()) store.close();
     if (oldState === undefined) delete process.env.XDG_STATE_HOME; else process.env.XDG_STATE_HOME = oldState;

@@ -106,10 +106,10 @@ test("HTTP は Host、Origin、トークン、hook 経路をそれぞれ守る",
   assert.equal((await raw(port, { method: "POST", path: "/api/action",
     headers: { ...json, [TOKEN_HEADER]: token }, body: action })).status, 501);
 
-  // hook 用の 3 経路はトークン無しで通る。未実装の経路は 501
+  // hook 用の 3 経路はトークン無しで通る。登録したセッションの終了は 200、不正な観測は 400
   assert.equal((await raw(port, { method: "POST", path: "/api/sessions", headers: json, body: session })).status, 201);
-  assert.equal((await raw(port, { method: "POST", path: "/api/sessions/s/end", headers: json, body: "{}" })).status, 501);
-  assert.equal((await raw(port, { method: "POST", path: "/api/observe", headers: json, body: "{}" })).status, 501);
+  assert.equal((await raw(port, { method: "POST", path: "/api/sessions/s/end", headers: json, body: "{}" })).status, 200);
+  assert.equal((await raw(port, { method: "POST", path: "/api/observe", headers: json, body: "{}" })).status, 400);
 
   // 未知の POST は 405、未知の GET /api は 404
   assert.equal((await raw(port, { method: "POST", path: "/api/unknown", headers: json, body: "{}" })).status, 405);

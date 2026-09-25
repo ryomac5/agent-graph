@@ -25,6 +25,9 @@ export interface Repo {
   name: string;
 }
 
+export type SessionStatus = "running" | "waiting" | "ended";
+export type WaitingReason = "permission" | "question";
+
 export interface Session {
   id: string;
   repoKey: string;
@@ -32,6 +35,48 @@ export interface Session {
   client: string;
   traceId: string;
   startedAt: string;
+  status?: SessionStatus;
+  endedAt?: string;
+  pid?: number;
+  pidStartedAt?: string;
+  waitingReason?: WaitingReason;
+  goal?: string;
+  model?: string;
+  lastSeenAt?: string;
+}
+
+export interface SessionRow extends Session {
+  status: SessionStatus;
+  lastSeenAt: string;
+}
+
+export interface TurnRow {
+  id: string;
+  sessionId: string;
+  at: string;
+  prompt: string;
+  summary?: string;
+  reply?: string;
+  hidden: boolean;
+}
+
+// 委譲が生きているとみなす状態。親セッションの終了で lost にする対象。
+const ACTIVE_DELEGATION_STATUSES = ["requested", "planned", "running", "waiting"];
+const SESSION_NAME_WIDTH = 3;
+
+function sessionFromRow(row: Record<string, unknown>): SessionRow {
+  const optional = (value: unknown): string | undefined => value === null || value === undefined ? undefined : String(value);
+  return {
+    id: String(row.id), repoKey: String(row.repo_key), name: String(row.name), client: String(row.client),
+    traceId: String(row.trace_id), startedAt: String(row.started_at), status: String(row.status) as SessionStatus,
+    lastSeenAt: String(row.last_seen_at ?? row.started_at),
+    ...(row.ended_at === null ? {} : { endedAt: String(row.ended_at) }),
+    ...(row.pid === null ? {} : { pid: Number(row.pid) }),
+    ...(row.pid_started_at === null ? {} : { pidStartedAt: String(row.pid_started_at) }),
+    ...(row.waiting_reason === null ? {} : { waitingReason: String(row.waiting_reason) as WaitingReason }),
+    ...(optional(row.goal) === undefined ? {} : { goal: String(row.goal) }),
+    ...(optional(row.model) === undefined ? {} : { model: String(row.model) }),
+  };
 }
 
 export function openStore(path: string): Store {
@@ -85,15 +130,162 @@ export class Store {
 
   insertSession(session: Session): void {
     this.db.prepare(`
-      INSERT INTO sessions (id, repo_key, name, client, trace_id, started_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(session.id, session.repoKey, session.name, session.client, session.traceId, session.startedAt);
+      INSERT INTO sessions (id, repo_key, name, client, trace_id, started_at, status, ended_at, pid, pid_started_at,
+        waiting_reason, goal, model, last_seen_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(session.id, session.repoKey, session.name, session.client, session.traceId, session.startedAt,
+      session.status ?? "running", session.endedAt ?? null, session.pid ?? null, session.pidStartedAt ?? null,
+      session.waitingReason ?? null, session.goal ?? null, session.model ?? null, session.lastSeenAt ?? session.startedAt);
     this.notifyChange();
+  }
+
+  // リポジトリごとの連番で <repo名>-NNN を振る。既存の最大番号の次を使う。
+  nextSessionName(repoKey: string): string {
+    const repo = this.db.prepare("SELECT name FROM repos WHERE key = ?").get(repoKey);
+    if (!repo) throw new Error(`Repository not found: ${repoKey}`);
+    const prefix = `${String(repo.name)}-`;
+    let max = 0;
+    for (const row of this.db.prepare("SELECT name FROM sessions WHERE repo_key = ?").all(repoKey)) {
+      const name = String(row.name);
+      if (!name.startsWith(prefix)) continue;
+      const suffix = name.slice(prefix.length);
+      if (!/^\d+$/.test(suffix)) continue;
+      max = Math.max(max, Number(suffix));
+    }
+    return `${prefix}${String(max + 1).padStart(SESSION_NAME_WIDTH, "0")}`;
+  }
+
+  // 初回の登録で名前を振る。採番と挿入を 1 つのトランザクションで行い、並行登録で番号を重ねない。
+  insertNamedSession(session: Omit<Session, "name">): string {
+    this.db.exec("BEGIN IMMEDIATE");
+    let name: string;
+    try {
+      name = this.nextSessionName(session.repoKey);
+      this.db.prepare(`
+        INSERT INTO sessions (id, repo_key, name, client, trace_id, started_at, status, pid, pid_started_at, goal, model, last_seen_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(session.id, session.repoKey, name, session.client, session.traceId, session.startedAt,
+        session.status ?? "running", session.pid ?? null, session.pidStartedAt ?? null,
+        session.goal ?? null, session.model ?? null, session.lastSeenAt ?? session.startedAt);
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+    this.notifyChange();
+    return name;
+  }
+
+  getSession(id: string): SessionRow | undefined {
+    const row = this.db.prepare("SELECT * FROM sessions WHERE id = ?").get(id);
+    return row ? sessionFromRow(row as Record<string, unknown>) : undefined;
+  }
+
+  // 生死を確かめる対象。running か waiting のセッション。
+  listLiveSessions(): SessionRow[] {
+    return this.db.prepare("SELECT * FROM sessions WHERE status IN ('running', 'waiting') ORDER BY started_at, id").all()
+      .map((row) => sessionFromRow(row as Record<string, unknown>));
   }
 
   updateSessionClient(id: string, client: "claude" | "codex" | "planner"): void {
     const result = this.db.prepare("UPDATE sessions SET client = ? WHERE id = ? AND client != ?").run(client, id, client);
     if (result.changes > 0) this.notifyChange();
+  }
+
+  // 生死判定の材料。pid と起動時刻を記録し、last_seen_at を進める。
+  setSessionProcess(id: string, pid: number, pidStartedAt: string | undefined, seenAt: string): void {
+    const result = this.db.prepare(`UPDATE sessions SET pid = ?, pid_started_at = ?, last_seen_at = ?
+      WHERE id = ? AND status != 'ended'`).run(pid, pidStartedAt ?? null, seenAt, id);
+    if (result.changes > 0) this.notifyChange();
+  }
+
+  // 同じ id の再登録。終了済みなら running に戻す。名前は変えず、lost にした委譲も戻さない。
+  resumeSession(id: string, seenAt: string): boolean {
+    const result = this.db.prepare(`UPDATE sessions SET status = 'running', ended_at = NULL, waiting_reason = NULL, last_seen_at = ?
+      WHERE id = ? AND status = 'ended'`).run(seenAt, id);
+    if (result.changes > 0) this.notifyChange();
+    return result.changes > 0;
+  }
+
+  setSessionModel(id: string, model: string): void {
+    const result = this.db.prepare("UPDATE sessions SET model = ? WHERE id = ? AND model IS NOT ?").run(model, id, model);
+    if (result.changes > 0) this.notifyChange();
+  }
+
+  // 最初の指示を goal にする。以降は変えない。
+  setSessionGoalIfEmpty(id: string, goal: string): void {
+    const result = this.db.prepare("UPDATE sessions SET goal = ? WHERE id = ? AND goal IS NULL").run(goal, id);
+    if (result.changes > 0) this.notifyChange();
+  }
+
+  // 観測があった。待ちなら running に戻し、last_seen_at を進める。
+  touchSession(id: string, seenAt: string): void {
+    const result = this.db.prepare(`UPDATE sessions SET last_seen_at = ?, status = 'running', waiting_reason = NULL
+      WHERE id = ? AND status != 'ended'`).run(seenAt, id);
+    if (result.changes > 0) this.notifyChange();
+  }
+
+  setSessionWaiting(id: string, reason: WaitingReason, seenAt: string): void {
+    const result = this.db.prepare(`UPDATE sessions SET status = 'waiting', waiting_reason = ?, last_seen_at = ?
+      WHERE id = ? AND status != 'ended'`).run(reason, seenAt, id);
+    if (result.changes > 0) this.notifyChange();
+  }
+
+  // 終了。走っていた委譲は親を失うので lost にする。すでに終わっていれば何もしない。
+  endSession(id: string, endedAt: string): boolean {
+    this.db.exec("BEGIN IMMEDIATE");
+    let changed: number;
+    try {
+      changed = Number(this.db.prepare(`UPDATE sessions SET status = 'ended', ended_at = ?, waiting_reason = NULL
+        WHERE id = ? AND status != 'ended'`).run(endedAt, id).changes);
+      if (changed > 0) {
+        this.db.prepare(`UPDATE delegations SET status = 'lost' WHERE session_id = ?
+          AND status IN (${ACTIVE_DELEGATION_STATUSES.map(() => "?").join(", ")})`).run(id, ...ACTIVE_DELEGATION_STATUSES);
+      }
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+    if (changed > 0) this.notifyChange();
+    return changed > 0;
+  }
+
+  insertTurn(turn: { id: string; sessionId: string; at: string; prompt: string; summary?: string; reply?: string }): void {
+    this.db.prepare("INSERT INTO turns (id, session_id, at, prompt, summary, reply) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(turn.id, turn.sessionId, turn.at, turn.prompt, turn.summary ?? null, turn.reply ?? null);
+    this.notifyChange();
+  }
+
+  // 応答を未完の直近の turn に付ける。無ければ空の prompt で turn を作る。
+  finishTurn(sessionId: string, at: string, summary: string, reply: string, newId: () => string): string {
+    const open = this.db.prepare(`SELECT id FROM turns WHERE session_id = ? AND summary IS NULL
+      ORDER BY at DESC, rowid DESC LIMIT 1`).get(sessionId);
+    if (open) {
+      this.db.prepare("UPDATE turns SET summary = ?, reply = ? WHERE id = ?").run(summary, reply, String(open.id));
+      this.notifyChange();
+      return String(open.id);
+    }
+    const id = newId();
+    this.insertTurn({ id, sessionId, at, prompt: "", summary, reply });
+    return id;
+  }
+
+  setTurnHidden(id: string, hidden: boolean): void {
+    const result = this.db.prepare("UPDATE turns SET hidden = ? WHERE id = ?").run(Number(hidden), id);
+    if (result.changes > 0) this.notifyChange();
+  }
+
+  listTurns(sessionId: string, limit?: number): TurnRow[] {
+    const rows = limit === undefined
+      ? this.db.prepare("SELECT * FROM turns WHERE session_id = ? ORDER BY at, rowid").all(sessionId)
+      : this.db.prepare(`SELECT * FROM (SELECT *, rowid AS position FROM turns WHERE session_id = ?
+        ORDER BY at DESC, rowid DESC LIMIT ?) ORDER BY at, position`).all(sessionId, limit);
+    return rows.map((row) => ({
+      id: String(row.id), sessionId: String(row.session_id), at: String(row.at), prompt: String(row.prompt),
+      ...(row.summary === null ? {} : { summary: String(row.summary) }),
+      ...(row.reply === null ? {} : { reply: String(row.reply) }),
+      hidden: Number(row.hidden) === 1,
+    }));
+  }
+
+  insertTaskDecision(graphId: string, taskId: string, action: string, at: string): void {
+    this.db.prepare("INSERT INTO task_decisions (graph_id, task_id, action, at) VALUES (?, ?, ?, ?)").run(graphId, taskId, action, at);
+    this.notifyChange();
   }
 
   findGraph(repo: string, session: string, fingerprint?: string): GraphRecord | undefined {
@@ -206,10 +398,11 @@ export class Store {
     if (result.changes === 0) throw new Error("Span not found");
   }
 
-  insertDelegation(row: { id: string; repoKey: string; sessionId: string; parentId?: string; role: Role; title: string; status: string }): void {
-    this.db.prepare(`INSERT INTO delegations (id, repo_key, session_id, parent_id, role, title, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?)`)
-      .run(row.id, row.repoKey, row.sessionId, row.parentId ?? null, row.role, row.title, row.status);
+  insertDelegation(row: { id: string; repoKey: string; sessionId: string; parentId?: string; role: Role; title: string;
+    status: string; kind?: "delegation" | "subagent" }): void {
+    this.db.prepare(`INSERT INTO delegations (id, repo_key, session_id, parent_id, role, title, status, kind)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(row.id, row.repoKey, row.sessionId, row.parentId ?? null, row.role, row.title, row.status, row.kind ?? "delegation");
     this.notifyChange();
   }
 

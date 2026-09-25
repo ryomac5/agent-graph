@@ -18,7 +18,7 @@ export type DelegateRequest = {
   review?: boolean;
 };
 
-export type DelegateHandler<Context> = (request: DelegateRequest, context: Context) => Promise<unknown>;
+export type DelegateHandler<Context, Result = unknown> = (request: DelegateRequest, context: Context) => Promise<Result>;
 
 const inputSchema = {
   type: "object",
@@ -87,7 +87,7 @@ export function createMcpSession<Context>(
         return;
       }
       try {
-        const result = await handler(params.arguments, context);
+        const result = await handler(params.arguments, context as Context);
         lines.response(message.id, { content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result });
       } catch (error) {
         lines.response(message.id, { content: [{ type: "text", text: String(error) }], isError: true });

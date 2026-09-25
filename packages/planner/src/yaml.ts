@@ -101,7 +101,7 @@ export function parseYaml(text: string): unknown {
       const content = first ? line.content.slice(2) : line.content;
       if (first && !line.content.startsWith("- ")) fail(line, "expected sequence item");
       const match = /^([A-Za-z_][\w-]*):(?:\s+(.*))?$/.exec(content);
-      if (!match) fail(line, "expected map entry");
+      if (!match) return fail(line, "expected map entry");
       const key = match[1]!;
       if (Object.hasOwn(result, key)) fail(line, `duplicate key ${key}`);
       position++;

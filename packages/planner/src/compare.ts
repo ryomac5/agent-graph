@@ -32,7 +32,7 @@ export function loadPlannerState(db: DatabaseSync | Store, selector: { graphId?:
   const database = db instanceof DatabaseSync ? db : db.db;
   const graph = selector.graphId
     ? database.prepare("SELECT id, session_id FROM graphs WHERE id = ?").get(selector.graphId)
-    : database.prepare("SELECT id, session_id FROM graphs WHERE session_id = ? ORDER BY rowid DESC LIMIT 1").get(selector.session);
+    : database.prepare("SELECT id, session_id FROM graphs WHERE session_id = ? ORDER BY rowid DESC LIMIT 1").get(selector.session!);
   if (!graph) throw new Error("Planner graph not found");
   const graphId = String(graph.id);
   const session = String(graph.session_id);

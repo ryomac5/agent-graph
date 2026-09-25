@@ -24,6 +24,7 @@ Codex は `agent-graph-install --codex-config <path>` で指定先に導入す�
 
 - 依存の解決: `npx --yes pnpm@10 install`
 - テスト: `npx --yes pnpm@10 test`
+- 型検査: `npx --yes pnpm@10 typecheck`
 - デーモン: `npx --yes pnpm@10 daemon`
 - ダッシュボード: デーモン起動後、`daemon.log` の `dashboard` 行に記録された URL を開く。ポートは `AGENT_GRAPH_PORT` または `~/.config/agent-graph/config.toml` の `[dashboard] port` で指定できる
 - 実機の双方向 e2e（claude と codex の認証が必要、API 利用費用が発生）: `AGENT_GRAPH_E2E=1 bash scripts/e2e-stage2.sh`

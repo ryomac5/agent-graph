@@ -4,12 +4,13 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import type { TestContext } from "node:test";
 import { repoKey, stateDbPath } from "../../core/src/paths.ts";
 import { openStore, type Store } from "../../core/src/store/store.ts";
 import { registerSession } from "../src/http/sessions.ts";
 import { startHttpServer } from "../src/http/server.ts";
 
-function createFixture(t: test.TestContext) {
+function createFixture(t: TestContext) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "agent-graph-session-")));
   execFileSync("git", ["init", "-q", root]);
   const cwd = join(root, "subdir");

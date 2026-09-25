@@ -1,0 +1,28 @@
+{
+  "projects": [
+    { "key": "kaggriculture", "name": "Kaggriculture", "rootPath": "/Users/r/00_project/Kaggriculture",
+      "counts": { "running": 0, "waiting": 0, "failed": 7, "done": 31 }, "liveSessions": 1,
+      "lastActivityAt": "2026-09-25T06:35:00.000Z", "status": "failed" },
+    { "key": "agent-graph", "name": "agent-graph", "rootPath": "/Users/r/00_project/agent-graph",
+      "counts": { "running": 3, "waiting": 1, "failed": 1, "done": 12 }, "liveSessions": 2,
+      "lastActivityAt": "2026-09-25T06:40:00.000Z", "status": "waiting" },
+    { "key": "dotfiles", "name": "dotfiles", "rootPath": "/Users/r/00_project/dotfiles",
+      "counts": { "running": 1, "waiting": 0, "failed": 0, "done": 16 }, "liveSessions": 1,
+      "lastActivityAt": "2026-09-25T06:20:00.000Z", "status": "running" },
+    { "key": "fde-lecture", "name": "fde-lecture", "rootPath": "/Users/r/00_project/fde-lecture",
+      "counts": { "running": 0, "waiting": 0, "failed": 0, "done": 0 }, "liveSessions": 0, "status": "quiet" },
+    { "key": "obsidian", "name": "obsidian", "rootPath": "/Users/r/00_project/obsidian",
+      "counts": { "running": 0, "waiting": 0, "failed": 0, "done": 18 }, "liveSessions": 1,
+      "lastActivityAt": "2026-09-24T22:00:00.000Z", "status": "idle" }
+  ],
+  "usage": {
+    "ts": "2026-09-25T06:40:00.000Z",
+    "windows": [
+      { "key": "anthropic:5h", "label": "Session", "provider": "anthropic", "percent": 73, "resetsAt": "2026-09-25T07:10:00.000Z" },
+      { "key": "anthropic:7d", "label": "Week", "provider": "anthropic", "percent": 36, "resetsAt": "2026-09-30T22:10:00.000Z" },
+      { "key": "anthropic:7d:fable", "label": "Week Fable", "provider": "anthropic", "percent": 92, "resetsAt": "2026-09-30T22:10:00.000Z" },
+      { "key": "openai:5h", "label": "Codex", "provider": "openai", "percent": 21, "resetsAt": "2026-09-25T09:00:00.000Z" }
+    ]
+  },
+  "updatedAt": "2026-09-25T06:40:12.000Z"
+}

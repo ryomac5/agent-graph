@@ -1,0 +1,187 @@
+goal: |
+  docs/agents/architecture.md の「作る順序」6 段目を完成させる。
+  tasks.yaml のグラフを実行する planner と、レビューの再指示などの付随物を作る。
+  tasks.yaml の実行が受け入れ検証とレビューを通り、旧版の agr launch と同じ結果になることを e2e で確かめる。
+base_branch: agent/agent-graph-001-s5/integration
+
+tasks:
+  - id: L1
+    title: tasks.yaml の読み取りと検証
+    executor: codex
+    model: gpt-6-sol
+    model_reason: YAML の部分集合と検証規則の移植で、実物の tasks.yaml を fixture にして検証できる
+    review_model: fable
+    scope:
+      - "packages/planner/src/yaml.ts"
+      - "packages/planner/src/spec.ts"
+      - "packages/planner/test/yaml.test.ts"
+      - "packages/planner/test/spec.test.ts"
+      - "packages/planner/test/fixtures/**"
+    outputs: ["packages/planner/src/yaml.ts", "packages/planner/src/spec.ts"]
+    accept:
+      - "test -f packages/planner/src/yaml.ts && test -f packages/planner/src/spec.ts"
+      - "npx --yes pnpm@10 --filter @agent-graph/planner test"
+    prompt: |
+      packages/planner に tasks.yaml の読み取りと検証を実装する。設計は docs/agents/architecture.md の「部品の責務と境界」「指紋」。
+      ls と cd は command ls と builtin cd を使う。最初に AGENTS.md と設計書を読む。
+      旧版の実装が /Users/r/00_project/dotfiles/.agents/bin/graph_model.py と run_graph.py の validate にある。読んで規則を写す。ファイルは読むだけで、変更しない。
+      YAML のライブラリは入れない。依存ゼロを保つため。
+
+      作るもの:
+      - src/yaml.ts。`parseYaml(text): unknown`。tasks.yaml に現れる部分集合だけに対応する
+        - ブロックのマップと列、入れ子、`|` のブロックスカラー、`[a, b]` のフロー列、単引用と二重引用の文字列、整数と真偽、`#` のコメント
+        - 対応外の構文は例外で行番号を知らせる
+      - src/spec.ts
+        - 旧版の normalize_task と同じ項目を持つ TaskSpec と GraphSpec の型。id, title, executor, depends_on, scope, inputs, outputs, accept, prompt, review, model, model_reason, review_model, retry, timeout_sec。goal と base_branch
+        - executor と role の対応。codex は implement、doc-light と doc-heavy は document、human と pr はそのまま
+        - `loadSpec(path)` と `validateSpec(spec): string[]`。旧版の validate と同じ規則。id の一意性と文字種、存在しない依存、循環、codex と doc 系の accept 必須、codex の scope 必須、pr が 1 つで最終ノード
+        - `graphFingerprint(spec)`。設計書の fingerprint と同じ計算。core の fingerprint があればそれを使う
+      - src/index.ts は触らない。公開は後続のタスクが行う
+
+      テスト:
+      - test/fixtures/ に、このリポジトリの .agents/graph/*/tasks.yaml を 3 つ以上写して置く。すべて parseYaml で読め、validateSpec がエラーを返さないこと。写すときに中身を変えない
+      - 対応外の構文の例外と行番号
+      - 検証規則ごとに違反するケース
+
+      制約: 依存を追加しない。enum と namespace を使わない。scope 外に触らない。
+      サンドボックスでは npm registry に届かない。検証は packages/planner で `node --test "test/**/*.test.ts"` を走らせ、結果を報告に載せる。報告は実際の差分と一致させる。
+
+  - id: L2
+    title: MCP クライアントと worktree の管理
+    executor: codex
+    model: gpt-6-sol
+    model_reason: 既存の shim と git worktree を使う部品で、偽のサーバと一時リポジトリで検証できる
+    review_model: fable
+    scope:
+      - "packages/planner/src/mcp-client.ts"
+      - "packages/planner/src/worktree.ts"
+      - "packages/planner/test/mcp-client.test.ts"
+      - "packages/planner/test/worktree.test.ts"
+      - "packages/planner/package.json"
+      - "pnpm-lock.yaml"
+    outputs: ["packages/planner/src/mcp-client.ts", "packages/planner/src/worktree.ts"]
+    accept:
+      - "test -f packages/planner/src/mcp-client.ts && test -f packages/planner/src/worktree.ts"
+      - "npx --yes pnpm@10 install --frozen-lockfile=false"
+      - "npx --yes pnpm@10 --filter @agent-graph/planner test"
+    prompt: |
+      packages/planner に、デーモンへの MCP クライアントと、タスクごとの git worktree の管理を実装する。設計は docs/agents/architecture.md の「部品の責務と境界」「置き場」。
+      ls と cd は command ls と builtin cd を使う。最初に AGENTS.md と設計書を読む。
+      planner は delegate の利用者の 1 つに留める。割り当てと検証を自前で持たない。
+
+      作るもの:
+      - src/mcp-client.ts。`connectDelegate({ shimPath?, nodePath?, env, cwd })`
+        - 既存の packages/daemon の shim を子プロセスで起こし、stdio で MCP を話す。initialize, notifications/initialized, tools/call の delegate
+        - `delegate(request): Promise<DelegateResult>`。structuredContent を優先し、無ければ text content の JSON を読む。isError は例外にする
+        - 呼び出しごとに cwd と TRACEPARENT と AGENT_GRAPH_CLIENT=planner を子の環境に入れられるようにする。1 タスク 1 接続でよい
+        - 制限時間なしで待つ。shim が落ちたら例外
+      - src/worktree.ts
+        - worktree の置き場は ~/.cache/agent-graph/worktrees/<repo-key>/<session>/<task>/。XDG_CACHE_HOME を優先する。repoKey は core のものを使う
+        - `prepareIntegration(repo, session, baseBranch)`。統合ブランチ `agent-graph/<session>/integration` を base から作る。既にあれば使う
+        - `createTaskWorktree(repo, session, taskId)`。統合ブランチの先端からタスクのブランチ `agent-graph/<session>/<task>` を切り、worktree を作る
+        - `commitScoped(worktree, message, patterns)`。scope と outputs の glob に当たる変更だけをコミットする。当たらない変更は一覧で返す
+        - `mergeIntoIntegration(repo, session, taskId)`。統合 worktree でタスクのブランチを --no-ff でマージする。衝突したら中止して conflict を返す
+        - `removeTaskWorktree(...)`。未追跡の生成物が残っていても外せるようにする。git stash は使わない。残ったファイルは worktree の外の退避ディレクトリに移す
+      - package.json に @agent-graph/core と @agent-graph/daemon への workspace:* の依存を足してよい
+      - src/index.ts は触らない
+
+      テスト:
+      - mcp-client.test.ts。偽の MCP サーバを子プロセスで起こし、initialize と tools/call の往復、isError の例外
+      - worktree.test.ts。一時 git リポジトリで、統合ブランチ、タスク worktree、scope 外の変更の分離、マージ、衝突の検出、未追跡ファイルがあっても外せること。git stash が使われないこと
+
+      制約: 依存を追加しない。enum と namespace を使わない。scope 外に触らない。
+      サンドボックスでは npm registry に届かない。検証は packages/planner で `node --test "test/**/*.test.ts"` を走らせ、結果を報告に載せる。報告は実際の差分と一致させる。
+
+  - id: L3
+    title: レビューの再指示ループ
+    executor: codex
+    model: gpt-6-sol
+    model_reason: 既存の runDelegation に上限つきのループを足す局所変更で、偽の部品で検証できる
+    review_model: fable
+    scope:
+      - "packages/core/src/delegate/**"
+      - "packages/core/src/assign/policy.ts"
+      - "packages/core/test/delegate.test.ts"
+      - "packages/core/test/policy.test.ts"
+    accept:
+      - "npx --yes pnpm@10 --filter @agent-graph/core test"
+    prompt: |
+      packages/core の runDelegation に、レビューの request_changes を受けた再指示のループを足す。設計は docs/agents/architecture.md の「delegate の入出力」の roundTrips と「実績」。
+      ls と cd は command ls と builtin cd を使う。最初に AGENTS.md と設計書を読む。
+
+      作ること:
+      - Policy に `maxRoundTrips: number` を足す。既定 2。policy.toml の `[review]` の `max_round_trips` で上書きできる
+      - 受け入れ不合格か review が request_changes のとき、同じ実装者に再指示する。再指示の task は元の依頼に、受け入れの失敗出力か review の comment を具体的に添える。同じ依頼を繰り返さない
+      - 再指示のたびに roundTrips を 1 増やし、delegations の round_trips を更新する。上限を越えたら最後の結果で終える
+      - 再指示も同じ delegation の中の execute の span として記録し、イベントを追記する
+      - 割り当ては最初の委譲と同じ実装者を使う。割り当てをやり直さない
+
+      テスト: 受け入れ不合格から合格、request_changes から approve、上限到達、roundTrips の値と DB の round_trips、再指示の task に前回の失敗内容が入ること。
+
+      制約: 依存を追加しない。enum と namespace を使わない。scope 外に触らない。
+      サンドボックスでは npm registry に届かない。検証は packages/core で `node --test "test/**/*.test.ts"` を走らせ、結果を報告に載せる。報告は実際の差分と一致させる。
+
+  - id: L4
+    title: planner の実行と旧版との比較 e2e
+    executor: codex
+    model: gpt-6-astra
+    review_model: fable
+    depends_on: [L1, L2, L3]
+    timeout_sec: 5400
+    scope:
+      - "packages/planner/**"
+      - "packages/core/src/store/**"
+      - "packages/core/src/index.ts"
+      - "packages/core/test/store.test.ts"
+      - "packages/core/test/smoke.test.ts"
+      - "scripts/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "AGENTS.md"
+    outputs: ["packages/planner/src/run.ts", "packages/planner/src/cli.ts", "scripts/e2e-stage6.sh"]
+    accept:
+      - "test -x scripts/e2e-stage6.sh"
+      - "npx --yes pnpm@10 install --frozen-lockfile=false"
+      - "npx --yes pnpm@10 test"
+      - "AGENT_GRAPH_E2E=1 bash scripts/e2e-stage5.sh"
+      - "AGENT_GRAPH_E2E=1 bash scripts/e2e-stage6.sh"
+    prompt: |
+      planner のグラフ実行と CLI を作り、旧版の agr launch と同じ結果になることを確かめる e2e を作る。6 段目の仕上げである。
+      ls と cd は command ls と builtin cd を使う。最初に AGENTS.md と docs/agents/architecture.md 全体を読む。
+      部品は揃っている。planner の parseYaml, loadSpec, validateSpec, graphFingerprint, connectDelegate, worktree の各関数。core の runDelegation の再指示ループ、store、fingerprint。
+      旧版の実装は /Users/r/00_project/dotfiles/.agents/bin/run_graph.py にある。状態遷移と human ゲートと pr ノードの振る舞いを読んで合わせる。ファイルは読むだけで、変更しない。
+
+      作るもの:
+      - packages/planner/src/run.ts。`runGraph({ repo, session, specPath, maxParallel, noPr })`
+        - 起動時に指紋を計算する。store の graphs に同じ指紋の行があれば tasks.state を引き継ぐ。無ければ新しい graphs 行を作り、前回の状態と作業ブランチを読まない
+        - ready なタスクごとに worktree を作り、connectDelegate で delegate を呼ぶ。role は executor から決める。accept, scope, outputs, title, task はタスクから渡す。review は旧版と同じ既定。cwd は worktree
+        - タスクの model と review_model は割り当て層の制約として扱わない。割り当ては daemon が決める。旧版の model 指定は無視したと events に残す
+        - 結果が done なら commitScoped してから統合ブランチにマージする。scope 内のコミットがあれば scope 外の生成物は統合しない。衝突なら conflict、failed なら failed
+        - human は waiting_human で止める。pr は noPr なら skip、そうでなければ `gh pr create` で統合ブランチから PR を作る
+        - 状態は store の graphs と tasks に書く。tasks の state と attempts を旧版と同じ語彙にする
+      - packages/planner/src/cli.ts。実行可能なエントリ `agent-graph-plan`
+        - `run --session <id> [--spec path] [--max-parallel n] [--no-pr]`、`status`、`approve|reject|retry <task>`
+        - retry は failed も受け付ける
+      - core の store に graphs と tasks の操作が足りなければ足す。index.ts から公開する
+      - scripts/e2e-stage6.sh。AGENT_GRAPH_E2E=1 のときだけ動き、それ以外は skip と表示して 0 で終わる
+        - e2e-stage5.sh と同じく状態とソケットとポートを一時ディレクトリに隔離し、AGENT_GRAPH_USAGE_PROBE=0 と安い割り当て表を使う。review の割り当ても安いモデルにする
+        - 一時 git リポジトリに fixture の tasks.yaml を置く。codex のタスク 2 つを依存でつなぎ、doc-light のタスク 1 つを並列に置き、human ゲートと pr で終える。受け入れは test -f などの機械判定
+        - 新版。`agent-graph-plan run --no-pr` で実行し、human ゲートで止まったら `agent-graph-plan approve` を送り、完了まで待つ。全タスクが done、統合ブランチに各 outputs があり、delegations と reviews に行があることを確かめる
+        - 旧版との比較。`agr` が PATH にあれば、同じ fixture を別の一時リポジトリに写し、`AGENT_GRAPH_RUNNER=local` で旧版を `agr run --session <id> --no-...` 相当で実行する。human ゲートは `agr approve` で通す。pr ノードは旧版では skip できないなら、pr を除いた fixture を両方に使う。両者の各タスクの最終状態と、統合ブランチのファイルの一覧を比べ、一致を確かめる。`agr` が無ければ比較を skip と表示する
+        - 失敗したら daemon.log と各子の出力を表示して非 0 で終わる。終了時にデーモンを止める
+      - AGENTS.md に 6 段目の範囲と agent-graph-plan の使い方を 2〜3 行で足す
+
+      制約: 依存を追加しない。enum と namespace を使わない。scope 外に触らない。dotfiles の旧版のファイルを変更しない。利用者の本物の ~/.claude と ~/.codex に書かない。
+      サンドボックスでは npm registry に届かず、本物の claude と codex も起こせない。e2e は受け入れ検証でサンドボックスの外から走る。単体の検証は `node --test` を各パッケージで走らせ、結果を報告に載せる。受け入れコマンドは受け入れ検証が走らせると書く。報告は実際の差分と一致させる。
+
+  - id: G6
+    title: 6 段目の統合結果を確認
+    executor: human
+    depends_on: [L4]
+    prompt: |
+      統合ブランチで `npx --yes pnpm@10 test` と 5 段目と 6 段目の e2e が通れば承認する。
+
+  - id: PR
+    title: PR を作成
+    executor: pr
+    depends_on: [G6]

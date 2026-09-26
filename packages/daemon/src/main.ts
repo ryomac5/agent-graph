@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { execFile } from "node:child_process";
-import { appendFileSync, realpathSync } from "node:fs";
+import { appendFileSync, existsSync, readdirSync, realpathSync } from "node:fs";
 import { mkdir, open, readFile, unlink } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
@@ -19,7 +19,8 @@ import type { DelegateHandler } from "./mcp/server.ts";
 import { runDir } from "./paths.ts";
 import { readDashboardPort } from "./config.ts";
 import { startHttpServer } from "./http/server.ts";
-import { startSocketServer, type Hello } from "./socket.ts";
+import { processStartedAt, startLivenessMonitor } from "./liveness.ts";
+import { startSocketServer, type Hello, type HelloHandler } from "./socket.ts";
 
 const execFileAsync = promisify(execFile);
 const CODEX_INTERVAL_MS = 60_000;
@@ -71,38 +72,116 @@ export function startUsageProbe(stores: Map<string, Store>, options: {
   return { stop: async () => { clear(codex); clear(claude); await Promise.allSettled(inflight.values()); } };
 }
 
-export function createHandler(stores: Map<string, Store>, latest = new Map<string, UsageSample>()): DelegateHandler<Hello, DelegateResult> {
-  const callers = new WeakMap<Hello, { sessionId: string; traceId: string; spanId: string }>();
-  return async (request, hello) => {
-    const repoRoot = (await execFileAsync("git", ["rev-parse", "--show-toplevel"], { cwd: hello.cwd })).stdout.trim();
-    const key = repoKey(repoRoot);
-    let store = stores.get(key);
-    if (!store) {
-      store = openStore(stateDbPath(key));
-      store.upsertRepo({ key, rootPath: repoRoot, name: basename(repoRoot) });
-      for (const value of latest.values()) saveUsage(store, key, value);
-      stores.set(key, store);
-    }
-    const state = parseTracestate(hello.tracestate);
-    let caller = callers.get(hello);
-    if (!caller) {
-      const sessionId = state.sessionId ?? hello.session ?? ulid();
-      const existing = store.db.prepare("SELECT trace_id FROM sessions WHERE id = ?").get(sessionId);
-      caller = { sessionId,
-        ...(parseTraceparent(hello.traceparent) ?? {
-          traceId: existing ? String(existing.trace_id) : newTraceId(), spanId: newSpanId(),
-        }) };
-      callers.set(hello, caller);
-    }
+interface Caller { sessionId: string; traceId: string; spanId: string }
+// hello ごとの呼び出し元。hello の処理と delegate の処理で同じ対応を共有し、セッションを二重に作らない。
+export type Callers = WeakMap<Hello, Caller>;
+
+// hello の cwd から repo を解決し、その store を開く。
+async function repoStoreOf(stores: Map<string, Store>, latest: Map<string, UsageSample>, cwd: string):
+  Promise<{ store: Store; key: string; repoRoot: string }> {
+  const repoRoot = (await execFileAsync("git", ["rev-parse", "--show-toplevel"], { cwd })).stdout.trim();
+  const key = repoKey(repoRoot);
+  let store = stores.get(key);
+  if (!store) {
+    store = openStore(stateDbPath(key));
+    store.upsertRepo({ key, rootPath: repoRoot, name: basename(repoRoot) });
+    for (const value of latest.values()) saveUsage(store, key, value);
+    stores.set(key, store);
+  }
+  return { store, key, repoRoot };
+}
+
+function callerOf(hello: Hello, store: Store, callers: Callers): { caller: Caller; created: boolean } {
+  const known = callers.get(hello);
+  if (known) return { caller: known, created: false };
+  const sessionId = parseTracestate(hello.tracestate).sessionId ?? hello.session ?? ulid();
+  const existing = store.db.prepare("SELECT trace_id FROM sessions WHERE id = ?").get(sessionId);
+  const caller = { sessionId,
+    ...(parseTraceparent(hello.traceparent) ?? {
+      traceId: existing ? String(existing.trace_id) : newTraceId(), spanId: newSpanId(),
+    }) };
+  callers.set(hello, caller);
+  return { caller, created: true };
+}
+
+// 根の hello か。委譲の子は tracestate に delegation を持つ。main の delegate 処理と同じ判定。
+function isRootHello(hello: Hello): boolean {
+  return !parseTracestate(hello.tracestate).delegationId;
+}
+
+// hello を受けた時点で根の pid と起動時刻を記録する。委譲していない根も生死判定の材料を持つ。
+// 既存のセッションは running に戻して pid を更新し、未登録なら登録する。委譲の子からの hello では根を書き換えない。
+export function createHelloHandler(stores: Map<string, Store>, latest = new Map<string, UsageSample>(),
+  callers: Callers = new WeakMap()): HelloHandler {
+  return async (hello) => {
+    if (!isRootHello(hello)) return;
+    const { store, key } = await repoStoreOf(stores, latest, hello.cwd);
+    const { caller } = callerOf(hello, store, callers);
+    // 起動時刻の取得は await を挟む。セッションの読み取りはこの後で行い、並行した登録を見落とさない。
+    const pidStartedAt = await processStartedAt(hello.pid);
     const session = store.db.prepare("SELECT trace_id FROM sessions WHERE id = ?").get(caller.sessionId);
     if (session && session.trace_id !== caller.traceId) throw new Error("Session trace does not match hello");
-    if (!session) store.insertSession({ id: caller.sessionId, repoKey: key, name: caller.sessionId,
-      client: hello.client ?? "mcp", traceId: caller.traceId, startedAt: new Date().toISOString() });
-    if (session && hello.client && !state.delegationId) store.updateSessionClient(caller.sessionId, hello.client);
+    const now = new Date().toISOString();
+    if (!session) {
+      store.insertNamedSession({ id: caller.sessionId, repoKey: key, client: hello.client ?? "mcp",
+        traceId: caller.traceId, startedAt: now, pid: hello.pid, pidStartedAt });
+      return;
+    }
+    // 終了済みのセッションが同じ id で戻ってきたら running に戻す
+    store.resumeSession(caller.sessionId, now);
+    store.setSessionProcess(caller.sessionId, hello.pid, pidStartedAt, now);
+    if (hello.client) store.updateSessionClient(caller.sessionId, hello.client);
+  };
+}
+
+export function createHandler(stores: Map<string, Store>, latest = new Map<string, UsageSample>(),
+  callers: Callers = new WeakMap()): DelegateHandler<Hello, DelegateResult> {
+  return async (request, hello) => {
+    const { store, key, repoRoot } = await repoStoreOf(stores, latest, hello.cwd);
+    const state = parseTracestate(hello.tracestate);
+    const { caller, created: firstRequest } = callerOf(hello, store, callers);
+    // 根の pid と起動時刻は生死判定に使う。委譲の子からの hello では親の記録を上書きしない。
+    const rootHello = isRootHello(hello);
+    // 起動時刻の取得は await を挟む。同じ hello の並行した要求が片方の挿入を見落とさないよう、セッションの読み取りはこの後で行う。
+    const pidStartedAt = rootHello && firstRequest ? await processStartedAt(hello.pid) : undefined;
+    const session = store.db.prepare("SELECT trace_id FROM sessions WHERE id = ?").get(caller.sessionId);
+    if (session && session.trace_id !== caller.traceId) throw new Error("Session trace does not match hello");
+    const now = new Date().toISOString();
+    if (!session) store.insertNamedSession({ id: caller.sessionId, repoKey: key,
+      client: hello.client ?? "mcp", traceId: caller.traceId, startedAt: now,
+      ...(rootHello ? { pid: hello.pid, pidStartedAt } : {}) });
+    else if (rootHello && firstRequest) {
+      // 終了済みのセッションが同じ id で戻ってきたら running に戻す
+      store.resumeSession(caller.sessionId, now);
+      store.setSessionProcess(caller.sessionId, hello.pid, pidStartedAt, now);
+    }
+    else if (rootHello) store.touchSession(caller.sessionId, now);
+    if (session && hello.client && rootHello) store.updateSessionClient(caller.sessionId, hello.client);
     return runDelegation(request, { repoKey: key, repoRoot, sessionId: caller.sessionId,
       trace: { traceId: caller.traceId, spanId: caller.spanId, traceState: hello.tracestate },
       parentDelegationId: state.delegationId }, { store, usageSamples: [...latest.values()] });
   };
+}
+
+// 状態置き場にある全リポジトリの store を開く。開けなかったものは例外を返し、起動は止めない。
+export function openAllStores(stores: Map<string, Store>, env: NodeJS.ProcessEnv = process.env): Error[] {
+  const errors: Error[] = [];
+  let keys: string[];
+  try { keys = readdirSync(dirname(dirname(stateDbPath("probe", env))), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory()).map((entry) => entry.name); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return errors;
+    return [error as Error];
+  }
+  for (const key of keys) {
+    if (stores.has(key)) continue;
+    let path: string;
+    try { path = stateDbPath(key, env); } catch { continue; }
+    if (!existsSync(path)) continue;
+    try { stores.set(key, openStore(path)); }
+    catch (error) { errors.push(error as Error); }
+  }
+  return errors;
 }
 
 async function claimPid(path: string): Promise<void> {
@@ -148,15 +227,20 @@ export async function startDaemon(): Promise<{ stop: () => Promise<void> }> {
   const stores = new Map<string, Store>();
   const latest = new Map<string, UsageSample>();
   const usageProbe = startUsageProbe(stores, { latest });
-  const handler = createHandler(stores, latest);
+  const liveness = startLivenessMonitor(stores, { onError: (error) => log(String(error)) });
+  const callers: Callers = new WeakMap();
+  const handler = createHandler(stores, latest, callers);
+  const onHello = createHelloHandler(stores, latest, callers);
   const pending = new Set<Promise<unknown>>();
   let http: Awaited<ReturnType<typeof startHttpServer>> | undefined;
   try {
+    // 再起動のあとも、状態置き場にある全リポジトリを見回りの対象にする
+    for (const error of openAllStores(stores)) log(String(error));
     const repoRoot = await execFileAsync("git", ["rev-parse", "--show-toplevel"], { cwd: process.cwd() })
       .then(({ stdout }) => stdout.trim(), () => undefined);
     if (repoRoot) {
       const key = repoKey(repoRoot);
-      const store = openStore(stateDbPath(key));
+      const store = stores.get(key) ?? openStore(stateDbPath(key));
       store.upsertRepo({ key, rootPath: repoRoot, name: basename(repoRoot) });
       stores.set(key, store);
     }
@@ -168,6 +252,7 @@ export async function startDaemon(): Promise<{ stop: () => Promise<void> }> {
     if (!address || typeof address === "string") throw new Error("HTTP address unavailable");
     log(`dashboard http://127.0.0.1:${address.port}/`);
     const server = await startSocketServer({ socketPath: process.env.AGENT_GRAPH_SOCKET || join(dir, "daemon.sock"),
+      onHello, onError: (error) => log(String(error)),
       handler: async (request, hello) => {
         const result = handler(request, hello);
         pending.add(result);
@@ -194,6 +279,7 @@ export async function startDaemon(): Promise<{ stop: () => Promise<void> }> {
       http!.closeAllConnections();
       await new Promise<void>((resolve) => http!.close(() => resolve()));
       await usageProbe.stop();
+      await liveness.stop();
       for (const store of stores.values()) store.close();
       await unlink(pidPath);
       log("stopped");
@@ -208,6 +294,7 @@ export async function startDaemon(): Promise<{ stop: () => Promise<void> }> {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
     await usageProbe.stop();
+    await liveness.stop();
     for (const store of stores.values()) store.close();
     await unlink(pidPath);
     throw error;

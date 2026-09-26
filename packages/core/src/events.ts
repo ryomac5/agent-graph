@@ -9,6 +9,7 @@ export type EventKind =
   | "acceptance.evaluated"
   | "review.evaluated"
   | "delegation.finished"
+  | "delegation.lost"
   | "usage.sampled"
   | "guard.denied";
 
@@ -22,6 +23,8 @@ export interface EventPayload {
   "acceptance.evaluated": { delegationId: string; passed: boolean };
   "review.evaluated": { delegationId: string; verdict: "approve" | "request_changes" };
   "delegation.finished": { delegationId: string; status: "done" | "failed" | "timeout" | "denied" };
+  // 親セッションの終了で失われた。あとで実際に完了すれば finished が事実として上書きする
+  "delegation.lost": { delegationId: string; reason: string };
   "usage.sampled": { provider: string; window: string; percent: number; model?: string };
   "guard.denied": { command: string; reason: string };
 }

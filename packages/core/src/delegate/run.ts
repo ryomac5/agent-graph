@@ -17,6 +17,8 @@ import type { AcceptanceResult, Assignment, DelegateRequest, DelegateResult, Mod
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_TIMEOUT_SEC = 1800;
+const REVIEW_DIFF_CHAR_LIMIT = 30000;
+const REVIEW_DIFF_TRUNCATED = "\n…(以降省略)";
 const EMPTY_ACCEPTANCE: AcceptanceResult = { passed: false, results: [], scopeViolations: [] };
 const EMPTY_USAGE = { inputTokens: 0, outputTokens: 0 };
 
@@ -45,6 +47,22 @@ function readVerdict(output: string): "approve" | "request_changes" {
   return line === "VERDICT: approve" ? "approve" : "request_changes";
 }
 
+async function readReviewDiff(cwd: string, baseRef: string): Promise<string> {
+  let diff = (await execFileAsync("git", ["diff", baseRef, "--"], { cwd, maxBuffer: 10 * 1024 * 1024 })).stdout;
+  const untracked = (await execFileAsync("git", ["ls-files", "--others", "--exclude-standard", "-z"], { cwd })).stdout;
+  for (const file of untracked.split("\0").filter(Boolean)) {
+    try {
+      await execFileAsync("git", ["diff", "--no-index", "--", "/dev/null", file], { cwd, maxBuffer: 10 * 1024 * 1024 });
+    } catch (error) {
+      const result = error as Error & { code?: number; stdout?: string };
+      if (result.code !== 1 || result.stdout === undefined) throw error;
+      diff += result.stdout;
+    }
+  }
+  return diff.length > REVIEW_DIFF_CHAR_LIMIT
+    ? diff.slice(0, REVIEW_DIFF_CHAR_LIMIT) + REVIEW_DIFF_TRUNCATED : diff;
+}
+
 export async function runDelegation(
   req: DelegateRequest, caller: DelegationCaller, deps: DelegationDeps,
 ): Promise<DelegateResult> {
@@ -71,9 +89,12 @@ export async function runDelegation(
   let review: DelegateResult["review"];
   let finished = false;
   let roundTrips = 0;
+  // 依頼の詳細と往復は表に残し、詳細パネルが events を辿らずに読めるようにする
   store.insertDelegation({ id: delegationId, repoKey: caller.repoKey,
     sessionId: caller.sessionId, parentId: caller.parentDelegationId,
-    role: req.role, title: req.title, status: "requested" });
+    role: req.role, title: req.title, status: "requested",
+    task: req.task, scope: req.scope, outputs: req.outputs, worktree: cwd });
+  store.insertDelegationRound(delegationId, "request", req.task, now().toISOString());
   store.insertSpan({ trace, name: "delegate", startedAt: now().toISOString(), status: "unset",
     attributes: { "agent.role": req.role, "agent.executor": "", "agent.model": "",
       "agent.session": caller.sessionId, "agent.delegation": delegationId } });
@@ -138,6 +159,7 @@ export async function runDelegation(
           await rm(workDir, { recursive: true, force: true });
         }
         output = execution.output;
+        store.insertDelegationRound(delegationId, "report", output, now().toISOString());
         usage = { inputTokens: usage.inputTokens + execution.usage.inputTokens, outputTokens: usage.outputTokens + execution.usage.outputTokens };
         if (roundTrips === 0) store.insertTokenUsage(delegationId, usage, assignment.model);
         else store.db.prepare("UPDATE token_usage SET input_tokens = ?, output_tokens = ? WHERE delegation_id = ?").run(usage.inputTokens, usage.outputTokens, delegationId);
@@ -154,7 +176,7 @@ export async function runDelegation(
           event("acceptance.evaluated", { delegationId, passed: acceptance.passed });
           status = execution.exitCode === 0 && acceptance.passed ? "done" : "failed";
           if (status === "done" && (req.review ?? req.role === "implement")) {
-            const diff = (await execFileAsync("git", ["diff"], { cwd, maxBuffer: 10 * 1024 * 1024 })).stdout;
+            const diff = await readReviewDiff(cwd, baseRef);
             const reviewResult = await runDelegation({
               role: "review", title: `Review: ${req.title}`, cwd,
               task: `元の依頼:\n${req.task}\n\n受け入れ結果:\n${JSON.stringify(acceptance)}\n\ngit diff:\n${diff}\n\n最終行に VERDICT: approve または VERDICT: request_changes を書いてください。`,
@@ -174,12 +196,14 @@ export async function runDelegation(
         const feedback = !acceptance.passed || execution.exitCode !== 0
           ? `受け入れ失敗 (exitCode: ${execution.exitCode}):\n${JSON.stringify(acceptance)}`
           : `レビューの修正依頼:\n${review?.comment ?? ""}`;
-        task = `${req.task}\n\n前回の結果を踏まえて修正してください。\n${feedback}`;
+        const reinstruction = `前回の結果を踏まえて修正してください。\n${feedback}`;
+        task = `${req.task}\n\n${reinstruction}`;
         roundTrips++;
+        store.insertDelegationRound(delegationId, "reinstruct", reinstruction, now().toISOString());
         store.db.prepare("UPDATE delegations SET round_trips = ? WHERE id = ?").run(roundTrips, delegationId);
       }
     }
-    store.finishDelegation(delegationId, status);
+    store.finishDelegation(delegationId, status, output);
     event("delegation.finished", { delegationId, status });
     finished = true;
     return { delegationId, traceId: trace.traceId, spanId: trace.spanId, status,

@@ -128,4 +128,60 @@ export const migrations: readonly Migration[] = [
       );
     `,
   },
+  {
+    // セッションの状態と生死、turn、planner の判断の受け渡し。
+    version: 2,
+    sql: `
+      ALTER TABLE sessions ADD COLUMN status TEXT NOT NULL DEFAULT 'running'
+        CHECK (status IN ('running', 'waiting', 'ended'));
+      ALTER TABLE sessions ADD COLUMN ended_at TEXT;
+      ALTER TABLE sessions ADD COLUMN pid INTEGER;
+      ALTER TABLE sessions ADD COLUMN pid_started_at TEXT;
+      ALTER TABLE sessions ADD COLUMN waiting_reason TEXT;
+      ALTER TABLE sessions ADD COLUMN goal TEXT;
+      ALTER TABLE sessions ADD COLUMN model TEXT;
+      ALTER TABLE sessions ADD COLUMN last_seen_at TEXT;
+      UPDATE sessions SET last_seen_at = started_at WHERE last_seen_at IS NULL;
+      ALTER TABLE delegations ADD COLUMN kind TEXT NOT NULL DEFAULT 'delegation'
+        CHECK (kind IN ('delegation', 'subagent'));
+      CREATE TABLE turns (
+        id TEXT PRIMARY KEY NOT NULL,
+        session_id TEXT NOT NULL REFERENCES sessions(id),
+        at TEXT NOT NULL,
+        prompt TEXT NOT NULL DEFAULT '',
+        summary TEXT,
+        reply TEXT,
+        hidden INTEGER NOT NULL DEFAULT 0 CHECK (hidden IN (0, 1))
+      );
+      CREATE INDEX turns_session ON turns (session_id, at);
+      CREATE TABLE task_decisions (
+        graph_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        action TEXT NOT NULL,
+        at TEXT NOT NULL
+      );
+      CREATE INDEX task_decisions_task ON task_decisions (graph_id, task_id, at);
+    `,
+  },
+  {
+    // 委譲の詳細（依頼文、scope、outputs、出力、作業木）と往復の記録。セッションの終了理由。
+    version: 3,
+    sql: `
+      ALTER TABLE sessions ADD COLUMN ended_reason TEXT
+        CHECK (ended_reason IN ('process_exit', 'idle', 'explicit'));
+      ALTER TABLE delegations ADD COLUMN task TEXT;
+      ALTER TABLE delegations ADD COLUMN scope TEXT;
+      ALTER TABLE delegations ADD COLUMN outputs TEXT;
+      ALTER TABLE delegations ADD COLUMN output TEXT;
+      ALTER TABLE delegations ADD COLUMN worktree TEXT;
+      CREATE TABLE delegation_rounds (
+        delegation_id TEXT NOT NULL REFERENCES delegations(id),
+        seq INTEGER NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('request', 'reinstruct', 'report')),
+        text TEXT NOT NULL,
+        at TEXT NOT NULL,
+        PRIMARY KEY (delegation_id, seq)
+      );
+    `,
+  },
 ];

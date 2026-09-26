@@ -1,157 +1,246 @@
-import { applySnapshot, applyDelegation, edgeDirection, layout } from "./model.js";
+// 画面の起点。契約の Overview と ProjectView を feed で受け、ヘッダー・canvas・詳細に配る
+import { countProject, sumCounts } from "./lib/status.js";
+import { dismissKey } from "./lib/visible.js";
+import { renderDetail } from "./ui/detail.js";
+import { el } from "./ui/dom.js";
+import { openFeed } from "./ui/feed.js";
+import { renderHeader } from "./ui/header.js";
+import { renderOverview } from "./ui/overview.js";
+import { buildProjectSection, scopesOf } from "./ui/project.js";
+import { setupSplitter } from "./ui/splitter.js";
+import { toast } from "./ui/toast.js";
+import { readToken, sendAction } from "./ui/action.js";
 
-const SVG_NS = "http://www.w3.org/2000/svg";
-const EMPTY_GRAPH = { nodes: [], edges: [] };
-const repoSelect = document.querySelector("#repo");
-const graphElement = document.querySelector("#graph");
-const emptyElement = document.querySelector("#empty");
-const detailsElement = document.querySelector("#details");
-const connectionElement = document.querySelector("#connection");
-const countElement = document.querySelector("#count");
-let state = EMPTY_GRAPH;
-let selectedId = null;
-let events = null;
+const TOKEN = readToken(document);
+const PROJECT_KEY = "agent-graph:project";
+const DISMISS_KEY = "agent-graph:dismissed";
+const CANVAS_MARGIN = 64;
+const CANVAS_MAX = 1200;
 
-function svg(name, attributes = {}) {
-  const element = document.createElementNS(SVG_NS, name);
-  for (const [key, value] of Object.entries(attributes)) element.setAttribute(key, String(value));
-  return element;
+function loadJson(key, fallback) {
+  try { const value = JSON.parse(localStorage.getItem(key) || "null"); return value == null ? fallback : value; }
+  catch { return fallback; }
+}
+function loadSelectedProjects() {
+  const value = loadJson(PROJECT_KEY, []);
+  if (Array.isArray(value)) return [...new Set(value.filter((k) => typeof k === "string"))];
+  return typeof value === "string" ? [value] : [];
 }
 
-function familyOf(node) {
-  if (node.family === "anthropic" || node.executor === "claude") return "anthropic";
-  if (node.family === "openai" || node.executor === "codex") return "openai";
-  return "other";
+const state = {
+  overview: null, views: new Map(), feeds: new Map(), feedState: new Map(), unavailable: new Map(), updatedAt: "",
+  selectedProjects: loadSelectedProjects(), selectedScope: null, selectedNode: null,
+  dismissed: new Set(loadJson(DISMISS_KEY, [])), expandedArchive: new Set(),
+  knownEdges: new Map(), knownNodes: new Map(), fresh: new Map(), zoom: new Map(),
+  expandedRounds: new Set(), hiddenTurns: new Set(), factsOpen: { value: false }, chatView: { key: "", top: 0, stick: true },
+};
+let previousCanvas = "";
+let previousDetail = "";
+
+const canvas = document.getElementById("canvas");
+const aside = document.getElementById("detail");
+
+// 操作の送信。契約の ActionRequest だけを送り、失敗はトーストに出す
+async function postAction(body) {
+  const result = await sendAction(body, { token: TOKEN, notify: toast });
+  previousCanvas = "";
+  previousDetail = "";
+  return result;
 }
 
-function showDetails() {
-  detailsElement.replaceChildren();
-  const node = state.nodes.find((item) => item.id === selectedId);
-  if (!node) {
-    const hint = document.createElement("p");
-    hint.className = "hint";
-    hint.textContent = "ノードを選択すると詳細を表示します。";
-    detailsElement.append(hint);
+function projectKeyOf(scopeId) {
+  for (const [key, view] of state.views) if (scopesOf(view).some((s) => s.id === scopeId)) return key;
+  return state.selectedProjects[0] || "";
+}
+
+function currentScope() {
+  if (!state.selectedScope) return null;
+  for (const view of state.views.values()) {
+    const scope = scopesOf(view).find((s) => s.id === state.selectedScope);
+    if (scope) return scope;
+  }
+  return null;
+}
+
+const projects = () => (state.overview && state.overview.projects) || [];
+const selectedViews = () => state.selectedProjects.map((key) => state.views.get(key)).filter(Boolean);
+
+function connectionState() {
+  const keys = ["", ...state.selectedProjects];
+  const states = keys.map((k) => state.feedState.get(k) || "connecting");
+  if (states.some((s) => s === "offline")) return "offline";
+  if (states.every((s) => s === "live")) return "live";
+  return "connecting";
+}
+
+// 件数はサーバーの ProjectSummary を正とする。Overview が無いときだけ画面の nodes から数える
+function headerCounts() {
+  if (!state.selectedProjects.length) return sumCounts(projects().map((p) => p.counts));
+  const summaries = projects().filter((p) => state.selectedProjects.includes(p.key));
+  if (summaries.length === state.selectedProjects.length) return sumCounts(summaries.map((p) => p.counts));
+  return sumCounts(selectedViews().map((view) => countProject(view, state.dismissed)));
+}
+
+const ctx = {
+  get dismissed() { return state.dismissed; },
+  get expandedArchive() { return state.expandedArchive; },
+  get selectedScope() { return state.selectedScope; },
+  get selectedNode() { return state.selectedNode; },
+  knownEdges: state.knownEdges, knownNodes: state.knownNodes, fresh: state.fresh, zoom: state.zoom, orbSlots: new Map(),
+  expandedRounds: state.expandedRounds, hiddenTurns: state.hiddenTurns, factsOpen: state.factsOpen, chatView: state.chatView,
+  maxWidth: 0, projectName: "",
+  confirm: (text) => window.confirm(text),
+  onOpen: (key, additive) => openProject(key, additive),
+  onSelect: (scope, nodeId) => {
+    state.selectedScope = scope.id;
+    state.selectedNode = nodeId;
+    state.factsOpen.value = false;
+    render();
+  },
+  onToggleDismiss: (scope, nodeId) => {
+    const key = dismissKey(scope.id, nodeId);
+    if (state.dismissed.has(key)) state.dismissed.delete(key);
+    else { state.dismissed.add(key); state.expandedArchive.delete(scope.id); }
+    localStorage.setItem(DISMISS_KEY, JSON.stringify([...state.dismissed]));
+    previousCanvas = "";
+    render();
+  },
+  onToggleArchive: (scope) => {
+    if (state.expandedArchive.has(scope.id)) state.expandedArchive.delete(scope.id); else state.expandedArchive.add(scope.id);
+    previousCanvas = "";
+    render();
+  },
+  // body は契約の ActionRequest の項目。nodeId は画面の中で隠し設定を外すためだけに使い、送らない
+  onAction: async (body, nodeId) => {
+    const repo = projectKeyOf(state.selectedScope) || state.selectedProjects[0] || "";
+    const result = await postAction({ repo, ...body });
+    if (result.ok && ["approve", "retry"].includes(body.action) && nodeId && state.selectedScope) {
+      if (state.dismissed.delete(dismissKey(state.selectedScope, nodeId))) localStorage.setItem(DISMISS_KEY, JSON.stringify([...state.dismissed]));
+    }
+    render();
+    return result.message;
+  },
+  onHideTurn: async (scope, turnId) => {
+    // 先に画面から外し、サーバに記録できなければ戻す
+    const key = `${scope.id}::${turnId}`;
+    state.hiddenTurns.add(key);
+    previousDetail = "";
+    render();
+    const result = await postAction({ repo: projectKeyOf(scope.id), action: "hide_turn", sessionId: scope.sessionId, turnId });
+    if (!result.ok) { state.hiddenTurns.delete(key); previousDetail = ""; render(); }
+  },
+};
+
+// Overview と Project ページの切り替え。null で Overview へ戻す
+function openProject(key, additive = false) {
+  const keys = additive
+    ? state.selectedProjects.includes(key) ? state.selectedProjects.filter((k) => k !== key) : [...state.selectedProjects, key]
+    : key ? [key] : [];
+  state.selectedProjects = [...new Set(keys)];
+  if (state.selectedProjects.length) localStorage.setItem(PROJECT_KEY, JSON.stringify(state.selectedProjects)); else localStorage.removeItem(PROJECT_KEY);
+  const scope = currentScope();
+  if (!scope || !state.selectedProjects.includes(projectKeyOf(scope.id))) { state.selectedScope = null; state.selectedNode = null; }
+  syncFeeds();
+  previousCanvas = "";
+  previousDetail = "";
+  render(true);
+}
+
+// 開いているプロジェクトの分だけ feed を持つ。Overview の feed は常に持つ
+function syncFeeds() {
+  const wanted = new Set(["", ...state.selectedProjects]);
+  for (const [key, feed] of state.feeds) if (!wanted.has(key)) { feed.close(); state.feeds.delete(key); state.feedState.delete(key); state.views.delete(key); }
+  for (const key of wanted) {
+    if (state.feeds.has(key)) continue;
+    state.feeds.set(key, openFeed(key, {
+      onData: (data) => {
+        if (key) { state.views.set(key, data); state.unavailable.delete(key); } else state.overview = data;
+        state.updatedAt = data.updatedAt || new Date().toISOString();
+        render();
+      },
+      onState: (s) => { state.feedState.set(key, s); renderHead(); },
+      // /api/project の取得に失敗したプロジェクトは Unavailable にする
+      onError: (message) => { if (key) { state.unavailable.set(key, message); previousCanvas = ""; render(); } },
+    }));
+  }
+}
+
+function pickDefaultScope() {
+  if (currentScope()) return;
+  const scopes = selectedViews().flatMap(scopesOf);
+  const live = scopes.find((s) => s.kind === "session" && s.status !== "ended" && s.status !== "lost") || scopes[0];
+  state.selectedScope = live ? live.id : null;
+  state.selectedNode = null;
+}
+
+function renderHead() {
+  renderHeader(document, {
+    projects: projects(), selected: state.selectedProjects, counts: headerCounts(),
+    usage: state.selectedProjects.length ? (selectedViews()[0] || {}).usage || (state.overview || {}).usage : (state.overview || {}).usage,
+    connection: connectionState(), updatedAt: state.updatedAt,
+  }, ctx);
+}
+
+function renderCanvas(enter) {
+  if (!state.selectedProjects.length) {
+    previousCanvas = "";
+    renderOverview(canvas, state.overview, ctx, state.unavailable);
     return;
   }
-  const title = document.createElement("h3");
-  title.className = "detail-title";
-  title.textContent = node.title;
-  const list = document.createElement("dl");
-  for (const [label, value] of Object.entries({ ID: node.id, 種類: node.kind, 役割: node.role, 状態: node.status, 実行: node.executor, モデル: node.model, 系統: node.family, 開始: node.startedAt, 終了: node.endedAt })) {
-    if (value == null || value === "") continue;
-    const term = document.createElement("dt");
-    const description = document.createElement("dd");
-    term.textContent = label;
-    description.textContent = value;
-    list.append(term, description);
+  canvas.classList.remove("overview");
+  ctx.orbSlots.clear();
+  ctx.maxWidth = Math.min(CANVAS_MAX, Math.max(360, canvas.clientWidth - CANVAS_MARGIN));
+  const signature = JSON.stringify([state.selectedProjects, selectedViews(), state.selectedScope, state.selectedNode, [...state.dismissed], [...state.expandedArchive], ctx.maxWidth]);
+  if (signature === previousCanvas && !enter) return;
+  previousCanvas = signature;
+  const view = el("div", undefined, "project-view" + (enter ? " enter" : ""));
+  for (const key of state.selectedProjects) {
+    const data = state.views.get(key);
+    const failure = state.unavailable.get(key);
+    if (data) { view.append(buildProjectSection(data, ctx, failure)); continue; }
+    const summary = projects().find((p) => p.key === key);
+    const section = el("section", undefined, "project");
+    section.append(el("h2", summary ? summary.name : key), el("p", failure ? `Unavailable: ${failure}` : "Loading…", failure ? "hint" : "empty"));
+    view.append(section);
   }
-  detailsElement.append(title, list);
+  const scrollTop = canvas.scrollTop;
+  canvas.replaceChildren(view);
+  canvas.scrollTop = scrollTop;
+  for (const holder of canvas.querySelectorAll(".graph-holder")) if (holder.startSparks) holder.startSparks();
 }
 
-function drawGraph() {
-  const positions = layout(state).nodes;
-  const points = new Map(positions.map((point) => [point.id, point]));
-  const width = Math.max(800, ...positions.map((point) => point.x + 170));
-  const height = Math.max(520, ...positions.map((point) => point.y + 100));
-  graphElement.setAttribute("viewBox", `0 0 ${width} ${height}`);
-  graphElement.setAttribute("width", width);
-  graphElement.setAttribute("height", height);
-  graphElement.replaceChildren();
-  emptyElement.hidden = state.nodes.length > 0;
-  countElement.textContent = `${state.nodes.length} ノード / ${state.edges.length} 辺`;
-
-  const defs = svg("defs");
-  for (const [id, color] of [["anthropic", "#b46b43"], ["openai", "#197c75"], ["same", "#65748b"], ["unknown", "#94a3b8"]]) {
-    const marker = svg("marker", { id: `arrow-${id}`, markerWidth: 8, markerHeight: 8, refX: 7, refY: 4, orient: "auto" });
-    marker.append(svg("path", { d: "M0 0 L8 4 L0 8 Z", fill: color }));
-    defs.append(marker);
+function renderAside() {
+  if (!state.selectedProjects.length) {
+    if (previousDetail !== "overview") { aside.replaceChildren(el("p", "Open a project to see its sessions", "empty")); previousDetail = "overview"; }
+    return;
   }
-  graphElement.append(defs);
-  for (const edge of state.edges) {
-    const from = points.get(edge.from);
-    const to = points.get(edge.to);
-    if (!from || !to) continue;
-    const direction = edgeDirection(edge);
-    const color = direction === "anthropic→openai" ? "#b46b43" : direction === "openai→anthropic" ? "#197c75" : direction === "same" ? "#65748b" : "#94a3b8";
-    const startX = from.x + 100;
-    const endX = to.x - 100;
-    const path = svg("path", { d: `M${startX} ${from.y} C${startX + 70} ${from.y},${endX - 70} ${to.y},${endX} ${to.y}`, fill: "none", stroke: color, "stroke-width": 2, "marker-end": `url(#arrow-${direction === "anthropic→openai" ? "anthropic" : direction === "openai→anthropic" ? "openai" : direction})` });
-    graphElement.append(path);
-    const label = svg("text", { x: (startX + endX) / 2, y: (from.y + to.y) / 2 - 12, "text-anchor": "middle", class: "edge-label" });
-    label.textContent = `${edge.title ?? "委譲"} · ${direction}`;
-    graphElement.append(label);
-  }
-  for (const point of positions) {
-    const node = state.nodes.find((item) => item.id === point.id);
-    const family = familyOf(node);
-    const color = family === "anthropic" ? "#b46b43" : family === "openai" ? "#197c75" : "#65748b";
-    const group = svg("g", { class: "node", tabindex: 0, role: "button", "aria-label": `${node.title} の詳細` });
-    group.append(svg("rect", { x: point.x - 100, y: point.y - 36, width: 200, height: 72, rx: 9, fill: "#fff", stroke: selectedId === node.id ? "#1a2332" : color, "stroke-width": selectedId === node.id ? 3 : 2 }));
-    const title = svg("text", { x: point.x - 88, y: point.y - 4, fill: "#1a2332", "font-size": 13, "font-weight": 600 });
-    title.textContent = node.title.length > 22 ? `${node.title.slice(0, 21)}…` : node.title;
-    const subtitle = svg("text", { x: point.x - 88, y: point.y + 20, fill: color, "font-size": 11 });
-    subtitle.textContent = `${node.kind === "session" ? "セッション" : "委譲"} · ${node.executor ?? node.family ?? "未割り当て"} · ${node.status ?? ""}`;
-    group.append(title, subtitle);
-    group.addEventListener("click", () => { selectedId = node.id; drawGraph(); showDetails(); });
-    group.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); group.dispatchEvent(new Event("click")); } });
-    graphElement.append(group);
-  }
-  showDetails();
+  pickDefaultScope();
+  const scope = currentScope();
+  const signature = JSON.stringify([state.selectedScope, state.selectedNode, scope, [...state.hiddenTurns]]);
+  if (signature === previousDetail) return;
+  previousDetail = signature;
+  const view = state.views.get(projectKeyOf(state.selectedScope));
+  ctx.projectName = view ? view.project.name : "";
+  renderDetail(aside, scope, state.selectedNode, ctx);
 }
 
-function connect(repo) {
-  events?.close();
-  events = new EventSource(`/api/events?repo=${encodeURIComponent(repo)}`);
-  connectionElement.textContent = "接続中";
-  events.addEventListener("open", () => { connectionElement.textContent = "ライブ"; });
-  events.addEventListener("error", () => { connectionElement.textContent = "再接続中"; });
-  events.addEventListener("snapshot", (event) => {
-    if (repoSelect.value !== repo) return;
-    state = applySnapshot(EMPTY_GRAPH, JSON.parse(event.data));
-    drawGraph();
-  });
-  events.addEventListener("delegation", (event) => {
-    if (repoSelect.value !== repo) return;
-    state = applyDelegation(state, JSON.parse(event.data));
-    drawGraph();
-  });
-}
-
-async function selectRepo() {
-  const repo = repoSelect.value;
-  events?.close();
-  events = null;
-  state = EMPTY_GRAPH;
-  selectedId = null;
-  drawGraph();
-  if (!repo) return;
-  connectionElement.textContent = "読み込み中";
-  try {
-    const response = await fetch(`/api/graph?repo=${encodeURIComponent(repo)}`);
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    if (repoSelect.value !== repo) return;
-    state = applySnapshot(EMPTY_GRAPH, await response.json());
-    drawGraph();
-    connect(repo);
-  } catch (error) {
-    connectionElement.textContent = `読込失敗: ${error.message}`;
+function render(enter = false) {
+  // 保存したプロジェクトが消えていれば Overview へ戻す
+  if (state.overview && state.selectedProjects.length) {
+    const alive = state.selectedProjects.filter((key) => projects().some((p) => p.key === key));
+    if (alive.length !== state.selectedProjects.length) { openProject(null); for (const key of alive) openProject(key, true); return; }
   }
+  renderCanvas(enter);
+  renderAside();
+  renderHead();
 }
 
-async function loadRepos() {
-  try {
-    const response = await fetch("/api/repos");
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const repos = await response.json();
-    repoSelect.replaceChildren(new Option("選択してください", ""));
-    for (const repo of repos) repoSelect.add(new Option(repo.name, repo.key));
-    if (repos.length) { repoSelect.value = repos[0].key; await selectRepo(); }
-  } catch (error) {
-    connectionElement.textContent = `読込失敗: ${error.message}`;
-  }
-}
+// Overview へ戻る近道
+document.addEventListener("keydown", (ev) => {
+  const typing = ev.target instanceof Element && ev.target.closest("input, textarea");
+  if (ev.key === "Escape" && state.selectedProjects.length && !typing) openProject(null);
+});
 
-repoSelect.addEventListener("change", selectRepo);
-drawGraph();
-loadRepos();
+setupSplitter(document, localStorage, () => { previousCanvas = ""; render(); });
+syncFeeds();
+render();

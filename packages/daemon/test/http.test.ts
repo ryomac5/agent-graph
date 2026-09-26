@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -59,12 +59,13 @@ test("HTTP graph と SSE は委譲を配信し、静的ファイルを制限す�
     reason: [], policyVersion: "1" });
   const staticDir = join(directory, "public");
   mkdirSync(staticDir);
-  writeFileSync(join(staticDir, "index.html"), "hello");
+  writeFileSync(join(staticDir, "index.html"), "<!doctype html><html><head><meta charset=\"utf-8\"></head><body>hello</body></html>");
   writeFileSync(join(directory, "secret"), "private content");
+  const tokenPath = join(directory, "run", "dashboard.token");
   let server;
   try {
     server = await startHttpServer({ port: 0, openStores: new Map([["repo", store]]),
-      listRepos: () => [{ key: "repo", rootPath: directory, name: "repo" }], staticDir });
+      listRepos: () => [{ key: "repo", rootPath: directory, name: "repo" }], staticDir, tokenPath });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "EPERM") { t.skip("HTTP listen is prohibited by the sandbox"); return; }
     throw error;
@@ -77,7 +78,15 @@ test("HTTP graph と SSE は委譲を配信し、静的ファイルを制限す�
   const graph = await (await fetch(`${base}/api/graph?repo=repo&session=session`)).json();
   assert.equal(graph.nodes.length, 2);
   assert.deepEqual(graph.edges, [{ from: "session", to: "first", fromFamily: "anthropic", toFamily: "openai" }]);
-  assert.equal((await fetch(`${base}/`)).status, 200);
+  const index = await fetch(`${base}/`);
+  assert.equal(index.status, 200);
+  const token = readFileSync(tokenPath, "utf8").trim();
+  assert.ok(token.length >= 32);
+  assert.equal(statSync(tokenPath).mode & 0o777, 0o600);
+  assert.match(await index.text(), new RegExp(`<head>\\s*<meta name="agent-graph-token" content="${token}">`));
+  assert.equal((await fetch(`${base}/api/overview`)).status, 200);
+  assert.equal((await fetch(`${base}/api/project?repo=repo`)).status, 200);
+  assert.equal((await fetch(`${base}/api/repos`)).status, 200);
   for (const path of ["/%2e%2e%2fsecret", "/../secret"]) {
     const result = await getRawPath(address.port, path);
     assert.equal(result.status, 403);
@@ -90,29 +99,23 @@ test("HTTP graph と SSE は委譲を配信し、静的ファイルを制限す�
   assert.equal(stream.status, 200);
   const reader = stream.body!.getReader();
   const firstChunk = await reader.read();
-  const snapshot = new TextDecoder().decode(firstChunk.value);
-  assert.match(snapshot, /event: snapshot/);
-  let state = applySnapshot({ nodes: [], edges: [] }, JSON.parse(snapshot.split("data: ")[1]));
+  const initial = new TextDecoder().decode(firstChunk.value);
+  assert.match(initial, /^event: project\n/);
+  assert.equal(JSON.parse(initial.split("data: ")[1]).sessions[0].nodes.length, 2);
   const began = performance.now();
   store.insertDelegation({ id: "second", repoKey: "repo", sessionId: "session", parentId: "first",
     role: "review", title: "second", status: "running" });
+  store.insertAssignment("second", { executor: "claude", model: "haiku", family: "anthropic", tier: "low", reason: [], policyVersion: "1" });
   const next = await Promise.race([
     reader.read(),
     new Promise<never>((_, reject) => setTimeout(() => reject(new Error("SSE timed out")), 2000)),
   ]);
   const message = new TextDecoder().decode(next.value);
-  assert.match(message, /event: delegation/);
-  const change = JSON.parse(message.split("data: ")[1]);
-  assert.equal(change.node.id, "second");
-  assert.equal(change.edge.from, "first");
-  assert.equal(change.nodes, undefined);
-  state = applyDelegation(state, change);
-  assert.equal(state.nodes.find((node) => node.id === "second")?.status, "running");
-  store.insertAssignment("second", { executor: "claude", model: "haiku", family: "anthropic", tier: "low", reason: [], policyVersion: "1" });
-  const assigned = await reader.read();
-  state = applyDelegation(state, JSON.parse(new TextDecoder().decode(assigned.value).split("data: ")[1]));
-  assert.equal(state.edges.find((edge) => edge.to === "second")?.toFamily, "anthropic");
-  assert.ok(performance.now() - began < 2000);
+  assert.match(message, /^event: project\n/);
+  const view = JSON.parse(message.split("data: ")[1]);
+  assert.equal(view.sessions[0].nodes.find((node: { id: string }) => node.id === "second")?.status, "running");
+  assert.equal(view.sessions[0].edges.find((edge: { to: string }) => edge.to === "second")?.toFamily, "anthropic");
+  assert.ok(performance.now() - began < 1000);
   controller.abort();
 });
 

@@ -69,22 +69,22 @@ test("並列実行、依存、承認、scope 限定統合と同一指紋の再�
   assert.equal(existsSync(join(changed.integration, "b.txt")), false);
 });
 
-test("failed の retry と人の reject は旧版の状態語彙を保つ", async (t) => {
+test("delegate の失敗は nextAttempt で再試行して昇格し、retry と reject は旧版の状態語彙を保つ", async (t) => {
   const options = fixture(t, worker("a"));
   let failed = true;
   const connect = async () => ({ close() {}, async delegate(request: DelegateRequest) {
     writeFileSync(join(request.cwd!, "a.txt"), "a"); return result(failed ? "failed" : "done");
   } });
-  const first = await runGraph(options, { connect });
-  assert.equal(first.tasks[0].state, "failed");
+  const running = runGraph(options, { connect });
+  // 既定の retry.max=1 で 1 回自動再試行した後、waiting_human に昇格する
+  await waitState(options, "a", "waiting_human");
   requestDecision(options, "a", "retry"); failed = false;
-  const second = await runGraph(options, { connect });
-  assert.equal(second.tasks[0].state, "done"); assert.equal(second.tasks[0].attempts, 2);
-  assert.throws(() => requestDecision(options, "a", "approve"), /not waiting/);
+  const first = await running;
+  assert.equal(first.tasks[0].state, "done"); assert.equal(first.tasks[0].attempts, 1);
   writeFileSync(options.specPath, "goal: gate\ntasks:\n  - id: gate\n    title: gate\n    executor: human\n");
-  const running = runGraph(options);
+  const gate = runGraph(options);
   await waitState(options, "gate", "waiting_human"); requestDecision(options, "gate", "reject");
-  assert.equal((await running).tasks[0].state, "rejected");
+  assert.equal((await gate).tasks[0].state, "rejected");
 });
 
 test("マージ衝突は conflict で待機し reject で終了する", async (t) => {

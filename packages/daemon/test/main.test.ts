@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { createHandler, startDaemon, startUsageProbe } from "../src/main.ts";
+import { createHandler, openAllStores, startDaemon, startUsageProbe } from "../src/main.ts";
+import { reconcileLiveness } from "../src/liveness.ts";
 import { repoKey, stateDbPath } from "../../core/src/paths.ts";
 import { openStore, type Store } from "../../core/src/store/store.ts";
 import { existsSync } from "node:fs";
@@ -62,6 +63,28 @@ test("handler restores caller and reuses repository store across nested cwd", as
     await handler(request, { ...hello, client: "claude" });
     assert.equal(store.db.prepare("SELECT client FROM sessions WHERE id = 'session'").get()?.client, "codex",
       "nested clients must not overwrite the root client");
+    // 終了済みのセッションが同じ id の根の hello で戻ると running に戻る。名前は変わらず、lost の委譲は戻らない
+    store.insertDelegation({ id: "orphan", repoKey: key, sessionId: "claude", role: "implement", title: "orphan", status: "running" });
+    assert.equal(store.endSession("claude", new Date().toISOString()), true);
+    const name = store.getSession("claude")!.name;
+    await handler(request, { type: "hello", cwd: root, pid: process.pid, session: "claude", client: "claude" });
+    const resumed = store.getSession("claude")!;
+    assert.equal(resumed.status, "running");
+    assert.equal(resumed.endedAt, undefined);
+    assert.equal(resumed.name, name);
+    assert.equal(resumed.pid, process.pid);
+    assert.equal(store.db.prepare("SELECT status FROM delegations WHERE id = 'orphan'").get()?.status, "lost");
+    // 同じ hello から並行して最初の要求が 2 件来ても、セッションは 1 行だけ作り、両方とも失敗しない
+    const parallel = { type: "hello" as const, cwd: root, pid: process.pid, session: "parallel", client: "claude" as const };
+    const results = await Promise.all([handler(request, parallel), handler(request, parallel)]);
+    assert.equal(results.length, 2);
+    assert.equal(store.db.prepare("SELECT count(*) AS n FROM sessions WHERE id = 'parallel'").get()?.n, 1);
+    assert.equal(store.getSession("parallel")?.pid, process.pid);
+    assert.ok(store.getSession("parallel")?.pidStartedAt);
+    // 委譲の子からの hello では戻さない
+    assert.equal(store.endSession("session", new Date().toISOString()), true);
+    await handler(request, { ...hello, client: "claude" });
+    assert.equal(store.getSession("session")?.status, "ended");
   } finally {
     for (const store of stores.values()) store.close();
     if (oldState === undefined) delete process.env.XDG_STATE_HOME; else process.env.XDG_STATE_HOME = oldState;
@@ -213,6 +236,36 @@ test("store 作成前の取得値を初回委譲時に保存して割り当て�
     for (const store of stores.values()) store.close();
     if (oldState === undefined) delete process.env.XDG_STATE_HOME; else process.env.XDG_STATE_HOME = oldState;
     if (oldPolicy === undefined) delete process.env.AGENT_GRAPH_POLICY_JSON; else process.env.AGENT_GRAPH_POLICY_JSON = oldPolicy;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("起動時に状態置き場の全リポジトリの store を開き、run など DB の無い名前は飛ばす", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "ag-open-all-"));
+  const env = { XDG_STATE_HOME: dir };
+  const stores = new Map<string, Store>();
+  try {
+    assert.deepEqual(openAllStores(stores, env), []);
+    assert.equal(stores.size, 0);
+    for (const key of ["repo-a", "repo-b"]) {
+      const store = openStore(stateDbPath(key, env));
+      store.upsertRepo({ key, rootPath: join(dir, key), name: key });
+      store.insertNamedSession({ id: `${key}-session`, repoKey: key, client: "claude", traceId: "a".repeat(32),
+        startedAt: new Date().toISOString(), pid: 99_999_999 });
+      store.close();
+    }
+    await mkdir(join(dir, "agent-graph", "run"), { recursive: true });
+    await writeFile(join(dir, "agent-graph", "run", "daemon.log"), "");
+    const already = openStore(stateDbPath("repo-a", env));
+    stores.set("repo-a", already);
+    assert.deepEqual(openAllStores(stores, env), []);
+    assert.deepEqual([...stores.keys()].sort(), ["repo-a", "repo-b"]);
+    assert.equal(stores.get("repo-a"), already, "開いている store は置き換えない");
+    // 開いた store は見回りの対象になり、死んだ pid のセッションが ended になる
+    await reconcileLiveness(stores.get("repo-b")!);
+    assert.equal(stores.get("repo-b")!.getSession("repo-b-session")?.status, "ended");
+  } finally {
+    for (const store of stores.values()) store.close();
     await rm(dir, { recursive: true, force: true });
   }
 });

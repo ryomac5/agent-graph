@@ -11,7 +11,7 @@ pnpm workspace のモノレポ。`packages/core`、`daemon`、`dashboard`、`ada
 責務と依存してよい先は設計書の「部品の責務と境界」の表を参照する。
 2 段目は `packages/core` の実行アダプタと委譲処理、`packages/daemon` の MCP・ソケット・エントリ、および双方向 e2e を実装する。
 3 段目は core の割り当て層と daemon の利用枠取得を結線する。
-4 段目は daemon の HTTP と SSE を dashboard の静的ファイルに結線し、双方向の辺と表示遅延を e2e で確認する。SSE の snapshot は全体、delegation は `{ node, edge? }` の差分を送り、e2e も画面の model.js で反映する。根の系統は shim の hello.client（AGENT_GRAPH_CLIENT=claude または codex）から記録する。
+4 段目は daemon の HTTP と SSE を dashboard の静的ファイルに結線し、双方向の辺と表示遅延を e2e で確認する。SSE は `/api/events` が全体の `overview` か `project` を送り、ダッシュボードは Overview・プロジェクトのグラフ・NodeDetail・判断待ちの Approve/Reject/Retry を表示する。根の系統は shim の hello.client（AGENT_GRAPH_CLIENT=claude または codex）から記録する。
 5 段目はプラグイン・設定の生成、`POST /api/sessions` の根登録、新規リポジトリでの委譲を `AGENT_GRAPH_E2E=1 bash scripts/e2e-stage5.sh` で確認する。
 `agent-graph-install --claude-plugin-dir <dir>` で生成し、Claude Code に `--plugin-dir <dir>` を渡す。
 Codex は `agent-graph-install --codex-config <path>` で指定先に導入するか、`--print-codex-overrides` の出力を 1 行 1 引数として `codex exec` に渡す（既存の設定を書き換えない）。

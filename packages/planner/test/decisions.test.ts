@@ -100,15 +100,13 @@ test("planner は表の reject を却下にし、failed の retry を再実行�
     writeFileSync(join(request.cwd!, "a.txt"), "a");
     return { delegationId: "fake", status: failed ? "failed" : "done", roundTrips: 0 } as never;
   } });
-  const first = await runGraph(options, { connect });
-  assert.equal(first.tasks[0].state, "failed");
-  // planner が止まっている間の判断は、次の run の起動直後に拾う
-  const ctx = openPlanner(options.repo, options.session, options.specPath);
-  try { ctx.store.insertTaskDecision(first.graph.id, "a", "retry", new Date().toISOString()); } finally { ctx.store.close(); }
+  // 既定の retry.max=1 で 1 回自動再試行し、失敗し続ければ waiting_human に昇格する
+  const running = runGraph(options, { connect });
+  await decideFromOutside(options, "a", "retry", "waiting_human");
   failed = false;
-  const second = await runGraph(options, { connect });
-  assert.equal(second.tasks[0].state, "done");
-  assert.equal(second.tasks[0].attempts, 2);
+  const first = await running;
+  assert.equal(first.tasks[0].state, "done");
+  assert.equal(first.tasks[0].attempts, 1);
   // 状態が合わない判断は反映せず skipped と記録する
   const after = openPlanner(options.repo, options.session, options.specPath);
   try { after.store.insertTaskDecision(first.graph.id, "a", "approve", new Date().toISOString()); } finally { after.store.close(); }

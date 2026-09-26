@@ -48,6 +48,17 @@ pnpm workspace のモノレポである。5 つのパッケージに分ける。
 
 spec の既定は `.agents/graph/<id>/tasks.yaml` である。
 
+## ダッシュボード
+
+デーモンの起動中に開ける。URL は `daemon.log` の `dashboard` 行に出す。
+
+- Overview。全リポジトリのセッションと利用枠を丸と件数で表示する
+- プロジェクト。1 リポジトリの委譲を有向グラフで表示する。根と子を選ぶと詳細パネルが開き、依頼文・出力・往復・受け入れ・割り当ての理由が見える
+- 判断待ち。planner が `waiting_human` か `conflict` で止まったタスクに Approve / Reject / Retry を送る
+- 双方向の辺。Claude と Codex のどちらの向きの委譲も色で区別して表示する
+
+画面は `packages/dashboard`、経路と SSE の約束は `docs/agents/dashboard-api.md` にある。
+
 ## 状態の置き場
 
 作業するリポジトリの中に状態を置かない。

@@ -215,9 +215,10 @@ test("POST /api/sessions/<id>/end と /api/observe は hook から通り、未�
 
 test("委譲せず 30 分黙って ended にした根は次の turn で running に戻り、プロセスの死で ended にした根は戻らない", async (t) => {
   const { cwd, key, store, stores } = createFixture(t);
-  await registerSession({ id: "idle", cwd, client: "claude" }, stores);
-  store.insertNamedSession({ id: "dead", repoKey: key, client: "claude", traceId: "b".repeat(32), startedAt: new Date().toISOString(), pid: 11 });
   const at = (hour: number) => new Date(`2026-09-26T0${hour}:00:00.000Z`);
+  await registerSession({ id: "idle", cwd, client: "claude" }, stores);
+  store.db.prepare("UPDATE sessions SET last_seen_at = ? WHERE id = ?").run(at(0).toISOString(), "idle");
+  store.insertNamedSession({ id: "dead", repoKey: key, client: "claude", traceId: "b".repeat(32), startedAt: at(0).toISOString(), pid: 11 });
   // idle は pid が無いので 30 分の規則、dead は pid の死で ended になる
   const ended = await reconcileLiveness(store, { now: () => at(1), isAlive: async () => false });
   assert.deepEqual(ended.sort(), ["dead", "idle"]);

@@ -132,6 +132,7 @@ function createSubagent(store: Store, session: SessionRef, at: string, input: {
   store.insertAssignment(id, { executor: "claude", model, family: "anthropic", tier: tierOf(model),
     reason: [`Claude Code の Agent ツール ${input.agentType}`], policyVersion: "" });
   record(store, session, "delegation.requested", at, { delegationId: id, task: input.task });
+  store.insertDelegationRound(id, "request", input.task, at);
   record(store, session, "subagent.dispatched", at, { delegationId: id, toolUseId: input.toolUseId ?? "",
     agentType: input.agentType, ...(input.name ? { name: input.name } : {}),
     ...(input.parentAgentId ? { parentAgentId: input.parentAgentId } : {}) });
@@ -254,8 +255,10 @@ export const subagentObservers: Record<string, Observer> = {
     if (!target) return;
     seen(store, sessionId, at);
     store.db.prepare("UPDATE delegations SET round_trips = round_trips + 1 WHERE id = ?").run(target.id);
+    const text = optionalString(body.text, MESSAGE_LIMIT) ?? "";
     record(store, session, "subagent.reinstructed", at, { delegationId: target.id, agentId: target.agentId ?? to,
-      toolUseId: toolUseId ?? "", text: optionalString(body.text, MESSAGE_LIMIT) ?? "" });
+      toolUseId: toolUseId ?? "", text });
+    store.insertDelegationRound(target.id, "reinstruct", text, at);
   },
   // SubagentStop。報告を積んで done にする。記録も種別も無い停止は捨てる。
   subagent_stop: (store, { sessionId, at, body }) => {
@@ -272,6 +275,7 @@ export const subagentObservers: Record<string, Observer> = {
     seen(store, sessionId, at);
     record(store, session, "subagent.reported", at, { delegationId: target.id, output, summary,
       ...(agentId ? { agentId } : {}), ...(task ? { task } : {}) });
+    store.insertDelegationRound(target.id, "report", output, at);
     record(store, session, "execution.finished", at, { delegationId: target.id, exitCode: 0 });
     finish(store, session, at, target, "done");
   },

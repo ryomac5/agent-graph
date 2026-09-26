@@ -190,8 +190,6 @@ data: {"project":{...},"sessions":[...],"graphs":[...],"usage":{...},"updatedAt"
 : keep-alive
 ```
 
-現状の `routes/events.ts` は従来どおり `event: snapshot` と `event: delegation` を送る。`project` と `overview` への切り替えは読み取り API のタスクが `views.ts` と合わせて行う。
-
 ## 守り
 
 実装は `packages/daemon/src/http/security.ts`。デーモンは `127.0.0.1` にだけ bind する。

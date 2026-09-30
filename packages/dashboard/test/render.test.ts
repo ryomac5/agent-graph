@@ -9,7 +9,7 @@ const { renderGraph, directionWord } = await import("../public/ui/graph.js");
 const { renderOverview } = await import("../public/ui/overview.js");
 const { renderHeader } = await import("../public/ui/header.js");
 const { buildProjectSection, scopesOf } = await import("../public/ui/project.js");
-const { renderDetail } = await import("../public/ui/detail.js");
+const { renderDetail, buildBubble } = await import("../public/ui/detail.js");
 
 type Json = Record<string, unknown>;
 const project = JSON.parse(readFileSync(new URL("./fixtures/project.json", import.meta.url), "utf8")) as Json;
@@ -109,7 +109,7 @@ test("planner のグラフは task を同じ丸で描き、waiting_human を紫�
 test("プロジェクトのページはセッションの枠と goal と Started と End と終了セッションの畳みを出す", () => {
   const section = buildProjectSection(project, ctx());
   const html = String(section);
-  for (const word of ["agent-graph", "/Users/r/00_project/agent-graph", "agent-graph-001-s10", "Started", "End", "旧版のダッシュボードの画面を新版に移植し", "Graph agent-graph-001-s10", "ダッシュボードを作り直す", "Ended sessions (1)", "agent-graph-001-s9", "planner", "ended"]) {
+  for (const word of ["agent-graph", "/Users/r/00_project/agent-graph", "agent-graph-001-s10", "Started", "End", "旧版のダッシュボードの画面を新版に移植し", "Task graph", "ダッシュボードを作り直す", "Ended sessions (1)", "agent-graph-001-s9", "planner", "ended"]) {
     assert.ok(html.includes(word), `${word} が無い`);
   }
 });
@@ -160,4 +160,16 @@ test("判断待ちの task は Approve, Retry, Reject を出し、Reject は確�
   assert.equal(sent[0].action, "approve");
   assert.equal(sent[0].graphId, "agent-graph-001-s10");
   assert.equal(sent[0].taskId, "P1");
+});
+
+test("吹き出しは Markdown の記号を外して見出しと太字とコードを要素で描き、HTML は文字のまま入れる", () => {
+  const bubble = buildBubble({ role: "agent", text: "## 完了報告\n- **notes.md** を `test -f` で確認\n<b>x</b>" }, "done", "k", { expandedRounds: new Set() });
+  const html = String(bubble);
+  assert.ok(!html.includes("## "), "見出しの記号が残っている");
+  assert.ok(!html.includes("**"), "太字の記号が残っている");
+  assert.ok(html.includes("md-heading") && html.includes("<strong") && html.includes("<code"));
+  assert.ok(html.includes("notes.md") && html.includes("test -f"));
+  // 偽の DOM は文字列化で文字を逃がさないので、要素として作られていないことを検索で確かめる
+  assert.equal(bubble.querySelectorAll("b").length, 0, "外からの HTML が要素になった");
+  assert.ok(html.includes("<b>x</b>"), "外からの HTML が文字として残っていない");
 });

@@ -145,6 +145,20 @@ test("受け入れ失敗の feedback と return の label は 80 字で切る", 
   assert.ok(back.label!.endsWith("…"));
 });
 
+test("return の label は Markdown の見出しを飛ばし、行頭の記号と強調を外す", (t) => {
+  const store = withStore(t);
+  store.insertSession({ id: "s1", repoKey: "r", name: "repo-001", client: "codex", traceId: trace, startedAt: ts });
+  store.insertDelegation({ id: "d1", repoKey: "r", sessionId: "s1", role: "implement", title: "実装", status: "done" });
+  store.insertDelegation({ id: "d2", repoKey: "r", sessionId: "s1", parentId: "d1", role: "review", title: "Review", status: "done" });
+  store.insertReview("d1", "d2", "approve", "## 完了報告\n\n- **notes.md** に 1 行書いた\nVERDICT: approve");
+  store.insertDelegation({ id: "d3", repoKey: "r", sessionId: "s1", role: "implement", title: "実装 2", status: "done" });
+  store.insertDelegation({ id: "d4", repoKey: "r", sessionId: "s1", parentId: "d3", role: "review", title: "Review", status: "done" });
+  store.insertReview("d3", "d4", "approve", "## 見出しだけ");
+  const [session] = project(store).sessions;
+  assert.equal(session.edges.find((edge) => edge.id === "d2->d1#return")?.label, "notes.md に 1 行書いた");
+  assert.equal(session.edges.find((edge) => edge.id === "d4->d3#return")?.label, "見出しだけ");
+});
+
 test("GraphView は planner のタスクと依存の辺を持ち、委譲の結果で NodeDetail を埋める", (t) => {
   const store = withStore(t);
   store.insertSession({ id: "p1", repoKey: "r", name: "agent-graph-001-s10", client: "planner", traceId: trace, startedAt: ts });

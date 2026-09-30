@@ -28,7 +28,10 @@ function buildGroup(scope, ctx) {
   const group = el("section", undefined, `session-group ${cls}${scope.kind === "planner" ? " planner" : ""}${cls === "ended" ? " ended" : ""}`);
   group.setAttribute("data-scope", scope.id);
   const h3 = el("h3");
-  h3.append(el("span", "", "dot"), el("span", scope.kind === "planner" ? `Graph ${scope.name}` : scope.name));
+  // planner のグラフの id は ULID で読めないので、見出しは種類だけにして id は title に回す
+  const heading = el("span", scope.kind === "planner" ? "Task graph" : scope.name);
+  if (scope.kind === "planner") heading.title = scope.name;
+  h3.append(el("span", "", "dot"), heading);
   if (scope.kind === "planner" && scope.sessionName) h3.append(el("small", `of ${scope.sessionName}`));
   if (scope.startedAt) {
     const when = el("small", `Started ${fmtWhen(scope.startedAt)}`);

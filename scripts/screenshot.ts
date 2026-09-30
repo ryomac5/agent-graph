@@ -36,11 +36,12 @@ if (target === 'project' || target === 'detail') {
   await page.waitForSelector('svg.graph', { timeout: 15000 });
 }
 if (target === 'detail') {
-  const node = page.locator('.graph-holder .node').first();
-  if (await node.count()) {
-    await node.click({ force: true });
-    await page.waitForTimeout(600);
-  }
+  // 根ではない最初の子を選ぶ。根を選ぶと詳細パネルは会話のままで、子の詳細が撮れない。
+  const node = page.locator('.graph-holder .node:not(.root)').first();
+  if (!(await node.count())) throw new Error('no child node to select');
+  await node.click({ force: true });
+  await page.waitForFunction(() => document.querySelector('.graph-holder .node.selected:not(.root)'), null, { timeout: 5000 });
+  await page.waitForTimeout(600);
 }
 await page.screenshot({ path: out, fullPage: false });
 await browser.close();

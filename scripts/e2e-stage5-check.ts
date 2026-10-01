@@ -10,11 +10,16 @@ try {
     const hooks = store.db.prepare(`SELECT s.id FROM sessions s JOIN events e ON e.session_id = s.id
       WHERE s.client = 'claude' AND e.kind = 'session.started'`).all();
     if (hooks.length) {
+      // hook と shim が同じ id を使い、1 つの claude -p が根を 1 つだけ作ること。2 つに割れていたのを直した
+      const roots = store.db.prepare("SELECT id, model FROM sessions WHERE client = 'claude'").all() as { id: string; model: string | null }[];
+      assert.equal(roots.length, 1, `claude -p must register exactly one root session, got ${JSON.stringify(roots)}`);
+      // モデルは Stop の hook が transcript から拾う。e2e は --no-session-persistence で transcript を残さないので検べない
+      console.log(`PASS: one claude root session ${roots[0].id}`);
       console.log("U7: generated plugin delivered callable MCP and SessionStart hook together");
       console.log("U10: SessionStart in claude -p registered a claude session and session.started");
     } else {
       const execution = store.db.prepare(`SELECT s.id FROM sessions s JOIN events e ON e.session_id = s.id
-        WHERE s.id = 'e2e-claude' AND s.client = 'claude' AND e.kind = 'execution.started'`).get();
+        WHERE s.client = 'claude' AND e.kind = 'execution.started'`).get();
       assert.ok(execution, "fallback must retain the session with execution adapter evidence");
       console.log("U7: generated plugin MCP call passed; hook delivery remains unconfirmed");
       console.log("U10: no SessionStart registration observed in claude -p; verified MCP session with execution.started as fallback (hook nonexecution and delivery failure cannot be distinguished)");

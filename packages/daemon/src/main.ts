@@ -99,10 +99,14 @@ function callerOf(hello: Hello, store: Store, callers: Callers): { caller: Calle
   const requestedId = parseTracestate(hello.tracestate).sessionId ?? hello.session ?? ulid();
   const existing = store.db.prepare("SELECT id, trace_id FROM sessions WHERE id = ? OR source_thread_id = ? ORDER BY id LIMIT 1").get(requestedId, requestedId);
   const sessionId = existing ? String(existing.id) : requestedId;
+  const parsed = parseTraceparent(hello.traceparent);
+  // 根は hook が先に登録していることがある。hook は trace を知らないので仮の trace で登録する。
+  // hello が上流の TRACEPARENT を持ってきたら、そちらに揃える。持っていなければ登録済みの trace を使う
+  if (existing && parsed && isRootHello(hello) && parsed.traceId !== String(existing.trace_id)) {
+    store.db.prepare("UPDATE sessions SET trace_id = ? WHERE id = ?").run(parsed.traceId, sessionId);
+  }
   const caller = { sessionId,
-    ...(parseTraceparent(hello.traceparent) ?? {
-      traceId: existing ? String(existing.trace_id) : newTraceId(), spanId: newSpanId(),
-    }) };
+    ...(parsed ?? { traceId: existing ? String(existing.trace_id) : newTraceId(), spanId: newSpanId() }) };
   callers.set(hello, caller);
   return { caller, created: true };
 }

@@ -13,9 +13,14 @@ try {
   const trace = parseTraceparent(process.env.TRACEPARENT)!;
   const state = parseTracestate(process.env.TRACESTATE);
   // 根には親委譲がないため、デーモンと同じ優先順でセッションを読む。
-  const sessionId = state.sessionId ?? process.env.AGENT_GRAPH_SESSION;
+  let sessionId = state.sessionId ?? process.env.AGENT_GRAPH_SESSION;
   assert.ok(trace);
   assert.ok(sessionId);
+  // プラグインで動く根の Claude Code は自分の id で登録される。指定の id が無ければ、親を持たない委譲のセッションを根とみなす
+  if (mode === "check-root" && !store.db.prepare("SELECT 1 FROM sessions WHERE id = ?").get(sessionId)) {
+    const root = store.db.prepare("SELECT session_id FROM delegations WHERE parent_id IS NULL ORDER BY rowid LIMIT 1").get();
+    if (root) sessionId = String(root.session_id);
+  }
   if (mode !== "check-root") assert.ok(state.delegationId);
   if (mode === "seed") {
     const delegationId = state.delegationId;

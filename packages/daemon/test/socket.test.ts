@@ -17,6 +17,12 @@ test("hello は planner を含む既知の client だけを受け付ける", () 
   }
 });
 
+// テストを走らせている環境の session の変数を外し、shim の判定だけを見る
+function withoutSessionEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const { AGENT_GRAPH_SESSION: _a, CLAUDE_CODE_SESSION_ID: _c, ...rest } = env;
+  return rest;
+}
+
 for (const client of ["claude", "codex", "planner"]) test(`socket is private and shim forwards ${client} hello`, { timeout: 10_000 }, async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "agent-graph-test-"));
   const socketPath = join(dir, "daemon.sock");
@@ -44,7 +50,10 @@ for (const client of ["claude", "codex", "planner"]) test(`socket is private and
     const traceparent = "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01";
     const shim = spawn(process.execPath, ["src/shim.ts"], {
       cwd: join(import.meta.dirname, ".."),
-      env: { ...process.env, AGENT_GRAPH_SOCKET: socketPath, AGENT_GRAPH_CLIENT: client, TRACEPARENT: traceparent },
+      // 呼び出し元が Claude Code なら CLAUDE_CODE_SESSION_ID が最優先。Claude Code の中から起動した codex と planner も
+      // この変数を受け継ぐが、そちらでは使わず AGENT_GRAPH_SESSION を使う
+      env: { ...withoutSessionEnv(process.env), AGENT_GRAPH_SOCKET: socketPath, AGENT_GRAPH_CLIENT: client, TRACEPARENT: traceparent,
+        AGENT_GRAPH_SESSION: "parent-session", CLAUDE_CODE_SESSION_ID: "claude-session-1" },
       stdio: ["pipe", "pipe", "pipe"],
     });
     child = shim;
@@ -59,7 +68,8 @@ for (const client of ["claude", "codex", "planner"]) test(`socket is private and
       shim.once("error", reject);
       shim.once("exit", (code) => { if (!output.includes("\n")) reject(new Error(`shim exited ${code}: ${stderr}`)); });
     });
-    const result = JSON.parse(output.trim()) as { result: { structuredContent: { traceparent: string; cwd: string; client: string } } };
+    const result = JSON.parse(output.trim()) as { result: { structuredContent: { traceparent: string; cwd: string; client: string; session: string } } };
+    assert.equal(result.result.structuredContent.session, client === "claude" ? "claude-session-1" : "parent-session");
     assert.equal(result.result.structuredContent.traceparent, traceparent);
     assert.equal(result.result.structuredContent.client, client);
     assert.equal(result.result.structuredContent.cwd, join(import.meta.dirname, ".."));

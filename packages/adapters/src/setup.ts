@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { accessSync, closeSync, constants, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { installCodexConfig, mergeCodexConfig } from "./codex-config.ts";
 import { installLaunchd, renderLaunchdPlist } from "./launchd.ts";
 import { generateMarketplace, renderMarketplace } from "./marketplace.ts";
@@ -120,6 +120,8 @@ export async function setupAgentGraph(options: SetupOptions = {}): Promise<{ url
   const hookPath = join(root, "packages", "adapters", "src", "hook.ts");
   const daemonPath = join(root, "packages", "daemon", "src", "main.ts");
   for (const path of [shimPath, hookPath, daemonPath]) if (!existsSync(path)) throw new Error(`実行ファイルがありません: ${path}`);
+  // 設定を書き換える前に、配布物の依存ファイルも読み込めることを確かめる。
+  await import(pathToFileURL(daemonPath).href);
   const configPath = join(codexHome, "config.toml");
   const config = readOptional(configPath);
   const updatedConfig = mergeCodexConfig(config, { nodePath, shimPath });
@@ -133,7 +135,10 @@ export async function setupAgentGraph(options: SetupOptions = {}): Promise<{ url
   const plistPath = join(plistDir, `${SERVICE}.plist`);
   const plist = renderLaunchdPlist(launchd);
   const target = `gui/${options.uid ?? process.getuid?.() ?? 0}/${SERVICE}`;
-  const loaded = run("launchctl", ["print", target]).status === 0;
+  const service = run("launchctl", ["print", target]);
+  const loaded = service.status === 0;
+  const stopped = loaded && /^\s*state = (?:not running|waiting|spawn scheduled|exited)\s*$/m.test(service.stdout)
+    && !/^\s*pid = [1-9]\d*\s*$/m.test(service.stdout);
   const serviceChanged = readOptional(plistPath) !== plist;
 
   if (options.doctor) {
@@ -204,7 +209,7 @@ export async function setupAgentGraph(options: SetupOptions = {}): Promise<{ url
     }
   }
   // 既に動いているタスクの接続を、セットアップで切らない。
-  if (loaded && serviceChanged) {
+  if (loaded && serviceChanged && !stopped) {
     const url = await (options.wait ?? waitForDashboard)(logDir);
     const overview = await (await fetch(`${url}api/overview`, { signal: AbortSignal.timeout(2_000) })).json() as { projects: { key: string }[] };
     for (const project of overview.projects) {

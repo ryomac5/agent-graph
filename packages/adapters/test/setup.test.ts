@@ -20,7 +20,7 @@ function createFixture(t: { after: (callback: () => void) => void }, withClients
   }
   const calls: string[][] = [];
   const messages: string[] = [];
-  const state = { loaded: false, registered: false, installed: false, enabled: true, bootstrapStatus: 0, herdrRunning: true, claudeLoggedIn: true, codexLoggedIn: true };
+  const state = { loaded: false, serviceOutput: "", registered: false, installed: false, enabled: true, bootstrapStatus: 0, herdrRunning: true, claudeLoggedIn: true, codexLoggedIn: true };
   const marketplaceDir = join(home, ".local", "share", "agent-graph", "marketplace");
   const configPath = join(home, ".codex", "config.toml");
   const options: SetupOptions = {
@@ -29,7 +29,7 @@ function createFixture(t: { after: (callback: () => void) => void }, withClients
     run: (command, args) => {
       calls.push([command, ...args]);
       if (command === "launchctl") {
-        if (args[0] === "print") return { status: state.loaded ? 0 : 1, stdout: "", stderr: "" };
+        if (args[0] === "print") return { status: state.loaded ? 0 : 1, stdout: state.serviceOutput, stderr: "" };
         if (args[0] === "bootstrap") {
           if (args[2].includes("dev.agent-graph.herdr")) state.herdrRunning = state.bootstrapStatus === 0;
           else state.loaded = state.bootstrapStatus === 0;
@@ -142,6 +142,32 @@ test("サービス起動失敗時には成功URLを出さず失敗を返す", as
   f.state.bootstrapStatus = 1;
   await assert.rejects(setupAgentGraph(f.options), /bootstrap failed/);
   assert.ok(f.messages.every((message) => !message.startsWith("ダッシュボード:")));
+});
+
+test("起動に失敗している旧サービスは旧HTTPの応答を待たず設定を更新できる", async (t) => {
+  const f = createFixture(t);
+  await setupAgentGraph(f.options);
+  f.state.serviceOutput = "state = spawn scheduled\nlast exit code = 1\n";
+  f.options.env = { PATH: f.bin, AGENT_GRAPH_PORT: "7421" };
+  let waits = 0;
+  f.options.wait = async () => { waits++; return "http://127.0.0.1:7421/"; };
+  f.calls.length = 0;
+  const result = await setupAgentGraph(f.options);
+  assert.equal(waits, 1, "起動確認は新しいサービスに対してだけ行う");
+  assert.equal(result.url, "http://127.0.0.1:7421/");
+  assert.ok(f.calls.some((call) => call[1] === "bootstrap"));
+});
+
+test("配布物の依存が欠落していれば登録や常駐設定の変更より前に失敗する", async (t) => {
+  const f = createFixture(t);
+  const root = join(f.home, "incomplete");
+  for (const [path, body] of [["packages/daemon/src/shim.ts", ""], ["packages/adapters/src/hook.ts", ""],
+    ["packages/daemon/src/main.ts", 'import "../../core/src/assign/policy.ts";']] as const) {
+    const full = join(root, path); mkdirSync(full.slice(0, full.lastIndexOf("/")), { recursive: true }); writeFileSync(full, body);
+  }
+  await assert.rejects(setupAgentGraph({ ...f.options, rootPath: root }), /policy\.ts/);
+  assert.equal(f.calls.length, 0);
+  assert.equal(existsSync(f.configPath), false);
 });
 
 test("稼働中の委譲がある場合はサービス設定の変更より先に停止する", async (t) => {

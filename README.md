@@ -114,6 +114,8 @@ MCP disconnections and Claude SessionEnd hooks move sessions into history. Archi
 
 To update another Mac, publish the changes to the repository, rerun the quick-start installation command there, and restart its Claude and Codex clients.
 
+If startup reports `ERR_MODULE_NOT_FOUND` or `MODULE_NOT_FOUND` for files under `releases/`, rerun the installer. It compares the cached release with the downloaded archive, moves an incomplete or modified copy into a sibling `.incomplete-*` directory, and restores the complete release. Setup verifies the daemon's imports before changing client or service settings. A registered daemon that is stopped can be updated without waiting for its unavailable HTTP server.
+
 ## Development
 
 Use Node 24 or later. Runtime code uses Node's standard library; pnpm dependencies are needed for development.

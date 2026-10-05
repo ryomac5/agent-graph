@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -110,4 +110,24 @@ test("取得入口のdry-runは通信もファイル作成もしない", (t) => 
   assert.equal(result.status, 0, result.stderr);
   assert.equal(existsSync(join(f.home, "downloads")), false);
   assert.equal(existsSync(join(f.home, ".local")), false);
+});
+
+test("同じ版の配布物が欠落していたら退避し、完全な配布物を復元する", (t) => {
+  const f = createFixture(t);
+  const source = join(f.home, "source", "agent-graph-main");
+  mkdirSync(join(source, "scripts"), { recursive: true });
+  mkdirSync(join(source, "packages", "core", "src", "assign"), { recursive: true });
+  writeExecutable(join(source, "scripts", "setup.sh"), "exit 0");
+  writeFileSync(join(source, "packages", "core", "src", "assign", "policy.ts"), "export const valid = true;\n");
+  assert.equal(spawnSync("/usr/bin/tar", ["-czf", join(f.home, "source.tar.gz"), "-C", join(f.home, "source"), "agent-graph-main"]).status, 0);
+  const run = () => spawnSync("/bin/bash", [installer], { env: f.env, encoding: "utf8" });
+  assert.equal(run().status, 0);
+  const releases = join(f.home, ".local", "share", "agent-graph", "releases");
+  const policy = join(releases, NODE_SHA, "packages", "core", "src", "assign", "policy.ts");
+  rmSync(policy);
+  const repaired = run(); assert.equal(repaired.status, 0, repaired.stderr);
+  assert.equal(readFileSync(policy, "utf8"), "export const valid = true;\n");
+  assert.equal(readdirSync(releases).filter((name) => name.includes(".incomplete-")).length, 1);
+  assert.equal(run().status, 0);
+  assert.equal(readdirSync(releases).length, 2, "正常な同一版は再配置しない");
 });

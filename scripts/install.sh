@@ -22,6 +22,10 @@ agent_graph_revision="$(shasum -a 256 "$agent_graph_install_temp/source.tar.gz" 
 tar -xzf "$agent_graph_install_temp/source.tar.gz" -C "$agent_graph_install_temp"
 agent_graph_install_root="$agent_graph_data/releases/$agent_graph_revision"
 if [[ ! -f "$agent_graph_install_temp/agent-graph-main/scripts/setup.sh" ]]; then echo '取得したコードにセットアップがありません。' >&2; exit 1; fi
+if [[ -d "$agent_graph_install_root" ]] && ! diff -qr "$agent_graph_install_temp/agent-graph-main" "$agent_graph_install_root" >/dev/null; then
+  echo '既存の配布ファイルに欠落または変更があります。退避して取得し直します。'
+  mv "$agent_graph_install_root" "$agent_graph_install_root.incomplete-$(date +%Y%m%d%H%M%S)-$$"
+fi
 if [[ ! -d "$agent_graph_install_root" ]]; then
   mkdir -p "$agent_graph_data/releases"
   mv "$agent_graph_install_temp/agent-graph-main" "$agent_graph_install_root"

@@ -32,6 +32,10 @@ function findCreatedPane(value: unknown): string | undefined {
   }
 }
 
+function quoteShell(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
 async function waitForSwitch(control: ControlClient, pane: string, present: boolean): Promise<boolean> {
   for (let attempt = 0; attempt < SWITCH_POLL_ATTEMPTS; attempt++) {
     const text = await control.run(["pane", "read", pane, "--source", "recent-unwrapped", "--lines", "20"]);
@@ -51,10 +55,11 @@ export async function controlAction(body: unknown, stores: Map<string, Store>, c
   if (!store || !repo) throw new NotFoundError(`Repo not found: ${request.repo}`);
   try {
     if (request.action === "new_session") {
-      const created = await control.run(["tab", "create", "--label", repo.name, "--cwd", repo.rootPath, "--no-focus"]);
+      const created = await control.run(["workspace", "create", "--label", repo.name, "--cwd", repo.rootPath, "--no-focus"]);
       const pane = findCreatedPane(JSON.parse(created));
       if (!pane) return { ok: false, message: "起動先を取得できませんでした" };
-      await control.run(["pane", "run", pane, `export HERDR_PANE_ID=${pane}; ${request.client}`]);
+      const executable = process.env[request.client === "claude" ? "AGENT_GRAPH_CLAUDE_BIN" : "AGENT_GRAPH_CODEX_BIN"] || request.client!;
+      await control.run(["pane", "run", pane, `export HERDR_PANE_ID=${pane}; export PATH=${quoteShell(process.env.PATH ?? "")}; ${quoteShell(executable)}`]);
       return { ok: true, message: `${repo.name} で ${request.client} を起動しました` };
     }
     const session = store.getSession(request.sessionId!);

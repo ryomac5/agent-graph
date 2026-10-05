@@ -16,8 +16,10 @@ test("新規起動は登録済み PJ の cwd と検証済み client だけで起
   const calls: string[][] = [];
   const client: ControlClient = { run: async (args) => { calls.push(args); return JSON.stringify({ result: { pane_id: "w1:p2" } }); } };
   assert.equal((await controlAction({ action: "new_session", repo: "r", client: "codex" }, stores, client)).ok, true);
-  assert.deepEqual(calls[0], ["tab", "create", "--label", "repo", "--cwd", "/repo", "--no-focus"]);
-  assert.deepEqual(calls[1], ["pane", "run", "w1:p2", "export HERDR_PANE_ID=w1:p2; codex"]);
+  assert.deepEqual(calls[0], ["workspace", "create", "--label", "repo", "--cwd", "/repo", "--no-focus"]);
+  assert.deepEqual(calls[1].slice(0, 3), ["pane", "run", "w1:p2"]);
+  assert.ok(calls[1][3].startsWith("export HERDR_PANE_ID=w1:p2; export PATH="));
+  assert.ok(calls[1][3].endsWith("'codex'") || calls[1][3].endsWith(`'${process.env.AGENT_GRAPH_CODEX_BIN}'`));
   assert.throws(() => parseAction({ action: "new_session", repo: "r", client: "codex; touch x" }), /Invalid client/);
   assert.throws(() => parseAction({ action: "set_model", repo: "r", sessionId: "s", model: "opus; touch x" }), /Invalid model/);
 });

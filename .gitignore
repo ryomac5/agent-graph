@@ -2,3 +2,4 @@ node_modules
 *.db
 .claude/
 .agents-shots/
+*.log

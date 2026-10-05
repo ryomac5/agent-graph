@@ -11,12 +11,16 @@ Claude Code と Codex のどちらからでも同じ口で委譲できる。
 
 ### 新しいMacのセットアップ
 
-`bash scripts/setup.sh` がNode 24以上を確認し、必要なら既存のHomebrewから `node@24` を導入する。
-`packages/adapters/src/setup.ts` がCodexのagent-graph設定、Claudeのユーザー範囲のローカルマーケットプレイス、launchdの常駐起動を結線し、HTTPの起動確認後にURLを返す。
+`scripts/install.sh` がGitなしでコードを版ごとのユーザー領域へ取得し、`scripts/setup.sh` を起動する。
+`scripts/bootstrap-tools.sh` が未導入のNode 24・Claude Code・Codex CLI・Herdrを公式配布から導入する。Homebrewは不要。Nodeの公式SHA-256を固定して照合し、失敗時は後続を実行しない。
+`packages/adapters/src/setup.ts` が未認証のCLIのログインを案内し、完了を再確認する。Codex設定、Claudeのローカルマーケットプレイス、Herdrの公式連携を結線する。
+Herdrが未起動なら `dev.agent-graph.herdr` をlaunchdに登録する。既存の稼働サーバーはそのまま使う。デーモンのHTTP起動確認後にURLを返す。
+`setup-shell.ts` が既存のシェル設定を保持してPATHと `agent-graph` コマンドを登録する。画面からの初回起動はHerdrのworkspaceを作成し、検出済みのCLIを引用済みの絶対パスで呼ぶ。
 実行時の依存はNode標準だけなのでpnpm installは開発用に限る。
 既存のCodex設定の他項目を保持し、変更前にバックアップする。既存の同名ローカルマーケットプレイスはその場所を再利用する。
 同じ常駐設定での再実行は再起動しない。設定変更による再起動の前にはHTTPで委譲・plannerタスクのrunningを確認し、稼働中なら変更前に中止する。
 `--dry-run`と`--doctor`はファイルもサービスも変更しない。人向け手順は `docs/guides/setup.html` に置く。
+`--skip-login` は認証だけを省略する自動化用のオプション。既定の導入では認証未完了を成功扱いしない。
 
 優先順位は次の 3 つで固定する。
 

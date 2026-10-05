@@ -1,17 +1,18 @@
 import { spawnSync } from "node:child_process";
-import { accessSync, closeSync, constants, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync } from "node:fs";
+import { accessSync, closeSync, constants, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { installCodexConfig, mergeCodexConfig } from "./codex-config.ts";
 import { installLaunchd, renderLaunchdPlist } from "./launchd.ts";
 import { generateMarketplace, renderMarketplace } from "./marketplace.ts";
+import { installShellCommands } from "./setup-shell.ts";
 
 const SERVICE = "dev.agent-graph.daemon";
 const PLUGIN = "agent-graph@agent-graph-local";
 const START_TIMEOUT_MS = 15_000;
 const LOG_TAIL_BYTES = 65_536;
-const FORWARDED_ENV = ["XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "AGENT_GRAPH_PORT", "AGENT_GRAPH_SOCKET"];
+const FORWARDED_ENV = ["XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "AGENT_GRAPH_PORT", "AGENT_GRAPH_SOCKET", "HERDR_CONFIG_PATH", "HERDR_SESSION", "HERDR_SOCKET_PATH"];
 
 export interface CommandResult { status: number; stdout: string; stderr: string }
 export interface SetupOptions {
@@ -23,6 +24,8 @@ export interface SetupOptions {
   uid?: number;
   dryRun?: boolean;
   doctor?: boolean;
+  authenticate?: boolean;
+  interactiveRun?: (command: string, args: string[]) => number;
   run?: (command: string, args: string[]) => CommandResult;
   log?: (message: string) => void;
   wait?: (logDir: string) => Promise<string>;
@@ -110,9 +113,9 @@ export async function setupAgentGraph(options: SetupOptions = {}): Promise<{ url
     return result;
   };
   const warnings: string[] = [];
-  if (!claude) warnings.push("Claude CLI がありません。導入後にセットアップを再実行すると自動登録されます。");
-  if (!codex) warnings.push("Codex CLI がありません。アプリへの設定は登録します。CLI での委譲には Codex CLI の導入とログインが必要です。");
-  if (!herdr) warnings.push("Herdr がありません。画面からの新規起動・送信・モデル変更には Herdr が必要です。");
+  if (!claude) warnings.push("Claude CLIは通常のセットアップで自動導入します。");
+  if (!codex) warnings.push("Codex CLIは通常のセットアップで自動導入します。");
+  if (!herdr) warnings.push("画面操作用のHerdrは通常のセットアップで自動導入します。");
   const shimPath = join(root, "packages", "daemon", "src", "shim.ts");
   const hookPath = join(root, "packages", "adapters", "src", "hook.ts");
   const daemonPath = join(root, "packages", "daemon", "src", "main.ts");
@@ -179,6 +182,27 @@ export async function setupAgentGraph(options: SetupOptions = {}): Promise<{ url
     for (const warning of warnings) log(warning);
     return { warnings };
   }
+  if (options.authenticate) {
+    if (!claude || !codex || !herdr) throw new Error("必要なCLIが不足しています。bash scripts/setup.sh から導入してください。");
+    const interactive = options.interactiveRun ?? ((command, args) => {
+      const result = spawnSync(command, args, { cwd: root, env: runtimeEnv, stdio: "inherit" });
+      if (result.error) throw result.error;
+      return result.status ?? 1;
+    });
+    const isLoggedIn = (command: string, args: string[]): boolean => {
+      const result = run(command, args);
+      if (command === claude) return result.status === 0 && (JSON.parse(result.stdout) as { loggedIn?: boolean }).loggedIn === true;
+      return result.status === 0;
+    };
+    for (const [command, statusArgs, loginArgs] of [
+      [claude, ["auth", "status", "--json"], ["auth", "login"]],
+      [codex, ["login", "status"], ["login"]],
+    ] as const) {
+      if (isLoggedIn(command, [...statusArgs])) continue;
+      log(`${command === claude ? "Claude" : "Codex"} にログインしてください。`);
+      if (interactive(command, [...loginArgs]) !== 0 || !isLoggedIn(command, [...statusArgs])) throw new Error("ログインが完了していません。同じセットアップを再実行してください。");
+    }
+  }
   // 既に動いているタスクの接続を、セットアップで切らない。
   if (loaded && serviceChanged) {
     const url = await (options.wait ?? waitForDashboard)(logDir);
@@ -197,6 +221,7 @@ export async function setupAgentGraph(options: SetupOptions = {}): Promise<{ url
     mkdirSync(dirname(configPath), { recursive: true });
     installCodexConfig({ configPath, nodePath, shimPath });
   }
+  installShellCommands(home, env.SHELL, [dirname(nodePath), join(dataHome, "agent-graph", "tools", "bin"), join(home, ".local", "bin")], root);
   log("Codex の登録を確認しました。");
   if (pluginChanged) generateMarketplace(marketplace);
   if (claude) {
@@ -206,9 +231,34 @@ export async function setupAgentGraph(options: SetupOptions = {}): Promise<{ url
     if (installed && !installed.enabled) checked(claude, ["plugin", "enable", PLUGIN, "--scope", "user"]);
     log("Claude を全プロジェクトで使えるように登録しました。");
   }
+  if (herdr) {
+    for (const provider of ["claude", "codex"]) checked(herdr, ["integration", "install", provider]);
+    const serverOptions = { ...launchd, label: "dev.agent-graph.herdr", nodePath: herdr, daemonPath: "server", logDir: join(logDir, "herdr") };
+    if (run(herdr, ["status", "server"]).status !== 0) {
+      const serverTarget = `gui/${options.uid ?? process.getuid?.() ?? 0}/dev.agent-graph.herdr`;
+      if (run("launchctl", ["print", serverTarget]).status !== 0) installLaunchd({ ...serverOptions, launchctl: (args) => run("launchctl", args).status });
+      let ready = false;
+      for (let attempt = 0; attempt < 30; attempt++) {
+        if (run(herdr, ["status", "server"]).status === 0) { ready = true; break; }
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      if (!ready) throw new Error(`Herdrの起動を確認できません。${logDir} のログを確認してください。`);
+    } else {
+      // 手動起動済みのサーバーは止めず、次回ログイン用の設定だけを保存する。
+      const serverPlistPath = join(plistDir, "dev.agent-graph.herdr.plist");
+      const serverPlist = renderLaunchdPlist(serverOptions);
+      if (readOptional(serverPlistPath) !== serverPlist) {
+        mkdirSync(plistDir, { recursive: true });
+        mkdirSync(serverOptions.logDir, { recursive: true });
+        writeFileSync(serverPlistPath, serverPlist);
+      }
+    }
+    log("画面からの起動・送信に使うHerdrを確認しました。");
+  }
   if (!loaded || serviceChanged) installLaunchd({ ...launchd, launchctl: (args) => run("launchctl", args).status });
   const url = await (options.wait ?? waitForDashboard)(logDir);
   log(`ダッシュボード: ${url}`);
+  log("新しいターミナルでは claude / codex / herdr / agent-graph --doctor を使えます。");
   log("開いている Claude / Codex は再起動してください。次回のPCログインからはデーモンが自動起動します。");
   for (const warning of warnings) log(warning);
   return { url, warnings };

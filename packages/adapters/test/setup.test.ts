@@ -20,7 +20,7 @@ function createFixture(t: { after: (callback: () => void) => void }, withClients
   }
   const calls: string[][] = [];
   const messages: string[] = [];
-  const state = { loaded: false, registered: false, installed: false, enabled: true, bootstrapStatus: 0 };
+  const state = { loaded: false, registered: false, installed: false, enabled: true, bootstrapStatus: 0, herdrRunning: true, claudeLoggedIn: true, codexLoggedIn: true };
   const marketplaceDir = join(home, ".local", "share", "agent-graph", "marketplace");
   const configPath = join(home, ".codex", "config.toml");
   const options: SetupOptions = {
@@ -30,9 +30,16 @@ function createFixture(t: { after: (callback: () => void) => void }, withClients
       calls.push([command, ...args]);
       if (command === "launchctl") {
         if (args[0] === "print") return { status: state.loaded ? 0 : 1, stdout: "", stderr: "" };
-        if (args[0] === "bootstrap") { state.loaded = state.bootstrapStatus === 0; return { status: state.bootstrapStatus, stdout: "", stderr: "bootstrap error" }; }
+        if (args[0] === "bootstrap") {
+          if (args[2].includes("dev.agent-graph.herdr")) state.herdrRunning = state.bootstrapStatus === 0;
+          else state.loaded = state.bootstrapStatus === 0;
+          return { status: state.bootstrapStatus, stdout: "", stderr: "bootstrap error" };
+        }
         return { status: 0, stdout: "", stderr: "" };
       }
+      if (args.join(" ") === "status server") return { status: state.herdrRunning ? 0 : 1, stdout: "", stderr: "" };
+      if (args.join(" ") === "auth status --json") return { status: 0, stdout: JSON.stringify({ loggedIn: state.claudeLoggedIn }), stderr: "" };
+      if (args.join(" ") === "login status") return { status: state.codexLoggedIn ? 0 : 1, stdout: "", stderr: "" };
       if (args.join(" ") === "plugin marketplace list --json") return {
         status: 0, stderr: "", stdout: JSON.stringify(state.registered ? [{ name: "agent-graph-local", source: "directory", path: marketplaceDir }] : []),
       };
@@ -63,6 +70,7 @@ test("新PCの導入は既存Codex設定を保持し、Claudeのユーザー登�
   const plist = readFileSync(join(f.home, "Library", "LaunchAgents", "dev.agent-graph.daemon.plist"), "utf8");
   assert.match(plist, /AGENT_GRAPH_CLAUDE_BIN/);
   assert.match(plist, /AGENT_GRAPH_CODEX_BIN/);
+  assert.ok(existsSync(join(f.home, "Library", "LaunchAgents", "dev.agent-graph.herdr.plist")));
 });
 
 test("同じ設定で再実行しても設定の重複・再起動・バックアップの上書きをしない", async (t) => {
@@ -76,8 +84,8 @@ test("同じ設定で再実行しても設定の重複・再起動・バック�
   await setupAgentGraph(f.options);
   assert.equal(readFileSync(f.configPath, "utf8"), config);
   assert.equal(readFileSync(`${f.configPath}.agent-graph.bak`, "utf8"), backup);
-  assert.equal(f.calls.length, 3);
-  assert.ok(f.calls.every((call) => call[1] === "print" || call.at(-1) === "--json"));
+  assert.equal(f.calls.length, 6);
+  assert.ok(f.calls.every((call) => call[1] === "print" || call.at(-1) === "--json" || call[1] === "integration" || call[1] === "status"));
 });
 
 test("dry-runは設定・サービス・プラグインを変更しない", async (t) => {
@@ -181,7 +189,7 @@ test("起動確認はログ末尾のURLとHTTP APIを確認する", async (t) =>
   assert.equal(result.url, url);
 });
 
-test("シェルのdry-runはNodeが不足してもHomebrewでインストールしない", (t) => {
+test("シェルのdry-runはNodeが不足してもインストールしない", (t) => {
   const f = createFixture(t, false);
   const marker = join(f.home, "brew-installed");
   for (const [name, body] of Object.entries({
@@ -194,8 +202,8 @@ test("シェルのdry-runはNodeが不足してもHomebrewでインストール�
   }
   const script = fileURLToPath(new URL("../../../scripts/setup.sh", import.meta.url));
   const result = spawnSync("/bin/bash", [script, "--dry-run"], { env: { HOME: f.home, PATH: `${f.bin}:/usr/bin:/bin` }, encoding: "utf8" });
-  assert.equal(result.status, 1);
-  assert.match(result.stderr, /Node 24 が未導入/);
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /Node 24 が未導入/);
   assert.equal(existsSync(marker), false);
   assert.equal(existsSync(f.configPath), false);
 });
@@ -221,4 +229,39 @@ test("実際のシェル入口からdry-runしても新PCの設定を作らな�
   assert.ok(result.stdout.includes(f.configPath));
   assert.equal(existsSync(f.configPath), false);
   assert.equal(existsSync(join(f.home, "Library")), false);
+});
+
+test("未ログインのCLIだけログインを案内し、認証を再確認してから登録する", async (t) => {
+  const f = createFixture(t);
+  f.state.claudeLoggedIn = false;
+  f.state.codexLoggedIn = false;
+  const loggedIn: string[][] = [];
+  await setupAgentGraph({ ...f.options, authenticate: true, interactiveRun: (command, args) => {
+    loggedIn.push([command, ...args]);
+    if (command.endsWith("/claude")) f.state.claudeLoggedIn = true;
+    else f.state.codexLoggedIn = true;
+    return 0;
+  } });
+  assert.deepEqual(loggedIn.map((call) => call.slice(1)), [["auth", "login"], ["login"]]);
+  await setupAgentGraph({ ...f.options, authenticate: true, interactiveRun: () => { throw new Error("ログイン済みなら再度開かない"); } });
+});
+
+test("ログインが未完了なら設定を書かず完了URLも出さない", async (t) => {
+  const f = createFixture(t);
+  f.state.codexLoggedIn = false;
+  await assert.rejects(setupAgentGraph({ ...f.options, authenticate: true, interactiveRun: () => 0 }), /ログインが完了していません/);
+  assert.equal(existsSync(f.configPath), false);
+  assert.ok(f.messages.every((message) => !message.startsWith("ダッシュボード:")));
+});
+
+test("新PCではHerdrも常駐起動し、既存の稼働サーバーは再起動しない", async (t) => {
+  const f = createFixture(t);
+  f.state.herdrRunning = false;
+  await setupAgentGraph(f.options);
+  const plist = readFileSync(join(f.home, "Library", "LaunchAgents", "dev.agent-graph.herdr.plist"), "utf8");
+  assert.ok(plist.includes(`<string>${join(f.bin, "herdr")}</string><string>server</string>`));
+  assert.ok(f.calls.some((call) => call.at(-1)?.endsWith("dev.agent-graph.herdr.plist")));
+  f.calls.length = 0;
+  await setupAgentGraph(f.options);
+  assert.ok(f.calls.every((call) => call[1] !== "bootstrap" && call[1] !== "bootout"));
 });

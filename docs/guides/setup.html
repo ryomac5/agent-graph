@@ -7,43 +7,34 @@
 :root{color-scheme:light dark;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.75}body{max-width:760px;margin:64px auto;padding:0 24px}h1{font-size:32px;letter-spacing:-.04em;line-height:1.3}h2{font-size:21px;margin-top:40px}p,li{font-size:15px}pre{background:light-dark(#f5f5f7,#202024);border-radius:12px;padding:20px;overflow:auto;line-height:1.6}code{font-size:13px}a{color:light-dark(#06c,#6ab0ff)}small{opacity:.7}table{width:100%;border-collapse:collapse;font-size:14px}td,th{text-align:left;padding:12px 0;border-bottom:1px solid light-dark(#ddd,#444)}
 </style>
 <h1>新しいMacへの導入</h1>
-<p>リポジトリを新しいMacに置いたら、そのフォルダで実行します。</p>
-<pre><code>bash scripts/setup.sh</code></pre>
-<p>常駐起動、Claudeのユーザー登録、Codexの設定をまとめて行い、最後にダッシュボードのURLを表示します。そのURLをブラウザで開いてください。開いているClaude / Codexは設定を読み直すために再起動します。次回のPCログインからデーモンは自動起動します。</p>
-
-<h2>最初に用意するもの</h2>
-<ul>
-<li><strong>Node 24以上</strong>。未導入でもHomebrewがあればセットアップが <code>node@24</code> を導入します。Homebrewがない場合は <a href="https://nodejs.org/">Nodeの公式サイト</a>から導入してください。pnpmや実行用の依存インストールは不要です。</li>
-<li><strong>Claude Code / CodexのCLIとログイン</strong>。利用する側を各PCで準備してください。CLIがない場合は不足を表示します。後から導入して同じセットアップを再実行すると登録できます。</li>
-<li><strong>Herdr</strong>。画面から新規セッションの起動・メッセージ送信・モデル変更を使う場合に必要です。未導入の場合、これらの操作は使えません。</li>
-</ul>
-<p>CLIを導入済みなら、ログインはそれぞれ次のコマンドで行います。</p>
-<pre><code>claude auth login
-codex login</code></pre>
-<p><small>公式の導入・認証手順：<a href="https://code.claude.com/docs/en/setup">Claude Code</a> / <a href="https://learn.chatgpt.com/docs/codex/cli">Codex CLI</a>。Claudeは<a href="https://code.claude.com/docs/en/discover-plugins">ユーザー範囲のプラグイン</a>として登録します。Codexは<a href="https://learn.chatgpt.com/docs/config-file/config-reference">個人設定</a>にMCPサーバーを追加します。</small></p>
-
-<h2>移すのはコード。設定は新しいPCで生成</h2>
-<p>この変更を含むリポジトリを新しいPCへコピーして実行してください。新しいPCのNodeやCLIの場所を検出して設定を生成するため、古いPCのLaunchAgentや生成済みプラグインをコピーする必要はありません。公開済みの版を使う場合は、取得後に同じコマンドを実行します。</p>
-<pre><code>git clone https://github.com/ryomac5/agent-graph.git
-cd agent-graph
-bash scripts/setup.sh</code></pre>
-<p>アカウントのログインは各PCで行います。割り当てポリシーを引き継ぐ場合だけ、<code>~/.config/agent-graph/policy.toml</code>を移してください。セッション履歴の移行はセットアップには含みません。</p>
-
+<p>Apple Silicon / IntelのMacで、ターミナルに次の1行を貼り付けます。</p>
+<pre><code>curl -fsSL https://raw.githubusercontent.com/ryomac5/agent-graph/main/scripts/install.sh | bash</code></pre>
+<p>コードを取得し、未導入のNode 24・Claude Code・Codex CLI・Herdrを公式配布から導入します。HomebrewやGitの事前準備は不要です。Nodeは公式チェックサムとの一致を確認してから実行します。</p>
+<p>Claude / Codexのログイン画面が開いたら、自分のアカウントでログインします。Gitの実行環境がないMacでは、Command Line Toolsの確認画面が開きます。インストールを選ぶと、セットアップが完了を待って先へ進みます。</p>
+<p>その後、Claudeのプラグイン・CodexのMCP・Herdrの連携を登録し、バックグラウンド起動します。最後に表示されたダッシュボードのURLを開いてください。導入したCLIのPATHも登録するので、通常のCLIを使う場合は新しいターミナルを開きます。</p>
+<p>開いているClaude / Codexは設定を読み直すために再起動します。次回のPCログインからデーモンと画面操作用サーバーは自動起動します。既にHerdrサーバーが動いている場合は、そのサーバーを利用して再起動しません。</p>
+<p><small>公式配布と認証：<a href="https://nodejs.org/">Node</a> / <a href="https://code.claude.com/docs/en/setup">Claude Code</a> / <a href="https://learn.chatgpt.com/docs/codex/cli">Codex CLI</a> / <a href="https://herdr.dev/docs/install/">Herdr</a>。各サービスの利用にはそれぞれのアカウント・利用条件が適用されます。</small></p>
 <h2>確認と更新</h2>
-<pre><code>bash scripts/setup.sh --doctor
-bash scripts/setup.sh --dry-run</code></pre>
-<p><code>--doctor</code>は登録状況とURLを表示します。<code>--dry-run</code>は変更予定だけを表示し、Nodeの導入も設定変更も行いません。</p>
-<p>コードを更新した後も同じセットアップを実行します。同じ設定ならデーモンを再起動しません。再起動が必要な変更で実行中の委譲がある場合は、完了後の再実行を案内します。</p>
-
-<h2>設定とログ</h2>
+<pre><code>agent-graph --doctor
+agent-graph --dry-run</code></pre>
+<p><code>--doctor</code>は登録状況とURLを表示します。<code>--dry-run</code>は変更予定を表示します。どちらもツールの導入・設定変更・再起動は行いません。</p>
+<p>agent-graphの更新も最初と同じ1行で行います。コードは版ごとのフォルダに保存し、以前の版を上書きしません。設定が変わらなければデーモンを再起動しません。再起動が必要な変更で実行中の委譲がある場合は中止し、完了後の再実行を案内します。</p>
+<p>Gitで取得して開発する場合は、リポジトリのルートで <code>bash scripts/setup.sh</code> を実行しても同じセットアップになります。自動化用の <code>--skip-login</code> はログイン確認のみを省略するため、委譲を使う前に別途認証を完了してください。</p>
+<h2>設定と保存先</h2>
 <table>
 <tr><th>内容</th><th>既定の場所</th></tr>
+<tr><td>取得したコード</td><td><code>~/.local/share/agent-graph/releases/</code></td></tr>
+<tr><td>自動導入したNode・Codex・Herdr</td><td><code>~/.local/share/agent-graph/tools/</code></td></tr>
+<tr><td>Claude Code</td><td><code>~/.local/bin/claude</code></td></tr>
 <tr><td>Codex設定</td><td><code>~/.codex/config.toml</code></td></tr>
-<tr><td>変更前のCodex設定</td><td><code>~/.codex/config.toml.agent-graph.bak</code></td></tr>
 <tr><td>Claudeプラグイン</td><td><code>~/.local/share/agent-graph/marketplace/</code></td></tr>
-<tr><td>自動起動</td><td><code>~/Library/LaunchAgents/dev.agent-graph.daemon.plist</code></td></tr>
+<tr><td>自動起動</td><td><code>~/Library/LaunchAgents/dev.agent-graph.daemon.plist</code><br><code>dev.agent-graph.herdr.plist</code></td></tr>
 <tr><td>デーモンのログ</td><td><code>~/.local/state/agent-graph/run/</code></td></tr>
+<tr><td>ターミナルのPATH</td><td><code>~/.zprofile</code>（Bashは<code>~/.bash_profile</code>）のagent-graph専用枠</td></tr>
 </table>
-<p>Codexはagent-graphの項目だけを更新し、他のモデル設定やMCPサーバーは保持します。Claudeにすでに同名のローカル登録がある場合はその場所を利用します。<code>CODEX_HOME</code>やXDGの保存先を使う場合も絶対パスを指定すれば尊重します。</p>
-<p>起動に失敗した場合は表示されたエラーと <code>daemon.stderr.log</code> を確認してください。ポートは <code>AGENT_GRAPH_PORT</code> または <code>~/.config/agent-graph/config.toml</code> の <code>[dashboard] port</code> で指定できます。</p>
+<p>Codex設定はagent-graphの項目だけを更新し、他のモデル設定やMCPサーバーを保持します。変更前のCodex設定とシェル設定を <code>.agent-graph.bak</code> に保存します。Herdr自身の連携は<a href="https://herdr.dev/docs/cli-reference/">公式integrationコマンド</a>で登録します。<code>CODEX_HOME</code>やXDGの保存先を使う場合は絶対パスを指定してください。</p>
+<p>新しいPCで設定を生成するため、古いPCのLaunchAgentや生成済みプラグインはコピーしません。個人の割り当てを引き継ぐ場合だけ <code>~/.config/agent-graph/policy.toml</code> を移してください。セッション履歴の移行はセットアップには含みません。</p>
+<p>起動に失敗した場合は表示されたエラーと <code>daemon.stderr.log</code> を確認します。Herdr用のログは <code>run/herdr/</code> にあります。ポートは <code>AGENT_GRAPH_PORT</code> または <code>~/.config/agent-graph/config.toml</code> の <code>[dashboard] port</code> で指定できます。</p>
+<h2>ライセンス</h2>
+<p>agent-graphはMIT Licenseです。条件全文はリポジトリのLICENSEを参照してください。インストールするCLIは各配布元のライセンス・利用条件に従います。</p>
 </html>

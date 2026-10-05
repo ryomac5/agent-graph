@@ -253,7 +253,7 @@ data: {"project":{...},"sessions":[...],"graphs":[...],"usage":{...},"updatedAt"
 
 | action | 追加の本文 | 処理 |
 | --- | --- | --- |
-| `new_session` | `client: claude / codex` | 登録済み PJ の cwd で Herdr の tab を作って起動 |
+| `new_session` | `client: claude / codex` | 登録済み PJ の cwd で Herdr の workspace を作って起動 |
 | `set_model` | `sessionId`, `model` | Claude の pane に `/model` を送り、確認が出たときは確認する。表示モデルは後続の観測を正とする |
 | `stop_session` | `sessionId` | 子が動いていない Claude の pane に `/exit` を送る。終了は hook または生死監視で確認する |
 | `rerun_delegation` | `sessionId`, `delegationId` | planner の判断とは別に、保存した実行条件で新しい委譲を起動。ネイティブの子は親へ再実行を依頼 |

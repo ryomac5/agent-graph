@@ -15,9 +15,9 @@ const hookPath = fileURLToPath(new URL("./hook.ts", import.meta.url));
 const nodePath = process.execPath;
 const args = process.argv.slice(2);
 if (args.includes("--setup")) {
-  const unknown = args.find((flag) => !["--setup", "--dry-run", "--doctor"].includes(flag));
+  const unknown = args.find((flag) => !["--setup", "--dry-run", "--doctor", "--skip-login"].includes(flag));
   if (unknown) throw new Error(`Unknown option: ${unknown}`);
-  try { await setupAgentGraph({ dryRun: args.includes("--dry-run"), doctor: args.includes("--doctor") }); }
+  try { await setupAgentGraph({ dryRun: args.includes("--dry-run"), doctor: args.includes("--doctor"), authenticate: !args.includes("--skip-login") }); }
   catch (error) { process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; }
 } else {
 const dryRun = args.includes("--dry-run");

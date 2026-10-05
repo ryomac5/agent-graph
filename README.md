@@ -6,20 +6,24 @@ Claude Code と Codex のどちらから呼んだ委譲も 1 つの有向グラ�
 
 ## 新しいMacへの導入
 
-このリポジトリを新しいMacに置き、ルートで実行する。
+新しいMacのターミナルで実行する。
 
 ```bash
-bash scripts/setup.sh
+curl -fsSL https://raw.githubusercontent.com/ryomac5/agent-graph/main/scripts/install.sh | bash
 ```
 
-常駐起動・Claudeのユーザー登録・Codex設定をまとめて行い、ダッシュボードのURLを表示する。
-Node 24以上が必要。未導入でもHomebrewがあれば自動で導入する。実行用の依存インストールやpnpmは不要。
-Claude / CodexのCLIとログインは各PCで準備する。設定の反映後、開いているClaude / Codexを再起動する。
-画面からの新規起動・送信・モデル変更にはHerdrも必要。
+コードの取得、Node 24・Claude Code・Codex CLI・Herdrの導入、ログイン案内、プラグインとMCPの登録、常駐起動までまとめて行う。
+最後に表示されるダッシュボードのURLを開く。Git・Node・Homebrewの事前準備は不要。
+本人が操作するのはClaude / Codexのログインと、未導入の場合のmacOS Command Line Toolsの確認画面。
+公式配布から必要なツールをユーザー領域に取得する。既存のツールと設定を利用し、同じ設定なら稼働中サービスを再起動しない。
+セットアップを反映するため、開いているClaude / Codexは再起動する。
+
+コードを取得済みの場合は `bash scripts/setup.sh` でも同じセットアップを実行できる。
+CLIを通常のターミナルから使うPATHも登録するので、導入後は新しいターミナルを開く。
 
 ```bash
-bash scripts/setup.sh --doctor   # 登録状況とURLを確認
-bash scripts/setup.sh --dry-run  # 変更内容だけを確認
+agent-graph --doctor   # 登録状況とURLを確認
+agent-graph --dry-run  # 変更内容だけを確認
 ```
 
 既存のCodex設定はagent-graphの項目だけを更新し、変更前のファイルをバックアップする。
@@ -92,3 +96,8 @@ e2e は本物の `claude` と `codex` を呼ぶ。認証と API 利用費用が�
 
 構成の詳細、イベントとトレースの型、割り当て層の判断、セキュリティの考え方は `docs/agents/architecture.md` にある。
 開発コマンドの詳細とコーディング規約は `AGENTS.md` にある。
+
+## ライセンス
+
+MIT License。利用・変更・再配布の条件は [LICENSE](LICENSE) を参照。
+Claude Code・Codex CLI・Herdrは各公式配布から別途導入し、それぞれのライセンス・アカウント条件に従う。

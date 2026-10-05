@@ -11,8 +11,10 @@ const FRESH_MS = 4000;
 const WRAP_SLACK = 1.4;
 // 前向きの辺のラベルは届く先の近くに置く。隣り合う子で高さを互い違いにして重ねない
 const LABEL_T = [0.58, 0.72, 0.86];
-// 戻りの辺のラベルは親の近く（子から 82%）に置く。前向きの辺のラベルは子の近くなので重ならない
+// 戻りの辺のラベルは親の近く（子から 82%）に置き、さらに膨らみの外側へ寄せる。
+// 親子が近いと高さの差だけでは前向きの辺のラベルと重なるため、横にも逃がす
 const BACK_LABEL_T = 0.82;
+const BACK_LABEL_GAP = 6;
 // ノードに触れたとき、出る辺の文字を出すのはこの本数まで
 const HOT_OUT_MAX = 3;
 // ラベルの箱。中身は文字に合わせて縮み、本文だけを省略する。向きの語は切らない
@@ -22,9 +24,11 @@ const ORB_STATUS_CLASS = { running: "on-running", waiting: "on-waiting", failed:
 const FAMILY_WORD = { anthropic: "Claude", openai: "Codex" };
 const edgeKey = (e) => e.id || `${e.from}>${e.to}:${e.kind || "delegate"}`;
 
-function edgeLabel(text, direction, mid) {
-  const holder = svgEl("foreignObject", { x: mid.x - LABEL_W / 2, y: mid.y - LABEL_H / 2, width: LABEL_W, height: LABEL_H, "pointer-events": "none" });
-  const box = el("div", undefined, "edge-label");
+// align は箱の寄せ方。center は mid を中心に、start は mid から右へ、end は mid から左へ伸ばす
+function edgeLabel(text, direction, mid, align = "center") {
+  const x = align === "start" ? mid.x : align === "end" ? mid.x - LABEL_W : mid.x - LABEL_W / 2;
+  const holder = svgEl("foreignObject", { x, y: mid.y - LABEL_H / 2, width: LABEL_W, height: LABEL_H, "pointer-events": "none" });
+  const box = el("div", undefined, align === "center" ? "edge-label" : `edge-label ${align}`);
   box.setAttribute("xmlns", XHTML_NS);
   const span = el("span", undefined, "edge-pill");
   if (text) span.append(el("span", text, "txt"));
@@ -58,7 +62,8 @@ function buildOrb(node, selected) {
   const role = node.kind === "root" ? "" : roleLabel(node);
   orb.title = [node.title, statusLabel(node.status), sub].filter(Boolean).join(" · ");
   orb.append(el("strong", title, "orb-name"));
-  modelLines(orb, sub || (node.kind === "root" ? "?" : ""), "orb-live");
+  // モデルがわからない根は 2 行目を出さない。「?」を置くと未完成に見える
+  if (sub) modelLines(orb, sub, "orb-live");
   if (role) orb.append(el("span", role, "orb-role"));
   return orb;
 }
@@ -177,7 +182,11 @@ export function renderGraph(scope, ctx) {
       const g = svgEl("g", { class: "edge edge-back" + (sel ? " sel" : ""), "data-edge": edgeKey(e) });
       g.append(svgEl("path", { class: "hit", d }));
       g.append(svgEl("path", { class: "line", d, "marker-end": arrow(sel ? "arrow-sel" : "arrow") }));
-      if (e.label || direction) g.append(edgeLabel(e.label || "return", direction, edgePoint(x1, y1, x2, y2, bulge, BACK_LABEL_T)));
+      if (e.label || direction) {
+        const apex = edgePoint(x1, y1, x2, y2, bulge, BACK_LABEL_T);
+        const side = bulge < 0 ? -1 : 1;
+        g.append(edgeLabel(e.label || "return", direction, { x: apex.x + side * BACK_LABEL_GAP, y: apex.y }, side < 0 ? "end" : "start"));
+      }
       if (knownEdges.fresh.has(edgeKey(e)) && motion) sparks.push({ g, d, target: e.to, family: e.fromFamily || familyOf(from) });
       linkEdge(e.from, g, false); linkEdge(e.to, g, true);
       svg.append(g);

@@ -38,8 +38,16 @@ function taskStatus(state: TaskState): Status {
   return state;
 }
 
+// Markdown の行頭の記号と強調を外す。子の出力は見出しや箇条書きで始まることが多い
+function plainLine(line: string): string {
+  return line.replace(/^(#{1,6}|[-*+]|>|\d+\.)\s+/, "").replace(/\*\*|__|`/g, "").trim();
+}
+
+// ラベル用の 1 行。見出しだけの行は飛ばし、最初の本文の行を使う。本文が無ければ見出しを使う
 function firstLine(text: string, limit: number): string {
-  const line = text.split(/\r?\n/).map((item) => item.trim()).find(Boolean) ?? "";
+  const lines = text.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+  const body = lines.find((item) => !/^#{1,6}\s/.test(item));
+  const line = plainLine(body ?? lines[0] ?? "");
   return line.length > limit ? `${line.slice(0, limit - 1)}…` : line;
 }
 

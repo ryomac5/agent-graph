@@ -15,3 +15,5 @@ export {
 export type { Layout, LayoutView, LayoutNode, LayoutEdge, Box } from "../public/lib/layout.js";
 export { DISMISSABLE_STATUS, isDismissable, dismissKey, visibleView, diffKnown } from "../public/lib/visible.js";
 export type { VisibleScope, VisibleResult } from "../public/lib/visible.js";
+export { inlineSpans, parseMarkdown } from "../public/lib/markdown.js";
+export type { MdSpan, MdLine } from "../public/lib/markdown.js";

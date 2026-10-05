@@ -1,6 +1,7 @@
 // 右の詳細パネル。root は会話の吹き出し、子は属性と往復と Accept と Scope と Review と Output
 import { fmtElapsed, fmtTokens, fmtWhen, modelLabel, statusClass, statusLabel, statusDescription } from "../lib/format.js";
 import { actionsFor } from "../lib/status.js";
+import { parseMarkdown } from "../lib/markdown.js";
 import { button, el } from "./dom.js";
 
 const KIND_LABEL = { root: "Root", task: "Task", delegation: "Delegation", subagent: "Subagent" };
@@ -18,13 +19,28 @@ function addRow(dl, label, value, mono, hover) {
   dl.append(dd);
 }
 
+// 吹き出しの本文を行ごとに描く。文字列はすべて textContent で入れ、HTML として解釈させない
+function renderMarkdown(body, text) {
+  const lines = parseMarkdown(text);
+  lines.forEach((line, index) => {
+    const row = el("span", undefined, `md-${line.type}`);
+    if (line.type === "bullet") row.append(el("span", "・", "md-mark"));
+    for (const span of line.spans) {
+      row.append(el(span.type === "text" ? "span" : span.type === "strong" ? "strong" : "code", span.text));
+    }
+    body.append(row);
+    if (index < lines.length - 1) body.append(el("span", "\n"));
+  });
+}
+
 // 吹き出し 1 つ。root は右、子は左。全文を出しているかは ctx に持つ
 export function buildBubble(round, tone, key, ctx) {
   const fromRoot = round.role === "root";
   const wrap = el("div", undefined, `bubble ${fromRoot ? "from-root" : "from-agent"}${fromRoot ? "" : ` ${tone}`}`);
   const text = String(round.text == null ? "" : round.text);
   const open = ctx.expandedRounds.has(key);
-  const body = el("div", text, `bubble-text${open ? "" : " clamp"}`);
+  const body = el("div", undefined, `bubble-text${open ? "" : " clamp"}`);
+  renderMarkdown(body, text);
   wrap.append(body);
   if (isLong(text)) {
     const more = button(open ? "Less" : "More", "more", () => {

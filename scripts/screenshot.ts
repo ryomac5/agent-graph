@@ -60,10 +60,10 @@ if (target === 'detail') {
   const target = wanted
     ? page.locator('.graph-holder .node[data-node="' + wanted + '"]')
     : page.locator('.graph-holder .node:not(.root)').first();
-  if (await target.count()) {
-    await target.click({ force: true });
-    await page.waitForTimeout(600);
-  }
+  if (!(await target.count())) throw new Error('no child node to select');
+  await target.click({ force: true });
+  await page.waitForFunction(() => document.querySelector('.graph-holder .node.selected:not(.root)'), null, { timeout: 5000 });
+  await page.waitForTimeout(600);
   // 詳細パネルに会話が描画されたかを検証する。「No messages」だけでは失敗。
   const bubbles = page.locator('#detail .chat .bubble').count();
   if (!(await bubbles)) {

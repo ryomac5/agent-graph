@@ -186,3 +186,15 @@ test("日時と残り時間と経過時間の整形", () => {
   assert.equal(lib.fmtElapsed(new Date(now.getTime() - 5 * 3600000).toISOString(), undefined, now), "5h 00m");
   assert.equal(lib.fmtTokens({ input: 48210, output: 612 }), "48k in · 612 out");
 });
+
+test("吹き出しの Markdown は見出し、箇条書き、太字、コードだけを見分け、閉じない記号は地の文に残す", () => {
+  const lines = lib.parseMarkdown("## 完了報告\n- **notes.md** を `test -f` で確認\n**閉じない\n<script>x</script>");
+  assert.deepEqual(lines[0], { type: "heading", level: 2, spans: [{ type: "text", text: "完了報告" }] });
+  assert.deepEqual(lines[1], { type: "bullet", indent: 0, spans: [
+    { type: "strong", text: "notes.md" }, { type: "text", text: " を " }, { type: "code", text: "test -f" }, { type: "text", text: " で確認" },
+  ] });
+  assert.deepEqual(lines[2], { type: "line", spans: [{ type: "text", text: "**閉じない" }] });
+  // HTML は区間の文字列として残るだけで、要素として解釈する経路を持たない
+  assert.deepEqual(lines[3], { type: "line", spans: [{ type: "text", text: "<script>x</script>" }] });
+  assert.deepEqual(lib.parseMarkdown(undefined), [{ type: "line", spans: [] }]);
+});

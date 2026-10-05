@@ -1,103 +1,132 @@
 # agent-graph
 
-AI エージェント同士の委譲を記録し、可視化し、割り当てを改善する常駐デーモンである。
-Claude Code と Codex のどちらから呼んだ委譲も 1 つの有向グラフに乗る。
-委譲の口は MCP ツール `delegate` 1 本である。
+A local dashboard and background daemon for delegations between Claude Code and Codex.
+Track agents, models, conversations, and task results in one directed graph, including delegations in both directions.
 
-## 新しいMacへの導入
+## Features
 
-新しいMacのターミナルで実行する。
+- Keep the delegation graph visible while switching projects and sessions.
+- Inspect models, conversation history, task output, acceptance checks, and assignment decisions.
+- Start sessions and send messages from the dashboard through Herdr. Change models or stop Claude sessions, and retry failed delegations.
+- Run dependency-based task plans with approval gates and pull request integration.
+- Store history locally, outside your working repositories.
+
+## Quick start
+
+Run this command in a terminal on your Mac:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ryomac5/agent-graph/main/scripts/install.sh | bash
 ```
 
-コードの取得、Node 24・Claude Code・Codex CLI・Herdrの導入、ログイン案内、プラグインとMCPの登録、常駐起動までまとめて行う。
-最後に表示されるダッシュボードのURLを開く。Git・Node・Homebrewの事前準備は不要。
-本人が操作するのはClaude / Codexのログインと、未導入の場合のmacOS Command Line Toolsの確認画面。
-公式配布から必要なツールをユーザー領域に取得する。既存のツールと設定を利用し、同じ設定なら稼働中サービスを再起動しない。
-セットアップを反映するため、開いているClaude / Codexは再起動する。
+The installer downloads agent-graph and installs missing tools: Node 24, Claude Code, Codex CLI, and Herdr. You do not need to install Git, Node, or Homebrew beforehand.
 
-コードを取得済みの場合は `bash scripts/setup.sh` でも同じセットアップを実行できる。
-CLIを通常のターミナルから使うPATHも登録するので、導入後は新しいターミナルを開く。
+Complete Claude and Codex sign-in when prompted. If Git's runtime is missing, approve the macOS Command Line Tools installation when its dialog appears. The installer waits for it to finish.
+
+Setup registers the Claude plugin, Codex MCP server, and Herdr integrations, then starts the background services. Open the dashboard URL printed at the end.
+
+Open a new terminal to use the installed CLI commands. Restart any open Claude or Codex clients so they load the new configuration.
+
+Automated installation currently supports **macOS on Apple Silicon and Intel**. An internet connection is required. Agent usage follows each provider's account and billing terms.
+
+### What setup changes
+
+Tools are downloaded from their official distribution sources into your user directory. The downloaded Node archive is checked against its official SHA-256 checksum before execution. Existing tools are reused.
+
+Setup preserves unrelated Codex and shell settings and backs up files before changing them. It registers services for automatic startup at login. Existing Herdr servers are reused, and an unchanged daemon configuration does not trigger a restart. Updates that require a daemon restart stop before changing configuration if delegated tasks are still running.
+
+If you already have the source code, run this from the repository root instead:
 
 ```bash
-agent-graph --doctor   # 登録状況とURLを確認
-agent-graph --dry-run  # 変更内容だけを確認
+bash scripts/setup.sh
 ```
 
-既存のCodex設定はagent-graphの項目だけを更新し、変更前のファイルをバックアップする。
-同じ設定での再実行はデーモンを再起動しない。実行中の委譲がある場合は再起動を伴う更新を止める。
-詳しい導入・ログイン・移行手順は [導入ガイド](docs/guides/setup.html) を参照。
+### Check or update an installation
 
-## 構成
+In a new terminal:
 
-pnpm workspace のモノレポである。5 つのパッケージに分ける。
+```bash
+agent-graph --doctor   # Check registration and print the dashboard URL
+agent-graph --dry-run  # Preview setup changes without applying them
+```
 
-| パッケージ | 責務 |
+Run the installation command again to update agent-graph. Downloaded versions are stored separately so the installer does not overwrite an earlier version.
+
+For unattended setup, `bash scripts/setup.sh --skip-login` skips authentication checks. Authenticate the CLIs separately before delegating tasks.
+
+See the [setup guide (Japanese)](docs/guides/setup.html) for configuration locations and troubleshooting.
+
+## Usage
+
+Ask Claude Code or Codex to delegate a task through the `delegate` MCP tool. The caller supplies a role, a task, and acceptance criteria. The assignment policy selects the model. Child agents can delegate through the same tool, and both Claude-to-Codex and Codex-to-Claude delegations are recorded.
+
+Select a project and session in the dashboard to inspect the graph and conversation. Ended sessions are grouped in history. Planner tasks waiting for a decision expose Approve, Reject, and Retry controls.
+
+Personal assignment policies live in `~/.config/agent-graph/policy.toml`, or under `XDG_CONFIG_HOME` when set.
+
+### Task plans
+
+From the repository root:
+
+```bash
+node packages/planner/src/cli.ts run --session <id> [--spec path] [--max-parallel n] [--no-pr]
+node packages/planner/src/cli.ts status --session <id>
+node packages/planner/src/cli.ts approve <task> --session <id>
+node packages/planner/src/cli.ts reject <task> --session <id>
+node packages/planner/src/cli.ts retry <task> --session <id>
+```
+
+The default task specification is `.agents/graph/<id>/tasks.yaml`.
+
+## Project structure
+
+This repository is a pnpm workspace with five packages.
+
+| Package | Responsibility |
 | --- | --- |
-| `packages/core` | イベントの型、トレース文脈、割り当て層、実行アダプタ、受け入れ検証、SQLite の保存 |
-| `packages/daemon` | MCP サーバ、ダッシュボード用 HTTP と SSE、トレース受信、利用枠の取得 |
-| `packages/dashboard` | Web 画面。グラフと履歴と判断待ちの操作を表示する |
-| `packages/adapters` | Claude Code プラグインと Codex 設定を生成する |
-| `packages/planner` | tasks.yaml のグラフを実行する。ready なタスクごとに `delegate` を呼ぶ |
+| `packages/core` | Events, trace context, assignment policy, execution adapters, acceptance checks, and SQLite storage |
+| `packages/daemon` | MCP, dashboard HTTP and SSE, trace ingestion, and usage collection |
+| `packages/dashboard` | Delegation graphs, conversation history, and approval controls |
+| `packages/adapters` | Installation, Claude plugins, Codex configuration, and client integration |
+| `packages/planner` | Dependency-based execution of `tasks.yaml` plans |
 
-割り当てポリシーの個人値は `~/.config/agent-graph/policy.toml` に置く。`XDG_CONFIG_HOME` があれば優先する。
+## Local storage
 
-## 使い方
+Runtime state is stored outside the repositories your agents work on.
 
-呼び出し側は役割と依頼文と受け入れ条件を渡す。モデルは渡さない。
-割り当て層がコードのポリシーとして候補からモデルを選ぶ。
-子プロセスも同じ `delegate` を呼べる。Claude から Codex、Codex から Claude のどちらの向きも記録される。
-入出力の型は `docs/agents/architecture.md` の「delegate の入出力」にある。
+| Data | Default location |
+| --- | --- |
+| Downloaded application versions | `~/.local/share/agent-graph/releases/` |
+| Automatically installed tools | `~/.local/share/agent-graph/tools/` |
+| Project history | `~/.local/state/agent-graph/<repo-key>/agent-graph.db` |
+| Daemon socket and logs | `~/.local/state/agent-graph/run/` |
+| Agent worktrees | `~/.cache/agent-graph/worktrees/<repo-key>/<session>/<task>/` |
 
-複数タスクをまとめて回すときは planner を使う。
+Setup respects absolute `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME`, `XDG_CONFIG_HOME`, and `CODEX_HOME` paths. Generated configurations should be recreated on each PC rather than copied from another machine. Setup does not migrate session history.
 
-- 実行する。リポジトリのルートで `node packages/planner/src/cli.ts run --session <id> [--spec path] [--max-parallel n] [--no-pr]` を実行する
-- 状態を見て判断する。リポジトリのルートで `node packages/planner/src/cli.ts status|approve|reject|retry [task] --session <id>` を実行する
+## Development
 
-spec の既定は `.agents/graph/<id>/tasks.yaml` である。
+Use Node 24 or later. Runtime code uses Node's standard library; pnpm dependencies are needed for development.
 
-## ダッシュボード
+```bash
+npx --yes pnpm@10 install
+npx --yes pnpm@10 typecheck
+npx --yes pnpm@10 test
+```
 
-デーモンの起動中に開ける。URL は `daemon.log` の `dashboard` 行に出す。
+Live end-to-end checks use authenticated Claude and Codex CLIs and may incur provider usage charges:
 
-- プロジェクトとセッションを選び、委譲グラフを表示する。終了したセッションは折りたたむ
-- プロジェクト。1 リポジトリの委譲を有向グラフで表示する。根と子を選ぶと詳細パネルが開き、依頼文・出力・往復・受け入れ・割り当ての理由が見える
-- 判断待ち。planner が `waiting_human` か `conflict` で止まったタスクに Approve / Reject / Retry を送る
-- 双方向の辺。Claude と Codex のどちらの向きの委譲も色で区別して表示する
+```bash
+AGENT_GRAPH_E2E=1 bash scripts/e2e-stage2.sh  # Delegation in both directions
+AGENT_GRAPH_E2E=1 bash scripts/e2e-stage4.sh  # Dashboard
+AGENT_GRAPH_E2E=1 bash scripts/e2e-stage5.sh  # Plugins and configuration
+AGENT_GRAPH_E2E=1 bash scripts/e2e-stage6.sh  # Planner and review
+```
 
-画面は `packages/dashboard`、経路と SSE の約束は `docs/agents/dashboard-api.md` にある。
+These checks are skipped unless `AGENT_GRAPH_E2E` is set. They isolate state and working repositories in temporary directories.
 
-## 状態の置き場
+Please include relevant tests with changes. Follow [AGENTS.md](AGENTS.md) for repository conventions. The [architecture](docs/agents/architecture.md) and [dashboard API contract](docs/agents/dashboard-api.md) document component boundaries and behavior; these documents are currently in Japanese.
 
-作業するリポジトリの中に状態を置かない。
+## License
 
-- 実行時の状態。`~/.local/state/agent-graph/<repo-key>/agent-graph.db`
-- デーモンのソケットとログ。`~/.local/state/agent-graph/run/`
-- worktree。`~/.cache/agent-graph/worktrees/<repo-key>/<session>/<task>/`
-
-`XDG_STATE_HOME` と `XDG_CACHE_HOME` と `XDG_CONFIG_HOME` があれば優先する。
-詳しい置き場の一覧は `docs/agents/architecture.md` の「置き場」にある。
-
-## 開発
-
-- 開発用の依存を解決する。`npx --yes pnpm@10 install`
-- テストを走らせる。`npx --yes pnpm@10 test`
-- 実機の双方向 e2e。`AGENT_GRAPH_E2E=1 bash scripts/e2e-stage2.sh`
-- 実機のダッシュボード e2e。`AGENT_GRAPH_E2E=1 bash scripts/e2e-stage4.sh`
-- プラグインと設定生成の e2e。`AGENT_GRAPH_E2E=1 bash scripts/e2e-stage5.sh`
-- planner とレビューの e2e。`AGENT_GRAPH_E2E=1 bash scripts/e2e-stage6.sh`
-
-e2e は本物の `claude` と `codex` を呼ぶ。認証と API 利用費用が必要になる。
-`AGENT_GRAPH_E2E` を指定しないときは skip する。状態と作業リポジトリは一時ディレクトリに隔離する。
-
-## 設計
-
-構成の詳細、イベントとトレースの型、割り当て層の判断、セキュリティの考え方は `docs/agents/architecture.md` にある。
-開発コマンドの詳細とコーディング規約は `AGENTS.md` にある。
-
-## ライセンス
-
-MIT License。利用・変更・再配布の条件は [LICENSE](LICENSE) を参照。
-Claude Code・Codex CLI・Herdrは各公式配布から別途導入し、それぞれのライセンス・アカウント条件に従う。
+[MIT](LICENSE). Claude Code, Codex CLI, and Herdr are installed separately from their official distributions and remain subject to their own licenses and account terms.

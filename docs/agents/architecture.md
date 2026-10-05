@@ -9,6 +9,15 @@
 agent-graph は AI エージェント同士の委譲を記録し、可視化し、割り当てを改善する常駐デーモンである。
 Claude Code と Codex のどちらからでも同じ口で委譲できる。
 
+### 新しいMacのセットアップ
+
+`bash scripts/setup.sh` がNode 24以上を確認し、必要なら既存のHomebrewから `node@24` を導入する。
+`packages/adapters/src/setup.ts` がCodexのagent-graph設定、Claudeのユーザー範囲のローカルマーケットプレイス、launchdの常駐起動を結線し、HTTPの起動確認後にURLを返す。
+実行時の依存はNode標準だけなのでpnpm installは開発用に限る。
+既存のCodex設定の他項目を保持し、変更前にバックアップする。既存の同名ローカルマーケットプレイスはその場所を再利用する。
+同じ常駐設定での再実行は再起動しない。設定変更による再起動の前にはHTTPで委譲・plannerタスクのrunningを確認し、稼働中なら変更前に中止する。
+`--dry-run`と`--doctor`はファイルもサービスも変更しない。人向け手順は `docs/guides/setup.html` に置く。
+
 優先順位は次の 3 つで固定する。
 
 1. 可視化。委譲を有向グラフで見せる。Claude から Codex、Codex から Claude のどの向きもつなぐ

@@ -7,12 +7,19 @@ import { generateClaudePlugin, renderClaudePlugin } from "./claude-plugin.ts";
 import { installCodexConfig, mergeCodexConfig, removeCodexConfig, renderCodexOverrides, uninstallCodexConfig } from "./codex-config.ts";
 import { installLaunchd, renderInstallCommands, renderLaunchdPlist, renderUninstallCommands, uninstallLaunchd } from "./launchd.ts";
 import { generateMarketplace, renderMarketplace } from "./marketplace.ts";
+import { setupAgentGraph } from "./setup.ts";
 
 const shimPath = fileURLToPath(new URL("../../daemon/src/shim.ts", import.meta.url));
 const daemonPath = fileURLToPath(new URL("../../daemon/src/main.ts", import.meta.url));
 const hookPath = fileURLToPath(new URL("./hook.ts", import.meta.url));
 const nodePath = process.execPath;
 const args = process.argv.slice(2);
+if (args.includes("--setup")) {
+  const unknown = args.find((flag) => !["--setup", "--dry-run", "--doctor"].includes(flag));
+  if (unknown) throw new Error(`Unknown option: ${unknown}`);
+  try { await setupAgentGraph({ dryRun: args.includes("--dry-run"), doctor: args.includes("--doctor") }); }
+  catch (error) { process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; }
+} else {
 const dryRun = args.includes("--dry-run");
 const pluginOptions = { shimPath, hookPath, nodePath };
 const stateHome = process.env.XDG_STATE_HOME || join(homedir(), ".local", "state");
@@ -67,4 +74,5 @@ for (let i = 0; i < args.length; i++) {
     if (dryRun) process.stdout.write(removeCodexConfig(readExisting(path)));
     else uninstallCodexConfig({ configPath: path });
   } else throw new Error(`Unknown option: ${flag}`);
+}
 }

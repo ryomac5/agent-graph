@@ -3,7 +3,28 @@
 AI エージェント同士の委譲を記録し、可視化し、割り当てを改善する常駐デーモンである。
 Claude Code と Codex のどちらから呼んだ委譲も 1 つの有向グラフに乗る。
 委譲の口は MCP ツール `delegate` 1 本である。
-設計の正本は `docs/agents/architecture.md`。導入前に一読する。
+
+## 新しいMacへの導入
+
+このリポジトリを新しいMacに置き、ルートで実行する。
+
+```bash
+bash scripts/setup.sh
+```
+
+常駐起動・Claudeのユーザー登録・Codex設定をまとめて行い、ダッシュボードのURLを表示する。
+Node 24以上が必要。未導入でもHomebrewがあれば自動で導入する。実行用の依存インストールやpnpmは不要。
+Claude / CodexのCLIとログインは各PCで準備する。設定の反映後、開いているClaude / Codexを再起動する。
+画面からの新規起動・送信・モデル変更にはHerdrも必要。
+
+```bash
+bash scripts/setup.sh --doctor   # 登録状況とURLを確認
+bash scripts/setup.sh --dry-run  # 変更内容だけを確認
+```
+
+既存のCodex設定はagent-graphの項目だけを更新し、変更前のファイルをバックアップする。
+同じ設定での再実行はデーモンを再起動しない。実行中の委譲がある場合は再起動を伴う更新を止める。
+詳しい導入・ログイン・移行手順は [導入ガイド](docs/guides/setup.html) を参照。
 
 ## 構成
 
@@ -16,21 +37,6 @@ pnpm workspace のモノレポである。5 つのパッケージに分ける。
 | `packages/dashboard` | Web 画面。グラフと履歴と判断待ちの操作を表示する |
 | `packages/adapters` | Claude Code プラグインと Codex 設定を生成する |
 | `packages/planner` | tasks.yaml のグラフを実行する。ready なタスクごとに `delegate` を呼ぶ |
-
-## 必要なもの
-
-- Node 24 以上
-- pnpm は `npx --yes pnpm@10` 経由で呼ぶ。グローバル導入は不要
-- `claude` CLI。認証済みであること
-- `codex` CLI。認証済みであること
-
-## 導入と起動
-
-1. 依存を解決する。`npx --yes pnpm@10 install`
-2. デーモンを起動する。`npx --yes pnpm@10 daemon`
-3. ダッシュボードを開く。URL は `daemon.log` の `dashboard` 行に出る。ポートは環境変数 `AGENT_GRAPH_PORT` か `~/.config/agent-graph/config.toml` の `[dashboard] port` で指定する
-4. Claude Code に登録する。リポジトリのルートで実行する。`node packages/adapters/src/cli.ts --claude-plugin-dir <dir>` でプラグインを生成し、`claude` に `--plugin-dir <dir>` を渡す
-5. Codex に登録する。リポジトリのルートで実行する。`node packages/adapters/src/cli.ts --codex-config <path>` で指定先へ導入するか、`--print-codex-overrides` の出力を 1 行 1 引数として `codex exec` に渡す。既存の設定は書き換えない
 
 割り当てポリシーの個人値は `~/.config/agent-graph/policy.toml` に置く。`XDG_CONFIG_HOME` があれば優先する。
 
@@ -52,7 +58,7 @@ spec の既定は `.agents/graph/<id>/tasks.yaml` である。
 
 デーモンの起動中に開ける。URL は `daemon.log` の `dashboard` 行に出す。
 
-- Overview。全リポジトリのセッションと利用枠を丸と件数で表示する
+- プロジェクトとセッションを選び、委譲グラフを表示する。終了したセッションは折りたたむ
 - プロジェクト。1 リポジトリの委譲を有向グラフで表示する。根と子を選ぶと詳細パネルが開き、依頼文・出力・往復・受け入れ・割り当ての理由が見える
 - 判断待ち。planner が `waiting_human` か `conflict` で止まったタスクに Approve / Reject / Retry を送る
 - 双方向の辺。Claude と Codex のどちらの向きの委譲も色で区別して表示する
@@ -72,6 +78,7 @@ spec の既定は `.agents/graph/<id>/tasks.yaml` である。
 
 ## 開発
 
+- 開発用の依存を解決する。`npx --yes pnpm@10 install`
 - テストを走らせる。`npx --yes pnpm@10 test`
 - 実機の双方向 e2e。`AGENT_GRAPH_E2E=1 bash scripts/e2e-stage2.sh`
 - 実機のダッシュボード e2e。`AGENT_GRAPH_E2E=1 bash scripts/e2e-stage4.sh`

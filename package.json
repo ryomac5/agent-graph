@@ -1,6 +1,7 @@
 {
   "name": "agent-graph",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "engines": {
     "node": ">=24"

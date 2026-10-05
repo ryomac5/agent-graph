@@ -1,7 +1,7 @@
 import { createReadStream } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { createInterface } from "node:readline";
-import { join } from "node:path";
+import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { homedir } from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -17,6 +17,7 @@ import { summarize } from "./sessions.ts";
 const execFileAsync = promisify(execFile);
 const POLL_MS = 2000;
 const INDEX_INTERVAL_MS = POLL_MS;
+const SESSION_BIND_WINDOW_MS = 60_000;
 interface LogRow { type: string; timestamp?: string; payload: Record<string, any> }
 interface ObservedTurn { id: string; at: string; prompt: string; reply?: string }
 export interface CodexSnapshot {
@@ -38,6 +39,7 @@ export function parseCodexRows(rows: Iterable<LogRow>): CodexSnapshot | undefine
     const at = row.timestamp || "";
     if (row.type === "session_meta" && typeof p.id === "string" && typeof p.cwd === "string") {
       snapshot = { threadId: p.id, cwd: p.cwd, startedAt: at || p.timestamp, updatedAt: at || p.timestamp,
+        ...(typeof p.model === "string" && p.model ? { model: p.model } : {}),
         parentThreadId: p.source?.subagent?.spawn?.parent_thread_id ?? p.thread_source?.subagent?.spawn?.parent_thread_id,
         turns: [], status: "running" };
     }
@@ -155,6 +157,7 @@ function applyChild(store: Store, session: SessionRow, child: CodexSnapshot, par
 // 既に登録された根と、その根から派生した子だけを対象にする。無関係な過去の PJ は登録しない。
 export function startCodexObserver(stores: Map<string, Store>, options: {
   root?: string; intervalMs?: number; onError?: (error: unknown) => void;
+  openFiles?: (pid: number) => Promise<string[]>;
 } = {}): { tick: () => Promise<void>; stop: () => Promise<void> } {
   const root = options.root || join(process.env.CODEX_HOME || join(homedir(), ".codex"), "sessions");
   let paths: string[] = [];
@@ -167,7 +170,11 @@ export function startCodexObserver(stores: Map<string, Store>, options: {
     try {
       if (Date.now() - indexedAt > INDEX_INTERVAL_MS) { paths = (await listLogs(root)).sort(); indexedAt = Date.now(); }
       const read = async (path: string) => {
-        const info = await stat(path);
+        const info = await stat(path).catch((error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return undefined;
+          throw error;
+        });
+        if (!info) { snapshots.delete(path); return undefined; }
         let snapshot = snapshots.get(path);
         if (snapshot?.mtime !== info.mtimeMs) {
           snapshot = { mtime: info.mtimeMs, data: await readSnapshot(path) };
@@ -177,18 +184,66 @@ export function startCodexObserver(stores: Map<string, Store>, options: {
       };
       for (const store of stores.values()) {
         for (const session of listRepos(store.db).flatMap((repo) => listSessions(store.db, repo.key)).filter((value) => value.client === "codex")) {
+          const repo = listRepos(store.db).find((repo) => repo.key === session.repoKey)!;
+          const belongsToRepo = (candidate: CodexSnapshot) => {
+            const subpath = relative(repo.rootPath, candidate.cwd);
+            return subpath !== ".." && !subpath.startsWith("../") && !isAbsolute(subpath);
+          };
           const binding = store.db.prepare("SELECT source_thread_id FROM sessions WHERE id = ?").get(session.id);
           const threadId = binding?.source_thread_id ? String(binding.source_thread_id) : session.id;
           let path = sessionPaths.get(session.id) || paths.find((file) => file.endsWith(`-${threadId}.jsonl`));
+          if (!path) {
+            const archived = (await listLogs(join(dirname(root), "archived_sessions"))).find((file) => file.endsWith(`-${threadId}.jsonl`));
+            if (archived) {
+              store.endSession(session.id, new Date().toISOString(), "explicit");
+              session.status = "ended";
+              path = archived;
+            }
+          }
           if (!path && session.pid && session.status !== "ended") {
-            const open = await execFileAsync("lsof", ["-a", "-p", String(session.pid), "-Fn"], { encoding: "utf8" }).then((result) => result.stdout, () => "");
-            const files = [...new Set(open.split("\n").filter((line) => line.startsWith("n")).map((line) => line.slice(1)).filter((file) => file.startsWith(root + "/") && file.endsWith(".jsonl")))];
-            // app-server が複数スレッドを持つときは、どれが対象か推測で結ばない。
-            if (files.length === 1) path = files[0];
+            const files = options.openFiles ? await options.openFiles(session.pid) : await execFileAsync(process.platform === "darwin" ? "/usr/sbin/lsof" : "lsof", ["-a", "-p", String(session.pid), "-Fn"], { encoding: "utf8" })
+              .then((result) => result.stdout.split("\n").filter((line) => line.startsWith("n")).map((line) => line.slice(1)), () => []);
+            const candidates: string[] = [];
+            for (const file of new Set(files.filter((file) => file.startsWith(root + "/") && file.endsWith(".jsonl")))) {
+              const candidate = await read(file);
+              // 子のログも同じプロセスが開く。根の候補だけを使う。
+              if (candidate && !candidate.parentThreadId && belongsToRepo(candidate) && !store.db.prepare("SELECT 1 FROM sessions WHERE id != ? AND (id = ? OR source_thread_id = ?)").get(session.id, candidate.threadId, candidate.threadId)) candidates.push(file);
+            }
+            if (candidates.length === 1) path = candidates[0];
+          }
+          if (!path && !binding?.source_thread_id && session.status !== "ended") {
+            const candidates: string[] = [];
+            // MCP に thread id が渡らない版では、登録直後の一意な根だけを結ぶ。
+            for (const file of paths) {
+              const info = await stat(file).catch((error: NodeJS.ErrnoException) => {
+                if (error.code === "ENOENT") return undefined;
+                throw error;
+              });
+              if (!info || info.mtimeMs < Date.parse(session.startedAt) - SESSION_BIND_WINDOW_MS) continue;
+              const candidate = await read(file);
+              if (!candidate || candidate.parentThreadId || !belongsToRepo(candidate)) continue;
+              const startDifference = Math.abs(Date.parse(candidate.startedAt) - Date.parse(session.startedAt));
+              if (!Number.isFinite(startDifference) || startDifference > SESSION_BIND_WINDOW_MS) continue;
+              if (store.db.prepare("SELECT 1 FROM sessions WHERE id != ? AND (id = ? OR source_thread_id = ?)").get(session.id, candidate.threadId, candidate.threadId)) continue;
+              candidates.push(file);
+            }
+            if (candidates.length === 1) path = candidates[0];
           }
           if (!path) continue;
-          const snapshot = await read(path);
+          let snapshot = await read(path);
+          if (!snapshot) {
+            const archived = join(dirname(root), "archived_sessions", basename(path));
+            snapshot = await read(archived);
+            if (snapshot) {
+              store.endSession(session.id, new Date().toISOString(), "explicit");
+              session.status = "ended";
+              path = archived;
+            }
+          }
           if (!snapshot) continue;
+          if (!binding?.source_thread_id && session.id !== snapshot.threadId) {
+            store.db.prepare("UPDATE sessions SET source_thread_id = ? WHERE id = ?").run(snapshot.threadId, session.id);
+          }
           sessionPaths.set(session.id, path);
           const rootKey = `${session.id}:${path}`;
           const mtime = snapshots.get(path)!.mtime;

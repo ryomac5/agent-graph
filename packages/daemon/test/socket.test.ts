@@ -21,8 +21,10 @@ for (const client of ["claude", "codex", "planner"]) test(`socket is private and
   const dir = await mkdtemp(join(tmpdir(), "agent-graph-test-"));
   const socketPath = join(dir, "daemon.sock");
   let server;
+  let disconnected = 0;
   try {
-    server = await startSocketServer({ socketPath, handler: async (_request, context) => context });
+    server = await startSocketServer({ socketPath, handler: async (_request, context) => context,
+      onHello: async () => () => { disconnected++; } });
   } catch (error) {
     await rm(dir, { recursive: true, force: true });
     if ((error as NodeJS.ErrnoException).code === "EPERM") {
@@ -71,6 +73,7 @@ for (const client of ["claude", "codex", "planner"]) test(`socket is private and
     }
     for (const socket of sockets) socket.destroy();
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    assert.equal(disconnected, 1);
     await rm(dir, { recursive: true, force: true });
   }
 });

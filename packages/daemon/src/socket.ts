@@ -22,7 +22,8 @@ export function isHello(value: unknown): value is Hello {
 }
 
 // hello を受けた時点で呼ぶ。根の登録と pid の記録に使う。終わるまで MCP の要求は溜めておく。
-export type HelloHandler = (hello: Hello) => Promise<void> | void;
+export type HelloCleanup = () => void;
+export type HelloHandler = (hello: Hello) => Promise<void | HelloCleanup> | void | HelloCleanup;
 
 function acceptConnection(socket: Socket, handler: DelegateHandler<Hello>, onHello?: HelloHandler,
   onError: (error: unknown) => void = console.error): void {
@@ -48,7 +49,12 @@ function acceptConnection(socket: Socket, handler: DelegateHandler<Hello>, onHel
     const buffer = (chunk: Buffer): void => { buffered += decoder.write(chunk); };
     socket.on("data", buffer);
     const registered = onHello ? Promise.resolve().then(() => onHello(hello)).catch(onError) : Promise.resolve();
-    void registered.then(() => {
+    void registered.then((cleanup) => {
+      // 登録中に切断された場合も、作成した根を稼働中のまま残さない。
+      if (typeof cleanup === "function") {
+        if (socket.destroyed) cleanup();
+        else socket.once("close", cleanup);
+      }
       socket.off("data", buffer);
       if (socket.destroyed) return;
       const session = createMcpSession(socket, handler, hello);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openStore } from "../../core/src/store/store.ts";
@@ -77,4 +77,79 @@ test("Claude の履歴はモデルと公開本文だけを読み、既存の往�
   const session = buildProjectView(store, "r")!.sessions[0];
   assert.equal(session.model, "claude-opus-4-6");
   assert.equal(session.turns.length, 1); assert.equal(session.turns[0].reply, "回答の全文"); assert.equal(session.turns[0].hidden, true);
+});
+
+test("Claude は設定ディレクトリ内のサブディレクトリ起動の履歴も UUID で取得する", async (t) => {
+  const store = fixture(); store.updateSessionClient("thread", "claude");
+  const home = await mkdtemp(join(tmpdir(), "graph-claude-custom-"));
+  const previous = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = home;
+  t.after(async () => {
+    if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = previous;
+    store.close(); await rm(home, { recursive: true, force: true });
+  });
+  const dir = join(home, "projects", "-repo-nested"); await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, "thread.jsonl"), JSON.stringify({ type: "assistant", message: { model: "claude-sonnet-4-6", content: [] } }));
+  const observer = startClaudeObserver(new Map([["r", store]]), { intervalMs: 60_000 });
+  await observer.tick(); await observer.stop();
+  assert.equal(store.getSession("thread")!.model, "claude-sonnet-4-6");
+  assert.equal(store.db.prepare("SELECT COUNT(*) AS n FROM sessions").get()!.n, 1);
+});
+
+test("Codex は thread id のない MCP 登録を一意な直近の根に結び、再起動後も取得する", async (t) => {
+  const store = fixture();
+  const root = await mkdtemp(join(tmpdir(), "graph-codex-binding-"));
+  t.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
+  await writeFile(join(root, "rollout-01-native.jsonl"), rows("native").map((row) => JSON.stringify(row)).join("\n"));
+  await writeFile(join(root, "rollout-02-child.jsonl"), rows("child", "native").map((row) => JSON.stringify(row)).join("\n"));
+  const observer = startCodexObserver(new Map([["r", store]]), { root, intervalMs: 60_000 });
+  await observer.tick(); await observer.stop();
+  assert.equal(store.getSession("thread")!.model, "gpt-6.1-sol");
+  assert.equal(store.db.prepare("SELECT source_thread_id FROM sessions WHERE id = 'thread'").get()!.source_thread_id, "native");
+  const restarted = startCodexObserver(new Map([["r", store]]), { root, intervalMs: 60_000 });
+  await restarted.tick(); await restarted.stop();
+  assert.equal(buildProjectView(store, "r")!.sessions[0].nodes.length, 2);
+});
+
+test("Codex は複数の根が同時に起動しているときモデルを推測して結ばない", async (t) => {
+  const store = fixture();
+  const root = await mkdtemp(join(tmpdir(), "graph-codex-ambiguous-"));
+  t.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
+  for (const id of ["one", "two"]) await writeFile(join(root, `rollout-${id}.jsonl`), rows(id).map((row) => JSON.stringify(row)).join("\n"));
+  const observer = startCodexObserver(new Map([["r", store]]), { root, intervalMs: 60_000 });
+  await observer.tick(); await observer.stop();
+  assert.equal(store.getSession("thread")!.model, undefined);
+  assert.equal(store.db.prepare("SELECT source_thread_id FROM sessions WHERE id = 'thread'").get()!.source_thread_id, null);
+});
+
+test("Codex のプロセスが子のログも開いていても、モデルは根のログから取得する", async (t) => {
+  const store = fixture(); store.setSessionProcess("thread", 42, undefined, at);
+  const root = await mkdtemp(join(tmpdir(), "graph-codex-open-files-"));
+  t.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
+  const files = [join(root, "rollout-native.jsonl"), join(root, "rollout-child.jsonl")];
+  // 再開済みの会話は開始時刻による補完では結べない。開いているファイルを使う。
+  await writeFile(files[0], rows("native").map((row) => JSON.stringify(row).replaceAll(at, "2026-01-01T01:00:00.000Z")).join("\n"));
+  await writeFile(files[1], rows("child", "native").map((row) => JSON.stringify(row)).join("\n"));
+  const observer = startCodexObserver(new Map([["r", store]]), { root, intervalMs: 60_000, openFiles: async () => files });
+  await observer.tick(); await observer.stop();
+  assert.equal(store.getSession("thread")!.model, "gpt-6.1-sol");
+});
+
+test("Codex のアーカイブはプロセスが残っていても終了扱いになり、他のセッションの観測を妨げない", async (t) => {
+  const store = fixture(); store.setSessionProcess("thread", process.pid, undefined, at);
+  const home = await mkdtemp(join(tmpdir(), "graph-codex-archive-"));
+  t.after(async () => { store.close(); await rm(home, { recursive: true, force: true }); });
+  const root = join(home, "sessions"); const archived = join(home, "archived_sessions");
+  await mkdir(root); await mkdir(archived);
+  const name = "rollout-thread.jsonl";
+  await writeFile(join(root, name), rows().map((row) => JSON.stringify(row)).join("\n"));
+  const observer = startCodexObserver(new Map([["r", store]]), { root, intervalMs: 60_000 });
+  await observer.tick();
+  await rename(join(root, name), join(archived, name));
+  await observer.tick(); await observer.stop();
+  assert.equal(store.getSession("thread")!.status, "ended");
+  assert.equal(store.getSession("thread")!.model, "gpt-6.1-sol");
+  const restarted = startCodexObserver(new Map([["r", store]]), { root, intervalMs: 60_000 });
+  await restarted.tick(); await restarted.stop();
+  assert.equal(store.getSession("thread")!.status, "ended");
 });

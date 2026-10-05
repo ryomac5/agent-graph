@@ -500,3 +500,7 @@ Herdr を使った Claude / Codex の新規起動、Claude のモデル変更・
 モデルと会話を補う観測は、登録済みのセッションに対応するローカル JSONL を対象にする。
 Codex の thread id と親 thread id、Claude の UUID を使い、無関係な履歴から PJ を増やさない。
 schema v4 は再実行用の依頼条件 `delegation_requests` と、旧 id をネイティブの thread に結ぶ `sessions.source_thread_id` を追加する。
+
+Claude の履歴の根は `CLAUDE_CONFIG_DIR` を優先する。Git の根に履歴が無いときは projects 直下から登録済み UUID に一致する一意な履歴を探し、サブディレクトリ起動にも対応する。
+Codex の MCP 登録が thread id を持たないときは、プロセスが開く根の履歴か、登録時刻の前後 60 秒に作成された同じリポジトリの一意な根を使う。子や既に別のセッションに結ばれた履歴は除外し、確定した thread id を source_thread_id に保存する。曖昧な候補は結ばない。
+根の最後の MCP 接続の切断でセッションを終了する。複数接続では最後だけを対象とし、デーモン自身の停止ではセッションを終了しない。Codex の archived_sessions への移動も終了として観測する。起動時は HTTP の開始前に保存済みのセッションの生死を確認する。

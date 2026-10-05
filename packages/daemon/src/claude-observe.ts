@@ -1,5 +1,5 @@
-import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
+import { createReadStream, type Stats } from "node:fs";
+import { readdir, stat } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -41,16 +41,36 @@ export function parseClaudeRows(rows: Iterable<TranscriptRow>): {
 export function startClaudeObserver(stores: Map<string, Store>, options: { root?: string; intervalMs?: number; onError?: (error: unknown) => void } = {}): {
   tick: () => Promise<void>; stop: () => Promise<void>;
 } {
-  const root = options.root || join(homedir(), ".claude", "projects");
+  const root = options.root || join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "projects");
+  const paths = new Map<string, string>();
   const mtimes = new Map<string, number>();
   let inflight: Promise<void> | undefined;
   const tick = (): Promise<void> => inflight ??= (async () => {
     try {
       for (const store of stores.values()) for (const repo of listRepos(store.db)) for (const session of listSessions(store.db, repo.key)) {
         if (session.client !== "claude" || !/^[A-Za-z0-9_-]+$/.test(session.id)) continue;
-        const path = join(root, repo.rootPath.replace(/[^A-Za-z0-9]/g, "-"), `${session.id}.jsonl`);
+        let path = paths.get(session.id) || join(root, repo.rootPath.replace(/[^A-Za-z0-9]/g, "-"), `${session.id}.jsonl`);
         let info;
-        try { info = await stat(path); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; throw error; }
+        try { info = await stat(path); } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          // Claude は Git の根ではなく起動ディレクトリを履歴のキーにする。
+          const dirs = await readdir(root, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+            if (error.code === "ENOENT") return [];
+            throw error;
+          });
+          const matches: { path: string; info: Stats }[] = [];
+          for (const dir of dirs.filter((entry) => entry.isDirectory())) {
+            const candidate = join(root, dir.name, `${session.id}.jsonl`);
+            const candidateInfo = await stat(candidate).catch((error: NodeJS.ErrnoException) => {
+              if (error.code === "ENOENT") return undefined;
+              throw error;
+            });
+            if (candidateInfo?.isFile()) matches.push({ path: candidate, info: candidateInfo });
+          }
+          if (matches.length !== 1) continue;
+          ({ path, info } = matches[0]);
+        }
+        paths.set(session.id, path);
         if (mtimes.get(path) === info.mtimeMs) continue;
         const rows: TranscriptRow[] = [];
         for await (const line of createInterface({ input: createReadStream(path, { encoding: "utf8" }), crlfDelay: Infinity })) {

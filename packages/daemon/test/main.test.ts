@@ -5,11 +5,31 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { createHandler, openAllStores, startDaemon, startUsageProbe } from "../src/main.ts";
+import { createHandler, createHelloHandler, openAllStores, startDaemon, startUsageProbe } from "../src/main.ts";
 import { reconcileLiveness } from "../src/liveness.ts";
 import { repoKey, stateDbPath } from "../../core/src/paths.ts";
 import { openStore, type Store } from "../../core/src/store/store.ts";
 import { existsSync } from "node:fs";
+
+test("根の最後の MCP 接続が閉じたら親プロセスが生きていても終了し、再接続で戻る", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "ag-hello-close-"));
+  execFileSync("git", ["init", "-q", dir]);
+  const root = execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd: dir, encoding: "utf8" }).trim();
+  const key = repoKey(root);
+  const store = openStore(":memory:");
+  store.upsertRepo({ key, rootPath: root, name: "repo" });
+  t.after(async () => { store.close(); await rm(dir, { recursive: true, force: true }); });
+  const handler = createHelloHandler(new Map([[key, store]]));
+  const hello = { type: "hello" as const, cwd: root, pid: process.pid, session: "session", client: "codex" as const };
+  const first = await handler({ ...hello });
+  const second = await handler({ ...hello });
+  assert.equal(typeof first, "function"); assert.equal(typeof second, "function");
+  first!(); assert.equal(store.getSession("session")!.status, "running");
+  second!(); assert.equal(store.getSession("session")!.status, "ended");
+  const reconnect = await handler({ ...hello });
+  assert.equal(store.getSession("session")!.status, "running");
+  reconnect!(); assert.equal(store.getSession("session")!.status, "ended");
+});
 
 test("handler restores caller and reuses repository store across nested cwd", async () => {
   const dir = await mkdtemp(join(tmpdir(), "ag-main-"));

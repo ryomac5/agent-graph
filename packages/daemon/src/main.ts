@@ -116,6 +116,7 @@ function isRootHello(hello: Hello): boolean {
 // 既存のセッションは running に戻して pid を更新し、未登録なら登録する。委譲の子からの hello では根を書き換えない。
 export function createHelloHandler(stores: Map<string, Store>, latest = new Map<string, UsageSample>(),
   callers: Callers = new WeakMap()): HelloHandler {
+  const connections = new Map<string, number>();
   return async (hello) => {
     if (!isRootHello(hello)) return;
     const { store, key } = await repoStoreOf(stores, latest, hello.cwd);
@@ -128,12 +129,22 @@ export function createHelloHandler(stores: Map<string, Store>, latest = new Map<
     if (!session) {
       store.insertNamedSession({ id: caller.sessionId, repoKey: key, client: hello.client ?? "mcp",
         traceId: caller.traceId, startedAt: now, pid: hello.pid, pidStartedAt });
-      return;
+    } else {
+      // 終了済みのセッションが同じ id で戻ってきたら running に戻す
+      store.resumeSession(caller.sessionId, now);
+      store.setSessionProcess(caller.sessionId, hello.pid, pidStartedAt, now);
+      if (hello.client) store.updateSessionClient(caller.sessionId, hello.client);
     }
-    // 終了済みのセッションが同じ id で戻ってきたら running に戻す
-    store.resumeSession(caller.sessionId, now);
-    store.setSessionProcess(caller.sessionId, hello.pid, pidStartedAt, now);
-    if (hello.client) store.updateSessionClient(caller.sessionId, hello.client);
+    const connectionKey = `${key}:${caller.sessionId}`;
+    connections.set(connectionKey, (connections.get(connectionKey) ?? 0) + 1);
+    return () => {
+      const remaining = (connections.get(connectionKey) ?? 1) - 1;
+      if (remaining > 0) connections.set(connectionKey, remaining);
+      else {
+        connections.delete(connectionKey);
+        store.endSession(caller.sessionId, new Date().toISOString(), "process_exit");
+      }
+    };
   };
 }
 
@@ -236,6 +247,7 @@ export async function startDaemon(): Promise<{ stop: () => Promise<void> }> {
   const callers: Callers = new WeakMap();
   const handler = createHandler(stores, latest, callers);
   const onHello = createHelloHandler(stores, latest, callers);
+  let shuttingDown = false;
   const pending = new Set<Promise<unknown>>();
   let http: Awaited<ReturnType<typeof startHttpServer>> | undefined;
   try {
@@ -249,6 +261,7 @@ export async function startDaemon(): Promise<{ stop: () => Promise<void> }> {
       store.upsertRepo({ key, rootPath: repoRoot, name: basename(repoRoot) });
       stores.set(key, store);
     }
+    await liveness.tick();
     http = await startHttpServer({ port: readDashboardPort(), openStores: stores,
       listRepos: () => [...stores.values()].flatMap((value) => value.db.prepare("SELECT key, root_path AS rootPath, name FROM repos").all()
         .map((row) => ({ key: String(row.key), rootPath: String(row.rootPath), name: String(row.name) }))),
@@ -257,7 +270,10 @@ export async function startDaemon(): Promise<{ stop: () => Promise<void> }> {
     if (!address || typeof address === "string") throw new Error("HTTP address unavailable");
     log(`dashboard http://127.0.0.1:${address.port}/`);
     const server = await startSocketServer({ socketPath: process.env.AGENT_GRAPH_SOCKET || join(dir, "daemon.sock"),
-      onHello, onError: (error) => log(String(error)),
+      onHello: async (hello) => {
+        const cleanup = await onHello(hello);
+        if (typeof cleanup === "function") return () => { if (!shuttingDown) cleanup(); };
+      }, onError: (error) => log(String(error)),
       handler: async (request, hello) => {
         const result = handler(request, hello);
         pending.add(result);
@@ -277,6 +293,7 @@ export async function startDaemon(): Promise<{ stop: () => Promise<void> }> {
     });
     let stopping: Promise<void> | undefined;
     const stop = (): Promise<void> => stopping ??= (async () => {
+      shuttingDown = true;
       const closed = new Promise<void>((resolve) => server.close(() => resolve()));
       for (const socket of sockets) socket.destroy();
       await closed;

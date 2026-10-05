@@ -104,6 +104,16 @@ Runtime state is stored outside the repositories your agents work on.
 
 Setup respects absolute `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME`, `XDG_CONFIG_HOME`, and `CODEX_HOME` paths. Generated configurations should be recreated on each PC rather than copied from another machine. Setup does not migrate session history.
 
+## Troubleshooting
+
+If model names are missing after installation, restart the Claude or Codex client and send a message. Model names come from the client's local conversation records; they may be unavailable before the first turn. Claude records are read from `CLAUDE_CONFIG_DIR` (default: `~/.claude`), including sessions started in a repository subdirectory. Codex records are read from `CODEX_HOME` (default: `~/.codex`).
+
+When Codex does not pass a thread ID to MCP, agent-graph uses the process's open conversation files or a unique thread created near session registration. It saves that association for subsequent daemon restarts. Ambiguous matches remain unresolved rather than showing another conversation's model.
+
+MCP disconnections and Claude SessionEnd hooks move sessions into history. Archived Codex threads also move into history, even if the app server remains running. The daemon checks process liveness at startup and periodically afterward. Hook-only sessions without a process ID expire after 30 minutes without activity.
+
+To update another Mac, publish the changes to the repository, rerun the quick-start installation command there, and restart its Claude and Codex clients.
+
 ## Development
 
 Use Node 24 or later. Runtime code uses Node's standard library; pnpm dependencies are needed for development.

@@ -22,7 +22,7 @@ socket.once("connect", () => {
     client: detectClient(),
     traceparent: process.env.TRACEPARENT,
     tracestate: process.env.TRACESTATE,
-    session: process.env.AGENT_GRAPH_SESSION,
+    session: process.env.AGENT_GRAPH_SESSION || process.env.CODEX_THREAD_ID,
     cwd: process.cwd(),
     // 親プロセスの pid。claude や codex 本体を指し、デーモンが生死判定に使う
     pid: process.ppid,

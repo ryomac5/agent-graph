@@ -6,7 +6,7 @@ import { NotFoundError } from "./sessions.ts";
 // repo の key は repoKey が basename と hash で作るので日本語や空白を含む。空でない文字列とだけ検べ、stores の完全一致で引く。
 const IDENT = /^[A-Za-z0-9._-]{1,128}$/;
 const REPO_MAX = 256;
-const ACTIONS = new Set<ActionRequest["action"]>(["approve", "retry", "reject", "end_session", "hide_turn"]);
+const ACTIONS = new Set<ActionRequest["action"]>(["approve", "retry", "reject", "end_session", "hide_turn", "new_session", "set_model", "rerun_delegation", "stop_session"]);
 const DECISIONS = new Set<TaskDecision>(["approve", "retry", "reject"]);
 
 function ident(value: unknown, name: string): string {
@@ -22,13 +22,23 @@ function repoKeyOf(value: unknown): string {
 // body を検べて ActionRequest にする。不正なら TypeError。
 export function parseAction(body: unknown): ActionRequest {
   if (!body || typeof body !== "object" || Array.isArray(body)) throw new TypeError("Invalid action body");
-  const { action, repo, graphId, taskId, sessionId, turnId } = body as Record<string, unknown>;
+  const { action, repo, graphId, taskId, sessionId, turnId, model, client, delegationId } = body as Record<string, unknown>;
   if (typeof action !== "string" || !ACTIONS.has(action as ActionRequest["action"])) throw new TypeError(`Unknown action: ${String(action)}`);
   const request: ActionRequest = { action: action as ActionRequest["action"], repo: repoKeyOf(repo) };
   if (DECISIONS.has(action as TaskDecision)) {
     request.graphId = ident(graphId, "graphId");
     request.taskId = ident(taskId, "taskId");
-  } else if (action === "end_session") {
+  } else if (action === "new_session") {
+    if (client !== "claude" && client !== "codex") throw new TypeError("Invalid client");
+    request.client = client;
+  } else if (action === "set_model") {
+    request.sessionId = ident(sessionId, "sessionId");
+    if (typeof model !== "string" || !/^[A-Za-z0-9._\[\]-]{1,100}$/.test(model)) throw new TypeError("Invalid model");
+    request.model = model;
+  } else if (action === "rerun_delegation") {
+    request.delegationId = ident(delegationId, "delegationId");
+    request.sessionId = ident(sessionId, "sessionId");
+  } else if (action === "end_session" || action === "stop_session") {
     request.sessionId = ident(sessionId, "sessionId");
   } else {
     request.turnId = ident(turnId, "turnId");
@@ -85,6 +95,7 @@ export function performAction(body: unknown, stores: Map<string, Store>, now = n
   const request = parseAction(body);
   const store = stores.get(request.repo);
   if (!store) throw new NotFoundError(`Repo not found: ${request.repo}`);
+  if (["new_session", "set_model", "rerun_delegation", "stop_session"].includes(request.action)) throw new TypeError("This action requires the session control handler");
   if (request.action === "end_session") return endSession(store, request, now);
   if (request.action === "hide_turn") return hideTurn(store, request);
   return decide(store, request, now);

@@ -111,9 +111,9 @@ function delegationNode(row: DelegationRow, context: DelegationContext): NodeDet
   };
 }
 
-function turnView(turn: { id: string; at: string; prompt: string; summary?: string; hidden: boolean }): Turn {
+function turnView(turn: { id: string; at: string; prompt: string; summary?: string; reply?: string; hidden: boolean }): Turn {
   return { id: turn.id, at: turn.at, prompt: turn.prompt,
-    ...(turn.summary === undefined ? {} : { summary: turn.summary }), ...(turn.hidden ? { hidden: true } : {}) };
+    ...(turn.summary === undefined ? {} : { summary: turn.summary }), ...(turn.reply === undefined ? {} : { reply: turn.reply }), ...(turn.hidden ? { hidden: true } : {}) };
 }
 
 function sessionView(store: Store, session: ReturnType<typeof listSessions>[number], rows: DelegationRow[],

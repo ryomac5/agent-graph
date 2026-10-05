@@ -184,4 +184,13 @@ export const migrations: readonly Migration[] = [
       );
     `,
   },
+  {
+    version: 4,
+    sql: `ALTER TABLE sessions ADD COLUMN source_thread_id TEXT;
+    CREATE UNIQUE INDEX sessions_source_thread ON sessions(source_thread_id) WHERE source_thread_id IS NOT NULL;
+    CREATE TABLE delegation_requests (
+      delegation_id TEXT PRIMARY KEY NOT NULL REFERENCES delegations(id),
+      request TEXT NOT NULL
+    );`,
+  },
 ];

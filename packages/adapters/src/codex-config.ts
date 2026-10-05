@@ -7,7 +7,7 @@ const TOOL_TIMEOUT_SEC = 1800;
 const SERVER = "agent-graph";
 const TOOL_KEY = "mcp_servers.agent-graph.tools.delegate.approval_mode";
 // 値を生成時に固定せず、各セッションの接続先とトレース文脈を shim に渡す。
-const SHIM_ENV_VARS = ["AGENT_GRAPH_SOCKET", "XDG_STATE_HOME", "TRACEPARENT", "TRACESTATE", "AGENT_GRAPH_SESSION"];
+const SHIM_ENV_VARS = ["AGENT_GRAPH_SOCKET", "XDG_STATE_HOME", "TRACEPARENT", "TRACESTATE", "AGENT_GRAPH_SESSION", "CODEX_THREAD_ID", "CODEX_HOME"];
 
 export function renderCodexConfig(options: CodexOptions): string {
   return `[mcp_servers.${SERVER}]\ncommand = ${JSON.stringify(options.nodePath)}\nargs = [${JSON.stringify(options.shimPath)}]\nenv_vars = ${JSON.stringify(SHIM_ENV_VARS)}\ntool_timeout_sec = ${TOOL_TIMEOUT_SEC}\n\n[mcp_servers.${SERVER}.env]\nAGENT_GRAPH_CLIENT = "codex"\n\n[mcp_servers.${SERVER}.tools.delegate]\napproval_mode = "approve"\n`;

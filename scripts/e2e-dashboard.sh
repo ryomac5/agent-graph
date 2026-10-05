@@ -119,9 +119,10 @@ node "$ROOT/scripts/e2e-dashboard-check.ts" project "$URL" > "$TEMP/project-chec
 cat "$TEMP/project-check.log"
 # 撮影。Overview とプロジェクトと詳細パネルを開いた状態を保存する。
 mkdir -p "$ROOT/.agents-shots"
-node "$ROOT/scripts/screenshot.ts" --url "$URL" --out "$ROOT/.agents-shots/overview.png" --target overview
-node "$ROOT/scripts/screenshot.ts" --url "$URL" --out "$ROOT/.agents-shots/project.png" --target project
-node "$ROOT/scripts/screenshot.ts" --url "$URL" --out "$ROOT/.agents-shots/detail.png" --target detail
+E2E_KEY=$(node --input-type=module -e "import{repoKey}from'$ROOT/packages/core/src/paths.ts';console.log(repoKey(process.cwd()))")
+node "$ROOT/scripts/screenshot.ts" --url "$URL" --out "$ROOT/.agents-shots/overview.png" --target overview --repo "$E2E_KEY"
+node "$ROOT/scripts/screenshot.ts" --url "$URL" --out "$ROOT/.agents-shots/project.png" --target project --repo "$E2E_KEY"
+node "$ROOT/scripts/screenshot.ts" --url "$URL" --out "$ROOT/.agents-shots/detail.png" --target detail --repo "$E2E_KEY"
 # HTTP で Approve を送り、planner が進んで完了することを確かめる。
 TOKEN=$(curl -s "$URL" | sed -n 's/.*name="agent-graph-token" content="\([^"]*\)".*/\1/p')
 GRAPH_ID=$(node --input-type=module -e "import{openPlanner}from'$ROOT/packages/planner/src/index.ts';const c=openPlanner('$TEMP/repo','dash','$TEMP/repo/.agents/graph/dash/tasks.yaml');try{const g=c.store.findGraph(c.key,'dash',c.fingerprint);console.log(g.id)}finally{c.store.close()}")

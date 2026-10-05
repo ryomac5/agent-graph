@@ -1,5 +1,5 @@
 // 右の詳細パネル。root は会話の吹き出し、子は属性と往復と Accept と Scope と Review と Output
-import { fmtElapsed, fmtTokens, fmtWhen, modelLabel, statusClass, statusLabel } from "../lib/format.js";
+import { fmtElapsed, fmtTokens, fmtWhen, modelLabel, statusClass, statusLabel, statusDescription } from "../lib/format.js";
 import { actionsFor } from "../lib/status.js";
 import { button, el } from "./dom.js";
 
@@ -63,6 +63,39 @@ function buildHead(tone, ctx) {
   return head;
 }
 
+// Claude セッションへのメッセージ送信欄。Enter は改行、cmd+Enter か ctrl+Enter で送信。
+function buildSayForm(scope, ctx) {
+  const form = el("form", undefined, "say");
+  const box = el("textarea");
+  box.rows = 2;
+  box.placeholder = "メッセージを入力…";
+  box.setAttribute("aria-label", `${scope.name} へのメッセージ`);
+  box.value = ctx.drafts?.get(scope.id) || "";
+  box.addEventListener("input", () => ctx.drafts?.set(scope.id, box.value));
+  const button = el("button", "送信 ↑", "say-send");
+  button.type = "submit";
+  box.title = "⌘ / Ctrl + Enter で送信";
+  const note = el("p", "", "say-note");
+  const submit = async () => {
+    const text = box.value.trim();
+    if (!text || button.disabled) return;
+    button.disabled = true; note.textContent = "Sending…";
+    const result = await ctx.onSay(scope.sessionId, text);
+    note.textContent = result.message;
+    if (result.ok) { box.value = ""; ctx.drafts?.delete(scope.id); }
+    button.disabled = false;
+  };
+  form.addEventListener("submit", (ev) => { ev.preventDefault(); submit(); });
+  box.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Enter" || ev.isComposing) return;
+    if (!(ev.metaKey || ev.ctrlKey)) return;
+    ev.preventDefault();
+    submit();
+  });
+  form.append(box, button, note);
+  return form;
+}
+
 // root。会話の吹き出しと 1 往復の非表示。End の確認
 export function renderRootDetail(aside, scope, ctx) {
   const cls = statusClass(scope.status);
@@ -72,7 +105,10 @@ export function renderRootDetail(aside, scope, ctx) {
   summary.append(el("span", "", "dot"), el("span", scope.name, "node-name"));
   if (cls === "waiting") summary.append(el("span", scope.waitingReason ? `Waiting · ${scope.waitingReason}` : "Waiting", "node-state"));
   else if (cls === "ended") summary.append(el("span", statusLabel(scope.status), "node-state"));
-  summary.append(el("span", fmtElapsed(scope.startedAt, scope.endedAt), "node-elapsed"));
+  summary.append(el("span", scope.model || "モデル未取得", "node-model"));
+  const more = el("span", "⋯", "facts-label");
+  more.title = "セッション情報・操作";
+  summary.append(more);
   head.append(summary);
   const dl = el("dl");
   addRow(dl, "Project", ctx.projectName);
@@ -85,14 +121,23 @@ export function renderRootDetail(aside, scope, ctx) {
   head.append(dl);
   if (cls !== "ended") {
     const row = el("p", undefined, "end-row");
-    row.append(button("End", undefined, () => {
-      if (ctx.confirm(`End ${scope.name}?`)) ctx.onAction({ action: "end_session", sessionId: scope.sessionId });
+    row.append(button("履歴へ移す", undefined, () => {
+      if (ctx.confirm(`${scope.name} を履歴へ移します。プロセスは停止しません。`)) ctx.onAction({ action: "end_session", sessionId: scope.sessionId });
+    }));
+    if (scope.client === "claude") row.append(button("停止", undefined, () => {
+      if (ctx.confirm(`${scope.name} を停止しますか？`)) ctx.onAction({ action: "stop_session", sessionId: scope.sessionId });
     }));
     head.append(row);
   }
   const chat = el("div", undefined, "chat");
+  if (ctx.onLoadHistory && !ctx.historyEnd?.has(scope.id)) chat.append(button("以前の会話を読み込む", "toolbar-button", async (event) => {
+    const control = event.currentTarget;
+    control.disabled = true;
+    await ctx.onLoadHistory(scope);
+    control.disabled = false;
+  }));
   const turns = (scope.turns || []).filter((t) => !t.hidden && !ctx.hiddenTurns.has(`${scope.id}::${t.id}`));
-  if (!turns.length) chat.append(el("p", "No messages", "chat-empty"));
+  if (!turns.length) chat.append(el("p", "会話はまだありません。メッセージが記録されると、ここに表示されます。", "chat-empty"));
   for (const t of turns) {
     const asked = buildBubble({ role: "root", text: t.prompt || "", at: t.at }, tone, `${scope.id}/${t.id}/prompt`, ctx);
     asked.classList.add("has-close");
@@ -101,9 +146,14 @@ export function renderRootDetail(aside, scope, ctx) {
     close.setAttribute("aria-label", "Hide");
     asked.append(close);
     chat.append(asked);
-    chat.append(buildBubble({ role: "agent", text: t.summary || "Running…", at: t.at }, tone, `${scope.id}/${t.id}/reply`, ctx));
+    chat.append(buildBubble({ role: "agent", text: t.reply || t.summary || "Running…", at: t.at }, tone, `${scope.id}/${t.id}/reply`, ctx));
   }
-  aside.replaceChildren(head, chat);
+  const parts = [head, chat];
+  const description = statusDescription(scope.status);
+  if (description) parts.splice(1, 0, el("p", description, "status-note"));
+  if (scope.client && ["claude", "codex"].includes(scope.client) && cls !== "ended") parts.push(buildSayForm(scope, ctx));
+  if (scope.client === "claude" && cls !== "ended") head.append(buildModelForm(scope, ctx));
+  aside.replaceChildren(...parts);
   keepChatAtEnd(ctx, `${scope.id}/root`, chat);
 }
 
@@ -131,9 +181,8 @@ export function renderNodeDetail(aside, scope, node, ctx) {
   const head = buildHead(tone, ctx);
   const summary = el("summary");
   summary.append(el("span", "", "dot"), el("span", node.title || node.id, "node-name"));
-  const model = modelLabel(node.model);
+  const model = node.model || "モデル未取得";
   if (model) summary.append(el("span", model, "node-model"));
-  summary.append(el("span", fmtElapsed(node.startedAt, node.endedAt), "node-elapsed"));
   head.append(summary);
   const dl = el("dl");
   addRow(dl, "Kind", KIND_LABEL[node.kind] || node.kind);
@@ -155,6 +204,8 @@ export function renderNodeDetail(aside, scope, node, ctx) {
   addRow(dl, "id", node.id, true);
   head.append(dl);
   const parts = [head];
+  const description = statusDescription(node.status);
+  if (description) parts.push(el("p", description, "status-note"));
 
   if (node.assignment && (node.assignment.reason || []).length) {
     const ul = el("ul");
@@ -182,7 +233,9 @@ export function renderNodeDetail(aside, scope, node, ctx) {
         if (action === "reject" && !ctx.confirm(`${node.id} を却下します。取り消せません。`)) return;
         for (const b of bar.children) b.disabled = true;
         // 契約の ActionRequest の項目だけ。2 つ目の引数は画面の隠し設定を外す鍵
-        const message = await ctx.onAction({ action, graphId: scope.graphId, taskId: node.id, sessionId: scope.sessionId }, node.id);
+        const message = await ctx.onAction(node.kind === "task"
+          ? { action, graphId: scope.graphId, taskId: node.id, sessionId: scope.sessionId }
+          : { action: "rerun_delegation", delegationId: node.id, sessionId: scope.sessionId }, node.id);
         result.textContent = message || "";
         for (const b of bar.children) b.disabled = false;
       }));
@@ -211,7 +264,12 @@ export function renderNodeDetail(aside, scope, node, ctx) {
     if (node.review.comment) { const d = el("details"); d.append(el("summary", "Review"), el("pre", node.review.comment)); parts.push(d); }
   }
   if (node.output) { const d = el("details"); d.append(el("summary", "Text"), el("pre", node.output)); parts.push(el("h3", "Output"), d); }
-  aside.replaceChildren(...parts);
+  const technical = parts.filter((part) => part !== head && part !== chat && !part.classList.contains("status-note") && !part.classList.contains("actions") && part.id !== "action-result");
+  const info = el("details", undefined, "execution-info");
+  info.append(el("summary", "検証・実行情報"), ...technical);
+  aside.replaceChildren(head, ...parts.filter((part) => part.classList.contains("status-note")), chat,
+    ...parts.filter((part) => part.classList.contains("actions") || part.id === "action-result"), ...(technical.length ? [info] : []));
+
   keepChatAtEnd(ctx, `${scope.id}/${node.id}`, chat);
 }
 
@@ -220,9 +278,56 @@ export function renderDetail(aside, scope, nodeId, ctx) {
   const node = (scope.nodes || []).find((n) => n.id === nodeId);
   if (!node || node.kind === "root") {
     if (scope.kind === "planner") renderPlannerDetail(aside, scope, ctx); else renderRootDetail(aside, scope, ctx);
+    addDetailToolbar(aside, ctx);
     return;
   }
   renderNodeDetail(aside, scope, node, ctx);
+  addDetailToolbar(aside, ctx);
+}
+
+function addDetailToolbar(aside, ctx) {
+  if (!ctx.onExpandDetail) return;
+  const bar = el("div", undefined, "detail-toolbar");
+  if (ctx.onBackToSessions) bar.append(button("‹ グラフ", "toolbar-button mobile-back", ctx.onBackToSessions));
+  if (ctx.selectedNode) {
+    const back = button("‹", "toolbar-button", () => ctx.onSelect({ id: ctx.selectedScope }, null));
+    back.setAttribute("aria-label", "‹ セッションの会話");
+    back.title = "セッションの会話へ戻る";
+    bar.append(back);
+  }
+  const latest = button("↓", "toolbar-button", () => {
+    const chat = aside.querySelector(".chat");
+    if (chat) { chat.scrollTop = chat.scrollHeight; ctx.chatView.stick = true; }
+  });
+  latest.setAttribute("aria-label", "最新の会話へ");
+  latest.title = "最新の会話へ";
+  bar.append(latest);
+  const expanded = globalThis.document.body.classList.contains("detail-expanded");
+  const expand = button(expanded ? "↙" : "↗", "toolbar-button", ctx.onExpandDetail);
+  expand.setAttribute("aria-label", expanded ? "縮小 ↙" : "拡大 ↗");
+  expand.title = expanded ? "会話を縮小" : "会話を拡大";
+  expand.setAttribute("aria-pressed", String(expanded));
+  bar.append(expand);
+  aside.insertBefore(bar, aside.firstChild);
+}
+
+function buildModelForm(scope, ctx) {
+  const form = el("form", undefined, "model-form");
+  const input = el("input");
+  input.value = scope.model || "";
+  input.setAttribute("aria-label", "モデル名");
+  input.placeholder = "モデル名";
+  const submit = el("button", "モデル変更", "toolbar-button");
+  submit.type = "submit";
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!input.value.trim()) return;
+    submit.disabled = true;
+    await ctx.onAction({ action: "set_model", sessionId: scope.sessionId, model: input.value.trim() });
+    submit.disabled = false;
+  });
+  form.append(input, submit);
+  return form;
 }
 
 // planner のグラフを選んだとき。goal とタスクの状態の一覧

@@ -4,10 +4,13 @@ import { STATE_TEXT, usageLevel } from "../lib/status.js";
 import { button, el } from "./dom.js";
 
 function buildProjectBar(projects, selectedKeys, ctx) {
-  const parts = [button("← Overview", "back", () => ctx.onOpen(null))];
+  const home = button("プロジェクト一覧", "back" + (!selectedKeys.length ? " on" : ""), () => ctx.onOpen(null));
+  home.setAttribute("aria-current", !selectedKeys.length ? "page" : "false");
+  const parts = [home];
   for (const project of projects) {
     const picked = selectedKeys.includes(project.key);
-    const pill = button(project.name, "pill" + (picked ? " on" : ""), () => ctx.onOpen(project.key, true));
+    const pill = button(project.name, "pill" + (picked ? " on" : ""), () => ctx.onOpen(project.key));
+
     pill.title = project.rootPath || project.key;
     pill.setAttribute("aria-pressed", picked ? "true" : "false");
     parts.push(pill);
@@ -42,7 +45,7 @@ export function renderUsage(doc, usage, now = new Date()) {
 // projects は全プロジェクトの一覧、selected は開いている key。counts は表示中の範囲の件数
 export function renderHeader(doc, { projects, selected, counts, usage, connection, updatedAt }, ctx) {
   const bar = doc.getElementById("project-bar");
-  bar.replaceChildren(...(selected.length ? buildProjectBar(projects, selected, ctx) : []));
+  bar.replaceChildren(...buildProjectBar(projects, selected, ctx));
   doc.getElementById("project-count").textContent = selected.length
     ? `${selected.length} / ${projects.length} projects`
     : `${projects.length} projects`;

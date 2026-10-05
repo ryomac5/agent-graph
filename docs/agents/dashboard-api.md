@@ -14,6 +14,7 @@
 | `GET /api/project?repo=<key>` | query `repo` | `ProjectView` | Host | 1 リポジトリの全体 |
 | `GET /api/events?repo=<key>` | query `repo` は省略可 | SSE | Host | 変化の配信 |
 | `POST /api/action` | `ActionRequest` | `ActionResult` | Host, JSON, Origin, token | 承認、再試行、却下、終了、turn の非表示 |
+| `POST /api/say` | `SayRequest` | `ActionResult` | Host, JSON, Origin, token | Claude セッションへ本文を送る |
 | `POST /api/sessions` | `{ id, cwd, client, model? }` | 201 `{ ok: true }` | Host, JSON, Origin, loopback | hook の SessionStart |
 | `POST /api/sessions/<id>/end` | `{}` | 200 `{ ok: true }` | Host, JSON, Origin, loopback | hook の SessionEnd |
 | `POST /api/observe` | `{ kind, sessionId, ... }` | 200 `{ ok: true }` | Host, JSON, Origin, loopback | hook の turn と待ちとサブエージェントの観測 |
@@ -112,6 +113,7 @@ hook はデーモンに届かなくても 0 で終わる。
 | `GraphView` | planner のグラフ。`{ id, sessionId?, goal, nodes, edges }`。タスクは `kind: task` の node、依存は `kind: depends` の edge |
 | `ProjectView` | `{ project: { key, name, rootPath }, sessions, graphs, usage, updatedAt }` |
 | `ActionRequest` | `{ action, repo, graphId?, taskId?, sessionId?, turnId? }`。`action` は `approve` `retry` `reject` `end_session` `hide_turn` |
+| `SayRequest` | `{ repo, sessionId, text }`。`POST /api/say` の body。ダッシュボードから Claude セッションへ送る本文 |
 | `ActionResult` | `{ ok, message }` |
 
 `ProjectView` の例。
@@ -171,6 +173,35 @@ X-Agent-Graph-Token: <index.html の meta の値>
 そのセッションに `requested` `planned` `running` `waiting` の委譲が 1 つでもあれば 409 で断り、`message` に件数を書く。
 終えると子が `lost` と記録されるので、生きている子がいる間は画面から終えられない。
 
+`POST /api/say` の例。
+
+```http
+POST /api/say HTTP/1.1
+Host: 127.0.0.1:4310
+Origin: http://127.0.0.1:4310
+Content-Type: application/json
+X-Agent-Graph-Token: <index.html の meta の値>
+
+{ "repo": "abc123", "sessionId": "s1", "text": "続きをよろしく" }
+```
+
+`POST /api/say` はダッシュボードから Claude セッションへ本文を送る。
+`herdr agent list` で `agent_session.value` が `sessionId` と一致する pane を探し、`herdr agent prompt` で送る。
+`text` は改行を 1 行に潰し、先頭が `/` の本文と制御文字と 4000 字超は拒む。
+
+`POST /api/say` の応答の状態。
+
+| 状態 | 本文 | 契機 |
+| --- | --- | --- |
+| 200 | `ActionResult` の `ok: true` | herdr の pane に送った |
+| 409 | `ActionResult` の `ok: false` | 空・`/` 始まり・長すぎる本文、claude 以外・ended のセッション、pane が見つからない、送信失敗 |
+| 400 | `{ error }` | 不正な body |
+| 404 | `{ error }` | 未知の repo、session |
+| 403 | `{ error }` | 守りの拒否 |
+
+`end_session` と違い、`say` は実行中の Claude セッションに触る。
+herdr で起動していないセッションや、pane にセッション ID が載っていない場合は pane が見つからず 409 になる。
+
 ## SSE
 
 `GET /api/events` は `text/event-stream` を返す。
@@ -199,10 +230,42 @@ data: {"project":{...},"sessions":[...],"graphs":[...],"usage":{...},"updatedAt"
 | Host | すべて | `127.0.0.1:<port>`、`localhost:<port>`、`[::1]:<port>` だけ受ける。DNS リバインディング対策 |
 | Content-Type | POST | `application/json` で始まること |
 | Origin | POST | 付いていれば `http://<Host>` と一致すること |
-| token | `POST /api/action` | `X-Agent-Graph-Token` がデーモンのトークンと一致すること |
+| token | `POST /api/action`、`POST /api/say` | `X-Agent-Graph-Token` がデーモンのトークンと一致すること |
 | loopback | hook 用の 3 経路 | 接続元が `127.0.0.1` であること。トークンは要らない |
 
 拒否はどれも 403 で `{ error }` を返す。
 トークンはデーモン起動ごとに作り直し、`runDir()/dashboard.token` に 0600 で保存する。
 `GET /` の応答は index.html の `<head>` 直後に `<meta name="agent-graph-token" content="...">` を差し込む。ダッシュボードはこの値を読んで POST に付ける。
 テストでは `startHttpServer` の `tokenPath` で保存先を差し替える。
+
+## ワークスペース表示とセッション操作（2026-10-05）
+
+初期表示は `liveSessions > 0` または実行中・判断待ちの件数がある PJ だけを表示する。
+「すべて」で非稼働 PJ の履歴も表示する。保存済みの非稼働 PJ は初期選択から外す。
+セッションを切り替え、モデル名と応答全文を確認できる。詳細パネルは単独で広げられる。
+`Failed` は実行・検証の失敗、`Lost` は終了結果を取得できなかった追跡断であり、同じ意味ではない。
+
+`Turn.reply` に保存済みの応答全文を返す。`summary` は短い要約として残す。
+`GET /api/turns?repo=<key>&session=<id>[&before=<turn-id>]` は古い会話を 50 件ずつ返す。
+応答は `{ turns: Turn[], hasMore: boolean }`。cursor は同じセッションの turn id だけを受け付ける。
+
+`POST /api/action` に以下の操作を追加する。いずれも既存の Host・Origin・token 検査を通る。
+
+| action | 追加の本文 | 処理 |
+| --- | --- | --- |
+| `new_session` | `client: claude / codex` | 登録済み PJ の cwd で Herdr の tab を作って起動 |
+| `set_model` | `sessionId`, `model` | Claude の pane に `/model` を送り、確認が出たときは確認する。表示モデルは後続の観測を正とする |
+| `stop_session` | `sessionId` | 子が動いていない Claude の pane に `/exit` を送る。終了は hook または生死監視で確認する |
+| `rerun_delegation` | `sessionId`, `delegationId` | planner の判断とは別に、保存した実行条件で新しい委譲を起動。ネイティブの子は親へ再実行を依頼 |
+
+`end_session` は記録を終了させる操作で、プロセス停止ではない。UI では「履歴へ移す」と表示する。
+メッセージは `/api/say` に `{ repo, sessionId, text }` を送る。Herdr に一致する Claude / Codex の pane が必要。
+ブラウザーから app 内の Codex スレッドに直接送信する経路は実装していない。
+再実行の条件は schema v4 の `delegation_requests` に保存する。旧記録で条件がないものは勝手に補わず、再依頼を案内する。
+
+登録済みの Claude UUID と Codex thread id に一致するローカル JSONL からモデル・公開会話を補完する。
+推論やツール出力は会話として取り込まない。非表示の印は再取り込みでも維持する。
+Codex の子は metadata の `parent_thread_id` が登録済みの根や子に一致したときだけグラフに結ぶ。
+旧 shim の生成 id は `sessions.source_thread_id` で実際のスレッドと結べる。
+新 shim は `CODEX_THREAD_ID` を利用し、既存の対応付けがあれば同じセッションに戻る。
+プロセスが複数の履歴を開いている場合は、どのスレッドか推測で結び付けない。

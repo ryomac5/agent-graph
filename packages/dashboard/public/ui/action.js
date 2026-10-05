@@ -2,7 +2,7 @@
 export const TOKEN_META_NAME = "agent-graph-token";
 export const TOKEN_HEADER = "X-Agent-Graph-Token";
 // 契約の ActionRequest にある項目だけを送る
-const REQUEST_KEYS = ["action", "repo", "graphId", "taskId", "sessionId", "turnId"];
+const REQUEST_KEYS = ["action", "repo", "graphId", "taskId", "sessionId", "turnId", "delegationId", "model", "client"];
 
 export function readToken(doc = globalThis.document) {
   const meta = doc && doc.querySelector ? doc.querySelector(`meta[name="${TOKEN_META_NAME}"]`) : null;
@@ -21,10 +21,19 @@ async function readResult(res) {
 
 // 結果は { ok, message }。失敗は notify に "Failed: ..." で渡す。成功は message をそのまま渡す
 export async function sendAction(body, { fetch: fetchFn = (...args) => globalThis.fetch(...args), token = "", notify = () => {} } = {}) {
+  return sendPost("/api/action", body, { fetch: fetchFn, token, notify });
+}
+
+// POST /api/say。Claude セッションへメッセージを送る。応答は ActionResult と同じ形。
+export async function sendSay(body, { fetch: fetchFn = (...args) => globalThis.fetch(...args), token = "", notify = () => {} } = {}) {
+  return sendPost("/api/say", body, { fetch: fetchFn, token, notify });
+}
+
+async function sendPost(path, body, { fetch: fetchFn, token, notify }) {
   const request = {};
-  for (const key of REQUEST_KEYS) if (body[key] !== undefined) request[key] = body[key];
+  for (const key of path === "/api/say" ? ["repo", "sessionId", "text"] : REQUEST_KEYS) if (body[key] !== undefined) request[key] = body[key];
   try {
-    const res = await fetchFn("/api/action", {
+    const res = await fetchFn(path, {
       method: "POST",
       headers: { "Content-Type": "application/json", [TOKEN_HEADER]: token },
       body: JSON.stringify(request),

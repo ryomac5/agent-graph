@@ -1,5 +1,5 @@
 import { sendJson, type Route } from "../route.ts";
-import { performAction } from "../../actions.ts";
+import { controlAction } from "../../control.ts";
 import { NotFoundError } from "../../sessions.ts";
 
 const MAX_ACTION_BODY_BYTES = 4096;
@@ -11,7 +11,7 @@ export const actionRoute: Route = {
   handle: async ({ options, response, readJson }) => {
     const body = await readJson(MAX_ACTION_BODY_BYTES);
     try {
-      const result = performAction(body, options.openStores);
+      const result = await controlAction(body, options.openStores);
       sendJson(response, result.ok ? 200 : 409, result);
     } catch (error) {
       if (error instanceof TypeError) { sendJson(response, 400, { error: error.message }); return; }

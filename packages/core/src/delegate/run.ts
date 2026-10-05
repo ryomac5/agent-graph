@@ -95,6 +95,7 @@ export async function runDelegation(
     role: req.role, title: req.title, status: "requested",
     task: req.task, scope: req.scope, outputs: req.outputs, worktree: cwd });
   store.insertDelegationRound(delegationId, "request", req.task, now().toISOString());
+  store.db.prepare("INSERT INTO delegation_requests (delegation_id, request) VALUES (?, ?)").run(delegationId, JSON.stringify(req));
   store.insertSpan({ trace, name: "delegate", startedAt: now().toISOString(), status: "unset",
     attributes: { "agent.role": req.role, "agent.executor": "", "agent.model": "",
       "agent.session": caller.sessionId, "agent.delegation": delegationId } });

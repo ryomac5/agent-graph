@@ -5,7 +5,7 @@ import { migrate, migrations } from "../src/index.ts";
 
 const allTables = [
   "schema_version", "repos", "sessions", "graphs", "tasks", "delegations", "assignments",
-  "spans", "events", "acceptances", "reviews", "usage_samples", "token_usage", "turns", "task_decisions", "delegation_rounds",
+  "spans", "events", "acceptances", "reviews", "usage_samples", "token_usage", "turns", "task_decisions", "delegation_rounds", "delegation_requests",
 ].sort();
 
 test("空の DB に全表と schema_version の版1から版3を作り、再実行しても変わらない", (t) => {
@@ -13,7 +13,7 @@ test("空の DB に全表と schema_version の版1から版3を作り、再実�
   t.after(() => db.close());
   migrate(db);
   const versions = db.prepare("SELECT * FROM schema_version ORDER BY version").all();
-  assert.deepEqual(versions.map((row) => row.version), [1, 2, 3]);
+  assert.deepEqual(versions.map((row) => row.version), [1, 2, 3, 4]);
   assert.equal(new Date(versions[0].applied_at as string).toISOString(), versions[0].applied_at);
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all();
   assert.deepEqual(tables.map((row) => row.name).sort(), allTables);
@@ -36,7 +36,7 @@ test("版1の DB を版3に移行し、既存の行に既定値が入り、2 回
     delegation: db.prepare("SELECT * FROM delegations").get(),
   });
   const first = snapshot();
-  assert.deepEqual(first.versions, [1, 2, 3]);
+  assert.deepEqual(first.versions, [1, 2, 3, 4]);
   assert.deepEqual(first.tables, allTables);
   assert.equal(first.session!.status, "running");
   assert.equal(first.session!.last_seen_at, "2026-09-25T00:00:00.000Z");
@@ -75,7 +75,7 @@ test("版2の DB を版3に移行し、委譲の詳細と終了理由と往復�
     rounds: db.prepare("SELECT * FROM delegation_rounds").all(),
   });
   const first = snapshot();
-  assert.deepEqual(first.versions, [1, 2, 3]);
+  assert.deepEqual(first.versions, [1, 2, 3, 4]);
   assert.deepEqual(first.tables, allTables);
   // 版 2 で ended だった行は理由が分からないので空のまま残す
   assert.equal(first.session!.status, "ended");
@@ -93,24 +93,24 @@ test("追加の移行で版3から版4に進み、版4も再適用しない", (t
   const db = new DatabaseSync(":memory:");
   t.after(() => db.close());
   migrate(db);
-  const steps = [...migrations, { version: 4, sql: "CREATE TABLE extra (id TEXT);" }];
+  const steps = [...migrations, { version: 5, sql: "CREATE TABLE extra (id TEXT);" }];
   migrate(db, steps);
   migrate(db, steps);
   assert.deepEqual(db.prepare("SELECT version FROM schema_version ORDER BY version").all()
-    .map((row) => row.version), [1, 2, 3, 4]);
+    .map((row) => row.version), [1, 2, 3, 4, 5]);
 });
 
 test("失敗した版だけをロールバックし、修正後に再実行できる", (t) => {
   const db = new DatabaseSync(":memory:");
   t.after(() => db.close());
   assert.throws(() => migrate(db, [...migrations, {
-    version: 4,
+    version: 5,
     sql: "CREATE TABLE partial (id TEXT); INSERT INTO missing VALUES (1);",
   }]), /missing/);
-  assert.equal(db.prepare("SELECT MAX(version) AS version FROM schema_version").get()!.version, 3);
-  assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name = 'partial'").get(), undefined);
-  migrate(db, [{ version: 4, sql: "CREATE TABLE partial (id TEXT);" }]);
   assert.equal(db.prepare("SELECT MAX(version) AS version FROM schema_version").get()!.version, 4);
+  assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name = 'partial'").get(), undefined);
+  migrate(db, [{ version: 5, sql: "CREATE TABLE partial (id TEXT);" }]);
+  assert.equal(db.prepare("SELECT MAX(version) AS version FROM schema_version").get()!.version, 5);
 });
 
 test("初回移行の失敗では schema_version 自体もロールバックする", (t) => {

@@ -106,6 +106,7 @@ export interface Turn {
   at: string;
   prompt: string;
   summary?: string;
+  reply?: string;
   hidden?: boolean;
 }
 
@@ -142,17 +143,27 @@ export interface ProjectView {
 }
 
 export interface ActionRequest {
-  action: "approve" | "retry" | "reject" | "end_session" | "hide_turn";
+  action: "approve" | "retry" | "reject" | "end_session" | "hide_turn" | "new_session" | "set_model" | "rerun_delegation" | "stop_session";
   repo: string;
   graphId?: string;
   taskId?: string;
   sessionId?: string;
   turnId?: string;
+  delegationId?: string;
+  model?: string;
+  client?: "claude" | "codex";
 }
 
 export interface ActionResult {
   ok: boolean;
   message: string;
+}
+
+// ダッシュボードから Claude セッションへメッセージを送る。
+export interface SayRequest {
+  repo: string;
+  sessionId: string;
+  text: string;
 }
 
 // 失敗時の共通の応答。

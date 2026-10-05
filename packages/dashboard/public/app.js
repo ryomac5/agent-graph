@@ -1,21 +1,20 @@
 // 画面の起点。契約の Overview と ProjectView を feed で受け、ヘッダー・canvas・詳細に配る
-import { countProject, sumCounts } from "./lib/status.js";
+import { countProject, sumCounts, visibleProjects } from "./lib/status.js";
 import { dismissKey } from "./lib/visible.js";
-import { renderDetail } from "./ui/detail.js";
+import { renderDetail } from "./ui/detail.js?v=compact-20261005";
 import { el } from "./ui/dom.js";
 import { openFeed } from "./ui/feed.js";
-import { renderHeader } from "./ui/header.js";
-import { renderOverview } from "./ui/overview.js";
-import { buildProjectSection, scopesOf } from "./ui/project.js";
+import { renderHeader } from "./ui/header.js?v=compact-20261005";
+import { renderOverview } from "./ui/overview.js?v=compact-20261005";
+import { buildProjectSection, scopesOf } from "./ui/project.js?v=compact-20261005";
 import { setupSplitter } from "./ui/splitter.js";
 import { toast } from "./ui/toast.js";
-import { readToken, sendAction } from "./ui/action.js";
+import { readToken, sendAction, sendSay } from "./ui/action.js";
 
 const TOKEN = readToken(document);
 const PROJECT_KEY = "agent-graph:project";
 const DISMISS_KEY = "agent-graph:dismissed";
 const CANVAS_MARGIN = 64;
-const CANVAS_MAX = 1200;
 
 function loadJson(key, fallback) {
   try { const value = JSON.parse(localStorage.getItem(key) || "null"); return value == null ? fallback : value; }
@@ -30,9 +29,12 @@ function loadSelectedProjects() {
 const state = {
   overview: null, views: new Map(), feeds: new Map(), feedState: new Map(), unavailable: new Map(), updatedAt: "",
   selectedProjects: loadSelectedProjects(), selectedScope: null, selectedNode: null,
+  showInactive: false, restoredSelection: false,
   dismissed: new Set(loadJson(DISMISS_KEY, [])), expandedArchive: new Set(),
   knownEdges: new Map(), knownNodes: new Map(), fresh: new Map(), zoom: new Map(),
   expandedRounds: new Set(), hiddenTurns: new Set(), factsOpen: { value: false }, chatView: { key: "", top: 0, stick: true },
+  drafts: new Map(),
+  history: new Map(), historyEnd: new Set(),
 };
 let previousCanvas = "";
 let previousDetail = "";
@@ -57,7 +59,10 @@ function currentScope() {
   if (!state.selectedScope) return null;
   for (const view of state.views.values()) {
     const scope = scopesOf(view).find((s) => s.id === state.selectedScope);
-    if (scope) return scope;
+    if (scope) {
+      const turns = new Map([...(state.history.get(scope.id) || []), ...scope.turns].map((turn) => [turn.id, turn]));
+      return { ...scope, turns: [...turns.values()].sort((a, b) => a.at.localeCompare(b.at)) };
+    }
   }
   return null;
 }
@@ -75,7 +80,7 @@ function connectionState() {
 
 // 件数はサーバーの ProjectSummary を正とする。Overview が無いときだけ画面の nodes から数える
 function headerCounts() {
-  if (!state.selectedProjects.length) return sumCounts(projects().map((p) => p.counts));
+  if (!state.selectedProjects.length) return sumCounts(visibleProjects(projects(), state.showInactive).map((p) => p.counts));
   const summaries = projects().filter((p) => state.selectedProjects.includes(p.key));
   if (summaries.length === state.selectedProjects.length) return sumCounts(summaries.map((p) => p.counts));
   return sumCounts(selectedViews().map((view) => countProject(view, state.dismissed)));
@@ -88,15 +93,45 @@ const ctx = {
   get selectedNode() { return state.selectedNode; },
   knownEdges: state.knownEdges, knownNodes: state.knownNodes, fresh: state.fresh, zoom: state.zoom, orbSlots: new Map(),
   expandedRounds: state.expandedRounds, hiddenTurns: state.hiddenTurns, factsOpen: state.factsOpen, chatView: state.chatView,
+  drafts: state.drafts,
+  historyEnd: state.historyEnd,
+  onLoadHistory: async (scope) => {
+    const params = new URLSearchParams({ repo: projectKeyOf(scope.id), session: scope.sessionId });
+    if (scope.turns.length) params.set("before", scope.turns[0].id);
+    const response = await fetch(`/api/turns?${params}`);
+    if (!response.ok) { toast("履歴を取得できませんでした"); return; }
+    const data = await response.json();
+    state.history.set(scope.id, [...(data.turns || []), ...(state.history.get(scope.id) || [])]);
+    if (!data.hasMore) state.historyEnd.add(scope.id);
+    state.chatView.stick = false;
+    previousDetail = "";
+    render();
+  },
+  onExpandDetail: () => {
+    document.body.classList.toggle("detail-expanded");
+    previousDetail = "";
+    render();
+  },
+  onNewSession: async (repo, client) => postAction({ repo, action: "new_session", client }),
   maxWidth: 0, projectName: "",
+  get showInactive() { return state.showInactive; },
+  onShowInactive: (show) => { state.showInactive = show; render(); },
   confirm: (text) => window.confirm(text),
   onOpen: (key, additive) => openProject(key, additive),
   onSelect: (scope, nodeId) => {
+    if (nodeId) document.body.classList.add("mobile-conversation");
     state.selectedScope = scope.id;
     state.selectedNode = nodeId;
     state.factsOpen.value = false;
     render();
   },
+  onOpenConversation: (scope) => {
+    state.selectedScope = scope.id;
+    state.selectedNode = null;
+    document.body.classList.add("mobile-conversation");
+    render();
+  },
+  onBackToSessions: () => document.body.classList.remove("mobile-conversation", "detail-expanded"),
   onToggleDismiss: (scope, nodeId) => {
     const key = dismissKey(scope.id, nodeId);
     if (state.dismissed.has(key)) state.dismissed.delete(key);
@@ -120,6 +155,15 @@ const ctx = {
     render();
     return result.message;
   },
+  onSay: async (sessionId, text) => {
+    const repo = projectKeyOf(state.selectedScope) || state.selectedProjects[0] || "";
+    const result = await sendSay({ repo, sessionId, text }, { token: TOKEN, notify: toast });
+    if (result.ok && state.selectedScope) state.drafts.delete(state.selectedScope);
+    previousCanvas = "";
+    previousDetail = "";
+    render();
+    return result;
+  },
   onHideTurn: async (scope, turnId) => {
     // 先に画面から外し、サーバに記録できなければ戻す
     const key = `${scope.id}::${turnId}`;
@@ -133,6 +177,8 @@ const ctx = {
 
 // Overview と Project ページの切り替え。null で Overview へ戻す
 function openProject(key, additive = false) {
+  document.body.classList.remove("detail-expanded", "graph-expanded");
+  document.body.classList.remove("mobile-conversation");
   const keys = additive
     ? state.selectedProjects.includes(key) ? state.selectedProjects.filter((k) => k !== key) : [...state.selectedProjects, key]
     : key ? [key] : [];
@@ -154,7 +200,15 @@ function syncFeeds() {
     if (state.feeds.has(key)) continue;
     state.feeds.set(key, openFeed(key, {
       onData: (data) => {
-        if (key) { state.views.set(key, data); state.unavailable.delete(key); } else state.overview = data;
+        if (key) { state.views.set(key, data); state.unavailable.delete(key); } else {
+          state.overview = data;
+          if (!state.restoredSelection) {
+            state.restoredSelection = true;
+            state.selectedProjects = state.selectedProjects.filter((id) => visibleProjects(data.projects).some((p) => p.key === id));
+            localStorage.setItem(PROJECT_KEY, JSON.stringify(state.selectedProjects));
+            queueMicrotask(syncFeeds);
+          }
+        }
         state.updatedAt = data.updatedAt || new Date().toISOString();
         render();
       },
@@ -175,7 +229,7 @@ function pickDefaultScope() {
 
 function renderHead() {
   renderHeader(document, {
-    projects: projects(), selected: state.selectedProjects, counts: headerCounts(),
+    projects: projects().filter((p) => state.selectedProjects.includes(p.key) || visibleProjects([p], state.showInactive).length), selected: state.selectedProjects, counts: headerCounts(),
     usage: state.selectedProjects.length ? (selectedViews()[0] || {}).usage || (state.overview || {}).usage : (state.overview || {}).usage,
     connection: connectionState(), updatedAt: state.updatedAt,
   }, ctx);
@@ -189,7 +243,7 @@ function renderCanvas(enter) {
   }
   canvas.classList.remove("overview");
   ctx.orbSlots.clear();
-  ctx.maxWidth = Math.min(CANVAS_MAX, Math.max(360, canvas.clientWidth - CANVAS_MARGIN));
+  ctx.maxWidth = Math.max(360, canvas.clientWidth - CANVAS_MARGIN);
   const signature = JSON.stringify([state.selectedProjects, selectedViews(), state.selectedScope, state.selectedNode, [...state.dismissed], [...state.expandedArchive], ctx.maxWidth]);
   if (signature === previousCanvas && !enter) return;
   previousCanvas = signature;
@@ -225,11 +279,13 @@ function renderAside() {
 }
 
 function render(enter = false) {
+  document.body.classList.toggle("is-overview", !state.selectedProjects.length);
   // 保存したプロジェクトが消えていれば Overview へ戻す
   if (state.overview && state.selectedProjects.length) {
     const alive = state.selectedProjects.filter((key) => projects().some((p) => p.key === key));
     if (alive.length !== state.selectedProjects.length) { openProject(null); for (const key of alive) openProject(key, true); return; }
   }
+  pickDefaultScope();
   renderCanvas(enter);
   renderAside();
   renderHead();

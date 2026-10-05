@@ -8,3 +8,4 @@ export interface ActionDeps {
 }
 export function readToken(doc?: unknown): string;
 export function sendAction(body: Record<string, unknown>, deps?: ActionDeps): Promise<ActionOutcome>;
+export function sendSay(body: Record<string, unknown>, deps?: ActionDeps): Promise<ActionOutcome>;

@@ -25,15 +25,19 @@ function ctx(extra: Json = {}): Json {
   };
 }
 
-test("Overview は fixture の全プロジェクトを丸で描き、状態の言葉と件数を出す", () => {
+test("Overview は fixture の稼働中のプロジェクトをカードで描き、状態の言葉と件数を出す", () => {
   const canvas = doc.getElementById("canvas")!;
   const c = ctx();
   renderOverview(canvas, overview, c);
   const html = String(canvas);
-  for (const word of ["Kaggriculture", "agent-graph", "dotfiles", "fde-lecture", "obsidian", "Failed 7", "Waiting 1", "Running 1", "Quiet", "Idle", "on-failed", "on-waiting", "on-running", "quiet", "orb-slot", "--orb-dur"]) {
+  for (const word of ["Kaggriculture", "agent-graph", "dotfiles", "obsidian", "Failed 7", "Waiting 1", "Running 1", "Idle", "on-failed", "on-waiting", "on-running", "orb-slot"]) {
     assert.ok(html.includes(word), `${word} が無い`);
   }
   assert.ok(canvas.classList.contains("overview"));
+  assert.ok(!html.includes("fde-lecture"), "非稼働 PJ は初期表示から外す");
+  renderOverview(canvas, overview, ctx({ showInactive: true }));
+  assert.ok(String(canvas).includes("fde-lecture"));
+  renderOverview(canvas, overview, c);
   // 丸は使い回す
   const before = (c.orbSlots as Map<string, FakeElement>).get("dotfiles");
   renderOverview(canvas, overview, c);
@@ -44,7 +48,7 @@ test("ヘッダーはピル列と件数と利用枠の色分けと Live を出�
   const projects = overview.projects as Json[];
   renderHeader(doc, { projects, selected: ["agent-graph"], counts: { running: 3, waiting: 1, failed: 1, done: 12 }, usage: overview.usage, connection: "live", updatedAt: "2026-09-25T06:40:12.000Z" }, ctx());
   const html = String(doc.body);
-  for (const word of ["← Overview", "1 / 5 projects", "Running 3", "Waiting 1", "Failed 1", "Done 12", "on-running", "on-waiting", "Session", "Week Fable", "usage-fill high", "usage-fill warn", "92%", "36%", "Live", "connection live", "Updated"]) {
+  for (const word of ["プロジェクト一覧", "1 / 5 projects", "Running 3", "Waiting 1", "Failed 1", "Done 12", "on-running", "on-waiting", "Session", "Week Fable", "usage-fill high", "usage-fill warn", "92%", "36%", "Live", "connection live", "Updated"]) {
     assert.ok(html.includes(word), `${word} が無い`);
   }
   assert.equal(doc.getElementById("head-sub")!.hidden, false);
@@ -106,10 +110,11 @@ test("planner のグラフは task を同じ丸で描き、waiting_human を紫�
   assert.equal(directionWord({ fromFamily: "openai", toFamily: "openai" }), "");
 });
 
-test("プロジェクトのページはセッションの枠と goal と Started と End と終了セッションの畳みを出す", () => {
+test("プロジェクトは簡潔なセッション切替と常時表示のグラフと履歴を出す", () => {
   const section = buildProjectSection(project, ctx());
   const html = String(section);
-  for (const word of ["agent-graph", "/Users/r/00_project/agent-graph", "agent-graph-001-s10", "Started", "End", "旧版のダッシュボードの画面を新版に移植し", "Graph agent-graph-001-s10", "ダッシュボードを作り直す", "Ended sessions (1)", "agent-graph-001-s9", "planner", "ended"]) {
+  assert.equal(section.querySelector(".session-group")!.tagName, "section", "グラフは開閉枠に隠さない");
+  for (const word of ["agent-graph", "agent-graph-001-s10", "session-picker", "実行計画", "履歴 · 1", "agent-graph-001-s9", "planner"]) {
     assert.ok(html.includes(word), `${word} が無い`);
   }
 });
@@ -119,7 +124,7 @@ test("root の詳細は会話の吹き出しと More と × を出し、隠し�
   const scope = scopesOf(project)[0];
   renderDetail(aside, scope, null, ctx());
   const html = String(aside);
-  for (const word of ["agent-graph-001-s10", "from-root", "from-agent", "More", "bubble-close", "Running…", "契約を固定して", "End", "Goal", "Session ID"]) {
+  for (const word of ["agent-graph-001-s10", "from-root", "from-agent", "More", "bubble-close", "Running…", "契約を固定して", "履歴へ移す", "Goal", "Session ID"]) {
     assert.ok(html.includes(word), `${word} が無い`);
   }
   renderDetail(aside, scope, null, ctx({ hiddenTurns: new Set([`${scope.id}::t1`]) }));
@@ -131,7 +136,7 @@ test("子の詳細は属性と往復と Accept と Scope と Violations と Revi
   const scope = scopesOf(project)[0];
   renderDetail(aside, scope, "C0", ctx());
   let html = String(aside);
-  for (const word of ["契約を固定する", "GPT 6 Sol", "Assignment", "段 1: 契約の固定", "policy 2026-09-20.3", "policyVersion", "Round trips", "Tokens", "48k in", "Reviewer", "claude · Fable 5.1", "Accept: pass", "pnpm@10 typecheck", "verdict\">pass", "Scope", "packages/daemon/src/http/**", "Outputs", "Review: Approve", "契約は文書と一致している", "Output", "テスト 17 件が通過", "from-root", "from-agent"]) {
+  for (const word of ["契約を固定する", "gpt-6-sol", "Assignment", "段 1: 契約の固定", "policy 2026-09-20.3", "policyVersion", "Round trips", "Tokens", "48k in", "Reviewer", "claude · Fable 5.1", "Accept: pass", "pnpm@10 typecheck", "verdict\">pass", "Scope", "packages/daemon/src/http/**", "Outputs", "Review: Approve", "契約は文書と一致している", "Output", "テスト 17 件が通過", "from-root", "from-agent"]) {
     assert.ok(html.includes(word), `${word} が無い`);
   }
   renderDetail(aside, scope, "F1", ctx());

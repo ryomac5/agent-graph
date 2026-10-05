@@ -21,6 +21,8 @@ import { readDashboardPort } from "./config.ts";
 import { startHttpServer } from "./http/server.ts";
 import { processStartedAt, startLivenessMonitor } from "./liveness.ts";
 import { startSocketServer, type Hello, type HelloHandler } from "./socket.ts";
+import { startCodexObserver } from "./codex-observe.ts";
+import { startClaudeObserver } from "./claude-observe.ts";
 
 const execFileAsync = promisify(execFile);
 const CODEX_INTERVAL_MS = 60_000;
@@ -94,8 +96,9 @@ async function repoStoreOf(stores: Map<string, Store>, latest: Map<string, Usage
 function callerOf(hello: Hello, store: Store, callers: Callers): { caller: Caller; created: boolean } {
   const known = callers.get(hello);
   if (known) return { caller: known, created: false };
-  const sessionId = parseTracestate(hello.tracestate).sessionId ?? hello.session ?? ulid();
-  const existing = store.db.prepare("SELECT trace_id FROM sessions WHERE id = ?").get(sessionId);
+  const requestedId = parseTracestate(hello.tracestate).sessionId ?? hello.session ?? ulid();
+  const existing = store.db.prepare("SELECT id, trace_id FROM sessions WHERE id = ? OR source_thread_id = ? ORDER BY id LIMIT 1").get(requestedId, requestedId);
+  const sessionId = existing ? String(existing.id) : requestedId;
   const caller = { sessionId,
     ...(parseTraceparent(hello.traceparent) ?? {
       traceId: existing ? String(existing.trace_id) : newTraceId(), spanId: newSpanId(),
@@ -228,6 +231,8 @@ export async function startDaemon(): Promise<{ stop: () => Promise<void> }> {
   const latest = new Map<string, UsageSample>();
   const usageProbe = startUsageProbe(stores, { latest });
   const liveness = startLivenessMonitor(stores, { onError: (error) => log(String(error)) });
+  const codexObserver = startCodexObserver(stores, { onError: (error) => log(String(error)) });
+  const claudeObserver = startClaudeObserver(stores, { onError: (error) => log(String(error)) });
   const callers: Callers = new WeakMap();
   const handler = createHandler(stores, latest, callers);
   const onHello = createHelloHandler(stores, latest, callers);
@@ -280,6 +285,8 @@ export async function startDaemon(): Promise<{ stop: () => Promise<void> }> {
       await new Promise<void>((resolve) => http!.close(() => resolve()));
       await usageProbe.stop();
       await liveness.stop();
+      await codexObserver.stop();
+      await claudeObserver.stop();
       for (const store of stores.values()) store.close();
       await unlink(pidPath);
       log("stopped");
@@ -295,6 +302,8 @@ export async function startDaemon(): Promise<{ stop: () => Promise<void> }> {
     }
     await usageProbe.stop();
     await liveness.stop();
+    await codexObserver.stop();
+    await claudeObserver.stop();
     for (const store of stores.values()) store.close();
     await unlink(pidPath);
     throw error;

@@ -3,34 +3,29 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="dark">
+<meta name="color-scheme" content="light">
 <title>Agent Console</title>
-<link rel="stylesheet" href="./style.css">
-<script type="module" src="./app.js"></script>
+<link rel="stylesheet" href="./style.css?v=compact-20261005">
+<script type="module" src="./app.js?v=compact-20261005"></script>
 </head>
 <body>
 <header>
   <div class="head-main">
     <div class="brand"><h1>Agent Console</h1></div>
-    <div id="project-bar" class="project-bar"></div>
     <span id="project-count"></span>
     <div id="summary" aria-live="polite"></div>
     <span id="connection" class="connection" role="status">Connecting</span>
     <span id="updated"></span>
+    <details class="quota-panel"><summary>利用状況</summary>
+      <div id="head-sub" class="head-sub" hidden><div id="usage" aria-label="利用状況"></div></div>
+    </details>
   </div>
-  <div class="head-sub" id="head-sub" hidden>
-    <div class="legend" aria-label="Legend">
-      <span><i class="lg-planned"></i>Planned</span>
-      <span><i class="lg-running"></i>Running</span>
-      <span><i class="lg-waiting"></i>Waiting</span>
-      <span><i class="lg-done"></i>Done</span>
-      <span><i class="lg-failed"></i>Failed</span>
-      <span><i class="lg-ended"></i>Lost</span>
-    </div>
-    <div id="usage" aria-label="Usage"></div>
-  </div>
+
 </header>
 <main>
+  <nav id="workspace-nav" class="workspace-nav" aria-label="プロジェクト">
+    <div id="project-bar" class="project-bar"></div>
+  </nav>
   <div id="canvas"><p class="empty">Connecting…</p></div>
   <div id="splitter" role="separator" aria-orientation="vertical" aria-label="Panel width" tabindex="0"></div>
   <aside id="detail"><p class="empty">Select a node</p></aside>

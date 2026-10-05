@@ -56,3 +56,12 @@ test("JSON でない応答は Server error になる", async () => {
   assert.deepEqual(result, { ok: false, message: "Server error 502" });
   assert.deepEqual(notices, ["Failed: Server error 502"]);
 });
+
+test("メッセージは /api/say に本文を含めて送る", async () => {
+  const { sendSay } = await import("../public/ui/action.js");
+  const calls: Call[] = [];
+  const result = await sendSay({ repo: "r", sessionId: "s", text: "続けてください\n次の依頼", action: "reject" },
+    { fetch: fakeFetch(200, { ok: true, message: "送信済み" }, calls), token: "tok" });
+  assert.equal(result.ok, true); assert.equal(calls[0].url, "/api/say");
+  assert.deepEqual(JSON.parse(calls[0].init.body), { repo: "r", sessionId: "s", text: "続けてください\n次の依頼" });
+});

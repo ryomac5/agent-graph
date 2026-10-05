@@ -20,7 +20,7 @@ test("Codex の生成設定は実行時のソケットと親文脈を転送し�
   assert.ok(overrides[1].startsWith("mcp_servers.agent-graph={command="));
   for (const output of [config, overrides[1]]) {
     const forwarded = JSON.parse(output.match(/env_vars\s*=\s*(\[[^\]]*\])/)![1]);
-    assert.deepEqual(forwarded, ["AGENT_GRAPH_SOCKET", "XDG_STATE_HOME", "TRACEPARENT", "TRACESTATE", "AGENT_GRAPH_SESSION"]);
+    assert.deepEqual(forwarded, ["AGENT_GRAPH_SOCKET", "XDG_STATE_HOME", "TRACEPARENT", "TRACESTATE", "AGENT_GRAPH_SESSION", "CODEX_THREAD_ID", "CODEX_HOME"]);
   }
   assert.doesNotMatch(config, /\brequired\s*=/);
   assert.match(overrides[1], /required\s*=\s*true/);

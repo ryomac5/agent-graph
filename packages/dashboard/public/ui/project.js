@@ -1,5 +1,5 @@
 // Project ページ。セッションごとの枠と goal と Started、planner のグラフの枠、終了セッションの畳み
-import { fmtWhen, statusClass, statusLabel } from "../lib/format.js";
+import { statusClass, statusLabel } from "../lib/format.js";
 import { isLive } from "../lib/status.js";
 import { button, el } from "./dom.js";
 import { renderGraph } from "./graph.js";
@@ -27,25 +27,23 @@ function buildGroup(scope, ctx) {
   const cls = statusClass(scope.status);
   const group = el("section", undefined, `session-group ${cls}${scope.kind === "planner" ? " planner" : ""}${cls === "ended" ? " ended" : ""}`);
   group.setAttribute("data-scope", scope.id);
-  const h3 = el("h3");
-  h3.append(el("span", "", "dot"), el("span", scope.kind === "planner" ? `Graph ${scope.name}` : scope.name));
-  if (scope.kind === "planner" && scope.sessionName) h3.append(el("small", `of ${scope.sessionName}`));
-  if (scope.startedAt) {
-    const when = el("small", `Started ${fmtWhen(scope.startedAt)}`);
-    when.title = scope.startedAt;
-    h3.append(when);
+  if (scope.kind === "planner") {
+    const title = el("h4", "実行計画", "graph-title");
+    title.title = scope.goal || scope.name;
+    group.append(title);
   }
-  if (scope.kind === "session" && cls !== "ended") {
-    // 取り消せない操作なのでここだけ確認する
-    h3.append(button("End", undefined, () => {
-      if (ctx.confirm(`End ${scope.name}?`)) ctx.onAction({ action: "end_session", sessionId: scope.sessionId });
-    }));
-  } else if (cls === "ended") {
-    h3.append(el("small", statusLabel(scope.status)));
-  }
-  group.append(h3);
-  if (scope.goal) group.append(el("p", scope.goal, "goal"));
   group.append(renderGraph(scope, ctx));
+  const roster = el("div", undefined, "node-roster");
+  for (const node of scope.nodes.filter((n) => n.kind !== "root")) {
+    const control = button(node.title || node.id, `toolbar-button ${node.id === ctx.selectedNode ? "selected" : ""}`, () => ctx.onSelect(scope, node.id));
+    control.append(el("small", `${node.model || "モデル未取得"} · ${statusLabel(node.status)}`));
+    roster.append(control);
+  }
+  if (roster.children.length) {
+    const list = el("details", undefined, "agent-list");
+    list.append(el("summary", `エージェント一覧 · ${roster.children.length}`), roster);
+    group.append(list);
+  }
   return group;
 }
 
@@ -55,25 +53,58 @@ export function buildProjectSection(view, ctx, failure = "") {
   const section = el("section", undefined, "project");
   section.setAttribute("data-project", view.project.key);
   const heading = el("div", undefined, "project-heading");
-  heading.append(el("h2", view.project.name), el("span", view.project.rootPath, "project-path"));
+  section.setAttribute("aria-label", view.project.name);
+  const controls = el("div", undefined, "project-actions");
+  if (ctx.onNewSession) {
+    const menu = el("details", undefined, "new-session-menu");
+    const summary = el("summary", "＋");
+    summary.setAttribute("aria-label", "新規セッション");
+    summary.title = "新規セッション";
+    menu.append(summary);
+    const choices = el("div", undefined, "new-session-choices");
+    for (const client of ["claude", "codex"]) choices.append(button(client === "claude" ? "Claude" : "Codex", "toolbar-button", () => { menu.open = false; ctx.onNewSession(view.project.key, client); }));
+    menu.append(choices);
+    controls.append(menu);
+  }
   section.append(heading);
   if (failure) section.append(el("p", `Unavailable: ${failure}`, "hint"));
   const sessions = view.sessions || [];
   const graphs = view.graphs || [];
-  const endedBox = el("details", undefined, "ended-sessions");
-  const ended = sessions.filter((s) => !isLive(s));
-  endedBox.append(el("summary", `Ended sessions (${ended.length})`));
-  for (const session of sessions) {
+  const selectedId = graphs.find((g) => `graph:${g.id}` === ctx.selectedScope)?.sessionId || ctx.selectedScope;
+  const picker = el("nav", undefined, "session-picker");
+  picker.setAttribute("aria-label", "セッション");
+
+  const addSession = (session, target) => {
     const scope = sessionScope(session);
-    (isLive(session) ? section : endedBox).append(buildGroup(scope, ctx));
-    // planner のグラフはそのセッションの枠の直後に並べる
-    for (const graph of graphs.filter((g) => g.sessionId === session.id)) {
-      (isLive(session) ? section : endedBox).append(buildGroup(graphScope(graph, sessions), ctx));
-    }
+    const control = button(undefined, session.id === selectedId ? "selected" : "", () => ctx.onSelect(scope, null));
+    control.setAttribute("aria-pressed", String(session.id === selectedId));
+    control.title = `${session.name} · ${session.model || "モデル未取得"} · ${statusLabel(session.status)}`;
+    control.setAttribute("aria-label", `${session.name} · ${statusLabel(session.status)}`);
+    control.append(el("span", "", `session-state on-${statusClass(session.status)}`), el("strong", session.name));
+    target.append(control);
+  };
+  for (const session of sessions.filter(isLive)) addSession(session, picker);
+  heading.append(picker, controls);
+  let archiveBox;
+  const ended = sessions.filter((s) => !isLive(s));
+  if (ended.length) {
+    const archive = el("details", undefined, "ended-sessions");
+    archive.open = ended.some((s) => s.id === ctx.selectedScope);
+    archive.append(el("summary", `履歴 · ${ended.length}`));
+    const list = el("nav", undefined, "session-picker");
+    for (const session of ended) addSession(session, list);
+    archive.append(list);
+    archiveBox = archive;
+  }
+  const selected = sessions.find((s) => s.id === selectedId) || sessions.find(isLive) || sessions[0];
+  if (selected) {
+    if (ctx.onOpenConversation) controls.append(button("会話を開く", "toolbar-button open-conversation", () => ctx.onOpenConversation(sessionScope(selected))));
+    section.append(buildGroup(sessionScope(selected), ctx));
+    for (const graph of graphs.filter((g) => g.sessionId === selected.id)) section.append(buildGroup(graphScope(graph, sessions), ctx));
   }
   for (const graph of graphs.filter((g) => !sessions.some((s) => s.id === g.sessionId))) section.append(buildGroup(graphScope(graph, sessions), ctx));
-  if (!sessions.length && !graphs.length) section.append(el("p", "No sessions yet", "empty"));
-  if (ended.length) section.append(endedBox);
+  if (!sessions.length && !graphs.length) section.append(el("p", "セッションがありません。＋ から開始できます。", "empty"));
+  if (archiveBox) section.append(archiveBox);
   return section;
 }
 

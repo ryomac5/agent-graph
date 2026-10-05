@@ -98,7 +98,7 @@ test("状態表は契約の全 Status を引け、lost と ended は沈んだ灰
   assert.equal(lib.statusClass("denied"), "failed");
   assert.equal(lib.statusClass("waiting_human"), "waiting");
   assert.equal(lib.statusLabel("waiting_human"), "Waiting");
-  assert.equal(lib.statusLabel("lost"), "Lost");
+  assert.equal(lib.statusLabel("lost"), "Lost · 追跡断");
 });
 
 test("隠す処理と畳む処理。× で隠した子孫もまとめ、古い完了の末端は自動で畳む", () => {

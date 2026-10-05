@@ -12,12 +12,22 @@ export const STATUS_CLASS = {
 export const STATUS_LABEL = {
   planned: "Planned", running: "Running", verifying: "Verifying", reviewing: "Reviewing", merging: "Merging",
   waiting: "Waiting", waiting_human: "Waiting", conflict: "Conflict", unverified: "Unverified",
-  done: "Done", idle: "Done", failed: "Failed", rejected: "Rejected", timeout: "Timeout", denied: "Denied",
-  stalled: "Stalled", lost: "Lost", ended: "Ended",
+  done: "Done", idle: "Done", failed: "Failed · 実行失敗", rejected: "Rejected", timeout: "Timeout", denied: "Denied",
+  stalled: "Stalled", lost: "Lost · 追跡断", ended: "Ended",
 };
 
 export function statusClass(status) { return STATUS_CLASS[status] || "planned"; }
 export function statusLabel(status) { return STATUS_LABEL[status] || String(status || ""); }
+
+export function statusDescription(status) {
+  return {
+    failed: "実行または受け入れ検証に失敗しました。出力・検証結果で原因を確認できます。",
+    lost: "終了結果を取得できず、追跡が途切れました。実行の失敗が確認された状態ではありません。",
+    timeout: "制限時間を超えて実行を停止しました。",
+    denied: "割り当て条件や利用枠を満たさず、実行を開始できませんでした。",
+    ended: "セッションは終了しています。会話と委譲の履歴は引き続き確認できます。",
+  }[status] || "";
+}
 
 // 系統。契約の family と executor から引く。分からなければ空
 export function familyOf(node) {

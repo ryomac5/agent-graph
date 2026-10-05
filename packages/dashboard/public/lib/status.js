@@ -7,6 +7,16 @@ export const STATE_TEXT = { running: "Running", waiting: "Waiting", failed: "Fai
 
 export function isLive(session) { return session && statusClass(session.status) !== "ended"; }
 
+// 履歴の失敗・完了件数では稼働を判断しない。待機中の根や動いている planner は残す。
+export function isActiveProject(project) {
+  return Number(project.liveSessions || 0) > 0
+    || Number(project.counts?.running || 0) > 0 || Number(project.counts?.waiting || 0) > 0;
+}
+
+export function visibleProjects(projects, showInactive = false) {
+  return (projects || []).filter((project) => showInactive || isActiveProject(project));
+}
+
 // root を除いた子の件数。dismissed に入っている id は数えない
 export function countNodes(nodes, dismissed = new Set(), prefix = "") {
   const counts = { running: 0, waiting: 0, failed: 0, done: 0 };

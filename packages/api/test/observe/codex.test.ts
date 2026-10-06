@@ -7,6 +7,7 @@ import test from "node:test";
 import type { TestContext } from "node:test";
 import { openLedger, project } from "../../../core/src/ledger/index.ts";
 import { observeCodex, observeCodexFile } from "../../src/observe/codex/index.ts";
+import { openObservationService } from "../../src/service/index.ts";
 
 const OBSERVED = "2026-10-08T00:00:00.000Z";
 const samples = fileURLToPath(new URL("../samples/", import.meta.url));
@@ -281,4 +282,312 @@ test("20 ファイル × 100 行を二度走査しても台帳は各走査で一
     assert.ok(results.every((result) => result.status === (scan === 0 ? "appended" : "duplicate")));
   }
   assert.equal(f.read().length, expectedFacts);
+});
+
+test("既知の補助行は ID がない場合も未対応にならない", (t) => {
+  const f = createFixture(t, "S7");
+  const path = join(f.directory, "rollout-known.jsonl");
+  const items = ["reasoning", "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output",
+    "commandExecution", "fileChange", "web_search_call", "tool_search_call", "tool_search_output", "compaction"];
+  const events = ["token_count", "agent_reasoning", "user_message", "agent_message", "exec_command_begin", "exec_command_end",
+    "exec_command_output_delta", "item_started", "item_completed", "context_compacted", "warning", "error", "thread_settings_applied"];
+  const records = ["turn_context", "compacted", "token_usage_record", "world_state", "inter_agent_communication_metadata"];
+  const methods = ["item/started", "item/agentMessage/delta", "thread/tokenUsage/updated", "serverRequest/resolved",
+    "thread/started", "thread/settings/updated"];
+  const rows = [
+    ...items.map((type) => ({ type })),
+    ...items.map((type) => ({ type: "response_item", payload: { type } })),
+    ...items.map((type) => ({ method: "item/completed", params: { item: { type } } })),
+    ...events.map((type) => ({ type: "event_msg", payload: { type } })),
+    ...records.map((type) => ({ type })),
+    ...methods.map((method) => ({ method })),
+    { record_type: "state" },
+  ];
+  writeFileSync(path, rows.map((row) => JSON.stringify(row)).join("\n") + "\n");
+  assert.deepEqual(observeCodexFile(f.ledger, path, f.options), []);
+  assert.deepEqual(f.read(), []);
+});
+
+test("未対応はファイル・種類・理由で集約し件数を payload に保持する", (t) => {
+  const f = createFixture(t, "S7");
+  const rows = [
+    { timestamp: OBSERVED, type: "session_meta", payload: { id: "fiction-group", timestamp: OBSERVED } },
+    { type: "future_row" }, { type: "future_row" },
+    { type: "response_item", payload: { type: "future_item" } },
+    { type: "response_item", payload: { type: "future_item" } },
+    { type: "response_item", payload: { type: "other_future_item" } },
+  ];
+  const paths = ["rollout-group-a.jsonl", "rollout-group-b.jsonl"].map((name) => join(f.directory, name));
+  for (const path of paths) {
+    writeFileSync(path, rows.map((row) => JSON.stringify(row)).join("\n") + "\n");
+    observeCodexFile(f.ledger, path, f.options);
+  }
+  const facts = f.read();
+  const unsupported = facts.filter((fact) => fact.kind === "observation.unsupported");
+  assert.equal(unsupported.length, 6);
+  assert.deepEqual(unsupported.map((fact) => (fact.payload as { count: number }).count), [2, 2, 1, 2, 2, 1]);
+  for (const path of paths) observeCodexFile(f.ledger, path, f.options);
+  assert.deepEqual(f.read(), facts);
+  const archive = join(f.home, "archived_sessions", "rollout-group-a.jsonl");
+  mkdirSync(join(f.home, "archived_sessions"));
+  renameSync(paths[0], archive);
+  observeCodexFile(f.ledger, archive, f.options);
+  assert.deepEqual(f.read().filter((fact) => fact.kind === "observation.unsupported"), unsupported);
+  appendFileSync(paths[1], JSON.stringify({ type: "future_row" }) + "\n");
+  observeCodexFile(f.ledger, paths[1], f.options);
+  const update = f.read().findLast((fact) => fact.kind === "observation.unsupported")!;
+  assert.equal((update.payload as { count: number }).count, 3);
+  assert.equal(update.supersedes, unsupported[3].fact_id);
+  const after = f.read();
+  observeCodexFile(f.ledger, paths[1], f.options);
+  assert.deepEqual(f.read(), after);
+});
+
+test("件数の異なる sessions と archive の未対応は最大件数だけを追記する", (t) => {
+  const f = createFixture(t, "S7");
+  const live = join(f.directory, "rollout-unsupported.jsonl");
+  const archive = join(f.home, "archived_sessions", "rollout-unsupported.jsonl");
+  const row = JSON.stringify({ timestamp: OBSERVED, type: "future_row", threadId: "fiction-unsupported" }) + "\n";
+  appendFileSync(live, row);
+  assert.ok(f.observe().every((result) => result.status === "appended"));
+  const initial = f.read().find((fact) => fact.kind === "observation.unsupported")!;
+  assert.equal((initial.payload as { count: number }).count, 1);
+  mkdirSync(join(f.home, "archived_sessions"));
+  cpSync(live, archive);
+  assert.ok(f.observe().every((result) => result.status !== "conflict"));
+  assert.equal(f.read().filter((fact) => fact.kind === "observation.unsupported").length, 1);
+
+  for (const [path, count] of [[live, 2], [archive, 3]] as const) {
+    appendFileSync(path, row.repeat(count - 1));
+    const previous = f.read().findLast((fact) => fact.kind === "observation.unsupported")!;
+    const results = f.observe();
+    assert.ok(results.every((result) => result.status !== "conflict"));
+    assert.equal(results.filter((result) => result.status === "appended").length, 1);
+    const facts = f.read();
+    const unsupported = facts.filter((fact) => fact.kind === "observation.unsupported");
+    assert.deepEqual(unsupported.map((fact) => (fact.payload as { count: number }).count),
+      count === 2 ? [1, 2] : [1, 2, 3]);
+    assert.equal(unsupported.at(-1)!.supersedes, previous.fact_id);
+    assert.equal((unsupported.at(-1)!.payload as { count: number }).count, count);
+    for (let scan = 0; scan < 2; scan += 1) {
+      assert.ok(f.observe().every((result) => result.status === "duplicate"));
+      for (const copy of [archive, live]) {
+        assert.ok(observeCodexFile(f.ledger, copy, f.options).every((result) => result.status === "duplicate"));
+      }
+      assert.deepEqual(f.read(), facts);
+    }
+  }
+});
+
+test("legacy の先頭メタの ID を直下の発言へ引き継ぐ", (t) => {
+  const f = createFixture(t, "S9");
+  const path = join(f.directory, "rollout-legacy-head.jsonl");
+  const rows = [
+    { id: "fiction-old-thread", timestamp: "2026-10-06T10:00:00.000Z", instructions: "Fictional instructions.", git: {} },
+    { type: "message", id: "fiction-old-user", role: "user", content: [{ type: "input_text", text: "Fictional input." }] },
+    { type: "reasoning", id: "fiction-old-reasoning", summary: [] },
+    { type: "function_call", call_id: "fiction-call", name: "fiction-tool", arguments: "{}" },
+    { type: "function_call_output", call_id: "fiction-call", output: "Fictional output." },
+    { type: "message", id: "fiction-old-agent", role: "assistant", content: [{ type: "output_text", text: "Fictional reply." }] },
+    { record_type: "state" },
+  ];
+  writeFileSync(path, rows.map((row) => JSON.stringify(row)).join("\n") + "\n");
+  observeCodexFile(f.ledger, path, f.options);
+  const facts = f.read();
+  const view = project(facts);
+  assert.equal(view.conversations[0].native_id, "fiction-old-thread");
+  assert.equal(facts.find((fact) => fact.kind === "conversation.created")?.source_ts, "2026-10-06T10:00:00.000Z");
+  assert.equal(view.messages.length, 2);
+  assert.ok(view.message_memberships.every((membership) => membership.conversation_id === view.conversations[0].id));
+  assert.equal(view.unsupported_observations.length, 0);
+  observeCodexFile(f.ledger, path, f.options);
+  assert.deepEqual(f.read(), facts);
+});
+
+test("legacy の ID をファイル名末尾から解決しメタの ID を優先する", (t) => {
+  const f = createFixture(t, "S9");
+  const id = "00000000-0000-4000-8000-000000000009";
+  const path = join(f.directory, `rollout-2026-10-06T10-00-00-${id}.jsonl`);
+  const message = { type: "message", id: "fiction-filename-message", role: "user", content: [] };
+  writeFileSync(path, JSON.stringify(message) + "\n");
+  observeCodexFile(f.ledger, path, f.options);
+  assert.equal(project(f.read()).conversations[0].native_id, id);
+  assert.equal(project(f.read()).message_memberships.length, 1);
+  assert.equal(project(f.read()).unsupported_observations.length, 0);
+  const before = f.read();
+  observeCodexFile(f.ledger, path, f.options);
+  assert.deepEqual(f.read(), before);
+  const other = join(f.directory, `rollout-other-${id}.jsonl`);
+  writeFileSync(other, JSON.stringify({ id: "fiction-meta-priority", timestamp: OBSERVED }) + "\n"
+    + JSON.stringify({ ...message, id: "fiction-priority-message" }) + "\n");
+  observeCodexFile(f.ledger, other, f.options);
+  assert.ok(project(f.read()).conversations.some((conversation) => conversation.native_id === "fiction-meta-priority"));
+});
+
+test("ID を解決できないファイルは種類によらず一件の未対応にまとめる", (t) => {
+  const f = createFixture(t, "S9");
+  const path = join(f.directory, "rollout-no-thread.jsonl");
+  writeFileSync(path, [
+    { timestamp: OBSERVED, type: "session_meta", payload: { timestamp: OBSERVED } },
+    { type: "message", id: "fiction-message", role: "user", content: [] },
+    { type: "response_item", payload: { type: "message", role: "assistant", content: [] } },
+    { type: "event_msg", payload: { type: "task_started" } },
+  ].map((row) => JSON.stringify(row)).join("\n") + "\n");
+  observeCodexFile(f.ledger, path, f.options);
+  const facts = f.read();
+  assert.equal(facts.length, 1);
+  assert.equal(facts[0].kind, "observation.unsupported");
+  assert.ok(facts[0].kind === "observation.unsupported");
+  assert.equal(facts[0].payload?.reason, "Missing thread identifier");
+  assert.equal((facts[0].payload as { count: number }).count, 4);
+  observeCodexFile(f.ledger, path, f.options);
+  assert.deepEqual(f.read(), facts);
+});
+
+function openFixtureService(f: ReturnType<typeof createFixture>) {
+  return openObservationService({ home: f.home, dbPath: join(f.home, "service.db"),
+    env: { CODEX_HOME: f.home, CLAUDE_CONFIG_DIR: join(f.home, "claude") } });
+}
+
+test("常駐の増分読み取りは未対応を 100 件から累積し、複製・再起動でも二重に数えない", (t) => {
+  const f = createFixture(t, "S7");
+  const path = join(f.directory, "rollout-exec.jsonl");
+  const archive = join(f.home, "archived_sessions", "rollout-exec.jsonl");
+  const row = JSON.stringify({ timestamp: OBSERVED, type: "future_row" }) + "\n";
+  appendFileSync(path, row.repeat(100));
+  mkdirSync(join(f.home, "archived_sessions"));
+  cpSync(path, archive);
+  let service = openFixtureService(f);
+  const readUnsupported = () => service.ledger.readSince(0, Number.MAX_SAFE_INTEGER)
+    .filter((fact) => fact.kind === "observation.unsupported");
+  try {
+    service.ingestOnce();
+    assert.deepEqual(readUnsupported().map((fact) => (fact.payload as { count: number }).count), [100]);
+    appendFileSync(path, row.repeat(5));
+    service.ingestOnce();
+    const facts = readUnsupported();
+    assert.deepEqual(facts.map((fact) => (fact.payload as { count: number }).count), [100, 105]);
+    assert.equal(facts[1].supersedes, facts[0].fact_id);
+    assert.ok(Number((facts[1].payload as { last_offset: number }).last_offset) > Number((facts[0].payload as { last_offset: number }).last_offset));
+    assert.match(String((facts[1].payload as { last_hash: string }).last_hash), /^[a-f0-9]{64}$/);
+    assert.equal(service.ingestOnce().unsupported, 0);
+    assert.equal(service.ingestOnce().unsupported, 0);
+  } finally { service.close(); }
+  service = openFixtureService(f);
+  try {
+    assert.equal(service.ingestOnce().unsupported, 0);
+    appendFileSync(path, row.repeat(7));
+    assert.equal(service.ingestOnce().unsupported, 1);
+    assert.deepEqual(readUnsupported().map((fact) => (fact.payload as { count: number }).count), [100, 105, 112]);
+    assert.equal(service.ingestOnce().unsupported, 0);
+    assert.equal(service.ingestOnce().unsupported, 0);
+  } finally { service.close(); }
+});
+
+test("増分読み取りで種類別の offset を保ち、ID 不明の集約も累積する", (t) => {
+  const f = createFixture(t, "S7");
+  const path = join(f.directory, "rollout-no-id.jsonl");
+  const message = JSON.stringify({ type: "message", role: "user", content: [] }) + "\n";
+  writeFileSync(path, message.repeat(100));
+  const service = openFixtureService(f);
+  try {
+    service.ingestOnce();
+    appendFileSync(path, message.repeat(5));
+    service.ingestOnce();
+    assert.equal(service.ingestOnce().unsupported, 0);
+    const missing = service.ledger.readSince(0, Number.MAX_SAFE_INTEGER)
+      .filter((fact) => fact.kind === "observation.unsupported");
+    assert.deepEqual(missing.map((fact) => (fact.payload as { count: number }).count), [100, 105]);
+    const other = join(f.directory, "rollout-exec.jsonl");
+    const row = (type: string) => JSON.stringify({ timestamp: OBSERVED, type }) + "\n";
+    appendFileSync(other, row("future_a").repeat(100) + row("future_b").repeat(200));
+    service.ingestOnce();
+    appendFileSync(other, row("future_a").repeat(5) + row("future_b").repeat(7));
+    service.ingestOnce();
+    const unknown = service.ledger.readSince(0, Number.MAX_SAFE_INTEGER)
+      .filter((fact) => fact.kind === "observation.unsupported" && fact.payload?.reason !== "Missing thread identifier");
+    assert.deepEqual(unknown.map((fact) => (fact.payload as { count: number }).count), [100, 200, 105, 207]);
+    assert.equal(service.ingestOnce().unsupported, 0);
+  } finally { service.close(); }
+});
+
+test("常駐と再起動で legacy メタを優先し、旧い未対応 cursor より前の発言も取り込む", (t) => {
+  const f = createFixture(t, "S7");
+  const id = "00000000-0000-4000-8000-000000000019";
+  for (const name of ["rollout-legacy-no-uuid.jsonl", `rollout-legacy-${id}.jsonl`]) {
+    const path = join(f.directory, name);
+    const rows = [
+      { id: `fiction-meta-${name}`, timestamp: OBSERVED },
+      ...["first", "middle", "last"].map((suffix) => ({ type: "message", id: `fiction-${name}-${suffix}`,
+        role: "user", content: [{ type: "input_text", text: "Fictional message." }] })),
+    ];
+    writeFileSync(path, rows.map((row) => JSON.stringify(row)).join("\n") + "\n");
+  }
+  const dbPath = join(f.home, "service.db");
+  const ledger = openLedger(dbPath);
+  // 旧い実装が保存した最終行の cursor を再現し、履歴を消さずに補う。
+  for (const name of ["rollout-legacy-no-uuid.jsonl", `rollout-legacy-${id}.jsonl`]) {
+    const bytes = readFileSync(join(f.directory, name));
+    const offset = bytes.lastIndexOf(10, bytes.length - 2) + 1;
+    ledger.append({ source: "rollout-codex", source_event_id: `fiction-old-${name}`, kind: "observation.unsupported",
+      subject: `observation:fiction-old-${name}`, source_ts: OBSERVED, confidence: "confirmed",
+      cursor: JSON.stringify({ file_id: name, offset, hash: "fiction-old-hash" }),
+      payload: { source_kind: "rollout-codex", reason: "Missing thread identifier", file_path: join(f.directory, name),
+        format_name: "legacy", format_version: "unknown" } });
+  }
+  ledger.close();
+  let service = openFixtureService(f);
+  try {
+    service.ingestOnce();
+    const initial = service.ledger.readSince(0, Number.MAX_SAFE_INTEGER);
+    assert.equal(project(initial).messages.filter((message) => message.native_id?.startsWith("fiction-rollout-legacy")).length, 6);
+    for (const name of ["rollout-legacy-no-uuid.jsonl", `rollout-legacy-${id}.jsonl`]) {
+      appendFileSync(join(f.directory, name), JSON.stringify({ type: "message", id: `fiction-${name}-added`,
+        role: "assistant", content: [] }) + "\n");
+    }
+    assert.equal(service.ingestOnce().unsupported, 0);
+    assert.equal(service.ingestOnce().appended, 0);
+  } finally { service.close(); }
+  service = openFixtureService(f);
+  try {
+    assert.equal(service.ingestOnce().appended, 0);
+    const facts = service.ledger.readSince(0, Number.MAX_SAFE_INTEGER);
+    const view = project(facts);
+    const legacy = view.messages.filter((message) => message.native_id?.startsWith("fiction-rollout-legacy"));
+    assert.equal(legacy.length, 8);
+    for (const message of legacy) {
+      const membership = view.message_memberships.find((entry) => entry.message_id === message.id)!;
+      const conversation = view.conversations.find((entry) => entry.id === membership.conversation_id)!;
+      assert.ok(conversation.native_id?.startsWith("fiction-meta-rollout-legacy"));
+    }
+    assert.equal(facts.filter((fact) => fact.kind === "observation.unsupported").length, 2);
+  } finally { service.close(); }
+});
+
+test("offset のない旧い集約を再起動時に全行から補い、以降は増分で数える", (t) => {
+  const f = createFixture(t, "S7");
+  const path = join(f.directory, "rollout-exec.jsonl");
+  const row = JSON.stringify({ timestamp: OBSERVED, type: "future_row" }) + "\n";
+  const offset = readFileSync(path).length;
+  appendFileSync(path, row.repeat(105));
+  const key = JSON.stringify(["rollout-exec.jsonl", "future_row", "unknown", "Unsupported rollout record"]);
+  const ledger = openLedger(join(f.home, "service.db"));
+  ledger.append({ source: "rollout-codex", source_event_id: `${key}:unsupported:100`,
+    kind: "observation.unsupported", subject: `observation:codex:${key}`, source_ts: OBSERVED,
+    confidence: "confirmed", cursor: JSON.stringify({ file_id: "rollout-exec.jsonl", offset, hash: "fiction-old-hash" }),
+    payload: { source_kind: "rollout-codex", file_path: path, format_name: "paginated", format_version: "unknown",
+      reason: "Unsupported rollout record", ...{ count: 100 } } });
+  ledger.close();
+  const service = openFixtureService(f);
+  try {
+    service.ingestOnce();
+    appendFileSync(path, row.repeat(7));
+    service.ingestOnce();
+    const facts = service.ledger.readSince(0, Number.MAX_SAFE_INTEGER)
+      .filter((fact) => fact.kind === "observation.unsupported");
+    assert.deepEqual(facts.map((fact) => (fact.payload as { count: number }).count), [100, 105, 112]);
+    assert.equal(facts[1].supersedes, facts[0].fact_id);
+    assert.equal(facts[2].supersedes, facts[1].fact_id);
+    assert.equal(service.ingestOnce().unsupported, 0);
+  } finally { service.close(); }
 });

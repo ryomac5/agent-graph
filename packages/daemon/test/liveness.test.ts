@@ -129,10 +129,17 @@ test("常駐の判定は、codex app-server と Claude のバックグラウン�
     [87592, "3051 claude -c"],
     [3051, "3046 -zsh"],
     [19173, "25610 /Users/r/.codex/bin/codex app-server --listen unix"],
+    // ChatGPT アプリの Codex。codex と app-server のあいだに設定が挟まる
+    [77447, "84436 /Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex -c features.code_mode_host=true app-server --analytics-default-enabled -c plugins.x.enabled=true"],
+    [70001, "3051 codex -c model=gpt-6.1-sol"],
+    [70002, "3051 /Users/r/.nodebrew/current/bin/node /Users/r/.nodebrew/current/bin/codex exec --json 調べて"],
   ]);
   const ps = async (pid: number) => { const line = table.get(pid); if (!line) throw new Error("no such process"); return line; };
   assert.equal(await isHostProcess(88265, ps), true);
   assert.equal(await isHostProcess(19173, ps), true);
+  assert.equal(await isHostProcess(77447, ps), true, "設定が挟まった app-server も常駐とする");
+  assert.equal(await isHostProcess(70001, ps), false, "ターミナルの Codex は常駐ではない");
+  assert.equal(await isHostProcess(70002, ps), false, "codex exec は常駐ではない");
   assert.equal(await isHostProcess(87592, ps), false);
   assert.equal(await isHostProcess(99999, ps), false);
 });

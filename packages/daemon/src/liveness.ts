@@ -32,7 +32,9 @@ export async function isProcessAlive(pid: number, startedAt: string | undefined)
 }
 
 // 長く常駐して、多くのスレッドの親になるプロセス。pid が生きていてもセッションが生きているとは言えない
-const HOST_PROCESS = /codex(-\S+)? app-server|codex-code-mode-host/;
+// codex と app-server のあいだに設定が挟まる形もある。ChatGPT アプリの Codex は
+// `codex -c features.code_mode_host=true app-server …` で起動する
+const HOST_PROCESS = /(^|\/)codex(-\S+)?(\s+\S+)*?\s+app-server(\s|$)|codex-code-mode-host/;
 // Claude Code のバックグラウンドセッションを抱える常駐プロセス。ターミナルを閉じても子の Claude を生かし続ける
 const CLAUDE_HOST = /--bg-pty-host|claude daemon run/;
 

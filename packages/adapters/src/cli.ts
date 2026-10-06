@@ -14,6 +14,14 @@ const daemonPath = fileURLToPath(new URL("../../daemon/src/main.ts", import.meta
 const hookPath = fileURLToPath(new URL("./hook.ts", import.meta.url));
 const nodePath = process.execPath;
 const args = process.argv.slice(2);
+const relayIndex = args.indexOf("--relay");
+let relay: "legacy" | "v2" = "legacy";
+if (relayIndex !== -1) {
+  const value = args[relayIndex + 1];
+  if (value !== "legacy" && value !== "v2") throw new Error("--relay requires legacy or v2");
+  relay = value;
+  args.splice(relayIndex, 2);
+}
 if (args.includes("--setup")) {
   const unknown = args.find((flag) => !["--setup", "--dry-run", "--doctor", "--skip-login"].includes(flag));
   if (unknown) throw new Error(`Unknown option: ${unknown}`);
@@ -21,7 +29,7 @@ if (args.includes("--setup")) {
   catch (error) { process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; }
 } else {
 const dryRun = args.includes("--dry-run");
-const pluginOptions = { shimPath, hookPath, nodePath };
+const pluginOptions = { shimPath, hookPath, nodePath, relay };
 const stateHome = process.env.XDG_STATE_HOME || join(homedir(), ".local", "state");
 const logDir = join(stateHome, "agent-graph", "run");
 const plistDir = join(homedir(), "Library", "LaunchAgents");
@@ -40,7 +48,7 @@ for (let i = 0; i < args.length; i++) {
   const flag = args[i];
   if (flag === "--dry-run") continue;
   if (flag === "--print-codex-overrides") {
-    process.stdout.write(`${renderCodexOverrides({ shimPath, nodePath }).join("\n")}\n`);
+    process.stdout.write(`${renderCodexOverrides({ shimPath, nodePath, relay }).join("\n")}\n`);
     continue;
   }
   if (flag === "--launchd") {
@@ -68,8 +76,8 @@ for (let i = 0; i < args.length; i++) {
     else generateMarketplace(options);
     process.stdout.write(`claude plugin marketplace add ${JSON.stringify(path)}\nclaude plugin install agent-graph@agent-graph-local\n`);
   } else if (flag === "--codex-config") {
-    if (dryRun) process.stdout.write(mergeCodexConfig(readExisting(path), { shimPath, nodePath }));
-    else installCodexConfig({ configPath: path, shimPath, nodePath });
+    if (dryRun) process.stdout.write(mergeCodexConfig(readExisting(path), { shimPath, nodePath, relay }));
+    else installCodexConfig({ configPath: path, shimPath, nodePath, relay });
   } else if (flag === "--uninstall-codex-config") {
     if (dryRun) process.stdout.write(removeCodexConfig(readExisting(path)));
     else uninstallCodexConfig({ configPath: path });

@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
 import { PROJECTION_TABLES } from "../../../core/src/ledger/rebuild.ts";
+import { forwardScreenCommand } from "./commands.ts";
 import type { openObservationService } from "../service/index.ts";
 import { pollObservation } from "../service/poll.ts";
 import { PROJECTION_POLL_MS } from "../service/index.ts";
@@ -86,7 +87,7 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
         for (const patch of patches) sendPatch(socket, patch);
       } else if (message.type === "cmd" && clients.has(socket) && typeof message.cmd_id === "string"
         && message.cmd_id.length > 0 && typeof message.command === "string" && message.command.length > 0) {
-        void runner.request({ type: "req", cmd_id: message.cmd_id, command: message.command, payload: message.payload }).then((result) => {
+        void runner.request(forwardScreenCommand(message)).then((result) => {
           const { type, ...ack } = result;
           send(socket, { type: "ack", ...ack });
         });

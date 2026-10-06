@@ -9,6 +9,7 @@ import { ClaudeHost } from "../hosts/claude/index.ts";
 import { CodexHost } from "../hosts/codex/index.ts";
 import { secureSocketDirectory } from "../paths.ts";
 import { RunnerRuntime } from "../runtime.ts";
+import { RunnerPlanner } from "../planner.ts";
 import { MAX_FRAME_BYTES, PROTOCOL_VERSION, RunnerProtocol, type RunnerEvent } from "../socket.ts";
 
 const SOCKET_PROBE_TIMEOUT_MS = 5000;
@@ -172,8 +173,10 @@ async function listen(server: Server, path: string): Promise<void> {
 export async function serveMcpRunner(ledger: Ledger, path: string,
   options: IntakeOptions & { hosts?: readonly AgentHost[]; isolation?: "shared" | "worktree" } = {}) {
   let ready = false;
+  const planner = new RunnerPlanner(path);
   const fallback = new RunnerProtocol((request) => {
     if (!ready) throw new Error("Runner is recovering");
+    if (request.command === "planner.run" || request.command === "planner.status") return planner.command(request);
     return intake.command(request);
   });
   const protocol = new McpProtocol({
@@ -194,7 +197,10 @@ export async function serveMcpRunner(ledger: Ledger, path: string,
   reconcile.unref();
   return { intake, runtime, protocol, async close() {
     ready = false; clearInterval(reconcile); protocol.disconnect(); fallback.disconnect();
-    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-    await intake.close();
+    try { await planner.close(); } finally {
+      try { await intake.close(); } finally {
+        await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      }
+    }
   } };
 }

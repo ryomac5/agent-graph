@@ -206,7 +206,8 @@ export class Store {
   // 最初の人の指示で番号を付ける。fork なら親の番号を継ぐ。付けた理由は session.named に残す。
   // すでに番号があれば何もしない。付けた名前を返す。
   // allocate を渡すと、自前の数え方の代わりにそれで番号を取る。undefined を返したら今は付けない
-  nameSessionAtFirstPrompt(id: string, at: string, allocate?: () => string | undefined): string | undefined {
+  // reason は付けた理由。キットの counter から取った番号は kit にし、daemon が自分で数えた番号と見分ける
+  nameSessionAtFirstPrompt(id: string, at: string, allocate?: () => string | undefined, reason: "first_prompt" | "kit" = "first_prompt"): string | undefined {
     this.db.exec("BEGIN IMMEDIATE");
     let name: string | undefined;
     try {
@@ -222,7 +223,7 @@ export class Store {
         if (name !== undefined) this.db.prepare("UPDATE sessions SET name = ? WHERE id = ?").run(name, id);
         if (name !== undefined) this.appendEvent({ id: ulid(), ts: at, kind: "session.named", repo: String(session.repo_key), session: id,
           trace: { traceId: String(session.trace_id), spanId: newSpanId() },
-          payload: { sessionId: id, name, reason: "first_prompt", ...(parent ? { forkOf: parentId } : {}) } }, { notify: false });
+          payload: { sessionId: id, name, reason: parent ? "first_prompt" : reason, ...(parent ? { forkOf: parentId } : {}) } }, { notify: false });
       }
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
@@ -232,9 +233,10 @@ export class Store {
 
   // 外から決まった名前に付け替える。旧版のキットが herdr と hook で使う番号に合わせるときに使う。
   // 同じ名前なら何もしない。付け替えたら true
-  renameSession(id: string, name: string, at: string, reason: "kit"): boolean {
+  // record を真にすると、名前が同じでも付けた記録を残す。キットの counter から予約した番号が元と同じだったときに使う
+  renameSession(id: string, name: string, at: string, reason: "kit" | "unprompted", record = false): boolean {
     const session = this.db.prepare("SELECT name, repo_key, trace_id FROM sessions WHERE id = ?").get(id);
-    if (!session || session.name === name) return false;
+    if (!session || (session.name === name && !record)) return false;
     this.db.prepare("UPDATE sessions SET name = ? WHERE id = ?").run(name, id);
     this.appendEvent({ id: ulid(), ts: at, kind: "session.named", repo: String(session.repo_key), session: id,
       trace: { traceId: String(session.trace_id), spanId: newSpanId() }, payload: { sessionId: id, name, reason } }, { notify: false });

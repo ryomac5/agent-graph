@@ -53,7 +53,7 @@ export function allocateKitName(rootPath: string, run: (script: string, path: st
 // 最初の人の指示で番号を付ける。キットのあるリポジトリでは、キットと番号を取り合わない。
 // Claude の会話はキットの hook が付けるので待ち、Codex などキットが付けない会話はキットの counter から取る
 export function nameAtFirstPrompt(store: Store, sessionId: string, at: string): void {
-  const row = store.db.prepare(`SELECT s.client, r.root_path FROM sessions s JOIN repos r ON r.key = s.repo_key WHERE s.id = ?`).get(sessionId);
+  const row = store.db.prepare(`SELECT s.client, s.repo_key, r.root_path FROM sessions s JOIN repos r ON r.key = s.repo_key WHERE s.id = ?`).get(sessionId);
   const root = row ? String(row.root_path) : "";
   if (!row || !hasKit(root)) { store.nameSessionAtFirstPrompt(sessionId, at); return; }
   if (row.client === "claude") {
@@ -61,7 +61,7 @@ export function nameAtFirstPrompt(store: Store, sessionId: string, at: string): 
     store.nameSessionAtFirstPrompt(sessionId, at, () => undefined);
     return;
   }
-  store.nameSessionAtFirstPrompt(sessionId, at, () => allocateKitName(root));
+  store.nameSessionAtFirstPrompt(sessionId, at, () => allocateFree(store, String(row.repo_key), sessionId, () => allocateKitName(root)), "kit");
 }
 
 // 読めないときや形が違うときは空。書きかけの JSON も空として次の回に回す
@@ -83,9 +83,27 @@ export function readKitNames(rootPath: string): Map<string, string> {
   return names;
 }
 
+// キットの counter から、DB のほかの会話が使っていない番号を取る
+function allocateFree(store: Store, repoKey: string, sessionId: string, take: () => string): string {
+  const used = store.db.prepare("SELECT 1 FROM sessions WHERE repo_key = ? AND name = ? AND id != ?");
+  for (;;) {
+    const name = take();
+    if (!used.get(repoKey, name, sessionId)) return name;
+  }
+}
+
+// daemon が昔、キットの counter を使わずに自分で付けた番号か。キットの counter から取った番号は reason が kit
+function selfNumbered(store: Store, sessionId: string): boolean {
+  const last = store.db.prepare(`SELECT json_extract(payload, '$.reason') AS reason FROM events
+    WHERE kind = 'session.named' AND session_id = ? ORDER BY ts DESC, id DESC LIMIT 1`).get(sessionId);
+  return last?.reason !== "kit";
+}
+
 // キットの番号に名前をそろえる。付け替えた数を返す。
 // 1. キットが番号を書いた会話は、その番号にする
-// 2. キットの番号と重なった、キットが知らない会話は、キットの counter から取り直す。fork で親の番号を継いだものは除く
+// 2. キットが知らない会話で、daemon が昔自分で付けた番号のものは、キットの counter から取り直す。
+//    人の指示を一度も受けていない会話は、番号を外す
+//    自分で数えた番号はキットのこれからの番号と重なりうるので、今重なっていなくても取り直す。fork で親の番号を継いだものは除く
 // 3. 番号を待っている Claude の会話で、待つ時間を過ぎてもキットが書かなかったものは、キットの counter から取る
 export function syncKitNames(store: Store, now = new Date(), allocate: (rootPath: string) => string = (root) => allocateKitName(root)): number {
   let renamed = 0;
@@ -93,31 +111,34 @@ export function syncKitNames(store: Store, now = new Date(), allocate: (rootPath
   for (const repo of listRepos(store.db)) {
     if (!hasKit(repo.rootPath)) continue;
     const names = readKitNames(repo.rootPath);
-    const sessions = listSessions(store.db, repo.key);
-    for (const session of sessions) {
+    for (const session of listSessions(store.db, repo.key)) {
       const name = names.get(session.id);
       if (name) {
         pending.delete(session.id);
         if (name !== session.name && store.renameSession(session.id, name, at, "kit")) renamed++;
       }
     }
-    const kitOwned = new Map<string, string>();
-    for (const [id, name] of names) kitOwned.set(name, id);
     for (const session of listSessions(store.db, repo.key)) {
-      if (names.has(session.id) || session.name === UNNAMED) continue;
-      const owner = kitOwned.get(session.name);
-      if (!owner || owner === session.id) continue;
+      if (names.has(session.id) || session.name === UNNAMED || !selfNumbered(store, session.id)) continue;
       const forked = store.db.prepare(`SELECT 1 FROM events WHERE kind = 'session.forked' AND session_id = ?
         AND json_extract(payload, '$.parentSessionId') IN (SELECT id FROM sessions WHERE name = ?)`).get(session.id, session.name);
       if (forked) continue;
-      if (store.renameSession(session.id, allocate(repo.rootPath), at, "kit")) renamed++;
+      // 人の指示を一度も受けていない会話は、今の決まりでは番号を持たない。番号を予約せずに外す
+      if (!store.db.prepare("SELECT 1 FROM turns WHERE session_id = ? AND prompt != '' AND prompt NOT LIKE '<%'").get(session.id)) {
+        if (store.renameSession(session.id, UNNAMED, at, "unprompted")) renamed++;
+        continue;
+      }
+      // 予約した番号が元と同じでも記録を残す。残さないと次の回にまた取り直してしまう
+      const name = allocateFree(store, repo.key, session.id, () => allocate(repo.rootPath));
+      store.renameSession(session.id, name, at, "kit", true);
+      if (name !== session.name) renamed++;
     }
     for (const session of listSessions(store.db, repo.key)) {
       const since = pending.get(session.id);
       if (!since || session.name !== UNNAMED || names.has(session.id)) continue;
       if (now.getTime() - Date.parse(since) < KIT_GRACE_MS) continue;
       pending.delete(session.id);
-      if (store.nameSessionAtFirstPrompt(session.id, at, () => allocate(repo.rootPath)) !== undefined) renamed++;
+      if (store.nameSessionAtFirstPrompt(session.id, at, () => allocateFree(store, repo.key, session.id, () => allocate(repo.rootPath)), "kit") !== undefined) renamed++;
     }
   }
   return renamed;

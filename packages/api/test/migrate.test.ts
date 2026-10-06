@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -7,6 +8,7 @@ import test from "node:test";
 import type { TestContext } from "node:test";
 import { openLedger, project } from "../../core/src/ledger/index.ts";
 import { migrations } from "../../core/src/store/migrations.ts";
+import type { MigrationReport } from "../src/migrate/index.ts";
 import { migrateLegacyDatabases } from "../src/migrate/index.ts";
 
 const TS = "2026-01-01T00:00:00.000Z";
@@ -245,4 +247,124 @@ test("複数の旧 DB の同じ行 ID は別々に取り込む", async (t) => {
   assert.equal(facts.filter((fact) => fact.kind === "task.created").length, 2);
   assert.deepEqual(await migrateLegacyDatabases([second.path, first.path], first.ledger), report);
   assert.deepEqual(first.ledger.readSince(0, 100), facts);
+});
+
+test("planner は作業として起源を残し、委譲との確かな関係を二重に作らない", async (t) => {
+  const { path, db, ledger, addSession } = createFixture(t);
+  addSession("planner");
+  addSession("child");
+  db.prepare("UPDATE sessions SET client = 'planner', goal = 'plan work' WHERE id = 'planner'").run();
+  db.prepare(`INSERT INTO delegations (id, repo_key, session_id, role, title, status)
+    VALUES ('planned', 'old', 'planner', 'implement', 'planned task', 'done')`).run();
+  db.prepare("INSERT INTO delegation_rounds VALUES ('planned', 1, 'request', 'implement', ?)").run(TS);
+  const report = await migrateLegacyDatabases([path], ledger);
+  const facts = ledger.readSince(0, 1000);
+  const projection = project(facts);
+  const plannerTask = facts.find((fact) => fact.kind === "task.created" && fact.payload?.purpose === "plan work")!;
+  assert.equal((plannerTask.payload as { origin?: string }).origin, "planner");
+  assert.equal(projection.tasks.length, 2);
+  assert.deepEqual(projection.conversations.map((conversation) => conversation.native_id), ["child"]);
+  assert.equal(projection.runs.length, 1);
+  assert.equal(projection.delegations[0].request_id, "planned");
+  assert.equal(projection.delegations[0].state, "done");
+  assert.equal(projection.delegations[0].parent_run_id, undefined);
+  const relation = projection.relations.find((relation) => relation.type === "delegated")!;
+  assert.equal(relation.from_id, plannerTask.subject.slice("task:".length));
+  assert.equal(relation.to_id, projection.delegations[0].id);
+  assert.equal(relation.confidence, "confirmed");
+  assert.equal(report.unsupported, 0);
+  assert.equal(report.unknown, 0);
+  assert.equal(report.inferred, 0);
+  assert.deepEqual(report.errors, []);
+  assert.equal(report.rows.sessions, 2);
+  assert.deepEqual(report.facts, {
+    "project.created": 1, "task.created": 2, "alias.created": 2,
+    "conversation.created": 1, "run.created": 1, "run.state_changed": 1,
+    "delegation.created": 1, "relation.created": 1, "delegation.state_changed": 1, "delegation.attempt_created": 1,
+  });
+  assert.equal(report.rows.graphs, undefined);
+  assert.equal(report.rows.tasks, undefined);
+  assert.deepEqual(await migrateLegacyDatabases([path], ledger), report);
+  assert.deepEqual(ledger.readSince(0, 1000), facts);
+});
+
+test("未知の client と写せない行は未対応にし、後続行と DB を最後まで写す", async (t) => {
+  const first = createFixture(t, "first");
+  const second = createFixture(t, "second");
+  first.addSession("unknown");
+  first.addSession("valid", "ended", "idle");
+  second.addSession("valid");
+  first.db.prepare("UPDATE sessions SET client = 'future-client' WHERE id = 'unknown'").run();
+  first.db.prepare("UPDATE sessions SET source_thread_id = 'unseen' WHERE id = 'valid'").run();
+  first.db.prepare("INSERT INTO turns (id, session_id, at, prompt) VALUES ('unsupported', 'unknown', ?, 'text'), ('valid', 'valid', ?, 'text')").run(TS, TS);
+  first.db.prepare(`INSERT INTO delegations (id, repo_key, session_id, role, title, status, scope)
+    VALUES ('broken', 'first', 'valid', 'implement', 'broken JSON', 'pending', '{'),
+      ('valid', 'first', 'valid', 'implement', 'valid', 'done', '[]'),
+      ('unknown-parent', 'first', 'unknown', 'implement', 'unknown parent', 'pending', '[]')`).run();
+  first.db.prepare("INSERT INTO delegation_requests VALUES ('valid', '{')").run();
+  first.db.prepare("INSERT INTO delegation_rounds VALUES ('broken', 1, 'request', 'text', ?), ('valid', 1, 'request', 'text', ?)").run(TS, TS);
+  first.db.exec("PRAGMA ignore_check_constraints = ON");
+  first.db.prepare(`INSERT INTO delegations (id, repo_key, session_id, role, title, status, kind)
+    VALUES ('future-kind', 'first', 'valid', 'implement', 'future', 'pending', 'future-kind')`).run();
+  first.db.prepare("INSERT INTO delegation_rounds VALUES ('valid', 2, 'future-kind', 'text', ?)").run(TS);
+  const report = await migrateLegacyDatabases([first.path, second.path], first.ledger);
+  const facts = first.ledger.readSince(0, 1000);
+  const projection = project(facts);
+  assert.equal(report.databases, 2);
+  assert.equal(report.rows.sessions, 3);
+  assert.equal(report.unsupported, 7);
+  assert.equal(report.facts["observation.unsupported"], 7);
+  assert.equal(report.facts["task.created"], 2);
+  assert.equal(report.facts["delegation.created"], 2);
+  assert.equal(report.facts["delegation.attempt_created"], 1);
+  assert.equal(report.unknown, 2);
+  assert.equal(report.inferred, 2);
+  assert.deepEqual(report.errors, []);
+  assert.equal(projection.messages.length, 1);
+  assert.equal(projection.delegations.find((row) => row.request_id === "valid")?.state, "done");
+  assert.equal(projection.delegations.find((row) => row.request_id === "unknown-parent")?.parent.confidence, "unknown");
+  assert.ok(facts.some((fact) => fact.kind === "observation.unsupported" && fact.payload?.reason?.includes("future-client")));
+  assert.equal(Object.values(report.facts).reduce((total, count) => total + count!, 0), facts.length);
+  assert.deepEqual(await migrateLegacyDatabases([first.path, second.path], first.ledger), report);
+  assert.deepEqual(first.ledger.readSince(0, 1000), facts);
+});
+
+test("CLI は読めない DB を誤り一覧へ入れ、planner と未知 client を移して終了コード 0 と JSON を返す", (t) => {
+  const { directory, path, db, addSession } = createFixture(t);
+  addSession("planner");
+  addSession("unknown");
+  addSession("valid");
+  db.prepare("UPDATE sessions SET client = 'planner' WHERE id = 'planner'").run();
+  db.prepare("UPDATE sessions SET client = 'future-client' WHERE id = 'unknown'").run();
+  db.prepare(`INSERT INTO delegations (id, repo_key, session_id, role, title, status)
+    VALUES ('planned', 'old', 'planner', 'implement', 'task', 'done')`).run();
+  const unreadable = join(directory, "broken.db");
+  writeFileSync(unreadable, "not a sqlite database");
+  const original = readFileSync(path);
+  const destination = join(directory, "ledger.db");
+  function runMigration(): MigrationReport {
+    const result = spawnSync(process.execPath, [new URL("../src/cli.ts", import.meta.url).pathname,
+      "migrate", "--from", directory, "--db", destination], { encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    return JSON.parse(result.stdout);
+  }
+  const report = runMigration();
+  assert.equal(report.databases, 1);
+  assert.equal(report.unsupported, 1);
+  assert.equal(report.facts["delegation.created"], 1);
+  assert.equal(report.facts["relation.created"], 1);
+  assert.equal(report.facts["task.created"], 2);
+  assert.equal(report.facts["conversation.created"], 1);
+  assert.equal(report.unknown, 0);
+  assert.equal(report.inferred, 0);
+  assert.equal(report.errors.length, 1);
+  assert.equal(report.errors[0].path, unreadable);
+  assert.ok(report.errors[0].reason);
+  const ledger = openLedger(destination);
+  t.after(() => ledger.close());
+  const facts = ledger.readSince(0, 1000);
+  assert.equal(Object.values(report.facts).reduce((total, count) => total + count!, 0), facts.length);
+  assert.deepEqual(runMigration(), report);
+  assert.deepEqual(ledger.readSince(0, 1000), facts);
+  assert.deepEqual(readFileSync(path), original);
 });

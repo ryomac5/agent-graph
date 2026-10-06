@@ -2,6 +2,8 @@ import type { TraceContext } from "./trace.ts";
 
 export type EventKind =
   | "session.started"
+  | "session.forked"
+  | "session.named"
   | "delegation.requested"
   | "assignment.decided"
   | "execution.started"
@@ -16,6 +18,10 @@ export type EventKind =
 // 仮: payload の構造は設計書に未定義のため、各イベントの最小必須項目に留める。
 export interface EventPayload {
   "session.started": { sessionId: string };
+  // --fork-session で起きた会話の親。番号を付けるときに親の番号を継ぐ
+  "session.forked": { sessionId: string; parentSessionId: string };
+  // 番号を付けた。reason は最初の人の指示。fork なら forkOf に親を残す
+  "session.named": { sessionId: string; name: string; reason: "first_prompt"; forkOf?: string };
   "delegation.requested": { delegationId: string; task: string };
   "assignment.decided": { delegationId: string; executor: "claude" | "codex"; model: string; reason: string[]; policyVersion: string };
   "execution.started": { delegationId: string };

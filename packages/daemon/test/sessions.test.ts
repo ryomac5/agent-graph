@@ -8,6 +8,7 @@ import type { TestContext } from "node:test";
 import { repoKey, stateDbPath } from "../../core/src/paths.ts";
 import { openStore, type Store } from "../../core/src/store/store.ts";
 import { endSession, NotFoundError, observe, registerSession, summarize } from "../src/sessions.ts";
+import { buildProjectView } from "../src/http/views.ts";
 import { startHttpServer } from "../src/http/server.ts";
 import { reconcileLiveness } from "../src/liveness.ts";
 
@@ -32,7 +33,7 @@ test("セッション登録は git ルートを解決し、再送でも開始イ
   assert.equal(session.id, body.id);
   assert.equal(session.repo_key, key);
   assert.equal(session.client, "claude");
-  assert.equal(session.name, "test-001");
+  assert.equal(session.name, "", "登録の時点では番号を付けない");
   assert.equal(session.status, "running");
   const events = store.listEvents();
   assert.equal(events.length, 1);
@@ -106,11 +107,13 @@ test("POST /api/sessions は登録に 201、不正な body に 400 を返す", a
   assert.equal((await fetch(url, { method: "POST", headers, body: JSON.stringify({ id: "s", cwd, client: "claude" }) })).status, 201);
 });
 
-test("登録はリポジトリごとの連番で名前を振り、再登録では変えず、model を記録し、pid は受けない", async (t) => {
+test("最初の人の指示でリポジトリごとの連番を振り、再登録では変えず、model を記録し、pid は受けない", async (t) => {
   const { cwd, store, stores } = createFixture(t);
   await registerSession({ id: "first", cwd, client: "claude", model: "fable" }, stores);
   await registerSession({ id: "second", cwd, client: "codex" }, stores);
   await registerSession({ id: "first", cwd, client: "claude", pid: process.pid }, stores);
+  observe({ kind: "turn_start", sessionId: "first", prompt: "一つ目" }, stores);
+  observe({ kind: "turn_start", sessionId: "second", prompt: "二つ目" }, stores);
   const first = store.getSession("first")!;
   assert.equal(first.name, "test-001");
   assert.equal(first.pid, undefined, "pid は shim の hello だけで記録する");
@@ -264,4 +267,85 @@ test("hook が送った Claude の pid を本物のセッションに付け、�
   // 不正な pid や Claude 以外のセッションには何もしない
   observe({ kind: "turn_start", sessionId: real, prompt: "p", claudePid: "x" }, stores, new Date());
   assert.equal(store.getSession(real)!.pid, 87592);
+});
+
+// Claude Code が事前に起こす bg-spare の起動行と、001 の会話を --fork-session で起こした起動行
+const SPARE_COMMAND = "claude bg-spare --bg-spare /tmp/cc-daemon-501/x/spare/y.claim.sock";
+const FORK_COMMAND = (parent: string) => `/Users/r/.local/share/claude/versions/2.1.291 --session-id 00000000-0000-4000-8000-000000000002
+  --fork-session --resume /Users/r/.claude/projects/-Users-r-x/${parent}.jsonl --model claude-opus-5-5[1m] --name a b`.replace("\n", "");
+
+test("人の指示が一度も来ないセッションは番号を取らず、画面にも出ない", async (t) => {
+  const { cwd, key, store, stores } = createFixture(t);
+  await registerSession({ id: "spare", cwd, client: "claude", claudePid: 4242 }, stores, async () => SPARE_COMMAND);
+  observe({ kind: "turn_done", sessionId: "spare", reply: "" }, stores);
+  observe({ kind: "waiting", sessionId: "spare", reason: "permission" }, stores);
+  assert.equal(store.getSession("spare")?.name, "");
+  assert.equal(store.listEvents().filter((event) => event.kind === "session.named").length, 0);
+  assert.deepEqual(buildProjectView(store, key)!.sessions.map((session) => session.id), []);
+  observe({ kind: "turn_start", sessionId: "spare", prompt: "作業して" }, stores);
+  assert.deepEqual(buildProjectView(store, key)!.sessions.map((session) => session.name), ["test-001"]);
+});
+
+test("最初の人の指示で番号を取り、理由を session.named に残し、2 回目以降は変えない", async (t) => {
+  const { cwd, store, stores } = createFixture(t);
+  await registerSession({ id: "s", cwd, client: "claude" }, stores);
+  await registerSession({ id: "other", cwd, client: "claude" }, stores);
+  observe({ kind: "turn_start", sessionId: "s", prompt: "最初の指示" }, stores, new Date("2026-10-06T00:00:00.000Z"));
+  assert.equal(store.getSession("s")?.name, "test-001");
+  observe({ kind: "turn_start", sessionId: "s", prompt: "次の指示" }, stores);
+  observe({ kind: "turn_start", sessionId: "other", prompt: "別の会話" }, stores);
+  observe({ kind: "turn_start", sessionId: "s", prompt: "三つ目" }, stores);
+  assert.equal(store.getSession("s")?.name, "test-001");
+  assert.equal(store.getSession("other")?.name, "test-002");
+  const named = store.listEvents().filter((event) => event.kind === "session.named");
+  assert.deepEqual(named.map((event) => [event.session, event.ts, event.payload]), [
+    ["s", "2026-10-06T00:00:00.000Z", { sessionId: "s", name: "test-001", reason: "first_prompt" }],
+    ["other", named[1].ts, { sessionId: "other", name: "test-002", reason: "first_prompt" }],
+  ]);
+});
+
+test("空、タグだけ、task-notification、引数の無いスラッシュコマンド、無人実行の指示では番号を取らない", async (t) => {
+  const { cwd, store, stores } = createFixture(t);
+  await registerSession({ id: "s", cwd, client: "claude" }, stores);
+  for (const prompt of ["", "   \n", "<system-reminder>\n文脈\n</system-reminder>",
+    "<task-notification>\n<task-id>a</task-id>\n</task-notification>\n結果を見て", "/clear", " /compact ",
+    "<command-name>/clear</command-name>\n<command-message>clear</command-message>\n<command-args></command-args>"]) {
+    observe({ kind: "turn_start", sessionId: "s", prompt }, stores);
+    assert.equal(store.getSession("s")?.name, "", JSON.stringify(prompt));
+  }
+  observe({ kind: "turn_start", sessionId: "s", prompt: "無人実行です。作業してください", headless: true }, stores);
+  assert.equal(store.getSession("s")?.name, "");
+  // 引数のあるスラッシュコマンドとタグに続く本文は人の指示
+  observe({ kind: "turn_start", sessionId: "s", prompt: "/plan 認証を直す" }, stores);
+  assert.equal(store.getSession("s")?.name, "test-001");
+  for (const [id, prompt] of [["args", "<command-name>/plan</command-name><command-args>認証を直す</command-args>"],
+    ["tagged", "<system-reminder>x</system-reminder>\n直してください"]]) {
+    await registerSession({ id, cwd, client: "claude" }, stores);
+    observe({ kind: "turn_start", sessionId: id, prompt }, stores);
+  }
+  assert.deepEqual(["args", "tagged"].map((id) => store.getSession(id)?.name), ["test-002", "test-003"]);
+});
+
+test("fork は新しい番号を取らず、最初の人の指示で親の番号を継ぐ", async (t) => {
+  const { cwd, store, stores } = createFixture(t);
+  const parent = "fa3cb783-77f1-4c34-8434-9da0dd41db81";
+  const fork = "a305032f-5023-4f49-b5d0-78b1abc526ec";
+  await registerSession({ id: parent, cwd, client: "claude", claudePid: 4241 }, stores, async () => "claude -c");
+  observe({ kind: "turn_start", sessionId: parent, prompt: "親の指示" }, stores);
+  await registerSession({ id: fork, cwd, client: "claude", claudePid: 4242 }, stores, async () => FORK_COMMAND(parent));
+  assert.equal(store.getSession(fork)?.name, "", "人の指示までは番号を持たない");
+  observe({ kind: "turn_start", sessionId: fork, prompt: "続きをお願いします" }, stores);
+  assert.equal(store.getSession(fork)?.name, "test-001");
+  const named = store.listEvents().filter((event) => event.kind === "session.named" && event.session === fork);
+  assert.deepEqual(named.map((event) => event.payload), [{ sessionId: fork, name: "test-001", reason: "first_prompt", forkOf: parent }]);
+  await registerSession({ id: "next", cwd, client: "claude" }, stores);
+  observe({ kind: "turn_start", sessionId: "next", prompt: "別の会話" }, stores);
+  assert.equal(store.getSession("next")?.name, "test-002", "fork は番号を消費しない");
+  // -r の短い形と id 直書きも親として読む。--fork-session の無い resume は fork として扱わない
+  const commands: Record<string, string> = { short: `claude --fork-session -r ${parent}`, plain: `claude --resume ${parent}` };
+  for (const id of Object.keys(commands)) {
+    await registerSession({ id, cwd, client: "claude", claudePid: 4243 }, stores, async () => commands[id]);
+    observe({ kind: "turn_start", sessionId: id, prompt: "続き" }, stores);
+  }
+  assert.deepEqual(["short", "plain"].map((id) => store.getSession(id)?.name), ["test-001", "test-003"]);
 });

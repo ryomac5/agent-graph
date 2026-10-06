@@ -84,6 +84,8 @@ export interface TurnRow {
 // 委譲が生きているとみなす状態。親セッションの終了で lost にする対象。
 const ACTIVE_DELEGATION_STATUSES = ["requested", "planned", "running", "waiting"];
 const SESSION_NAME_WIDTH = 3;
+// 番号をまだ持たないセッションの name。人の指示が来るまでこの値のまま
+export const UNNAMED = "";
 
 function sessionFromRow(row: Record<string, unknown>): SessionRow {
   const optional = (value: unknown): string | undefined => value === null || value === undefined ? undefined : String(value);
@@ -195,6 +197,36 @@ export class Store {
     return name;
   }
 
+  // 番号のないセッションを作る。番号は最初の人の指示で nameSessionAtFirstPrompt が付ける
+  insertUnnamedSession(session: Omit<Session, "name">): void {
+    this.insertSession({ ...session, name: UNNAMED });
+  }
+
+  // 最初の人の指示で番号を付ける。fork なら親の番号を継ぐ。付けた理由は session.named に残す。
+  // すでに番号があれば何もしない。付けた名前を返す
+  nameSessionAtFirstPrompt(id: string, at: string): string | undefined {
+    this.db.exec("BEGIN IMMEDIATE");
+    let name: string | undefined;
+    try {
+      const session = this.db.prepare("SELECT name, repo_key, trace_id FROM sessions WHERE id = ?").get(id);
+      if (session && session.name === UNNAMED) {
+        const forked = this.db.prepare(`SELECT json_extract(payload, '$.parentSessionId') AS parent FROM events
+          WHERE kind = 'session.forked' AND session_id = ? ORDER BY ts DESC, id DESC LIMIT 1`).get(id);
+        const parentId = forked?.parent ? String(forked.parent) : undefined;
+        const parent = parentId === undefined ? undefined
+          : this.db.prepare("SELECT name FROM sessions WHERE id = ? AND name != ?").get(parentId, UNNAMED);
+        name = parent ? String(parent.name) : this.nextSessionName(String(session.repo_key));
+        this.db.prepare("UPDATE sessions SET name = ? WHERE id = ?").run(name, id);
+        this.appendEvent({ id: ulid(), ts: at, kind: "session.named", repo: String(session.repo_key), session: id,
+          trace: { traceId: String(session.trace_id), spanId: newSpanId() },
+          payload: { sessionId: id, name, reason: "first_prompt", ...(parent ? { forkOf: parentId } : {}) } }, { notify: false });
+      }
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+    if (name !== undefined) this.notifyChange();
+    return name;
+  }
+
   getSession(id: string): SessionRow | undefined {
     const row = this.db.prepare("SELECT * FROM sessions WHERE id = ?").get(id);
     return row ? sessionFromRow(row as Record<string, unknown>) : undefined;
@@ -273,12 +305,14 @@ export class Store {
     this.db.exec("BEGIN IMMEDIATE");
     let moved = false;
     try {
-      const ghost = this.db.prepare("SELECT status FROM sessions WHERE id = ?").get(ghostId);
+      const ghost = this.db.prepare("SELECT status, name FROM sessions WHERE id = ?").get(ghostId);
       const real = this.db.prepare("SELECT id FROM sessions WHERE id = ?").get(realId);
       if (ghost && real) {
         for (const table of ["delegations", "turns", "graphs"]) {
           this.db.prepare(`UPDATE ${table} SET session_id = ? WHERE session_id = ?`).run(realId, ghostId);
         }
+        // 片割れだけが番号を持っていたら本物に移す
+        this.db.prepare("UPDATE sessions SET name = ? WHERE id = ? AND name = ?").run(String(ghost.name), realId, UNNAMED);
         if (ghost.status !== "ended") {
           this.db.prepare(`UPDATE sessions SET status = 'ended', ended_at = ?, ended_reason = 'explicit', waiting_reason = NULL
             WHERE id = ?`).run(at, ghostId);

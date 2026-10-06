@@ -8,6 +8,8 @@ fs.writeFileSync(process.env.FIXTURE_CAPTURE, JSON.stringify({
   tracestate: process.env.TRACESTATE,
   session: process.env.AGENT_GRAPH_SESSION,
   delegation: process.env.AGENT_GRAPH_DELEGATION,
+  headless: process.env.AGENT_GRAPH_HEADLESS,
+  parentSession: process.env.AGENT_GRAPH_PARENT_SESSION,
 }));
 if (process.env.FIXTURE_HANG === "1") {
   process.stdout.write('{"type":"result","result":"partial');

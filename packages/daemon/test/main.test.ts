@@ -57,6 +57,30 @@ test("Claude の id の hello は、同じ Claude のプロセスから割れた
   close?.();
 });
 
+test("Claude の hello は番号なしで記録し、fork の親を残して最初の人の指示で親の番号を継ぐ", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "ag-hello-fork-"));
+  execFileSync("git", ["init", "-q", dir]);
+  const root = execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd: dir, encoding: "utf8" }).trim();
+  const key = repoKey(root);
+  const store = openStore(":memory:");
+  store.upsertRepo({ key, rootPath: root, name: "repo" });
+  t.after(async () => { store.close(); await rm(dir, { recursive: true, force: true }); });
+  const parent = "fa3cb783-77f1-4c34-8434-9da0dd41db81";
+  const fork = "a305032f-5023-4f49-b5d0-78b1abc526ec";
+  const spare = "4156afb9-117a-4a0d-a86a-54a4867cb11c";
+  const commands = new Map([[4241, "claude -c"], [4242, "claude bg-spare --bg-spare /tmp/x.claim.sock"],
+    [4243, `/x/claude --session-id ${fork} --fork-session --resume /x/projects/-x/${parent}.jsonl --model m`]]);
+  const handler = createHelloHandler(new Map([[key, store]]), undefined, undefined, async (pid) => commands.get(pid) ?? "");
+  const closers = [await handler({ type: "hello", cwd: root, pid: 4241, session: parent, client: "claude" }),
+    await handler({ type: "hello", cwd: root, pid: 4242, session: spare, client: "claude" }),
+    await handler({ type: "hello", cwd: root, pid: 4243, session: fork, client: "claude" })];
+  assert.deepEqual([parent, spare, fork].map((id) => store.getSession(id)?.name), ["", "", ""]);
+  assert.equal(store.nameSessionAtFirstPrompt(parent, new Date().toISOString()), "repo-001");
+  assert.equal(store.nameSessionAtFirstPrompt(fork, new Date().toISOString()), "repo-001");
+  assert.equal(store.getSession(spare)?.name, "");
+  for (const close of closers) close?.();
+});
+
 test("handler restores caller and reuses repository store across nested cwd", async () => {
   const dir = await mkdtemp(join(tmpdir(), "ag-main-"));
   const oldState = process.env.XDG_STATE_HOME;

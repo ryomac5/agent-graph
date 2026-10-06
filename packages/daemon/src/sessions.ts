@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { basename, isAbsolute } from "node:path";
 import { promisify } from "node:util";
 import { repoKey, stateDbPath } from "../../core/src/paths.ts";
-import { openStore, type Store, type WaitingReason } from "../../core/src/store/store.ts";
+import { openStore, UNNAMED, type Store, type WaitingReason } from "../../core/src/store/store.ts";
 import { newSpanId, newTraceId } from "../../core/src/trace.ts";
 import { ulid } from "../../core/src/ulid.ts";
 
@@ -40,6 +40,43 @@ function optionalString(value: unknown, limit: number): string | undefined {
   return typeof value === "string" ? value.slice(0, limit) : undefined;
 }
 
+// 人の指示か。空、タグだけ、task-notification を含むもの、引数の無いスラッシュコマンドは人の指示としない
+export function isHumanPrompt(prompt: unknown): boolean {
+  if (typeof prompt !== "string" || prompt.includes("<task-notification>")) return false;
+  const args = /<command-args>([\s\S]*?)<\/command-args>/.exec(prompt)?.[1]?.trim();
+  if (args) return true;
+  const text = prompt.replace(/<([A-Za-z][\w-]*)(?:\s[^>]*)?>[\s\S]*?<\/\1>/g, "").trim();
+  return text !== "" && !/^\/[\w:.-]+$/.test(text);
+}
+
+// --fork-session と --resume を持つ Claude の起動行から親のセッション id を取る。--resume は id か履歴の JSONL の道を取る
+export function forkParentOf(command: string): string | undefined {
+  if (!/(?:^|\s)--fork-session(?=\s|$)/.test(command)) return undefined;
+  return /(?:^|\s)(?:--resume|-r)(?:=|\s+)\S*?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\.jsonl)?(?=\s|$)/i
+    .exec(command)?.[1];
+}
+
+export type ReadCommand = (pid: number) => Promise<string>;
+const readCommand: ReadCommand = async (pid) => (await execFileAsync("ps", ["-o", "command=", "-p", String(pid)])).stdout;
+
+// 番号のないセッションが fork なら、親を session.forked に残す。番号は最初の人の指示で親から継ぐ
+export async function noteForkParent(store: Store, sessionId: string, pid: unknown, at: string,
+  read: ReadCommand = readCommand): Promise<void> {
+  if (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid <= 1) return;
+  const before = store.db.prepare("SELECT name FROM sessions WHERE id = ?").get(sessionId);
+  if (!before || before.name !== UNNAMED) return;
+  if (store.db.prepare("SELECT 1 FROM events WHERE kind = 'session.forked' AND session_id = ?").get(sessionId)) return;
+  let command: string;
+  try { command = await read(pid); } catch { return; }
+  const parentSessionId = forkParentOf(command);
+  if (!parentSessionId || parentSessionId === sessionId) return;
+  const session = store.db.prepare("SELECT name, repo_key, trace_id FROM sessions WHERE id = ?").get(sessionId);
+  if (!session || session.name !== UNNAMED) return;
+  if (store.db.prepare("SELECT 1 FROM events WHERE kind = 'session.forked' AND session_id = ?").get(sessionId)) return;
+  store.appendEvent({ id: ulid(), ts: at, kind: "session.forked", repo: String(session.repo_key), session: sessionId,
+    trace: { traceId: String(session.trace_id), spanId: newSpanId() }, payload: { sessionId, parentSessionId } });
+}
+
 export function summarize(text: string, lines = SUMMARY_LINES): string {
   return text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(0, lines).join("\n");
 }
@@ -57,7 +94,7 @@ export function adoptClaudeProcess(store: Store, sessionId: string, claudePid: u
   for (const ghost of ghosts) store.mergeSessionInto(String(ghost.id), sessionId, at);
 }
 
-export async function registerSession(body: unknown, stores: Map<string, Store>): Promise<void> {
+export async function registerSession(body: unknown, stores: Map<string, Store>, read: ReadCommand = readCommand): Promise<void> {
   if (!body || typeof body !== "object" || Array.isArray(body)) throw new TypeError("Invalid session body");
   const { id, cwd, client, model } = body as Record<string, unknown>;
   if (typeof id !== "string" || !id.trim() || id.includes("\0") ||
@@ -82,18 +119,22 @@ export async function registerSession(body: unknown, stores: Map<string, Store>)
   if (existing) store.resumeSession(id, ts);
   if (typeof model === "string" && model) store.setSessionModel(id, model);
   // hook の再送や MCP による先行登録でも、開始イベントは一度だけ記録する。
+  const claudePid = (body as Record<string, unknown>).claudePid;
   if (store.db.prepare("SELECT 1 FROM events WHERE kind = 'session.started' AND session_id = ?").get(id)) {
-    adoptClaudeProcess(store, id, (body as Record<string, unknown>).claudePid, ts);
+    adoptClaudeProcess(store, id, claudePid, ts);
+    await noteForkParent(store, id, claudePid, ts, read);
     return;
   }
   const traceId = existing ? String(existing.trace_id) : newTraceId();
+  // 番号はまだ付けない。最初の人の指示で付ける
   if (!existing) {
-    store.insertNamedSession({ id, repoKey: key, client, traceId, startedAt: ts,
+    store.insertUnnamedSession({ id, repoKey: key, client, traceId, startedAt: ts,
       ...(typeof model === "string" && model ? { model } : {}) });
   }
   store.appendEvent({ id: ulid(), ts, kind: "session.started", repo: key, session: id,
     trace: { traceId, spanId: newSpanId() }, payload: { sessionId: id } });
-  adoptClaudeProcess(store, id, (body as Record<string, unknown>).claudePid, ts);
+  adoptClaudeProcess(store, id, claudePid, ts);
+  await noteForkParent(store, id, claudePid, ts, read);
 }
 
 // SessionEnd。未知のセッションは NotFoundError。すでに終わっていれば何もしない。
@@ -116,6 +157,8 @@ export const observers: Record<string, Observer> = {
     store.touchSession(sessionId, at);
     if (prompt.trim()) store.setSessionGoalIfEmpty(sessionId, prompt.trim().slice(0, GOAL_LIMIT));
     store.insertTurn({ id: ulid(), sessionId, at, prompt });
+    // 無人実行の子は人の指示を受けないので番号を取らない
+    if (body.headless !== true && isHumanPrompt(prompt)) store.nameSessionAtFirstPrompt(sessionId, at);
   },
   turn_done: (store, { sessionId, at, body }) => {
     const reply = optionalString(body.reply, REPLY_LIMIT) ?? "";

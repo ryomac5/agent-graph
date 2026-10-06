@@ -7,7 +7,8 @@ export async function executeClaude(req: ExecRequest): Promise<ExecResult> {
     "-p", "--model", req.model, "--output-format", "stream-json", "--verbose",
     "--permission-mode", "acceptEdits",
     "--settings", JSON.stringify({ sandbox: { enabled: true, allowUnsandboxedCommands: false } }),
-  ]);
+  // 無人実行の印と委譲した側のセッション。hook はこれを見て番号を取らない
+  ], { AGENT_GRAPH_HEADLESS: "1", AGENT_GRAPH_PARENT_SESSION: req.sessionId });
   let output = "";
   let inputTokens = 0;
   let outputTokens = 0;

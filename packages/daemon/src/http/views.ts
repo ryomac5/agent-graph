@@ -1,6 +1,6 @@
 // 契約の Overview と ProjectView を store の表から組み立てる。
 // 材料は core の queries.ts が返す。ここでは形を合わせるだけで、表には触らない。
-import type { Store, TaskState } from "../../../core/src/store/store.ts";
+import { UNNAMED, type Store, type TaskState } from "../../../core/src/store/store.ts";
 import {
   getRepo, lastActivityAt, latestUsageSamples, listDelegations, listGraphEvents, listGraphs, listRecentTurns,
   listRepos, listSessions, type DelegationRow, type DelegationStatus, type GraphEventRow, type GraphRow,
@@ -130,11 +130,17 @@ function isEmptyEnded(session: SessionView, graphs: GraphRow[]): boolean {
     && session.nodes.every((node) => node.kind === "root") && !graphs.some((graph) => graph.sessionId === session.id);
 }
 
+// 番号を持たず委譲もグラフも無いセッションは人の指示を受けていない。事前に起きた予備や無人実行の子がここに入る
+function isUnprompted(session: SessionView, graphs: GraphRow[]): boolean {
+  return session.name === UNNAMED && session.nodes.every((node) => node.kind === "root")
+    && !graphs.some((graph) => graph.sessionId === session.id);
+}
+
 function sessionView(store: Store, session: ReturnType<typeof listSessions>[number], rows: DelegationRow[],
   context: DelegationContext): SessionView {
   const family = familyOf(session.client);
   const root: NodeDetail = {
-    id: session.id, kind: "root", title: session.name, role: "root", status: session.status,
+    id: session.id, kind: "root", title: session.name || session.id.slice(0, 8), role: "root", status: session.status,
     executor: session.client, startedAt: session.startedAt,
     ...(family ? { family } : {}), ...(session.model ? { model: session.model } : {}),
     ...(session.endedAt ? { endedAt: session.endedAt } : {}), ...(session.goal ? { task: session.goal } : {}),
@@ -304,7 +310,7 @@ export function buildProjectView(store: Store, repoKey: string, now = new Date()
   return {
     project: { key: repo.key, name: repo.name, rootPath: repo.rootPath },
     sessions: listSessions(store.db, repoKey).map((session) => sessionView(store, session, bySession.get(session.id) ?? [], context))
-      .filter((session) => !isEmptyEnded(session, graphs)),
+      .filter((session) => !isEmptyEnded(session, graphs) && !isUnprompted(session, graphs)),
     graphs: graphs.map((graph) => graphView(graph, graphEvents.get(graph.id) ?? [], delegations, context)),
     usage: buildUsage(latestUsageSamples(store.db)),
     updatedAt: now.toISOString(),

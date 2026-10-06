@@ -57,6 +57,14 @@ test("Claude の引数、標準入力、結果、usage とトレース", async (
   } finally { await rm(workDir, { recursive: true, force: true }); }
 });
 
+test("Claude の子は無人実行の印と委譲した側のセッションを環境変数で受ける", async () => {
+  const { received, workDir } = await runFixture("claude");
+  try {
+    assert.equal(received.headless, "1");
+    assert.equal(received.parentSession, "session-1");
+  } finally { await rm(workDir, { recursive: true, force: true }); }
+});
+
 test("Codex の引数、標準入力、結果とトレース", async () => {
   const { result, received, workDir } = await runFixture("codex");
   try {

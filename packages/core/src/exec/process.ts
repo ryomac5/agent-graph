@@ -22,7 +22,8 @@ function signalGroup(pid: number | undefined, signal: NodeJS.Signals): void {
   }
 }
 
-export async function runProcess(req: ExecRequest, bin: string, args: string[]): Promise<ProcessResult> {
+// env は実行器ごとに子へ足す環境変数
+export async function runProcess(req: ExecRequest, bin: string, args: string[], env: Record<string, string> = {}): Promise<ProcessResult> {
   const childTrace = childContext(req.trace);
   childTrace.traceState = formatTracestate({
     ...parseTracestate(req.trace.traceState),
@@ -37,6 +38,7 @@ export async function runProcess(req: ExecRequest, bin: string, args: string[]):
       ...toEnv(childTrace),
       AGENT_GRAPH_SESSION: req.sessionId,
       AGENT_GRAPH_DELEGATION: req.delegationId,
+      ...env,
     },
     stdio: ["pipe", "pipe", "pipe"],
     detached: true,

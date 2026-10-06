@@ -228,7 +228,9 @@ export function observeBody(kind: string, input: HookInput): Record<string, unkn
   if (kind === "subagent_stop") return subagentStopBody(sessionId, input);
   // turn と通知は根のものだけを記録する。サブエージェントの中で発火した hook は agent_id を持つ
   if (input.agent_id) return undefined;
-  if (kind === "turn_start") return { kind, sessionId, prompt: typeof input.prompt === "string" ? input.prompt : "" };
+  // 無人実行の子の指示は人の指示ではない。daemon はこの印を見て番号を付けない
+  if (kind === "turn_start") return { kind, sessionId, prompt: typeof input.prompt === "string" ? input.prompt : "",
+    ...(process.env.AGENT_GRAPH_HEADLESS === "1" ? { headless: true } : {}) };
   if (kind === "turn_done") {
     if (input.stop_hook_active) return undefined;
     const reply = ((typeof input.last_assistant_message === "string" && input.last_assistant_message.trim())

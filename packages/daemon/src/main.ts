@@ -24,6 +24,7 @@ import { startSocketServer, type Hello, type HelloHandler } from "./socket.ts";
 import { startCodexObserver } from "./codex-observe.ts";
 import { startClaudeObserver } from "./claude-observe.ts";
 import { resolveAliasAssignments } from "./observe.ts";
+import { noteForkParent, type ReadCommand } from "./sessions.ts";
 
 const execFileAsync = promisify(execFile);
 const CODEX_INTERVAL_MS = 60_000;
@@ -126,7 +127,7 @@ function isOutsideRepo(error: unknown): boolean {
 }
 
 export function createHelloHandler(stores: Map<string, Store>, latest = new Map<string, UsageSample>(),
-  callers: Callers = new WeakMap()): HelloHandler {
+  callers: Callers = new WeakMap(), readCommand?: ReadCommand): HelloHandler {
   const connections = new Map<string, number>();
   return async (hello) => {
     if (!isRootHello(hello)) return;
@@ -143,8 +144,9 @@ export function createHelloHandler(stores: Map<string, Store>, latest = new Map<
     const session = store.db.prepare("SELECT trace_id FROM sessions WHERE id = ?").get(caller.sessionId);
     if (session && session.trace_id !== caller.traceId) throw new Error("Session trace does not match hello");
     const now = new Date().toISOString();
+    // 接続の時点では番号を付けない。最初の人の指示で付ける
     if (!session) {
-      store.insertNamedSession({ id: caller.sessionId, repoKey: key, client: hello.client ?? "mcp",
+      store.insertUnnamedSession({ id: caller.sessionId, repoKey: key, client: hello.client ?? "mcp",
         traceId: caller.traceId, startedAt: now, pid: hello.pid, pidStartedAt });
     } else {
       // 終了済みのセッションが同じ id で戻ってきたら running に戻す
@@ -158,6 +160,7 @@ export function createHelloHandler(stores: Map<string, Store>, latest = new Map<
         AND status != 'ended'`).all(hello.pid, caller.sessionId);
       for (const ghost of ghosts) store.mergeSessionInto(String(ghost.id), caller.sessionId, now);
     }
+    if (hello.client === "claude") await noteForkParent(store, caller.sessionId, hello.pid, now, readCommand);
     const connectionKey = `${key}:${caller.sessionId}`;
     connections.set(connectionKey, (connections.get(connectionKey) ?? 0) + 1);
     return () => {
@@ -184,7 +187,7 @@ export function createHandler(stores: Map<string, Store>, latest = new Map<strin
     const session = store.db.prepare("SELECT trace_id FROM sessions WHERE id = ?").get(caller.sessionId);
     if (session && session.trace_id !== caller.traceId) throw new Error("Session trace does not match hello");
     const now = new Date().toISOString();
-    if (!session) store.insertNamedSession({ id: caller.sessionId, repoKey: key,
+    if (!session) store.insertUnnamedSession({ id: caller.sessionId, repoKey: key,
       client: hello.client ?? "mcp", traceId: caller.traceId, startedAt: now,
       ...(rootHello ? { pid: hello.pid, pidStartedAt } : {}) });
     else if (rootHello && firstRequest) {

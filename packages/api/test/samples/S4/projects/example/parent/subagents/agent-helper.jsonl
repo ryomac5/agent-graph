@@ -1,0 +1,1 @@
+{"parentUuid":null,"isSidechain":true,"userType":"external","cwd":"/fictional/project","sessionId":"parent","version":"2.1.291","type":"assistant","uuid":"s4-child","timestamp":"2026-10-06T10:00:00.000Z","entrypoint":"sdk-cli","message":{"role":"assistant","content":[{"type":"text","text":"Child answer."}]},"agentId":"helper"}

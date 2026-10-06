@@ -1,0 +1,64 @@
+{
+  "facts": {
+    "conversation.created": 4,
+    "message.created": 6,
+    "message_membership.created": 8,
+    "relation.created": 1
+  },
+  "conversations": [
+    [
+      "agent-helper",
+      "subagent",
+      "observed"
+    ],
+    [
+      "fork-one",
+      "interactive",
+      "observed"
+    ],
+    [
+      "fork-two",
+      "interactive",
+      "observed"
+    ],
+    [
+      "parent",
+      "unattended",
+      "managed"
+    ]
+  ],
+  "messages": [
+    "s4-child",
+    "s4-managed",
+    "s4-one",
+    "s4-shared",
+    "s4-summary",
+    "s4-two"
+  ],
+  "membershipCount": 8,
+  "relations": [
+    [
+      "compacted",
+      "parent",
+      "parent"
+    ]
+  ],
+  "initialFacts": [
+    {
+      "source": "host-claude",
+      "source_event_id": "managed-parent",
+      "kind": "conversation.created",
+      "subject": "conversation:[\"claude\",\"parent\"]",
+      "source_ts": "2026-10-06T09:00:00.000Z",
+      "observed_ts": "2026-10-06T09:00:00.000Z",
+      "confidence": "confirmed",
+      "payload": {
+        "provider": "claude",
+        "native_id": "parent",
+        "origin": "managed",
+        "type": "unattended",
+        "history_format": "jsonl"
+      }
+    }
+  ]
+}

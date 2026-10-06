@@ -28,6 +28,20 @@ export interface ProjectSummary {
   liveSessions: number;
   lastActivityAt?: string;
   status: "waiting" | "failed" | "running" | "done" | "idle" | "quiet";
+  // 一覧のカードに出す直近のセッション。生きたものを新しい順に、無ければ最後に終わったもの 1 つ
+  sessions: SessionDigest[];
+}
+
+export interface SessionDigest {
+  id: string;
+  name: string;
+  client?: "claude" | "codex" | "planner";
+  model?: string;
+  status: Status;
+  waitingReason?: "permission" | "question";
+  lastPrompt?: string;
+  lastAt: string;
+  delegations: number;
 }
 
 export interface Overview {

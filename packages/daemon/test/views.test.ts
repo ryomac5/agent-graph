@@ -242,7 +242,7 @@ test("ProjectSummary の status は waiting, failed, running, done の順で、�
   const store = withStore(t);
   const empty = buildOverview(new Map([["r", store]]), now);
   assert.deepEqual(empty.projects, [{ key: "r", name: "repo", rootPath: "/work/repo",
-    counts: { running: 0, waiting: 0, failed: 0, done: 0 }, liveSessions: 0, status: "quiet" }]);
+    counts: { running: 0, waiting: 0, failed: 0, done: 0 }, liveSessions: 0, status: "quiet", sessions: [] }]);
   assert.equal(empty.updatedAt, now.toISOString());
   store.insertSession({ id: "old", repoKey: "r", name: "repo-000", client: "claude", traceId: trace, startedAt: "2026-09-20T00:00:00.000Z" });
   store.endSession("old", "2026-09-20T01:00:00.000Z");
@@ -252,6 +252,7 @@ test("ProjectSummary の status は waiting, failed, running, done の順で、�
   assert.equal(idle.status, "idle");
   assert.equal(idle.liveSessions, 1);
   assert.equal(idle.lastActivityAt, ts);
+  assert.deepEqual(idle.sessions.map((session) => session.name), ["repo-001"], "生きたセッションがあれば終わったものは出さない");
   store.insertDelegation({ id: "d1", repoKey: "r", sessionId: "s1", role: "implement", title: "a", status: "done" });
   assert.equal(buildOverview(new Map([["r", store]]), now).projects[0].status, "done");
   store.insertDelegation({ id: "d2", repoKey: "r", sessionId: "s1", role: "implement", title: "b", status: "running" });
@@ -420,4 +421,24 @@ test("会話も委譲もグラフも持たずに終わったセッションは�
   store.insertSession({ id: "live-empty", name: "repo-003", ...base });
   const ids = project(store).sessions.map((session) => session.id).sort();
   assert.deepEqual(ids, ["live-empty", "talked-ended"]);
+});
+
+test("一覧のカードには生きたセッションを新しい順に 3 つまで、最後の指示と委譲の数を添えて出す", (t) => {
+  const store = withStore(t);
+  for (const [index, id] of ["a", "b", "c", "d"].entries()) {
+    store.insertSession({ id, repoKey: "r", name: `repo-00${index + 1}`, client: index % 2 ? "codex" : "claude", traceId: trace,
+      startedAt: `2026-10-01T0${index}:00:00.000Z` });
+    store.insertTurn({ id: `t-${id}`, sessionId: id, at: `2026-10-01T0${index}:30:00.000Z`, prompt: `指示 ${id}\n次の行` });
+  }
+  store.insertTurn({ id: "t-d2", sessionId: "d", at: "2026-10-01T03:40:00.000Z", prompt: "<command-name>/exit</command-name>" });
+  store.insertDelegation({ id: "d1", repoKey: "r", sessionId: "d", role: "implement", title: "x", status: "running" });
+  const [card] = buildOverview(new Map([["r", store]]), now).projects;
+  assert.deepEqual(card.sessions.map((session) => session.name), ["repo-004", "repo-003", "repo-002"]);
+  assert.equal(card.sessions[0].client, "codex");
+  assert.equal(card.sessions[0].delegations, 1);
+  assert.equal(card.sessions[0].lastPrompt, "指示 d 次の行", "改行は空白にして 1 行にし、タグで包まれた指示は飛ばす");
+  store.endSession("a", "2026-10-01T05:00:00.000Z");
+  for (const id of ["b", "c", "d"]) store.endSession(id, "2026-10-01T04:00:00.000Z");
+  const ended = buildOverview(new Map([["r", store]]), now).projects[0];
+  assert.deepEqual(ended.sessions.map((session) => session.name), ["repo-001"], "生きたものが無ければ最後に終わった 1 つ");
 });

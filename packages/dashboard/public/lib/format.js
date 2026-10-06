@@ -134,6 +134,20 @@ export function fmtWhen(value, full = false, now = new Date()) {
   return d.getFullYear() === now.getFullYear() ? day : `${d.getFullYear()} ${day}`;
 }
 
+// 過ぎた時間を日本語で短く出す。1 分未満は「たった今」、1 週間を超えたら日付にする
+export function fmtAgo(value, now = new Date()) {
+  const d = toDate(value);
+  if (!d) return "";
+  const min = Math.floor((now - d) / 60000);
+  if (min < 1) return "たった今";
+  if (min < 60) return `${min} 分前`;
+  const hour = Math.floor(min / 60);
+  if (hour < 24) return `${hour} 時間前`;
+  const day = Math.floor(hour / 24);
+  if (day < 7) return `${day} 日前`;
+  return fmtWhen(d, false, now);
+}
+
 // リセットまでの残り。桁を落として短く出す
 export function fmtUntil(value, now = new Date()) {
   const d = toDate(value);

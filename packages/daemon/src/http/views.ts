@@ -7,7 +7,7 @@ import {
 } from "../../../core/src/store/queries.ts";
 import type { UsageSample } from "../../../core/src/usage/types.ts";
 import type {
-  EdgeDetail, Family, GraphView, NodeDetail, Overview, ProjectSummary, ProjectView, Round, SessionView, Status,
+  EdgeDetail, Family, GraphView, NodeDetail, Overview, ProjectSummary, ProjectView, Round, SessionDigest, SessionView, Status,
   Turn, Usage, UsageWindow,
 } from "./contract.ts";
 
@@ -269,6 +269,28 @@ function countStatus(counts: ProjectSummary["counts"], status: Status): void {
   else if (status === "done") counts.done++;
 }
 
+const DIGEST_LIMIT = 3;
+const PROMPT_LIMIT = 160;
+
+function plainPrompt(text: string): string {
+  if (/^\s*</.test(text)) return "";
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function digestOf(session: SessionView): SessionDigest {
+  const turns = session.turns.filter((turn) => !turn.hidden);
+  const last = turns.at(-1);
+  // コマンドや子からの通知のように、タグで包まれた指示は人の言葉ではないので飛ばす
+  const said = [...turns].reverse().map((turn) => plainPrompt(turn.prompt)).find(Boolean);
+  const prompt = said || plainPrompt(session.goal || "");
+  return { id: session.id, name: session.name, ...(session.client ? { client: session.client } : {}),
+    ...(session.model ? { model: session.model } : {}), status: session.status,
+    ...(session.waitingReason ? { waitingReason: session.waitingReason } : {}),
+    ...(prompt ? { lastPrompt: prompt.slice(0, PROMPT_LIMIT) } : {}),
+    lastAt: [last?.at, session.endedAt, session.startedAt].filter((at): at is string => !!at).sort().at(-1) || session.startedAt,
+    delegations: session.nodes.filter((node) => node.kind !== "root").length };
+}
+
 // 一覧の 1 行。数えるのは生きたセッションの委譲とそのセッションの planner のタスク。
 export function summarize(view: ProjectView, lastActivity: string | undefined, now: Date): ProjectSummary {
   const counts = { running: 0, waiting: 0, failed: 0, done: 0 };
@@ -286,8 +308,10 @@ export function summarize(view: ProjectView, lastActivity: string | undefined, n
     && (lastActivity === undefined || now.getTime() - Date.parse(lastActivity) > QUIET_AFTER_MS);
   const status: ProjectSummary["status"] = counts.waiting ? "waiting" : counts.failed ? "failed"
     : counts.running ? "running" : counts.done ? "done" : quiet ? "quiet" : "idle";
+  const recent = (live.length ? live : view.sessions.filter((session) => session.status === "ended")).map(digestOf)
+    .sort((a, b) => b.lastAt.localeCompare(a.lastAt)).slice(0, live.length ? DIGEST_LIMIT : 1);
   return { key: view.project.key, name: view.project.name, rootPath: view.project.rootPath, counts,
-    liveSessions: live.length, ...(lastActivity ? { lastActivityAt: lastActivity } : {}), status };
+    liveSessions: live.length, ...(lastActivity ? { lastActivityAt: lastActivity } : {}), status, sessions: recent };
 }
 
 // 1 リポジトリの全体。repo が無ければ undefined。

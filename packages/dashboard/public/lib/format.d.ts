@@ -27,6 +27,7 @@ export function kindTitle(node: NodeLike | undefined): string;
 export function roleLabel(node: NodeLike | undefined): string;
 export function modelLabel(id: string | undefined): string;
 export function fitWords(text: string | undefined, maxChars?: number): FitResult;
+export function fmtAgo(value: string | Date | undefined, now?: Date): string;
 export function fmtWhen(value: string | Date | undefined, full?: boolean, now?: Date): string;
 export function fmtUntil(value: string | Date | undefined, now?: Date): string;
 export function fmtElapsed(started: string | undefined, ended?: string, now?: Date): string;

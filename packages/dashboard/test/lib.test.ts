@@ -198,3 +198,13 @@ test("吹き出しの Markdown は見出し、箇条書き、太字、コード�
   assert.deepEqual(lines[3], { type: "line", spans: [{ type: "text", text: "<script>x</script>" }] });
   assert.deepEqual(lib.parseMarkdown(undefined), [{ type: "line", spans: [] }]);
 });
+
+test("fmtAgo は過ぎた時間を日本語で短く出し、1 週間を超えたら日付にする", () => {
+  const now = new Date(2026, 8, 25, 12, 0);
+  assert.equal(lib.fmtAgo(new Date(2026, 8, 25, 11, 59, 30), now), "たった今");
+  assert.equal(lib.fmtAgo(new Date(2026, 8, 25, 11, 55), now), "5 分前");
+  assert.equal(lib.fmtAgo(new Date(2026, 8, 25, 9, 0), now), "3 時間前");
+  assert.equal(lib.fmtAgo(new Date(2026, 8, 23, 12, 0), now), "2 日前");
+  assert.equal(lib.fmtAgo(new Date(2026, 8, 1, 10, 5), now), "Sep 1 10:05");
+  assert.equal(lib.fmtAgo(undefined, now), "");
+});

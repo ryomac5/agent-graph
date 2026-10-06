@@ -25,12 +25,13 @@ function ctx(extra: Json = {}): Json {
   };
 }
 
-test("Overview は fixture の稼働中のプロジェクトをカードで描き、状態の言葉と件数を出す", () => {
+test("Overview は稼働中のプロジェクトをカードで描き、状態と件数と直近のセッションを出す", () => {
   const canvas = doc.getElementById("canvas")!;
   const c = ctx();
   renderOverview(canvas, overview, c);
   const html = String(canvas);
-  for (const word of ["Kaggriculture", "agent-graph", "dotfiles", "obsidian", "Failed 7", "Waiting 1", "Running 1", "Idle", "on-failed", "on-waiting", "on-running", "orb-slot"]) {
+  for (const word of ["Kaggriculture", "agent-graph", "dotfiles", "obsidian", "失敗 7", "判断待ち 1", "実行中 3", "待機中", "on-failed", "on-waiting", "on-running", "card-slot",
+    "~/00_project/agent-graph", "agent-graph-001", "Opus 5.5", "許可待ち · 委譲 3", "一覧画面を作り直して", "Codex", "GPT 6.1 Sol", "指示はまだありません"]) {
     assert.ok(html.includes(word), `${word} が無い`);
   }
   assert.ok(canvas.classList.contains("overview"));
@@ -38,7 +39,7 @@ test("Overview は fixture の稼働中のプロジェクトをカードで描�
   renderOverview(canvas, overview, ctx({ showInactive: true }));
   assert.ok(String(canvas).includes("fde-lecture"));
   renderOverview(canvas, overview, c);
-  // 丸は使い回す
+  // カードは使い回す
   const before = (c.orbSlots as Map<string, FakeElement>).get("dotfiles");
   renderOverview(canvas, overview, c);
   assert.equal((c.orbSlots as Map<string, FakeElement>).get("dotfiles"), before);

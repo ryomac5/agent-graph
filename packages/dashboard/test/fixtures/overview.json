@@ -94,6 +94,62 @@
       "lastActivityAt": "2026-09-24T22:00:00.000Z",
       "status": "idle",
       "sessions": []
+    },
+    {
+      "key": "notes",
+      "name": "notes",
+      "rootPath": "/Users/r/00_project/notes",
+      "counts": {
+        "running": 0,
+        "waiting": 0,
+        "failed": 0,
+        "done": 0
+      },
+      "liveSessions": 0,
+      "lastActivityAt": "2026-09-24T10:00:00.000Z",
+      "status": "idle",
+      "sessions": [
+        {
+          "id": "n1",
+          "name": "notes-003",
+          "client": "claude",
+          "model": "claude-sonnet-5-5",
+          "status": "ended",
+          "lastPrompt": "メモを整理して",
+          "lastAt": "2026-09-24T10:00:00.000Z",
+          "delegations": 0
+        }
+      ]
+    },
+    {
+      "key": "scratch",
+      "name": "scratch",
+      "rootPath": "/private/tmp/scratch",
+      "counts": {
+        "running": 0,
+        "waiting": 0,
+        "failed": 0,
+        "done": 0
+      },
+      "liveSessions": 0,
+      "lastActivityAt": "2026-09-25T05:00:00.000Z",
+      "status": "idle",
+      "sessions": []
+    },
+    {
+      "key": "stale",
+      "name": "stale",
+      "rootPath": "/Users/r/00_project/stale",
+      "counts": {
+        "running": 0,
+        "waiting": 0,
+        "failed": 0,
+        "done": 0
+      },
+      "liveSessions": 0,
+      "lastActivityAt": "2026-09-01T00:00:00.000Z",
+      "status": "quiet",
+      "sessions": []
     }
   ],
   "usage": {

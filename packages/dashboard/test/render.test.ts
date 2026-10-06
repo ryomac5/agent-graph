@@ -25,9 +25,9 @@ function ctx(extra: Json = {}): Json {
   };
 }
 
-test("Overview は稼働中のプロジェクトをカードで描き、状態と件数と直近のセッションを出す", () => {
+test("Overview は稼働中を Active に、最近終わったものを Recent に、状態と件数と直近のセッションを添えて出す", () => {
   const canvas = doc.getElementById("canvas")!;
-  const c = ctx();
+  const c = ctx({ now: () => new Date("2026-09-25T07:00:00.000Z") });
   renderOverview(canvas, overview, c);
   const html = String(canvas);
   for (const word of ["Kaggriculture", "agent-graph", "dotfiles", "obsidian", "Failed 7", "Waiting 1", "Running 3", "Idle", "on-failed", "on-waiting", "on-running", "card-slot",
@@ -35,9 +35,11 @@ test("Overview は稼働中のプロジェクトをカードで描き、状態�
     assert.ok(html.includes(word), `${word} が無い`);
   }
   assert.ok(canvas.classList.contains("overview"));
-  assert.ok(!html.includes("fde-lecture"), "非稼働 PJ は初期表示から外す");
-  renderOverview(canvas, overview, ctx({ showInactive: true }));
-  assert.ok(String(canvas).includes("fde-lecture"));
+  assert.ok(!html.includes("project-filters"), "Active と All の切り替えは無い");
+  const [activeSection, recentSection] = canvas.querySelectorAll(".overview-section");
+  assert.ok(String(activeSection).includes("Kaggriculture") && !String(activeSection).includes("notes-003"));
+  assert.ok(String(recentSection).includes("notes-003"), "7 日以内に動いた終わったプロジェクトは Recent に出す");
+  for (const hidden of ["fde-lecture", "/private/tmp/scratch", "~/00_project/stale"]) assert.ok(!html.includes(hidden), `${hidden} は出さない`);
   renderOverview(canvas, overview, c);
   // カードは使い回す
   const before = (c.orbSlots as Map<string, FakeElement>).get("dotfiles");
@@ -49,14 +51,14 @@ test("ヘッダーはピル列と件数と利用枠の色分けと Live を出�
   const projects = overview.projects as Json[];
   renderHeader(doc, { projects, selected: ["agent-graph"], counts: { running: 3, waiting: 1, failed: 1, done: 12 }, usage: overview.usage, connection: "live", updatedAt: "2026-09-25T06:40:12.000Z" }, ctx());
   const html = String(doc.body);
-  for (const word of ["All projects", "1 / 5 projects", "Running 3", "Waiting 1", "Failed 1", "Done 12", "on-running", "on-waiting", "Session", "Week Fable", "usage-fill high", "usage-fill warn", "92%", "36%", "Live", "connection live", "Updated"]) {
+  for (const word of ["All projects", "1 / 8 projects", "Running 3", "Waiting 1", "Failed 1", "Done 12", "on-running", "on-waiting", "Session", "Week Fable", "usage-fill high", "usage-fill warn", "92%", "36%", "Live", "connection live", "Updated"]) {
     assert.ok(html.includes(word), `${word} が無い`);
   }
   assert.equal(doc.getElementById("head-sub")!.hidden, false);
   assert.equal(doc.title, "(3) ⏸ Agent Console · agent-graph");
   renderHeader(doc, { projects, selected: [], counts: { running: 0, waiting: 0, failed: 0, done: 0 }, usage: { windows: [] }, connection: "offline", updatedAt: "" }, ctx());
   assert.ok(String(doc.body).includes("Offline"));
-  assert.ok(String(doc.body).includes("5 projects"));
+  assert.ok(String(doc.body).includes("8 projects"));
   assert.equal(doc.getElementById("head-sub")!.hidden, true);
 });
 

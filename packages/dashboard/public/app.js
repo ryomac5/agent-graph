@@ -1,5 +1,5 @@
 // 画面の起点。契約の Overview と ProjectView を feed で受け、ヘッダー・canvas・詳細に配る
-import { countProject, sumCounts, visibleProjects } from "./lib/status.js";
+import { countProject, isActiveProject, sumCounts, visibleProjects } from "./lib/status.js";
 import { dismissKey } from "./lib/visible.js";
 import { renderDetail } from "./ui/detail.js?v=compact-20261005";
 import { el } from "./ui/dom.js";
@@ -29,7 +29,7 @@ function loadSelectedProjects() {
 const state = {
   overview: null, views: new Map(), feeds: new Map(), feedState: new Map(), unavailable: new Map(), updatedAt: "",
   selectedProjects: loadSelectedProjects(), selectedScope: null, selectedNode: null,
-  showInactive: false, restoredSelection: false,
+  restoredSelection: false,
   dismissed: new Set(loadJson(DISMISS_KEY, [])), expandedArchive: new Set(),
   knownEdges: new Map(), knownNodes: new Map(), fresh: new Map(), zoom: new Map(),
   expandedRounds: new Set(), hiddenTurns: new Set(), factsOpen: { value: false }, chatView: { key: "", top: 0, stick: true },
@@ -80,7 +80,7 @@ function connectionState() {
 
 // 件数はサーバーの ProjectSummary を正とする。Overview が無いときだけ画面の nodes から数える
 function headerCounts() {
-  if (!state.selectedProjects.length) return sumCounts(visibleProjects(projects(), state.showInactive).map((p) => p.counts));
+  if (!state.selectedProjects.length) return sumCounts(projects().filter(isActiveProject).map((p) => p.counts));
   const summaries = projects().filter((p) => state.selectedProjects.includes(p.key));
   if (summaries.length === state.selectedProjects.length) return sumCounts(summaries.map((p) => p.counts));
   return sumCounts(selectedViews().map((view) => countProject(view, state.dismissed)));
@@ -116,8 +116,6 @@ const ctx = {
   },
   onNewSession: async (repo, client) => postAction({ repo, action: "new_session", client }),
   maxWidth: 0, projectName: "",
-  get showInactive() { return state.showInactive; },
-  onShowInactive: (show) => { state.showInactive = show; render(); },
   confirm: (text) => window.confirm(text),
   onOpen: (key, additive) => openProject(key, additive),
   onSelect: (scope, nodeId) => {
@@ -231,7 +229,7 @@ function pickDefaultScope() {
 
 function renderHead() {
   renderHeader(document, {
-    projects: projects().filter((p) => state.selectedProjects.includes(p.key) || visibleProjects([p], state.showInactive).length), selected: state.selectedProjects, counts: headerCounts(),
+    projects: projects().filter((p) => state.selectedProjects.includes(p.key) || visibleProjects([p]).length), selected: state.selectedProjects, counts: headerCounts(),
     usage: state.selectedProjects.length ? (selectedViews()[0] || {}).usage || (state.overview || {}).usage : (state.overview || {}).usage,
     connection: connectionState(), updatedAt: state.updatedAt,
   }, ctx);

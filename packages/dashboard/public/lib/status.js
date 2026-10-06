@@ -13,8 +13,22 @@ export function isActiveProject(project) {
     || Number(project.counts?.running || 0) > 0 || Number(project.counts?.waiting || 0) > 0;
 }
 
-export function visibleProjects(projects, showInactive = false) {
-  return (projects || []).filter((project) => showInactive || isActiveProject(project));
+// 稼働していないプロジェクトのうち、一覧の Recent に出すもの。
+// 動きが 7 日以内で、検証用の一時置き場ではないものに限る
+export const RECENT_DAYS = 7;
+const TEMP_ROOT = /^\/(private\/)?(tmp|var\/folders)\//;
+export function isRecentProject(project, now = new Date()) {
+  if (isActiveProject(project) || TEMP_ROOT.test(String(project.rootPath || ""))) return false;
+  const at = Date.parse(project.lastActivityAt || "");
+  return Number.isFinite(at) && now.getTime() - at <= RECENT_DAYS * 86400000;
+}
+
+// 一覧と左の列に出すプロジェクト。稼働中を先に、Recent は新しい順に
+export function visibleProjects(projects, now = new Date()) {
+  const list = projects || [];
+  const recent = list.filter((project) => isRecentProject(project, now))
+    .sort((a, b) => String(b.lastActivityAt || "").localeCompare(String(a.lastActivityAt || "")));
+  return [...list.filter(isActiveProject), ...recent];
 }
 
 // root を除いた子の件数。dismissed に入っている id は数えない

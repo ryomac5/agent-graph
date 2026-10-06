@@ -19,3 +19,7 @@ export function sumCounts(list: Partial<Counts>[] | undefined): Counts;
 export function orbState(summary: OrbSummary, unavailable?: boolean): OrbState;
 export function usageLevel(percent: number | undefined): "" | "warn" | "high";
 export function actionsFor(node: { kind?: string; status?: string } | undefined): ActionPair[];
+export const RECENT_DAYS: number;
+export function isActiveProject(project: { liveSessions?: number; counts?: Partial<Counts> }): boolean;
+export function isRecentProject(project: { liveSessions?: number; counts?: Partial<Counts>; rootPath?: string; lastActivityAt?: string }, now?: Date): boolean;
+export function visibleProjects<T extends { liveSessions?: number; counts?: Partial<Counts>; rootPath?: string; lastActivityAt?: string }>(projects: T[] | undefined, now?: Date): T[];

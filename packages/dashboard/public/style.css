@@ -402,11 +402,19 @@ body.is-overview #detail, body.is-overview #splitter { display: none; }
 .eyebrow { font-size: 11px; font-weight: 600; letter-spacing: .12em; color: var(--muted); margin: 0 0 8px; }
 .workspace h2 { font-size: 28px; font-weight: 650; letter-spacing: -.03em; line-height: 1.2; margin: 0 0 6px; }
 .workspace-description { font-size: 13px; color: var(--muted); margin: 0; }
-.project-filters { display: flex; padding: 3px; border-radius: 10px; background: #e8e8ed; flex-shrink: 0; }
-.project-filters button { border: 0; padding: 7px 18px; border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; font-size: 13px; }
-.project-filters button.selected { background: white; color: var(--text); box-shadow: 0 1px 4px #00000012; }
 .overview-inner { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 16px; padding: 0; }
 .card-slot { min-width: 0; display: flex; }
+.overview-section + .overview-section { margin-top: 36px; }
+.overview-section-head { display: flex; align-items: baseline; gap: 8px; margin: 0 0 12px; }
+.overview-section-head h3 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.overview-section-count { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* Recent は終わったプロジェクト。小さく薄く並べ、稼働中より目立たせない */
+.is-recent .overview-inner { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.is-recent .project-card { gap: 8px; padding: 14px 16px 12px 18px; background: #fbfbfd; box-shadow: none; }
+.is-recent .card-name { font-size: 15px; color: var(--text); }
+.is-recent .card-stats { display: none; }
+.is-recent .card-sessions { padding-top: 8px; }
+.is-recent .card-sessions-caption { display: none; }
 /* プロジェクトのカード。左の帯の色で状態を示す */
 .project-card { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; padding: 20px 22px 18px 24px; border-radius: 14px; background: white; border: 1px solid #e5e5ea; box-shadow: 0 1px 2px #0000000a; cursor: pointer; overflow: hidden; transition: border-color .15s var(--ease), box-shadow .15s var(--ease), transform .15s var(--ease); }
 .project-card::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: #d1d1d6; }

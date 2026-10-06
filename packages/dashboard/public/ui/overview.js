@@ -1,7 +1,7 @@
 // Overview。プロジェクトを 1 枚のカードで並べ、直近のセッションと最後の指示まで見せる。
 // カードは key を鍵に使い回し、中身だけ書き換える
 import { fmtAgo, modelLabel, statusClass } from "../lib/format.js";
-import { orbState, visibleProjects } from "../lib/status.js";
+import { isActiveProject, orbState, visibleProjects } from "../lib/status.js";
 import { button, el, keyActivate } from "./dom.js";
 
 const CARD_STATE = { waiting: "Waiting", failed: "Failed", running: "Running", done: "Done", idle: "Idle", quiet: "Quiet" };
@@ -91,35 +91,42 @@ function summaryLine(projects) {
   return parts.join(" · ");
 }
 
+// 稼働中を上の Active に、7 日以内に動いた残りを下の Recent に並べる。
 // slots は key → slot。消えたプロジェクトだけ外し、残りは中身だけ書き換える。
 // unavailable は /api/project の取得に失敗した key の集まり
 export function renderOverview(canvas, overview, ctx, unavailable = new Map()) {
   canvas.classList.add("overview");
-  const all = (overview && overview.projects) || [];
-  const projects = visibleProjects(all, ctx.showInactive);
+  const now = ctx.now ? ctx.now() : new Date();
+  const listed = visibleProjects((overview && overview.projects) || [], now);
+  const active = listed.filter(isActiveProject);
+  const recent = listed.filter((project) => !isActiveProject(project));
   const page = el("section", undefined, "workspace");
   const heading = el("div", undefined, "workspace-heading");
   const title = el("div");
-  title.append(el("h2", "Projects"), el("p", overview ? summaryLine(projects) : "", "workspace-description"));
-  const filters = el("div", undefined, "project-filters");
-  filters.setAttribute("aria-label", "Project filter");
-  for (const [show, label] of [[false, "Active"], [true, "All"]]) {
-    const control = button(label, Boolean(ctx.showInactive) === show ? "selected" : "", () => ctx.onShowInactive(show));
-    control.setAttribute("aria-pressed", String(Boolean(ctx.showInactive) === show));
-    filters.append(control);
-  }
-  heading.append(title, filters);
-  const inner = el("div", undefined, "overview-inner");
-  page.append(heading, inner);
-  if (!projects.length) inner.append(el("p", overview ? (ctx.showInactive ? "No projects yet." : "No active projects. See All for history.") : "Connecting…", "empty"));
-  const keys = new Set(projects.map((p) => p.key));
+  title.append(el("h2", "Projects"), el("p", overview ? summaryLine(active) : "", "workspace-description"));
+  heading.append(title);
+  page.append(heading);
+  const keys = new Set(listed.map((p) => p.key));
   for (const [key, slot] of ctx.orbSlots) if (!keys.has(key)) { slot.remove(); ctx.orbSlots.delete(key); }
-  const now = new Date();
-  for (const project of projects) {
-    let slot = ctx.orbSlots.get(project.key);
-    if (!slot) { slot = buildSlot(project, ctx); ctx.orbSlots.set(project.key, slot); }
-    inner.append(slot);
-    updateCard(slot, project, unavailable.has(project.key), now);
+  const section = (name, projects, empty, className) => {
+    const block = el("section", undefined, `overview-section ${className}`);
+    const head = el("div", undefined, "overview-section-head");
+    head.append(el("h3", name), el("span", String(projects.length), "overview-section-count"));
+    const inner = el("div", undefined, "overview-inner");
+    block.append(head, inner);
+    if (!projects.length && empty) inner.append(el("p", empty, "empty"));
+    for (const project of projects) {
+      let slot = ctx.orbSlots.get(project.key);
+      if (!slot) { slot = buildSlot(project, ctx); ctx.orbSlots.set(project.key, slot); }
+      inner.append(slot);
+      updateCard(slot, project, unavailable.has(project.key), now);
+    }
+    return block;
+  };
+  if (!overview) page.append(el("p", "Connecting…", "empty"));
+  else {
+    page.append(section("Active", active, "No active projects.", "is-active"));
+    if (recent.length) page.append(section("Recent", recent, "", "is-recent"));
   }
   canvas.replaceChildren(page);
 }

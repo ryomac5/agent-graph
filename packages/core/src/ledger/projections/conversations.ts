@@ -15,7 +15,16 @@ export interface ConversationProjection {
   relations: ProjectedRelation[];
   operation_targets: string[];
 }
-export function projectConversations(facts: readonly Fact[]): ConversationProjection {
+// SQLite の並びも compareText と同じ UTF-16 の順序に固定する。
+export function encodeNameOrder(value: string): string {
+  return Buffer.from(value, "utf16le").swap16().toString("hex");
+}
+export function extractProvisionalName(body: Parameters<typeof getMessageText>[0]): string {
+  return getMessageText(body).trim().split(/(?<=[。.!?？！])|\n/u)[0];
+}
+export function projectConversations(
+  facts: readonly Fact[], names?: ReadonlyMap<string, string>,
+): ConversationProjection {
   const { tasks } = projectNames(facts);
   const { messages, message_memberships: memberships } = projectMessages(facts);
   const rows = projectEntities(facts, "conversation", (payload, id) =>
@@ -35,14 +44,14 @@ export function projectConversations(facts: readonly Fact[]): ConversationProjec
   for (const message of orderedMessages) {
     const text = getMessageText(message.body);
     if (!text.trim()) continue;
-    const name = text.trim().split(/(?<=[。.!?？！])|\n/u)[0];
+    const name = extractProvisionalName(message.body);
     for (const id of conversationsByMessage.get(message.id) ?? []) {
       if (!provisionalNames.has(id)) provisionalNames.set(id, name);
     }
   }
   const conversations = rows.map((conversation): ProjectedConversation => {
     const task = conversation.task_id ? tasksById.get(conversation.task_id) : undefined;
-    const provisionalName = provisionalNames.get(conversation.id) || null;
+    const provisionalName = (names ?? provisionalNames).get(conversation.id) || null;
     const name = conversation.type === "unattended" ? null : task?.name ?? provisionalName;
     return { ...conversation, name, name_is_provisional: name !== null && !task?.name };
   });

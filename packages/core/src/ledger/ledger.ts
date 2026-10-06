@@ -4,7 +4,8 @@ import { CONFIDENCES, ENTITY_KINDS, SOURCES } from "./facts.ts";
 import type { Fact, FactInput, JsonValue } from "./facts.ts";
 import { redactValue, validateRules } from "./redact.ts";
 import type { RedactionRules } from "./redact.ts";
-import { initializeSchema, SCHEMA_VERSION } from "./schema.ts";
+import { initializeSchema, FACT_SCHEMA_VERSION } from "./schema.ts";
+import { collectProjectionDependencies } from "./projections/dependencies.ts";
 
 export const STORAGE_SCOPES = ["metadata", "message_body", "tool_output", "full_diff"] as const;
 export type StorageScope = typeof STORAGE_SCOPES[number];
@@ -133,6 +134,7 @@ export function openLedger(path: string, options: LedgerOptions = {}): Ledger {
     source_ts, observed_ts, schema_version, cursor, confidence, supersedes
   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
   const read = db.prepare("SELECT * FROM facts WHERE seq > ? ORDER BY seq ASC LIMIT ?");
+  const insertDependency = db.prepare("INSERT OR IGNORE INTO fact_projection_dependencies VALUES (?, ?, ?, ?, ?)");
   const purge = db.prepare("UPDATE facts SET payload = NULL WHERE payload IS NOT NULL AND julianday(observed_ts) < julianday(?)");
 
   function transact<T>(operation: () => T): T {
@@ -168,10 +170,15 @@ export function openLedger(path: string, options: LedgerOptions = {}): Ledger {
         }
         const result = insert.run(
           factId, input.source, input.source_event_id, input.kind, input.subject,
-          payload, payloadHash, input.source_ts, observedTs, SCHEMA_VERSION,
+          payload, payloadHash, input.source_ts, observedTs, FACT_SCHEMA_VERSION,
           input.cursor ?? null, input.confidence, input.supersedes ?? null,
         );
-        return { status: "appended", seq: Number(result.lastInsertRowid), fact_id: factId };
+        const seq = Number(result.lastInsertRowid);
+        const fact = { ...input, fact_id: factId, seq, payload: JSON.parse(payload) } as Fact;
+        for (const dependency of collectProjectionDependencies(fact)) {
+          insertDependency.run(dependency.projection, input.subject, dependency.direction, dependency.key, seq);
+        }
+        return { status: "appended", seq, fact_id: factId };
       });
     },
     readSince(seq, limit) {

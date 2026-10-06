@@ -9,6 +9,7 @@ export interface CodexObservationOptions {
   codexHome?: string;
   reader?: RolloutReader;
   observedTs?: string;
+  batch?: <T>(operation: () => T) => T;
 }
 type ObjectValue = { [key: string]: JsonValue };
 function readObject(value: unknown): ObjectValue {
@@ -103,7 +104,8 @@ export function observeCodex(ledger: Ledger, options: CodexObservationOptions = 
   const archivedPaths = reader.list(join(home, "archived_sessions"));
   const archivedFileIds = new Set(archivedPaths.map((path) => basename(path)));
   return [...reader.list(join(home, "sessions")), ...archivedPaths]
-    .flatMap((path) => observeFile(ledger, path, { ...options, reader }, index, archivedFileIds));
+    .flatMap((path) => (options.batch ?? ((operation) => operation()))(
+      () => observeFile(ledger, path, { ...options, reader }, index, archivedFileIds)));
 }
 
 export function observeCodexFile(ledger: Ledger, path: string, options: CodexObservationOptions = {}): AppendResult[] {

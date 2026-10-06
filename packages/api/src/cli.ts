@@ -43,7 +43,7 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
   }
   if (command === "ingest" && !once) throw new TypeError("ingest requires --once");
   if (command === "migrate" && !from) throw new TypeError("migrate requires --from <path>");
-  const service = openObservationService({ dbPath });
+  const service = openObservationService({ dbPath, live: command === "serve" });
   try {
     if (command === "ingest") console.log(JSON.stringify(service.ingestOnce()));
     else if (command === "rebuild") console.log(JSON.stringify(service.rebuild()));
@@ -51,8 +51,9 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
       const destination = realpathSync(service.dbPath);
       const paths = listDatabases(from!, new Set([destination, `${destination}-wal`, `${destination}-shm`]));
       if (paths.length === 0) throw new TypeError("No legacy databases found");
-      const report = await migrateLegacyDatabases(paths, service.ledger, { backupDirectory: join(service.dbPath + ".migration-backups") });
-      service.catchUp();
+      const report = await migrateLegacyDatabases(paths, service.ledger, {
+        backupDirectory: join(service.dbPath + ".migration-backups"), afterDatabase: service.catchUp, batch: service.batch,
+      });
       console.log(JSON.stringify(report));
     } else {
       const report = pollObservation(() => service.ingestOnce());

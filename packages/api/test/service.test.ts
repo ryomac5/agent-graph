@@ -23,6 +23,7 @@ const CLI = new URL("../src/cli.ts", import.meta.url);
 const HOOK_EVENT = { version: 1, session_id: "session", generation: 1,
   event_id: "start", hook_event_name: "SessionStart", source_ts: TS, input: {}, managed: false };
 const BULK_MESSAGE_COUNT = 1500;
+const STAGING_REUSE_MESSAGE_COUNT = 4097;
 const BULK_FILE_COUNT = 300;
 const MESSAGES_PER_FILE = 10;
 const INITIAL_INGEST_LIMIT_MS = 8000;
@@ -514,4 +515,153 @@ test("待ち受けを代替しても serve の初回失敗・定期再試行・�
   }
   assert.equal(closed, true);
   assert.equal(fs.existsSync(ready.hook_endpoint_file), false);
+});
+
+test("hook は応答前に追記を確定し、投影を後続の周期まで保留する", async (t) => {
+  const f = createFixture(t);
+  const service = openObservationService({ env: f.env });
+  t.after(() => service.close());
+  const { createHookHandler } = await import("../src/hook/index.ts");
+  const { Readable } = await import("node:stream");
+  const request = Object.assign(Readable.from([JSON.stringify(HOOK_EVENT)]), {
+    method: "POST", url: "/hook-v2",
+    headers: { host: "127.0.0.1:12345", authorization: "Bearer token", "content-type": "application/json" },
+    socket: { remoteAddress: "127.0.0.1", localPort: 12345 },
+  });
+  let status = 0;
+  let accepted = false;
+  const response = {
+    writeHead(code: number) { status = code; },
+    end(body: string) {
+      accepted = JSON.parse(body).accepted;
+      const reader = new DatabaseSync(f.dbPath);
+      try {
+        assert.equal(reader.prepare("SELECT count(*) AS count FROM facts").get()!.count, 2);
+        assert.equal(reader.prepare("SELECT last_seq FROM projection_state").get()!.last_seq, 0);
+      } finally { reader.close(); }
+    },
+  };
+  await createHookHandler(service.ledger, "token")(
+    request as unknown as http.IncomingMessage, response as unknown as http.ServerResponse,
+  );
+  assert.equal(status, 200);
+  assert.equal(accepted, true);
+  assert.equal(service.catchUp().last_seq, 2);
+});
+
+for (const live of [false, true]) {
+  test(`取り込みの投影は ${live ? "常駐で 500 ms ごと" : "一回の走査の終了時"} にまとめる`, (t) => {
+    const f = createFixture(t);
+    let clock = 0;
+    t.mock.method(performance, "now", () => clock);
+    const service = openObservationService({ env: f.env, live });
+    t.after(() => service.close());
+    const directory = join(f.home, ".claude", "projects");
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, "batch.jsonl"), ["one", "two", "three"].map(createClaudeMessage).join(""));
+    const reader = new DatabaseSync(f.dbPath);
+    t.after(() => reader.close());
+    const append = service.ledger.append;
+    const positions: number[] = [];
+    service.ledger.append = (input) => {
+      clock += 250;
+      const result = append(input);
+      positions.push(Number(reader.prepare("SELECT last_seq FROM projection_state").get()!.last_seq));
+      return result;
+    };
+    assert.equal(service.ingestOnce().appended, 7);
+    assert.deepEqual(positions, live ? [0, 2, 2, 4, 4, 6, 6] : [0, 0, 0, 0, 0, 0, 0]);
+    assert.equal(reader.prepare("SELECT last_seq FROM projection_state").get()!.last_seq, 7);
+    assert.equal(service.ingestOnce().appended, 0);
+  });
+}
+
+test("一括追記も core と同じ秘匿・識別・衝突・差分投影の依存を保存する", async (t) => {
+  const f = createFixture(t);
+  const { openBatchLedger } = await import("../src/service/batch-ledger.ts");
+  const buffered = openBatchLedger(f.dbPath);
+  const referencePath = join(f.home, "reference.db");
+  const reference = openLedger(referencePath);
+  const actualDb = new DatabaseSync(f.dbPath);
+  const referenceDb = new DatabaseSync(referencePath);
+  t.after(() => { actualDb.close(); referenceDb.close(); buffered.ledger.close(); reference.close(); });
+  const input = { source: "hook" as const, source_event_id: "batch-message", kind: "message.created" as const,
+    subject: "message:batch" as const, source_ts: TS, observed_ts: TS, confidence: "confirmed" as const,
+    payload: { provider: "claude" as const, native_id: "batch", version: 1, role: "user",
+      body: "sk-ant-abcdefghijklmnopqrstuvwxyz123456", body_state: "stored" as const } };
+  const changed = { ...input, payload: { ...input.payload, body: "Changed body" } };
+  buffered.batch(() => {
+    for (const fact of [input, changed, input, changed]) {
+      assert.deepEqual(buffered.ledger.append(fact), reference.append(fact));
+    }
+  });
+  assert.deepEqual(buffered.ledger.readSince(0, 100), reference.readSince(0, 100));
+  const dependencySql = "SELECT * FROM fact_projection_dependencies ORDER BY projection, subject, direction, key, seq";
+  assert.deepEqual(actualDb.prepare(dependencySql).all(), referenceDb.prepare(dependencySql).all());
+  assert.deepEqual(buffered.ledger.append(input), reference.append(input));
+  assert.deepEqual(buffered.ledger.append(changed), reference.append(changed));
+  const service = openObservationService({ env: f.env });
+  t.after(() => service.close());
+  assert.equal(service.catchUp().last_seq, 1);
+  assert.equal(readProjection(f.dbPath).messages.length, 1);
+});
+
+test("一括追記の依存保存が失敗しても、その事実だけを戻し成功済みの追記を保持する", async (t) => {
+  const f = createFixture(t);
+  const { openBatchLedger } = await import("../src/service/batch-ledger.ts");
+  const buffered = openBatchLedger(f.dbPath);
+  const db = new DatabaseSync(f.dbPath);
+  t.after(() => { db.close(); buffered.ledger.close(); });
+  db.exec(`CREATE TRIGGER fail_dependency BEFORE INSERT ON fact_projection_dependencies
+    WHEN NEW.subject = 'message:failed' BEGIN SELECT RAISE(ABORT, 'Injected dependency failure'); END`);
+  const input = { source: "hook" as const, source_event_id: "batch-success", kind: "message.created" as const,
+    subject: "message:success" as const, source_ts: TS, confidence: "confirmed" as const,
+    payload: { provider: "claude" as const, native_id: "success", version: 1, role: "user",
+      body: "Request", body_state: "stored" as const } };
+  const failed = { ...input, source_event_id: "batch-failed", subject: "message:failed" as const,
+    payload: { ...input.payload, native_id: "failed" } };
+  assert.throws(() => buffered.batch(() => {
+    buffered.ledger.append(input);
+    buffered.ledger.append(failed);
+  }), /Injected dependency failure/);
+  assert.equal(buffered.ledger.readSince(0, 100).length, 1);
+  db.exec("DROP TRIGGER fail_dependency");
+  assert.equal(buffered.ledger.append(failed).status, "appended");
+  assert.equal(buffered.ledger.readSince(0, 100).length, 2);
+});
+
+test("準備台帳の再利用後も所属・訂正の依存と再送の結果が core と一致する", async (t) => {
+  const f = createFixture(t);
+  const { openBatchLedger } = await import("../src/service/batch-ledger.ts");
+  const buffered = openBatchLedger(f.dbPath);
+  const referencePath = join(f.home, "reference.db");
+  const reference = openLedger(referencePath);
+  const actualDb = new DatabaseSync(f.dbPath);
+  const referenceDb = new DatabaseSync(referencePath);
+  t.after(() => { actualDb.close(); referenceDb.close(); buffered.ledger.close(); reference.close(); });
+  const input = { source: "hook" as const, source_event_id: "first", kind: "message.created" as const,
+    subject: "message:first" as const, source_ts: TS, observed_ts: TS, confidence: "confirmed" as const,
+    payload: { provider: "claude" as const, native_id: "first", version: 1, role: "user",
+      body: "Request", body_state: "stored" as const } };
+  buffered.batch(() => {
+    const first = buffered.ledger.append(input);
+    assert.deepEqual(first, reference.append(input));
+    // 準備台帳の掃除をまたぎ、耐久台帳と準備台帳の seq をずらす。
+    for (let index = 0; index < STAGING_REUSE_MESSAGE_COUNT; index += 1) {
+      const next = { ...input, source_event_id: `next-${index}`, subject: `message:next-${index}` as const,
+        payload: { ...input.payload, native_id: `next-${index}` } };
+      assert.deepEqual(buffered.ledger.append(next), reference.append(next));
+    }
+    const membership = { ...input, source_event_id: "membership", kind: "message_membership.created" as const,
+      subject: "message_membership:first" as const,
+      payload: { message_id: createNativeId("claude", "first"), conversation_id: createNativeId("claude", "session"), active: true } };
+    const correction = { ...input, source_event_id: "correction", kind: "message.corrected" as const,
+      subject: "message:corrected" as const, supersedes: first.fact_id };
+    for (const next of [membership, correction, input, { ...input, payload: { ...input.payload, body: "Changed" } }]) {
+      assert.deepEqual(buffered.ledger.append(next), reference.append(next));
+    }
+  });
+  assert.deepEqual(buffered.ledger.readSince(0, Number.MAX_SAFE_INTEGER), reference.readSince(0, Number.MAX_SAFE_INTEGER));
+  const sql = "SELECT * FROM fact_projection_dependencies ORDER BY projection, subject, direction, key, seq";
+  assert.deepEqual(actualDb.prepare(sql).all(), referenceDb.prepare(sql).all());
 });

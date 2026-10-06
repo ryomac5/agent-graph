@@ -3,6 +3,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test \"test/**/*.test.ts\""
+    "test": "node --import ./test/setup.ts --test \"test/**/*.test.ts\""
   }
 }

@@ -1,0 +1,71 @@
+{
+  "runs": [
+    [
+      "claude",
+      "unknown"
+    ],
+    [
+      "codex",
+      "idle"
+    ],
+    [
+      "done",
+      "ended"
+    ],
+    [
+      "external",
+      "running"
+    ]
+  ],
+  "approvals": [
+    [
+      "claude",
+      "expired"
+    ],
+    [
+      "codex",
+      "expired"
+    ],
+    [
+      "done",
+      "resolved"
+    ],
+    [
+      "external",
+      "pending"
+    ]
+  ],
+  "actions": [
+    [
+      "claude",
+      "resume"
+    ]
+  ],
+  "ledger": [
+    [
+      "run:claude",
+      "run.state_changed",
+      "unknown"
+    ],
+    [
+      "run:codex",
+      "run.state_changed",
+      "unknown"
+    ],
+    [
+      "approval:claude",
+      "approval.resolved",
+      "expired"
+    ],
+    [
+      "approval:codex",
+      "approval.resolved",
+      "expired"
+    ],
+    [
+      "run:codex",
+      "run.state_changed",
+      "idle"
+    ]
+  ]
+}

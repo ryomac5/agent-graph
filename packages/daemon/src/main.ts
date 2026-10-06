@@ -23,6 +23,7 @@ import { processStartedAt, startLivenessMonitor } from "./liveness.ts";
 import { startSocketServer, type Hello, type HelloHandler } from "./socket.ts";
 import { startCodexObserver } from "./codex-observe.ts";
 import { startClaudeObserver } from "./claude-observe.ts";
+import { resolveAliasAssignments } from "./observe.ts";
 
 const execFileAsync = promisify(execFile);
 const CODEX_INTERVAL_MS = 60_000;
@@ -279,6 +280,8 @@ export async function startDaemon(): Promise<{ stop: () => Promise<void> }> {
     for (const [key, store] of stores) {
       const merged = store.mergeSplitClaudeSessions(new Date().toISOString());
       if (merged > 0) log(`merged ${merged} split claude sessions in ${key}`);
+      const resolved = resolveAliasAssignments(store);
+      if (resolved > 0) log(`resolved ${resolved} subagent model aliases in ${key}`);
     }
     const repoRoot = await execFileAsync("git", ["rev-parse", "--show-toplevel"], { cwd: process.cwd() })
       .then(({ stdout }) => stdout.trim(), () => undefined);

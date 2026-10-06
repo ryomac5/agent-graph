@@ -3,6 +3,7 @@ import type { Event } from "../../core/src/events.ts";
 import type { Store } from "../../core/src/store/store.ts";
 import { newSpanId } from "../../core/src/trace.ts";
 import { ulid } from "../../core/src/ulid.ts";
+import { resolveClaudeModel } from "./models.ts";
 import { observe as ingest, observers as turnObservers, summarize, type Observer } from "./sessions.ts";
 
 // Claude Code のネイティブのサブエージェントの観測。hook の PreToolUse, PostToolUse, SubagentStart, SubagentStop から届く。
@@ -58,6 +59,22 @@ export function inferRole(description: string, agentType: string): Role {
   if (/research|investigat|explore|search|analy|survey|調査|探索|確認|調べ|検索|分析|計画|把握/.test(text)) return "research";
   if (/\bdocs?\b|document|readme|guide|文書|ドキュメント|説明書|手順書|解説/.test(text)) return "document";
   return "implement";
+}
+
+// 以前に別名のまま記録した Claude の子のモデルを、親の会話のモデルで版つきに直す。直した数を返す
+export function resolveAliasAssignments(store: Store): number {
+  const rows = store.db.prepare(`SELECT a.delegation_id AS id, a.model AS model, s.model AS parent FROM assignments a
+    JOIN delegations d ON d.id = a.delegation_id LEFT JOIN sessions s ON s.id = d.session_id
+    WHERE a.executor = 'claude' AND (a.model = '' OR a.model NOT LIKE 'claude-%')`).all();
+  const update = store.db.prepare("UPDATE assignments SET model = ?, tier = ? WHERE delegation_id = ?");
+  let fixed = 0;
+  for (const row of rows) {
+    const model = resolveClaudeModel(String(row.model ?? ""), row.parent == null ? "" : String(row.parent));
+    if (!model || model === row.model) continue;
+    update.run(model, tierOf(model), String(row.id));
+    fixed++;
+  }
+  return fixed;
 }
 
 export function tierOf(model: string): Tier {
@@ -126,7 +143,7 @@ function createSubagent(store: Store, session: SessionRef, at: string, input: {
   title: string; task: string; agentType: string; model?: string; name?: string; toolUseId?: string; parentId?: string; parentAgentId?: string;
 }): string {
   const id = ulid();
-  const model = input.model || session.model || "";
+  const model = resolveClaudeModel(input.model || "", session.model || "");
   store.insertDelegation({ id, repoKey: session.repoKey, sessionId: session.id, parentId: input.parentId,
     role: inferRole(input.title, input.agentType), title: input.title, status: "running", kind: "subagent" });
   store.insertAssignment(id, { executor: "claude", model, family: "anthropic", tier: tierOf(model),

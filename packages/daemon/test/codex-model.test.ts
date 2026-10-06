@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { parseRows, switchCodexModel, type PaneControl } from "../src/codex-model.ts";
-import { codexModels, modelCatalog } from "../src/models.ts";
+import { codexModels, modelCatalog, resolveClaudeModel } from "../src/models.ts";
 import { parseAction } from "../src/actions.ts";
 
 // 実際の Codex の選択画面を写した偽の pane。キーに応じて画面を進める
@@ -96,4 +96,21 @@ test("set_model は effort を段階の名前だけ受け付ける", () => {
   assert.equal(parseAction({ action: "set_model", repo: "r", sessionId: "s", model: "gpt-6-astra", effort: "xhigh" }).effort, "xhigh");
   assert.equal(parseAction({ action: "set_model", repo: "r", sessionId: "s", model: "claude-opus-5-5" }).effort, undefined);
   assert.throws(() => parseAction({ action: "set_model", repo: "r", sessionId: "s", model: "m", effort: "turbo" }), /Invalid effort/);
+});
+
+test("Agent ツールの別名は、同じ系統なら親のモデルに、違えば一覧の最新の版に直す", () => {
+  assert.equal(resolveClaudeModel("opus", "claude-opus-5-5[1m]"), "claude-opus-5-5");
+  assert.equal(resolveClaudeModel("opus", "claude-opus-5"), "claude-opus-5");
+  assert.equal(resolveClaudeModel("sonnet", "claude-opus-5-5"), "claude-sonnet-5-5");
+  assert.equal(resolveClaudeModel("haiku", ""), "claude-haiku-4-5-20251001");
+  assert.equal(resolveClaudeModel("opus[1m]", "claude-sonnet-5"), "claude-opus-5-5[1m]");
+  assert.equal(resolveClaudeModel("", "claude-fable-5-1"), "claude-fable-5-1");
+  assert.equal(resolveClaudeModel("inherit", "claude-fable-5-1"), "claude-fable-5-1");
+  assert.equal(resolveClaudeModel("claude-sonnet-5", "claude-opus-5-5"), "claude-sonnet-5");
+  assert.equal(resolveClaudeModel("gpt-6-astra", "claude-opus-5-5"), "gpt-6-astra");
+});
+
+test("親の会話のモデルが別名でも版つきに直す", () => {
+  assert.equal(resolveClaudeModel("", "fable"), "claude-fable-5-1");
+  assert.equal(resolveClaudeModel("opus", "opus[1m]"), "claude-opus-5-5");
 });

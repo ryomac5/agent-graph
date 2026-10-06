@@ -57,3 +57,20 @@ export function findModelChoice(client: "claude" | "codex", id: string, catalog:
   if (found || client !== "claude" || !CLAUDE_ALIASES[id]) return found;
   return { id, label: CLAUDE_ALIASES[id], efforts: id === "haiku" ? [] : CLAUDE_EFFORTS };
 }
+
+// Agent ツールの model は「opus」のような別名か「inherit」で渡ってくる。表示のために版つきの ID に直す。
+// 同じ系統なら親の会話のモデルを使い、違えば一覧で最新の版を使う。1M の文脈は別名に付いたときだけ残す
+const CLAUDE_ALIAS = /^(fable|opus|sonnet|haiku)(\[1m\])?$/;
+export function resolveClaudeModel(model: string, parentModel = ""): string {
+  // 親の会話のモデルも別名のことがある
+  const parent = CLAUDE_ALIAS.test(parentModel.trim().toLowerCase()) ? resolveClaudeModel(parentModel) : parentModel;
+  const name = model.trim().toLowerCase();
+  if (!name || name === "inherit") return parent;
+  const alias = CLAUDE_ALIAS.exec(name);
+  if (!alias) return model;
+  const family = `-${alias[1]}-`;
+  const base = parent.replace(/\[1m\]$/, "");
+  const id = base.includes(family) ? base : CLAUDE_MODELS.find((item) => item.id.includes(family) && !item.id.endsWith("[1m]"))?.id;
+  if (!id) return model;
+  return alias[2] && CLAUDE_MODELS.some((item) => item.id === `${id}[1m]`) ? `${id}[1m]` : id;
+}

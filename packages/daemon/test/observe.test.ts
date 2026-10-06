@@ -8,7 +8,7 @@ import type { TestContext } from "node:test";
 import { repoKey } from "../../core/src/paths.ts";
 import { openStore, type Store } from "../../core/src/store/store.ts";
 import { startHttpServer } from "../src/http/server.ts";
-import { inferRole, observe, observers, tierOf } from "../src/observe.ts";
+import { inferRole, observe, observers, resolveAliasAssignments, tierOf } from "../src/observe.ts";
 import { NotFoundError, registerSession } from "../src/sessions.ts";
 
 async function createFixture(t: TestContext) {
@@ -57,7 +57,7 @@ test("Agent の呼び出しは kind subagent の行になり、SubagentStop で 
   assert.equal(rows[0].title, "契約を調べる");
   assert.equal(rows[0].role, "research");
   assert.equal(rows[0].executor, "claude");
-  assert.equal(rows[0].model, "sonnet");
+  assert.equal(rows[0].model, "claude-sonnet-5-5", "別名は版つきに直す");
   assert.equal(rows[0].family, "anthropic");
   assert.equal(rows[0].tier, "mid");
   assert.equal(rows[0].parent_id, null);
@@ -88,7 +88,7 @@ test("model が無ければ根の model を継ぎ、title が無ければ prompt
   observe({ kind: "subagent_request", sessionId: "s", toolUseId: "toolu_1", title: "  ", task: "\n\n  実装する  \n次の行" }, stores, at(1));
   const [row] = delegations(store);
   assert.equal(row.title, "実装する");
-  assert.equal(row.model, "fable");
+  assert.equal(row.model, "claude-fable-5-1");
   assert.equal(row.tier, "high");
   assert.equal(row.role, "implement");
   assert.equal(eventsOf(store, String(row.id))[1].payload.agentType, "general-purpose");
@@ -257,4 +257,14 @@ test("SubagentStop に付いた実際のモデルで、呼び出しのときの�
   assert.equal(row.status, "done");
   assert.equal(row.model, "claude-sonnet-5-5");
   assert.equal(row.tier, "mid");
+});
+
+test("以前に別名のまま記録した子のモデルを、起動時に版つきへ直す", async (t) => {
+  const { store, stores } = await createFixture(t);
+  observe({ kind: "subagent_request", sessionId: "s", toolUseId: "toolu_1", title: "調べる", task: "調べる" }, stores, at(1));
+  const [row] = delegations(store);
+  store.db.prepare("UPDATE assignments SET model = 'opus' WHERE delegation_id = ?").run(String(row.id));
+  assert.equal(resolveAliasAssignments(store), 1);
+  assert.equal(delegations(store)[0].model, "claude-opus-5-5");
+  assert.equal(resolveAliasAssignments(store), 0, "直したあとは触らない");
 });

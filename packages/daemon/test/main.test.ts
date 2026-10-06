@@ -31,6 +31,32 @@ test("根の最後の MCP 接続が閉じたら親プロセスが生きていて
   reconnect!(); assert.equal(store.getSession("session")!.status, "ended");
 });
 
+test("Claude の id の hello は、同じ Claude のプロセスから割れた別 id のセッションを寄せる", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "ag-hello-merge-"));
+  execFileSync("git", ["init", "-q", dir]);
+  const root = execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd: dir, encoding: "utf8" }).trim();
+  const key = repoKey(root);
+  const store = openStore(":memory:");
+  store.upsertRepo({ key, rootPath: root, name: "repo" });
+  t.after(async () => { store.close(); await rm(dir, { recursive: true, force: true }); });
+  // shim が Claude の id を知らなかった頃に作った別 id のセッション。委譲はこちらに付いている
+  const ghost = "01M48BMEHR38AAAAAAAAAAAAAA";
+  store.insertNamedSession({ id: ghost, repoKey: key, client: "claude", traceId: "a".repeat(32),
+    startedAt: new Date().toISOString(), pid: process.pid });
+  store.insertDelegation({ id: "d1", repoKey: key, sessionId: ghost, role: "implement", title: "x", status: "done" });
+  // 別の Claude のプロセスの別 id は寄せない
+  store.insertNamedSession({ id: "01M48BMEHR38BBBBBBBBBBBBBB", repoKey: key, client: "claude", traceId: "b".repeat(32),
+    startedAt: new Date().toISOString(), pid: process.pid + 1 });
+  const real = "fa3cb783-77f1-4c34-8434-9da0dd41db81";
+  const handler = createHelloHandler(new Map([[key, store]]));
+  const close = await handler({ type: "hello", cwd: root, pid: process.pid, session: real, client: "claude" });
+  assert.equal(store.db.prepare("SELECT session_id FROM delegations WHERE id = 'd1'").get()?.session_id, real);
+  assert.equal(store.getSession(ghost)!.status, "ended");
+  assert.equal(store.getSession(real)!.status, "running");
+  assert.equal(store.getSession("01M48BMEHR38BBBBBBBBBBBBBB")!.status, "running");
+  close?.();
+});
+
 test("handler restores caller and reuses repository store across nested cwd", async () => {
   const dir = await mkdtemp(join(tmpdir(), "ag-main-"));
   const oldState = process.env.XDG_STATE_HOME;

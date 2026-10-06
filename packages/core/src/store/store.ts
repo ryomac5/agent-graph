@@ -259,6 +259,52 @@ export class Store {
     if (result.changes > 0) this.notifyChange();
   }
 
+  // 割れたセッションを本物に寄せる。shim が Claude の id を知らずに作った別 id のセッションが対象。
+  // 委譲と会話とグラフを本物に移し、別 id のほうを終える。events は追記専用なので残す
+  mergeSessionInto(ghostId: string, realId: string, at: string): boolean {
+    if (ghostId === realId) return false;
+    this.db.exec("BEGIN IMMEDIATE");
+    let moved = false;
+    try {
+      const ghost = this.db.prepare("SELECT status FROM sessions WHERE id = ?").get(ghostId);
+      const real = this.db.prepare("SELECT id FROM sessions WHERE id = ?").get(realId);
+      if (ghost && real) {
+        for (const table of ["delegations", "turns", "graphs"]) {
+          this.db.prepare(`UPDATE ${table} SET session_id = ? WHERE session_id = ?`).run(realId, ghostId);
+        }
+        if (ghost.status !== "ended") {
+          this.db.prepare(`UPDATE sessions SET status = 'ended', ended_at = ?, ended_reason = 'explicit', waiting_reason = NULL
+            WHERE id = ?`).run(at, ghostId);
+        }
+        moved = true;
+      }
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+    if (moved) this.notifyChange();
+    return moved;
+  }
+
+  // 過去に割れた Claude のセッションをまとめて寄せる。別 id は ULID、Claude の id は UUID の形をしている。
+  // 同じリポジトリで 10 秒以内に始まった Claude の id がちょうど 1 つのときだけ寄せる。複数あれば取り違えるので触らない
+  mergeSplitClaudeSessions(at: string): number {
+    const ghosts = this.db.prepare(`SELECT id, repo_key, started_at FROM sessions
+      WHERE client = 'claude' AND length(id) = 26 AND id NOT LIKE '%-%'`).all();
+    let merged = 0;
+    for (const ghost of ghosts) {
+      const partners = this.db.prepare(`SELECT id FROM sessions WHERE client = 'claude' AND repo_key = ? AND id LIKE '%-%-%-%-%'
+        AND ABS(julianday(started_at) - julianday(?)) * 86400 <= 10`).all(String(ghost.repo_key), String(ghost.started_at));
+      if (partners.length !== 1) continue;
+      const hasContent = this.db.prepare(`SELECT
+        (SELECT count(*) FROM delegations WHERE session_id = ?) + (SELECT count(*) FROM turns WHERE session_id = ?) +
+        (SELECT count(*) FROM graphs WHERE session_id = ?) AS n`).get(ghost.id, ghost.id, ghost.id);
+      const status = this.db.prepare("SELECT status FROM sessions WHERE id = ?").get(ghost.id);
+      // 中身が無く終わった別 id は寄せ済み。何度起動しても同じ結果にする
+      if (Number(hasContent?.n ?? 0) === 0 && status?.status === "ended") continue;
+      if (this.mergeSessionInto(String(ghost.id), String(partners[0].id), at)) merged++;
+    }
+    return merged;
+  }
+
   // 終了。走っていた委譲は親を失うので lost にし、delegation.lost を追記する。すでに終わっていれば何もしない。
   // lost の委譲があとで実際に完了したときは finishDelegation が done や failed で上書きする。事実を優先する。
   endSession(id: string, endedAt: string, reason: EndedReason = "explicit"): boolean {

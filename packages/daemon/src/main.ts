@@ -139,6 +139,12 @@ export function createHelloHandler(stores: Map<string, Store>, latest = new Map<
       store.setSessionProcess(caller.sessionId, hello.pid, pidStartedAt, now);
       if (hello.client) store.updateSessionClient(caller.sessionId, hello.client);
     }
+    // shim が Claude の id を知らなかった頃に同じ Claude のプロセスから作られた別 id のセッションを寄せる
+    if (hello.client === "claude" && /^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(caller.sessionId)) {
+      const ghosts = store.db.prepare(`SELECT id FROM sessions WHERE client = 'claude' AND pid = ? AND id != ?
+        AND status != 'ended'`).all(hello.pid, caller.sessionId);
+      for (const ghost of ghosts) store.mergeSessionInto(String(ghost.id), caller.sessionId, now);
+    }
     const connectionKey = `${key}:${caller.sessionId}`;
     connections.set(connectionKey, (connections.get(connectionKey) ?? 0) + 1);
     return () => {
@@ -257,6 +263,11 @@ export async function startDaemon(): Promise<{ stop: () => Promise<void> }> {
   try {
     // 再起動のあとも、状態置き場にある全リポジトリを見回りの対象にする
     for (const error of openAllStores(stores)) log(String(error));
+    // 過去に 2 つに割れた Claude のセッションを寄せる。寄せた数をログに残す
+    for (const [key, store] of stores) {
+      const merged = store.mergeSplitClaudeSessions(new Date().toISOString());
+      if (merged > 0) log(`merged ${merged} split claude sessions in ${key}`);
+    }
     const repoRoot = await execFileAsync("git", ["rev-parse", "--show-toplevel"], { cwd: process.cwd() })
       .then(({ stdout }) => stdout.trim(), () => undefined);
     if (repoRoot) {

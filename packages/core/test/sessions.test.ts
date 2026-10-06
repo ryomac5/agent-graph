@@ -191,3 +191,42 @@ test("委譲の詳細の列と往復の記録", (t) => {
   store.finishDelegation("d1", "failed");
   assert.equal(store.db.prepare("SELECT output FROM delegations WHERE id = 'd1'").get()!.output, "最終の出力", "省略なら出力を保つ");
 });
+
+test("割れたセッションは委譲と会話を本物に移し、別 id のほうを終える", (t) => {
+  const store = withStore(t);
+  const base = { client: "claude", traceId: "a".repeat(32), startedAt: "2026-10-05T03:07:00.000Z" };
+  const real = "0da2d9d3-6b79-4c34-8434-9da0dd41db81";
+  const ghost = "01M45WRPM3KJYABCDEFGHJKMNP";
+  store.insertNamedSession({ id: real, repoKey: "r", ...base });
+  store.insertNamedSession({ id: ghost, repoKey: "r", ...base, pid: 123 });
+  store.insertDelegation({ id: "d1", repoKey: "r", sessionId: ghost, role: "implement", title: "on ghost", status: "done" });
+  assert.equal(store.mergeSessionInto(ghost, real, "2026-10-05T04:00:00.000Z"), true);
+  assert.equal(store.db.prepare("SELECT session_id FROM delegations WHERE id = 'd1'").get()?.session_id, real);
+  assert.equal(store.getSession(ghost)?.status, "ended");
+  assert.equal(store.getSession(real)?.status, "running");
+  // 同じ id や無い相手には何もしない
+  assert.equal(store.mergeSessionInto(real, real, "x"), false);
+  assert.equal(store.mergeSessionInto("missing", real, "x"), false);
+});
+
+test("過去に割れた Claude のセッションは 10 秒以内の相手が 1 つのときだけ寄せ、何度流しても同じ結果になる", (t) => {
+  const store = withStore(t);
+  const at = (second: number) => `2026-10-05T03:07:${String(second).padStart(2, "0")}.000Z`;
+  const add = (id: string, startedAt: string, repoKey = "r") =>
+    store.insertNamedSession({ id, repoKey, client: "claude", traceId: "a".repeat(32), startedAt });
+  // 相手が 1 つ。寄せる
+  add("aaaaaaaa-0000-4000-8000-000000000001", at(0));
+  add("01M45WRPM3KJYAAAAAAAAAAAAA", at(3));
+  store.insertDelegation({ id: "d1", repoKey: "r", sessionId: "01M45WRPM3KJYAAAAAAAAAAAAA", role: "implement", title: "x", status: "done" });
+  // 相手が 2 つ。取り違えるので触らない
+  add("bbbbbbbb-0000-4000-8000-000000000001", at(30));
+  add("bbbbbbbb-0000-4000-8000-000000000002", at(31));
+  add("01M45WRPM3KJYBBBBBBBBBBBBB", at(32));
+  store.insertDelegation({ id: "d2", repoKey: "r", sessionId: "01M45WRPM3KJYBBBBBBBBBBBBB", role: "implement", title: "y", status: "done" });
+  // 別のリポジトリの相手は数えない
+  add("cccccccc-0000-4000-8000-000000000001", at(3), "other");
+  assert.equal(store.mergeSplitClaudeSessions("2026-10-05T04:00:00.000Z"), 1);
+  assert.equal(store.db.prepare("SELECT session_id FROM delegations WHERE id = 'd1'").get()?.session_id, "aaaaaaaa-0000-4000-8000-000000000001");
+  assert.equal(store.db.prepare("SELECT session_id FROM delegations WHERE id = 'd2'").get()?.session_id, "01M45WRPM3KJYBBBBBBBBBBBBB");
+  assert.equal(store.mergeSplitClaudeSessions("2026-10-05T05:00:00.000Z"), 0);
+});

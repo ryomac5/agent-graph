@@ -208,3 +208,19 @@ test("fmtAgo は過ぎた時間を英語で短く出し、1 週間を超えた�
   assert.equal(lib.fmtAgo(new Date(2026, 8, 1, 10, 5), now), "Sep 1 10:05");
   assert.equal(lib.fmtAgo(undefined, now), "");
 });
+
+test("layoutLanes は一次の親で列を引き継ぎ、マージの親を空いた列に出し、合流で列を空ける", () => {
+  // main: M(merge of F2) -> B -> A ;  feature: F2 -> F1 -> A
+  const commits = [
+    { sha: "M", parents: ["B", "F2"] }, { sha: "F2", parents: ["F1"] }, { sha: "B", parents: ["A"] },
+    { sha: "F1", parents: ["A"] }, { sha: "A", parents: [] },
+  ];
+  const { rows, width } = lib.layoutLanes(commits);
+  assert.equal(width, 2);
+  assert.deepEqual(rows.map((row) => row.col), [0, 1, 0, 1, 0]);
+  assert.deepEqual(rows[0].edges, [0, 1], "マージは 2 本の線を出す");
+  assert.deepEqual(rows[2].after, ["A", "F1"]);
+  assert.deepEqual(rows[3].edges, [0], "同じ親を待つ列があればそこへ合流する");
+  assert.deepEqual(rows[3].after, ["A"]);
+  assert.deepEqual(rows[4].after, [], "最初のコミットで線が終わる");
+});

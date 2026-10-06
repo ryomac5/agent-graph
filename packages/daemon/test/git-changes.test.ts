@@ -4,7 +4,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { buildChanges, mergedBranch, sessionsFor, type SessionRef } from "../src/git-changes.ts";
+import { buildChanges, sessionsFor, type SessionRef } from "../src/git-changes.ts";
+import { commitDiff, parseDiff } from "../src/git-diff.ts";
 import { commitCommands } from "../src/claude-observe.ts";
 import { parseCodexRows } from "../src/codex-observe.ts";
 
@@ -27,12 +28,6 @@ function repo(t: { after: (fn: () => void) => void }) {
   };
   return { root, run, commit };
 }
-
-test("マージの件名から取り込んだブランチを読む", () => {
-  assert.equal(mergedBranch("Merge pull request #12 from ryomac5/fix/bg-sessions"), "fix/bg-sessions");
-  assert.equal(mergedBranch("Merge branch 'feat/x' into main"), "feat/x");
-  assert.equal(mergedBranch("一覧を直す"), "");
-});
 
 test("件名を含むコマンドのセッションを選び、無ければ前後 2 分のコマンドで選ぶ", () => {
   const commands = [
@@ -71,14 +66,52 @@ test("既定のブランチのコミットに増減とセッションを添え�
   ];
   const changes = await buildChanges(root, commands, names);
   assert.equal(changes.branch, "main");
-  assert.deepEqual(changes.commits.map((c) => c.subject), ["Merge branch 'feat/list'", "土台を作る"]);
-  const merge = changes.commits[0];
-  assert.equal(merge.merge?.branch, "feat/list");
-  assert.deepEqual(merge.merge?.commits.map((c) => c.subject), ["一覧を磨く", "一覧を作る"]);
-  assert.deepEqual(merge.sessions.map((ref) => ref.name).sort(), ["repo-001", "repo-002"]);
-  assert.equal(merge.files, 2);
-  assert.deepEqual(changes.commits[1].sessions, []);
-  assert.deepEqual(changes.branches.map((b) => [b.name, b.ahead, b.sessions.map((ref) => ref.name)]), [["feat/wip", 1, ["repo-002"]]]);
+  assert.deepEqual(changes.branches, ["main", "feat/wip"], "作業用のブランチはツリーに入れない");
+  const subjects = changes.commits.map((c) => c.subject);
+  assert.deepEqual(subjects, ["途中の作業", "Merge branch 'feat/list'", "一覧を磨く", "一覧を作る", "土台を作る"], "トポロジー順で子が親より先");
+  const bySubject = new Map(changes.commits.map((c) => [c.subject, c]));
+  const merge = bySubject.get("Merge branch 'feat/list'")!;
+  assert.equal(merge.parents.length, 2);
+  assert.deepEqual(merge.refs, ["main"]);
+  assert.deepEqual(bySubject.get("途中の作業")!.refs, ["feat/wip"]);
+  assert.deepEqual(bySubject.get("一覧を作る")!.sessions.map((ref) => ref.name), ["repo-001"]);
+  assert.deepEqual(bySubject.get("一覧を磨く")!.sessions.map((ref) => ref.name), ["repo-002"]);
+  assert.equal(bySubject.get("一覧を作る")!.files, 1);
+  assert.deepEqual(bySubject.get("土台を作る")!.sessions, []);
+  const page = await buildChanges(root, commands, names, { limit: 2 });
+  assert.equal(page.hasMore, true);
+  assert.equal(page.commits.length, 2);
+
+  // 差分。普通のコミット、マージ、最初のコミット
+  const plain = await commitDiff(root, bySubject.get("一覧を磨く")!.sha);
+  assert.equal(plain.subject, "一覧を磨く");
+  assert.deepEqual(plain.files.map((f) => [f.path, f.status, f.additions, f.deletions]), [["c.txt", "added", 1, 0]]);
+  assert.deepEqual(plain.files[0].hunks[0].lines, [{ kind: "add", new: 1, text: "一覧を磨く" }]);
+  const merged = await commitDiff(root, merge.sha);
+  assert.deepEqual(merged.files.map((f) => f.path).sort(), ["b.txt", "c.txt"], "マージは一次の親との差分");
+  const first = await commitDiff(root, bySubject.get("土台を作る")!.short);
+  assert.deepEqual(first.files.map((f) => f.path), ["a.txt"]);
+  await assert.rejects(commitDiff(root, "not-a-sha"), /Invalid commit/);
+});
+
+test("差分の解析は変更と削除と改名と二進と行番号を読み、大きなファイルは切る", () => {
+  const output = [
+    "diff --git a/src/a.ts b/src/a.ts", "index 1..2 100644", "--- a/src/a.ts", "+++ b/src/a.ts",
+    "@@ -10,3 +10,3 @@ function f() {", " keep", "-old", "+new", " tail", "\\ No newline at end of file",
+    "diff --git a/old.md b/new.md", "similarity index 90%", "rename from old.md", "rename to new.md",
+    "diff --git a/gone.txt b/gone.txt", "deleted file mode 100644", "--- a/gone.txt", "+++ /dev/null", "@@ -1 +0,0 @@", "-bye",
+    "diff --git a/img.png b/img.png", "Binary files a/img.png and b/img.png differ",
+  ].join("\n");
+  const { files } = parseDiff(output);
+  assert.deepEqual(files.map((f) => [f.path, f.oldPath, f.status, f.binary]), [
+    ["src/a.ts", undefined, "modified", false], ["new.md", "old.md", "renamed", false], ["gone.txt", undefined, "deleted", false], ["img.png", undefined, "modified", true]]);
+  assert.deepEqual(files[0].hunks[0].lines, [
+    { kind: "ctx", old: 10, new: 10, text: "keep" }, { kind: "del", old: 11, text: "old" }, { kind: "add", new: 11, text: "new" }, { kind: "ctx", old: 12, new: 12, text: "tail" }]);
+  const big = ["diff --git a/b.txt b/b.txt", "@@ -0,0 +1,2000 @@", ...Array.from({ length: 2000 }, (_, i) => `+${i}`)].join("\n");
+  const parsed = parseDiff(big);
+  assert.equal(parsed.truncated, true);
+  assert.equal(parsed.files[0].additions, 2000, "数は全部数える");
+  assert.equal(parsed.files[0].hunks[0].lines.length, 1500);
 });
 
 test("Claude と Codex の記録から git commit のコマンドを時刻つきで拾う", () => {

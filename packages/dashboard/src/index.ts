@@ -17,3 +17,5 @@ export { DISMISSABLE_STATUS, isDismissable, dismissKey, visibleView, diffKnown }
 export type { VisibleScope, VisibleResult } from "../public/lib/visible.js";
 export { inlineSpans, parseMarkdown } from "../public/lib/markdown.js";
 export type { MdSpan, MdLine } from "../public/lib/markdown.js";
+export { layoutLanes } from "../public/lib/lanes.js";
+export type { LaneRow } from "../public/lib/lanes.js";

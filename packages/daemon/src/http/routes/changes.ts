@@ -2,7 +2,7 @@ import { listSessions } from "../../../../core/src/store/queries.ts";
 import { buildChanges, type SessionRef } from "../../git-changes.ts";
 import { sendJson, type Route } from "../route.ts";
 
-const PAGE_SIZE = 40;
+const PAGE_SIZE = 60;
 // プロジェクトの開発の流れ。既定のブランチのコミットと作業中のブランチに、作ったセッションを添える
 export const changesRoute: Route = {
   method: "GET", path: "/api/changes",

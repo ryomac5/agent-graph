@@ -786,3 +786,62 @@ form.say textarea { min-height: 60px; }
 .agent-child-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .agent-child-model, .agent-child-state { flex-shrink: 0; color: var(--muted); font-size: 11.5px; }
 .session-picker[hidden] { display: none; }
+
+/* Changes のツリー。行の高さを固定し、行ごとの SVG の線を上下でつなげる */
+.change-section-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+.change-section-sub { font-size: 12px; color: var(--muted); }
+.change-tree { display: flex; flex-direction: column; background: white; border: 1px solid #e5e5ea; border-radius: 12px; overflow: hidden; }
+.change-row { display: flex; align-items: center; gap: 10px; height: 58px; padding: 0 14px 0 6px; cursor: pointer; border-bottom: 1px solid #f2f2f5; }
+.change-row:last-child { border-bottom: 0; }
+.change-row:hover { background: #fafafc; }
+.change-row.selected { background: #eef5ff; }
+.change-row:focus-visible { outline: 2px solid var(--running); outline-offset: -2px; }
+.change-lanes { flex-shrink: 0; display: block; }
+.change-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.change-row .change-head { gap: 6px; white-space: nowrap; }
+.change-row .change-subject { font-size: 13.5px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; }
+.change-row.unlinked .change-subject { color: #3a3a3c; }
+.change-row .change-meta { margin-top: 0; flex-wrap: nowrap; white-space: nowrap; overflow: hidden; }
+.change-ref { flex-shrink: 0; font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11px; padding: 1px 6px; border-radius: 5px; background: #f3e8ff; color: #8944ab; }
+.change-ref.is-base { background: #eaf3ff; color: var(--running); }
+.change-row .change-sessions { flex-wrap: nowrap; }
+
+/* 差分。右の詳細に出し、広げるとレビューしやすい幅になる */
+.diff-view { display: flex; flex-direction: column; gap: 14px; padding-bottom: 40px; }
+.diff-head { display: flex; flex-direction: column; gap: 8px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.diff-subject { margin: 0; color: var(--text); font-size: 16px; font-weight: 650; line-height: 1.4; overflow-wrap: anywhere; }
+.diff-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--muted); }
+.diff-meta code { font-family: "IBM Plex Mono", ui-monospace, monospace; color: var(--text); }
+.diff-merge { color: #8944ab; }
+.diff-body { margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--ink); font-family: inherit; font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.diff-summary { display: flex; gap: 10px; font-size: 12.5px; font-weight: 600; }
+.diff-add-count { color: var(--done); font-variant-numeric: tabular-nums; }
+.diff-del-count { color: var(--failed); font-variant-numeric: tabular-nums; }
+.diff-index { display: flex; flex-direction: column; border: 1px solid #e5e5ea; border-radius: 10px; overflow: hidden; }
+.diff-index-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border: 0; border-bottom: 1px solid #f2f2f5; background: white; font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.diff-index-item:last-child { border-bottom: 0; }
+.diff-index-item:hover { background: #fafafc; }
+.diff-index-item .diff-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diff-status { flex-shrink: 0; width: 18px; height: 18px; display: inline-grid; place-items: center; border-radius: 4px; font-size: 10.5px; font-weight: 700; background: var(--ink); color: var(--muted); }
+.diff-status.on-added { background: #e9f6ec; color: var(--done); }
+.diff-status.on-deleted { background: #ffecee; color: var(--failed); }
+.diff-status.on-renamed { background: #f3e8ff; color: #8944ab; }
+.diff-status.on-modified { background: #fff4d6; color: var(--waiting); }
+.diff-path { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px; }
+.diff-file { border: 1px solid #e5e5ea; border-radius: 10px; overflow: hidden; background: white; }
+.diff-file-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: #f7f7f9; cursor: pointer; font-size: 12px; position: sticky; top: 0; z-index: 1; }
+.diff-file-head .diff-path { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.diff-file[open] > .diff-file-head { border-bottom: 1px solid #e5e5ea; }
+.diff-lines { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px; line-height: 1.55; overflow-x: auto; }
+.diff-hunk { padding: 4px 12px; background: #f0f4ff; color: #5a6b8c; white-space: pre; }
+.diff-line { display: grid; grid-template-columns: 44px 44px 16px 1fr; min-width: max-content; }
+.diff-line.add { background: #e9f8ee; }
+.diff-line.del { background: #ffeef0; }
+.diff-no { padding: 0 6px; text-align: right; color: #aeaeb2; user-select: none; font-variant-numeric: tabular-nums; }
+.diff-line.add .diff-no { background: #d4f2dd; color: #4a8a5c; }
+.diff-line.del .diff-no { background: #ffdde1; color: #b45563; }
+.diff-sign { text-align: center; color: var(--muted); user-select: none; }
+.diff-line.add .diff-sign { color: var(--done); }
+.diff-line.del .diff-sign { color: var(--failed); }
+.diff-text { white-space: pre; padding-right: 16px; }
+.diff-note { margin: 0; padding: 10px 12px; font-size: 12px; color: var(--muted); }

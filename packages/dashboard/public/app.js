@@ -2,6 +2,7 @@
 import { countProject, isActiveProject, sumCounts, visibleProjects } from "./lib/status.js";
 import { dismissKey } from "./lib/visible.js";
 import { renderDetail } from "./ui/detail.js?v=compact-20261005";
+import { renderDiff } from "./ui/diff.js";
 import { el } from "./ui/dom.js";
 import { openFeed } from "./ui/feed.js";
 import { renderHeader } from "./ui/header.js?v=compact-20261005";
@@ -41,6 +42,8 @@ const state = {
   projectTab: ["graph", "changes", "agents"].includes(localStorage.getItem(TAB_KEY)) ? localStorage.getItem(TAB_KEY) : "graph",
   // repo key → /api/changes の取得結果。{ data, loading, error, at }
   changes: new Map(), agentQuery: "",
+  // Changes で選んだコミット。{ repo, sha }。選んでいる間は右の詳細に差分を出す
+  selectedCommit: null, diffs: new Map(),
 };
 let previousCanvas = "";
 let previousDetail = "";
@@ -125,6 +128,7 @@ const ctx = {
   confirm: (text) => window.confirm(text),
   onOpen: (key, additive) => openProject(key, additive),
   onSelect: (scope, nodeId) => {
+    state.selectedCommit = null;
     if (nodeId) document.body.classList.add("mobile-conversation");
     state.selectedScope = scope.id;
     state.selectedNode = nodeId;
@@ -132,6 +136,7 @@ const ctx = {
     render();
   },
   onOpenConversation: (scope) => {
+    state.selectedCommit = null;
     state.selectedScope = scope.id;
     state.selectedNode = null;
     document.body.classList.add("mobile-conversation");
@@ -151,7 +156,23 @@ const ctx = {
     return entry;
   },
   onMoreChanges: (key) => loadChanges(key, true),
+  get selectedCommit() { return state.selectedCommit ? state.selectedCommit.sha : null; },
+  onOpenCommit: (repo, sha) => {
+    state.selectedCommit = { repo, sha };
+    document.body.classList.add("mobile-conversation");
+    previousCanvas = "";
+    previousDetail = "";
+    loadDiff(repo, sha);
+    render();
+  },
+  onCloseCommit: () => {
+    state.selectedCommit = null;
+    previousCanvas = "";
+    previousDetail = "";
+    render();
+  },
   onOpenSession: (session) => {
+    state.selectedCommit = null;
     state.selectedScope = session.id;
     state.selectedNode = null;
     document.body.classList.add("mobile-conversation");
@@ -230,6 +251,23 @@ async function loadChanges(key, more = false) {
   render();
 }
 
+async function loadDiff(repo, sha) {
+  const key = `${repo}:${sha}`;
+  if (state.diffs.get(key)?.data || state.diffs.get(key)?.loading) return;
+  state.diffs.set(key, { loading: true });
+  let next;
+  try {
+    const response = await fetch(`/api/diff?${new URLSearchParams({ repo, sha })}`);
+    const body = await response.json().catch(() => ({}));
+    next = response.ok ? { data: body } : { error: body.error || `Could not load the diff (${response.status})` };
+  } catch (error) {
+    next = { error: `Could not load the diff: ${error instanceof Error ? error.message : error}` };
+  }
+  state.diffs.set(key, next);
+  previousDetail = "";
+  render();
+}
+
 // Overview と Project ページの切り替え。null で Overview へ戻す
 function openProject(key, additive = false) {
   document.body.classList.remove("detail-expanded", "graph-expanded");
@@ -238,6 +276,7 @@ function openProject(key, additive = false) {
     ? state.selectedProjects.includes(key) ? state.selectedProjects.filter((k) => k !== key) : [...state.selectedProjects, key]
     : key ? [key] : [];
   state.selectedProjects = [...new Set(keys)];
+  if (state.selectedCommit && !state.selectedProjects.includes(state.selectedCommit.repo)) state.selectedCommit = null;
   if (state.selectedProjects.length) localStorage.setItem(PROJECT_KEY, JSON.stringify(state.selectedProjects)); else localStorage.removeItem(PROJECT_KEY);
   const scope = currentScope();
   if (!scope || !state.selectedProjects.includes(projectKeyOf(scope.id))) { state.selectedScope = null; state.selectedNode = null; }
@@ -300,7 +339,7 @@ function renderCanvas(enter) {
   ctx.orbSlots.clear();
   ctx.maxWidth = Math.max(360, canvas.clientWidth - CANVAS_MARGIN);
   const changes = state.projectTab === "graph" ? [] : state.selectedProjects.map((key) => state.changes.get(key) || null);
-  const signature = JSON.stringify([state.selectedProjects, selectedViews(), state.selectedScope, state.selectedNode, [...state.dismissed], [...state.expandedArchive], ctx.maxWidth, state.projectTab, changes]);
+  const signature = JSON.stringify([state.selectedProjects, selectedViews(), state.selectedScope, state.selectedNode, [...state.dismissed], [...state.expandedArchive], ctx.maxWidth, state.projectTab, changes, state.selectedCommit]);
   if (signature === previousCanvas && !enter) return;
   previousCanvas = signature;
   const view = el("div", undefined, "project-view" + (enter ? " enter" : ""));
@@ -330,6 +369,16 @@ function renderAside() {
     return;
   }
   pickDefaultScope();
+  if (state.selectedCommit) {
+    const { repo, sha } = state.selectedCommit;
+    const entry = state.diffs.get(`${repo}:${sha}`);
+    const commit = ((state.changes.get(repo) || {}).data?.commits || []).find((item) => item.sha === sha);
+    const signature = JSON.stringify(["diff", repo, sha, entry, commit]);
+    if (signature === previousDetail) return;
+    previousDetail = signature;
+    renderDiff(aside, entry, commit, state.views.get(repo), ctx);
+    return;
+  }
   const scope = currentScope();
   const signature = JSON.stringify([state.selectedScope, state.selectedNode, scope, [...state.hiddenTurns]]);
   if (signature === previousDetail) return;

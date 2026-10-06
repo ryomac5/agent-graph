@@ -10,6 +10,7 @@ const { renderOverview } = await import("../public/ui/overview.js");
 const { renderHeader } = await import("../public/ui/header.js");
 const { buildProjectSection, scopesOf } = await import("../public/ui/project.js");
 const { renderDetail, buildBubble } = await import("../public/ui/detail.js");
+const { renderDiff } = await import("../public/ui/diff.js");
 
 type Json = Record<string, unknown>;
 const project = JSON.parse(readFileSync(new URL("./fixtures/project.json", import.meta.url), "utf8")) as Json;
@@ -126,30 +127,56 @@ test("プロジェクトは Graph と Changes と Agents のタブを持ち、Gr
   assert.ok(picked.includes("agent-graph-001-s9"), "選んだ終わったセッションは切替に並べる");
 });
 
-test("Changes は作業中のブランチと日ごとのコミットを出し、セッションの札で会話を開く", () => {
+test("Changes はコミットをツリーで並べ、行で差分を開き、セッションの札で会話を開く", () => {
   const opened: string[] = [];
-  const commit = (sha: string, subject: string, at: string, sessions: Json[], merge?: Json) => ({ sha, short: sha.slice(0, 7), subject, author: "r", at,
-    files: 2, insertions: 10, deletions: 3, sessions, ...(merge ? { merge } : {}) });
+  const commits: string[] = [];
+  const commit = (sha: string, subject: string, parents: string[], sessions: Json[], refs: string[] = []) => ({ sha, short: sha.slice(0, 7), subject, author: "r",
+    at: "2026-09-25T05:00:00.000Z", parents, refs, files: 2, insertions: 10, deletions: 3, sessions });
   const s10 = { id: "s10", name: "agent-graph-001-s10", client: "claude" };
-  const data = { branch: "main", hasMore: true,
-    branches: [{ name: "feat/tabs", ahead: 2, at: "2026-09-25T06:00:00.000Z", subject: "タブを足す", sessions: [s10] }],
-    commits: [
-      commit("aaaaaaaa1", "Merge pull request #3 from r/feat/list", "2026-09-25T05:00:00.000Z", [s10],
-        { branch: "feat/list", commits: [commit("bbbbbbbb2", "一覧を作る", "2026-09-25T04:00:00.000Z", [s10])] }),
-      commit("cccccccc3", "手で直す", "2026-09-24T03:00:00.000Z", []),
-    ] };
-  const section = buildProjectSection(project, ctx({ projectTab: "changes", changesFor: () => ({ data }),
-    onOpenSession: (session: Json) => opened.push(String(session.id)), onMoreChanges() {} }));
+  const data = { branch: "main", branches: ["main", "feat/tabs"], hasMore: true, commits: [
+    commit("ddddddd4", "タブを足す", ["bbbbbbb2"], [s10], ["feat/tabs"]),
+    commit("aaaaaaa1", "Merge branch 'feat/list'", ["ccccccc3", "bbbbbbb2"], [s10], ["main"]),
+    commit("bbbbbbb2", "一覧を作る", ["ccccccc3"], [s10]),
+    commit("ccccccc3", "手で直す", [], []),
+  ] };
+  const section = buildProjectSection(project, ctx({ projectTab: "changes", changesFor: () => ({ data }), selectedCommit: "bbbbbbb2",
+    onOpenSession: (session: Json) => opened.push(String(session.id)), onOpenCommit: (repo: string, sha: string) => commits.push(`${repo}:${sha}`), onMoreChanges() {} }));
   const html = String(section);
-  for (const word of ["In progress", "feat/tabs", "2 commits ahead of main", "History of main", "Merge feat/list", "1 commit", "一覧を作る",
-    "aaaaaaa", "+10 −3", "2 files", "No agent", "手で直す", "Load older commits", "session-chip claude"]) {
+  for (const word of ["main and 1 open branch", "change-tree", "change-lanes", "feat/tabs", "change-ref is-base", "タブを足す", "一覧を作る",
+    "aaaaaaa", "merge", "+10 −3", "2 files", "No agent", "手で直す", "Load older commits", "session-chip claude", "change-row selected"]) {
     assert.ok(html.includes(word), `${word} が無い`);
   }
-  assert.ok(!html.includes("session-group"), "Changes ではグラフを出さない");
-  (section.querySelector(".session-chip") as FakeElement).dispatch("click");
+  assert.equal(section.querySelectorAll(".change-row").length, 4);
+  assert.equal(section.querySelectorAll("circle").length, 4, "コミットごとに点を 1 つ描く");
+  (section.querySelectorAll(".change-row")[1] as FakeElement).dispatch("click");
+  assert.deepEqual(commits, ["agent-graph:aaaaaaa1"]);
+  (section.querySelector(".session-chip") as FakeElement).dispatch("click", { stopPropagation() {} });
   assert.deepEqual(opened, ["s10"]);
   assert.ok(String(buildProjectSection(project, ctx({ projectTab: "changes", changesFor: () => ({ loading: true }) }))).includes("Loading git history"));
   assert.ok(String(buildProjectSection(project, ctx({ projectTab: "changes", changesFor: () => ({ error: "Could not read git history: x" }) }))).includes("Could not read git history"));
+});
+
+test("差分はファイルの一覧と行番号つきの行を出し、長いファイルと二進は閉じる", () => {
+  const aside = doc.getElementById("detail")!;
+  const long = Array.from({ length: 500 }, (_, i) => ({ kind: "add", new: i + 1, text: `line ${i}` }));
+  const data = { sha: "abc", short: "abc1234", subject: "一覧を作る", body: "本文", author: "r", at: "2026-09-25T05:00:00.000Z", parents: ["p"], base: "p", truncated: false,
+    files: [
+      { path: "src/a.ts", status: "modified", additions: 1, deletions: 1, binary: false, truncated: false,
+        hunks: [{ header: "@@ -1,2 +1,2 @@", lines: [{ kind: "del", old: 1, text: "<b>old</b>" }, { kind: "add", new: 1, text: "new" }, { kind: "ctx", old: 2, new: 2, text: "keep" }] }] },
+      { path: "big.txt", status: "added", additions: 500, deletions: 0, binary: false, truncated: true, hunks: [{ header: "@@ -0,0 +1,500 @@", lines: long }] },
+      { path: "img.png", oldPath: "old.png", status: "renamed", additions: 0, deletions: 0, binary: true, truncated: false, hunks: [] },
+    ] };
+  renderDiff(aside, { data }, { sessions: [{ id: "s10", name: "agent-graph-001-s10", client: "claude" }], parents: ["p"] }, project, ctx({ onCloseCommit() {}, onExpandDetail() {}, onOpenSession() {} }));
+  const html = String(aside);
+  for (const word of ["一覧を作る", "abc1234", "本文", "3 files changed", "+501", "−1", "src/a.ts", "old.png → img.png", "@@ -1,2 +1,2 @@",
+    "diff-line del", "diff-line add", "Binary file", "This file is too long", "Close diff", "agent-graph-001-s10"]) {
+    assert.ok(html.includes(word), `${word} が無い`);
+  }
+  const blocks = aside.querySelectorAll(".diff-file");
+  assert.deepEqual(blocks.map((block) => block.open), [true, false, false]);
+  assert.equal(aside.querySelectorAll("b").length, 0, "差分の中の HTML を要素にしない");
+  renderDiff(aside, { loading: true }, undefined, project, ctx({ onCloseCommit() {}, onExpandDetail() {} }));
+  assert.ok(String(aside).includes("Loading diff"));
 });
 
 test("Agents は今と過去のセッションを並べ、選んだセッションの子を出し、検索で絞り込む", () => {

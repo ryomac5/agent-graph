@@ -104,3 +104,20 @@ test("見回りは指定の間隔で全 store を確かめ、stop で止まる",
   await monitor.stop();
   assert.equal(cleared, true);
 });
+
+test("pid が常駐プロセスを指すセッションは pid を当てにせず、最後の動きからの経過で終える", async (t) => {
+  const store = fixture(t);
+  const base = { repoKey: "r", client: "codex", traceId: "a".repeat(32), startedAt: ts };
+  // codex app-server を親に持つスレッド。app-server は生き続けるので pid では終わりを判定できない
+  store.insertNamedSession({ id: "stale-host", ...base, pid: 19173 });
+  store.insertNamedSession({ id: "fresh-host", ...base, pid: 19174 });
+  store.markSessionSeen("fresh-host", "2026-09-25T00:50:00.000Z");
+  store.insertNamedSession({ id: "terminal", ...base, pid: 22 });
+  const now = new Date("2026-09-25T01:00:00.000Z");
+  const ended = await reconcileLiveness(store, { now: () => now, isAlive: async () => true,
+    isHost: async (pid) => pid === 19173 || pid === 19174 });
+  assert.deepEqual(ended, ["stale-host"]);
+  assert.equal(store.getSession("stale-host")?.endedReason, "idle");
+  assert.equal(store.getSession("fresh-host")?.status, "running");
+  assert.equal(store.getSession("terminal")?.status, "running");
+});

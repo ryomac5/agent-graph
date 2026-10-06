@@ -247,6 +247,13 @@ export class Store {
   }
 
   // 観測があった。待ちなら running に戻し、last_seen_at を進める。
+  // 最後の動きの時刻だけを進める。状態と待ちには触らない。観測が記録の新しい行を見つけたときに使う
+  markSessionSeen(id: string, seenAt: string): void {
+    const result = this.db.prepare(`UPDATE sessions SET last_seen_at = ?
+      WHERE id = ? AND status != 'ended' AND (last_seen_at IS NULL OR last_seen_at < ?)`).run(seenAt, id, seenAt);
+    if (result.changes > 0) this.notifyChange();
+  }
+
   touchSession(id: string, seenAt: string): void {
     const result = this.db.prepare(`UPDATE sessions SET last_seen_at = ?, status = 'running', waiting_reason = NULL
       WHERE id = ? AND status != 'ended'`).run(seenAt, id);

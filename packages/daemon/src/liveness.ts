@@ -31,7 +31,20 @@ export async function isProcessAlive(pid: number, startedAt: string | undefined)
   return current === undefined || current === startedAt;
 }
 
+// 長く常駐して、多くのスレッドの親になるプロセス。pid が生きていてもセッションが生きているとは言えない
+const HOST_PROCESS = /codex(-\S+)? app-server|codex-code-mode-host/;
+
+// pid が常駐プロセスを指すか。取れなければ常駐ではないとみなす
+export async function isHostProcess(pid: number): Promise<boolean> {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  try {
+    const { stdout } = await execFileAsync("ps", ["-o", "command=", "-p", String(pid)]);
+    return HOST_PROCESS.test(stdout);
+  } catch { return false; }
+}
+
 export interface LivenessOptions {
+  isHost?: (pid: number) => Promise<boolean>;
   now?: () => Date;
   isAlive?: (pid: number, startedAt: string | undefined) => Promise<boolean>;
   startedAtOf?: (pid: number) => Promise<string | undefined>;
@@ -46,10 +59,13 @@ export async function reconcileLiveness(store: Store, options: LivenessOptions =
   const isAlive = options.isAlive ?? isProcessAlive;
   const startedAtOf = options.startedAtOf ?? processStartedAt;
   const staleMs = options.staleMs ?? STALE_SESSION_MS;
+  const isHost = options.isHost ?? isHostProcess;
   const ended: string[] = [];
   for (const session of store.listLiveSessions()) {
     let dead: boolean;
-    if (session.pid !== undefined) {
+    // 常駐プロセスの pid は当てにせず、pid の無いセッションと同じく最後の動きからの経過で判定する
+    const trustPid = session.pid !== undefined && !(await isHost(session.pid));
+    if (trustPid && session.pid !== undefined) {
       dead = !(await isAlive(session.pid, session.pidStartedAt));
       if (!dead && session.pidStartedAt === undefined) {
         const startedAt = await startedAtOf(session.pid);
@@ -58,8 +74,8 @@ export async function reconcileLiveness(store: Store, options: LivenessOptions =
     } else dead = now.getTime() - Date.parse(session.lastSeenAt) > staleMs;
     if (!dead) continue;
     // 理由を残す。idle で終えたものだけが次の観測で running に戻る
-    const endedAt = session.pid !== undefined ? now.toISOString() : session.lastSeenAt;
-    if (store.endSession(session.id, endedAt, session.pid !== undefined ? "process_exit" : "idle")) ended.push(session.id);
+    const endedAt = trustPid ? now.toISOString() : session.lastSeenAt;
+    if (store.endSession(session.id, endedAt, trustPid ? "process_exit" : "idle")) ended.push(session.id);
   }
   return ended;
 }

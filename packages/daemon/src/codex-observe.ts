@@ -113,6 +113,12 @@ async function listLogs(root: string, depth = 0): Promise<string[]> {
 
 export function applyCodexSnapshot(store: Store, session: SessionRow, snapshot: CodexSnapshot): void {
   if (snapshot.model) store.setSessionModel(session.id, snapshot.model);
+  // app-server 経由のスレッドは pid で生死を判定できない。記録の新しい会話を最後の動きとして残す
+  const latest = snapshot.turns.map((turn) => turn.at).filter(Boolean).sort().at(-1);
+  if (latest && latest > session.lastSeenAt) {
+    store.reviveIdleSession(session.id, latest);
+    store.markSessionSeen(session.id, latest);
+  }
   const put = store.db.prepare(`INSERT INTO turns (id, session_id, at, prompt, summary, reply) VALUES (?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET prompt = excluded.prompt, summary = excluded.summary, reply = excluded.reply`);
   for (const turn of snapshot.turns) {

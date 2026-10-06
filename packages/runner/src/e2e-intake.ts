@@ -64,7 +64,8 @@ export async function runIntakeChecks(fake: boolean) {
   const directory = mkdtempSync(join(tmpdir(), "intake-e2e-"));
   const cwd = join(directory, "repo"); mkdirSync(cwd);
   const db = join(directory, "ledger.db"); const socket = join(directory, "runner.sock");
-  const env = { ...process.env, XDG_STATE_HOME: directory, AGENT_GRAPH_RUNNER_SOCKET: socket,
+  // planner の作業ツリーを利用者の cache に残さないよう、cache も一時の場所に置く。
+  const env = { ...process.env, XDG_STATE_HOME: directory, XDG_CACHE_HOME: join(directory, "cache"), AGENT_GRAPH_RUNNER_SOCKET: socket,
     AGENT_GRAPH_E2E: "1",
     AGENT_GRAPH_FAKE_HOSTS: fake ? "1" : "0", CLAUDE_CODE_SESSION_ID: "intake-parent", CODEX_THREAD_ID: "", AGENT_GRAPH_MANAGED: "" };
   const children = new Set<ChildProcessWithoutNullStreams>();
@@ -202,7 +203,10 @@ export async function runIntakeChecks(fake: boolean) {
     process.removeListener("SIGINT", onSignal); process.removeListener("SIGTERM", onSignal);
     for (const screen of sockets) screen.terminate();
     await Promise.allSettled([...children].reverse().map(stop));
-    ledger.close(); rmSync(directory, { recursive: true, force: true });
+    ledger.close();
+    // 実機の失敗を台帳で調べられるよう、指定があれば一時の場所を残す。
+    if (process.env.AGENT_GRAPH_E2E_KEEP === "1") console.error(`KEPT: ${directory}`);
+    else rmSync(directory, { recursive: true, force: true });
   }
 }
 

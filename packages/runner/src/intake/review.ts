@@ -41,3 +41,30 @@ export function parseReviewResult(output: string): ReviewResult {
   }
   return { verdict: review.verdict as ReviewResult["verdict"], comment: review.comment };
 }
+
+export interface ReviewSubject {
+  request: { title: string; task: string; accept: string[]; scope?: string[] };
+  reply: string;
+  artifact: object;
+}
+
+// レビュアーは依頼の文脈がなければ空の差分を未実装と読むため、元の依頼と実装者の返答を必ず渡す。
+export function buildReviewPrompt({ request, reply, artifact }: ReviewSubject): string {
+  return [
+    "Review a delegated task. Do not edit files.",
+    "Judge the fixed artifact and the implementer reply against the original request below.",
+    "Approve when they do what the task asks, stay within the scope, and the verification passed.",
+    "An empty diff is correct when the task asks for no file changes.",
+    "Request changes when required work is missing, the change goes beyond the task or scope, or the result is wrong.",
+    'Return one JSON object with "verdict" ("approve" or "request_changes") and "comment".',
+    "",
+    "Original request:",
+    JSON.stringify({ title: request.title, task: request.task, accept: request.accept, ...(request.scope ? { scope: request.scope } : {}) }),
+    "",
+    "Implementer reply:",
+    reply,
+    "",
+    "Fixed artifact:",
+    JSON.stringify(artifact),
+  ].join("\n");
+}

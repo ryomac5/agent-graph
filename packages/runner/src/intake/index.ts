@@ -11,7 +11,7 @@ import { projectDelegations, projectEntityRecords } from "../../../core/src/ledg
 import type { RunnerRuntime } from "../runtime.ts";
 import type { RunnerEvent, SocketRequest } from "../socket.ts";
 import type { WorktreeRecord } from "../worktree.ts";
-import { parseReviewResult } from "./review.ts";
+import { buildReviewPrompt, parseReviewResult } from "./review.ts";
 
 function json(value: unknown): JsonValue { return JSON.parse(JSON.stringify(value)) as JsonValue; }
 function git(cwd: string, ...args: string[]): string { return execFileSync("git", args, { cwd, encoding: "utf8" }); }
@@ -274,7 +274,7 @@ export class Intake {
         this.write("delegation.attempt_created", `delegation:${requestId}`, { attempt,
           review: { run_id: reviewRunId, artifact_id: artifactId, patch_hash: artifact.patch_hash, assignment: reviewer.assignment } });
         await this.launch(reviewRunId, reviewConversationId, reviewer.assignment, tree.cwd!,
-          `Review this fixed artifact. Do not edit files. Return a JSON object with verdict (approve or request_changes) and comment.\n${JSON.stringify(artifact)}`);
+          buildReviewPrompt({ request, reply: result.output, artifact }));
         this.write("relation.created", `relation:${reviewRunId}`, { type: "review_of", from_id: reviewConversationId,
           to_id: conversationId, active: true, confidence: "confirmed", evidence: { artifact_id: artifactId, patch_hash: artifact.patch_hash } });
       } else {

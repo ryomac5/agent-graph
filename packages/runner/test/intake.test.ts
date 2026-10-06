@@ -11,7 +11,7 @@ import { openLedger } from "../../core/src/ledger/ledger.ts";
 import { projectDelegations, projectEntityRecords } from "../../core/src/ledger/projections/delegations.ts";
 import { projectRelations } from "../../core/src/ledger/projections/relations.ts";
 import { FakeHost } from "../src/host/contract.ts";
-import { parseReviewResult } from "../src/intake/review.ts";
+import { buildReviewPrompt, parseReviewResult } from "../src/intake/review.ts";
 import { Intake } from "../src/intake/index.ts";
 import { serveIntakeRunner } from "../src/intake/socket.ts";
 import { RunnerRuntime } from "../src/runtime.ts";
@@ -104,6 +104,37 @@ test("acceptance and a managed reviewer of another family use a fixed artifact",
   assert.notEqual(status.result?.assignment.family, status.result?.review?.reviewer.family);
   assert.equal(intake.submit(request).state, "done");
   assert.equal(codex.starts.length, 1); assert.equal(claude.starts.length, 1);
+});
+
+test("reviewer receives the original request and implementer reply so an empty diff can satisfy a no-change task", async (t) => {
+  const { intake, codex, claude, request } = fixture(t);
+  const noChange = { ...request, task: "Reply INTAKE-OK. Do not use tools or change files.", accept: ["git diff --exit-code"], scope: ["file.txt"] };
+  intake.submit(noChange);
+  await until(() => intake.status(request.requestId).state === "running");
+  const run = codex.starts[0];
+  codex.emit(run.runId, { type: "fact", fact: { source_event_id: `answer:${run.runId}`, source_ts: new Date().toISOString(),
+    kind: "message.created", subject: `message:${run.runId}`, confidence: "confirmed", payload: {
+      provider: "codex", native_id: run.runId, version: 1, role: "assistant", phase: "final_answer", body_state: "stored", body: "INTAKE-OK" } } });
+  codex.emit(run.runId, { type: "fact", fact: { source_event_id: `membership:${run.runId}`, source_ts: new Date().toISOString(), kind: "message_membership.created",
+    subject: `message_membership:${run.runId}`, confidence: "confirmed", payload: { message_id: run.runId, conversation_id: run.conversationId, active: true } } });
+  codex.emit(run.runId, { type: "exit", exitCode: 0 });
+  await until(() => claude.starts.length === 1);
+  const prompt = claude.starts[0].input.text;
+  assert.ok(prompt.includes(JSON.stringify(noChange.task)), "review prompt carries the original task");
+  assert.ok(prompt.includes('"accept":["git diff --exit-code"]') && prompt.includes('"scope":["file.txt"]'));
+  assert.match(prompt, /Implementer reply:\nINTAKE-OK\n/);
+  assert.match(prompt, /empty diff is correct when the task asks for no file changes/);
+  assert.ok(prompt.includes('"patch_hash":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"'), "artifact is the empty diff");
+  emitReview(claude);
+  assert.equal((await intake.wait(request.requestId)).state, "done");
+});
+
+test("review prompt keeps the request, reply and artifact in fixed sections", () => {
+  const prompt = buildReviewPrompt({ request: { title: "T", task: "Do {x}", accept: ["true"] }, reply: "", artifact: { patch_hash: "h" } });
+  assert.ok(prompt.startsWith("Review a delegated task. Do not edit files."));
+  assert.ok(prompt.includes('Original request:\n{"title":"T","task":"Do {x}","accept":["true"]}\n'));
+  assert.ok(prompt.endsWith('Fixed artifact:\n{"patch_hash":"h"}'));
+  assert.ok(!prompt.includes('"scope"'));
 });
 
 test("failed acceptance does not start a reviewer or retry automatically", async (t) => {

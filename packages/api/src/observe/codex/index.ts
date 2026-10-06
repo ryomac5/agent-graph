@@ -23,14 +23,31 @@ function readTime(value: unknown, fallback: string): string {
 }
 function identifyConversation(id: string): string { return createNativeId("codex", id); }
 
+const IGNORED_ITEMS = new Set([
+  "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output", "reasoning",
+  "commandExecution", "fileChange", "web_search_call", "tool_search_call", "tool_search_output", "compaction",
+]);
+const IGNORED_EVENTS = new Set([
+  "token_count", "user_message", "agent_message", "agent_reasoning", "exec_command_begin", "exec_command_end",
+  "exec_command_output_delta", "item_started", "item_completed", "context_compacted", "warning", "error",
+  "thread_settings_applied",
+]);
+const IGNORED_RECORDS = new Set([
+  "turn_context", "compacted", "token_usage_record", "world_state", "inter_agent_communication_metadata",
+]);
+const IGNORED_METHODS = new Set([
+  "item/started", "item/agentMessage/delta", "thread/tokenUsage/updated", "serverRequest/resolved",
+  "thread/started", "thread/settings/updated",
+]);
+
 interface RunBoundary {
   generation: number;
   offset: number;
   fileId?: string;
 }
 interface ObservationIndex {
+  unsupported: Map<string, { factId: string; count: number; offset?: number; hash?: string; fileId?: string }>;
   subjects: Set<string>;
-  events: Set<string>;
   placeholders: Map<string, string>;
   stateGenerations: Map<string, number>;
   runs: Map<string, RunBoundary[]>;
@@ -39,7 +56,13 @@ interface ObservationIndex {
 
 function indexFact(index: ObservationIndex, fact: Fact | FactInput, factId: string): void {
   index.subjects.add(fact.subject);
-  if (fact.source === "rollout-codex") index.events.add(fact.source_event_id);
+  if (fact.kind === "observation.unsupported" && fact.source === "rollout-codex") {
+    const payload = readObject(fact.payload);
+    const cursor = fact.cursor ? readObject(JSON.parse(fact.cursor)) : {};
+    if (typeof payload.count === "number") index.unsupported.set(fact.subject, { factId, count: payload.count,
+      offset: typeof payload.last_offset === "number" ? payload.last_offset : undefined,
+      hash: readText(payload.last_hash), fileId: readText(cursor.file_id) });
+  }
   if (fact.kind === "conversation.created" && fact.source === "rollout-codex" && fact.confidence === "unknown") {
     index.placeholders.set(fact.subject, factId);
   }
@@ -61,7 +84,7 @@ function indexFact(index: ObservationIndex, fact: Fact | FactInput, factId: stri
 }
 
 function readIndex(ledger: Ledger): ObservationIndex {
-  const index: ObservationIndex = { subjects: new Set(), events: new Set(), placeholders: new Map(),
+  const index: ObservationIndex = { unsupported: new Map(), subjects: new Set(), placeholders: new Map(),
     runs: new Map(), archivedRuns: new Map(), stateGenerations: new Map() };
   // 全台帳の読み取りと世代の整列は、走査全体で一度だけ行う。
   for (const fact of ledger.readSince(0, Number.MAX_SAFE_INTEGER)) indexFact(index, fact, fact.fact_id);
@@ -93,14 +116,24 @@ export function observeCodexFile(ledger: Ledger, path: string, options: CodexObs
 function observeFile(ledger: Ledger, path: string, options: CodexObservationOptions, index: ObservationIndex,
   archivedFileIds: Set<string>): AppendResult[] {
   const reader = options.reader ?? rolloutReader;
-  const file = reader.read(path);
   const fileId = basename(path);
+  let file = reader.read(path);
+  // 増分の読み手が落とす legacy メタと、旧い cursor より前の未取り込み行を補う。
+  // offset を持たない旧い集約も、一度全行を数えて続きから数えられる形にする。
+  if (reader !== rolloutReader && (!file.lines.some((line) => readObject(line.value).type === "session_meta")
+    || [...index.unsupported.values()].some((group) => group.fileId === fileId && group.offset === undefined))) {
+    file = rolloutReader.read(path);
+  }
   const archived = normalize(path).split(sep).includes("archived_sessions");
   const observedTs = options.observedTs ?? new Date().toISOString();
   const results: AppendResult[] = [];
-  const metaLine = file.lines.find((line) => readObject(line.value).type === "session_meta");
-  const meta = readObject(readObject(metaLine?.value).payload);
-  const nativeId = readText(meta.id);
+  const firstRow = readObject(file.lines[0]?.value);
+  const metaLine = file.lines.find((line) => readObject(line.value).type === "session_meta")
+    ?? (!firstRow.type && readText(firstRow.id) ? file.lines[0] : undefined);
+  const metaRow = readObject(metaLine?.value);
+  const meta = metaRow.type === "session_meta" ? readObject(metaRow.payload) : metaRow;
+  const nativeId = readText(meta.id)
+    ?? /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i.exec(fileId)?.[1];
   const format = readText(meta.history_mode) ?? "legacy";
   const createdTs = readTime(meta.timestamp, observedTs);
   const supported = format === "legacy" || format === "paginated";
@@ -119,15 +152,35 @@ function observeFile(ledger: Ledger, path: string, options: CodexObservationOpti
         hash: line?.hash ?? file.lines.at(-1)?.hash ?? null }),
     };
   }
+  const unsupported = new Map<string, { line: RolloutLine; reason: string; recordType: string; payloadType: string; count: number }>();
   function reportUnsupported(line: RolloutLine, reason: string): void {
     const row = readObject(line.value);
-    const key = `${fileId}:${line.offset}:${line.hash}:unsupported`;
-    // 移動後も元の検出場所を維持し、同じ未対応行を再検出として数えない。
-    if (index.events.has(key)) return;
-    append({ ...createBase(key, readTime(row.timestamp, createdTs), line),
-      kind: "observation.unsupported", subject: `observation:codex:${fileId}:${line.offset}:${line.hash}`,
-      payload: { source_kind: "rollout-codex", file_path: path, format_name: format,
-        format_version: readText(meta.cli_version) ?? "unknown", reason } });
+    const recordType = reason === "Missing thread identifier" ? "unknown"
+      : readText(row.type) ?? readText(row.method) ?? readText(row.record_type) ?? "unknown";
+    const payloadType = reason === "Missing thread identifier" ? "unknown"
+      : readText(readObject(row.payload).type) ?? readText(readObject(readObject(row.params).item).type) ?? "unknown";
+    const key = JSON.stringify([fileId, recordType, payloadType, reason]);
+    const previous = index.unsupported.get(`observation:codex:${key}`);
+    if (previous?.offset !== undefined && (line.offset < previous.offset
+      || (line.offset === previous.offset && line.hash === previous.hash))) return;
+    const group = unsupported.get(key);
+    if (group) { group.count += 1; group.line = line; }
+    else unsupported.set(key, { line, reason, recordType, payloadType,
+      count: (previous?.offset !== undefined ? previous.count : 0) + 1 });
+  }
+  function appendUnsupported(): void {
+    for (const [key, group] of unsupported) {
+      const subject = `observation:codex:${key}` as const;
+      const previous = index.unsupported.get(subject);
+      if (previous?.offset !== undefined && previous.count >= group.count) continue;
+      // 件数が増えた場合だけ集約を追記で置き換え、再読と archive への移動は増殖させない。
+      const payload = { source_kind: "rollout-codex" as const, file_path: path, format_name: format,
+        format_version: readText(meta.cli_version) ?? "unknown", reason: group.reason,
+        record_type: group.recordType, payload_type: group.payloadType, count: Math.max(previous?.count ?? 0, group.count),
+        last_offset: group.line.offset, last_hash: group.line.hash };
+      append({ ...createBase(`${key}:unsupported:${payload.count}:${group.line.offset}:${group.line.hash}`, readTime(readObject(group.line.value).timestamp, createdTs), group.line),
+        kind: "observation.unsupported", subject, payload, ...(previous ? { supersedes: previous.factId } : {}) });
+    }
   }
   function ensureConversation(id: string, timestamp: string): void {
     const conversation = identifyConversation(id);
@@ -214,13 +267,19 @@ function observeFile(ledger: Ledger, path: string, options: CodexObservationOpti
     const id = readText(params.threadId) ?? readText(row.threadId) ?? readText(payload.thread_id) ?? readText(payload.threadId) ?? nativeId;
     const timestamp = readTime(row.timestamp, createdTs);
     if (!supported) { reportUnsupported(line, "Unsupported history mode"); continue; }
-    if (row.type === "session_meta") {
-      if (!nativeId || !readText(meta.timestamp) || !Number.isFinite(Date.parse(String(meta.timestamp)))) reportUnsupported(line, "Invalid session metadata");
+    if (line === metaLine || row.type === "session_meta") {
+      if (!nativeId) reportUnsupported(line, "Missing thread identifier");
+      else if (!readText(meta.timestamp) || !Number.isFinite(Date.parse(String(meta.timestamp)))) reportUnsupported(line, "Invalid session metadata");
       continue;
     }
-    if (!id) { reportUnsupported(line, "Missing thread identifier"); continue; }
     const method = readText(row.method);
     const eventType = readText(payload.type);
+    const item = method === "item/completed" ? readObject(params.item) : row.type === "response_item" ? payload : row;
+    if (IGNORED_RECORDS.has(String(row.type)) || (!method && IGNORED_ITEMS.has(String(row.type)))
+      || (row.type === "event_msg" && IGNORED_EVENTS.has(eventType ?? "")) || IGNORED_METHODS.has(method ?? "")
+      || ((row.type === "response_item" || method === "item/completed") && IGNORED_ITEMS.has(String(item.type)))
+      || row.record_type === "state") continue;
+    if (!id) { reportUnsupported(line, "Missing thread identifier"); continue; }
     if (method === "turn/started" || (row.type === "event_msg" && eventType === "task_started")) {
       changeState(id, "running", timestamp, line, { kind: "turn_started", turn_id: params.turnId ?? readObject(params.turn).id ?? payload.turn_id ?? null });
     } else if (method === "turn/completed" || (row.type === "event_msg" && ["task_complete", "task_completed", "turn_aborted"].includes(eventType ?? ""))) {
@@ -233,9 +292,8 @@ function observeFile(ledger: Ledger, path: string, options: CodexObservationOpti
       changeState(id, state, timestamp, line, { kind: "thread_status", status });
     } else if (method?.endsWith("/requestApproval") || (row.type === "event_msg" && eventType === "request_approval")) {
       changeState(id, "waiting_approval", timestamp, line, { kind: "request_approval", request_id: row.id ?? payload.request_id ?? null });
-    } else if (row.type === "response_item" || method === "item/completed") {
-      const item = method ? readObject(params.item) : payload;
-      if (item.type === "message" || item.type === "agentMessage" || item.type === "userMessage") {
+    } else if (row.type === "response_item" || method === "item/completed" || row.type === "message") {
+      if (item.type === "message" || item.type === "agentMessage" || item.type === "userMessage" || item.type === "agent_message") {
         createMessage(id, { ...item, role: item.role ?? (item.type === "userMessage" ? "user" : "assistant") }, timestamp, line);
       } else if (item.type === "collabAgentToolCall") {
         const sender = readText(item.senderThreadId);
@@ -250,17 +308,15 @@ function observeFile(ledger: Ledger, path: string, options: CodexObservationOpti
                 confidence: "confirmed", active: true, evidence: { item_id: item.id ?? null, senderThreadId: sender, receiverThreadId: receiver } } });
           }
         }
-      } else if (!["function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output", "reasoning", "commandExecution", "fileChange", "web_search_call", "compaction"].includes(String(item.type))) {
+      } else {
         reportUnsupported(line, "Unsupported response item");
       }
-    } else if (!(row.type === "event_msg" && ["token_count", "user_message", "agent_message", "agent_reasoning",
-      "exec_command_begin", "exec_command_end", "exec_command_output_delta", "item_started", "item_completed",
-      "context_compacted", "warning", "error"].includes(eventType ?? ""))
-      && row.type !== "turn_context" && !["item/started", "item/agentMessage/delta", "thread/tokenUsage/updated",
-        "serverRequest/resolved", "thread/started", "thread/settings/updated"].includes(method ?? "")) {
+    } else {
       reportUnsupported(line, "Unsupported rollout record");
     }
   }
+  appendUnsupported();
+  if (nativeId && !metaLine) { ensureConversation(nativeId, createdTs); ensureRun(nativeId, createdTs); }
   const firstMessageLine = file.lines.find((line) => {
     const row = readObject(line.value);
     const params = readObject(row.params);

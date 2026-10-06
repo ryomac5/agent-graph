@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { UNNAMED, type Store } from "../../core/src/store/store.ts";
 import { listRepos, listSessions } from "../../core/src/store/queries.ts";
 import { isHumanPrompt, summarize } from "./sessions.ts";
+import { syncKitNames } from "./kit-names.ts";
 
 const POLL_MS = 2000;
 const MATCH_WINDOW_MS = 10_000;
@@ -77,6 +78,8 @@ export function startClaudeObserver(stores: Map<string, Store>, options: { root?
   let inflight: Promise<void> | undefined;
   const run = async (): Promise<void> => {
     try {
+      // herdr と hook が使うキットの番号に名前をそろえる
+      for (const store of stores.values()) syncKitNames(store);
       for (const store of stores.values()) for (const repo of listRepos(store.db)) for (const session of listSessions(store.db, repo.key)) {
         if (session.client !== "claude" || !/^[A-Za-z0-9_-]+$/.test(session.id)) continue;
         let path = paths.get(session.id) || join(root, repo.rootPath.replace(/[^A-Za-z0-9]/g, "-"), `${session.id}.jsonl`);

@@ -1,0 +1,31 @@
+import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import { openStore } from "../../core/src/store/store.ts";
+import { kitNamesPath, readKitNames, syncKitNames } from "../src/kit-names.ts";
+
+test("キットの番号と違う名前を付け替え、同じなら触らず、形の違う値と壊れた JSON は無視する", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "ag-kit-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, ".agents", "state"), { recursive: true });
+  const store = openStore(":memory:");
+  t.after(() => store.close());
+  store.upsertRepo({ key: "r", rootPath: root, name: "repo" });
+  const at = "2026-10-07T00:00:00.000Z";
+  store.insertSession({ id: "a", repoKey: "r", name: "repo-024", client: "claude", traceId: "t".repeat(32), startedAt: at });
+  store.insertSession({ id: "b", repoKey: "r", name: "repo-001", client: "claude", traceId: "t".repeat(32), startedAt: at });
+  store.insertSession({ id: "c", repoKey: "r", name: "repo-030", client: "codex", traceId: "t".repeat(32), startedAt: at });
+  writeFileSync(kitNamesPath(root), JSON.stringify({ a: "repo-014", b: "repo-001", c: "<script>", d: "repo-099" }));
+  assert.equal(syncKitNames(store, new Date(at)), 1);
+  assert.equal(store.getSession("a")!.name, "repo-014");
+  assert.equal(store.getSession("b")!.name, "repo-001");
+  assert.equal(store.getSession("c")!.name, "repo-030", "名前の形でない値は使わない");
+  const named = store.db.prepare("SELECT payload FROM events WHERE kind = 'session.named'").all().map((row) => JSON.parse(String(row.payload)));
+  assert.deepEqual(named, [{ sessionId: "a", name: "repo-014", reason: "kit" }]);
+  assert.equal(syncKitNames(store), 0, "そろったあとは何もしない");
+  writeFileSync(kitNamesPath(root), "{ broken");
+  assert.equal(readKitNames(root).get("a"), "repo-014", "書きかけの JSON は前に読んだ値を使う");
+  assert.equal(readKitNames(join(root, "missing")).size, 0);
+});

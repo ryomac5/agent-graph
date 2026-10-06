@@ -229,6 +229,18 @@ export class Store {
     return name;
   }
 
+  // 外から決まった名前に付け替える。旧版のキットが herdr と hook で使う番号に合わせるときに使う。
+  // 同じ名前なら何もしない。付け替えたら true
+  renameSession(id: string, name: string, at: string, reason: "kit"): boolean {
+    const session = this.db.prepare("SELECT name, repo_key, trace_id FROM sessions WHERE id = ?").get(id);
+    if (!session || session.name === name) return false;
+    this.db.prepare("UPDATE sessions SET name = ? WHERE id = ?").run(name, id);
+    this.appendEvent({ id: ulid(), ts: at, kind: "session.named", repo: String(session.repo_key), session: id,
+      trace: { traceId: String(session.trace_id), spanId: newSpanId() }, payload: { sessionId: id, name, reason } }, { notify: false });
+    this.notifyChange();
+    return true;
+  }
+
   getSession(id: string): SessionRow | undefined {
     const row = this.db.prepare("SELECT * FROM sessions WHERE id = ?").get(id);
     return row ? sessionFromRow(row as Record<string, unknown>) : undefined;

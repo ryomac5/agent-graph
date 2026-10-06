@@ -16,7 +16,7 @@ const x = (index) => PAD + index * COL_W;
 function sessionChips(refs, view, ctx) {
   const chips = el("div", undefined, "change-sessions");
   for (const ref of refs) {
-    const session = (view.sessions || []).find((item) => item.id === ref.id);
+    const session = (view.sessions || []).find((item) => item.id === ref.id || (item.memberIds || []).includes(ref.id));
     const chip = button(undefined, `session-chip ${ref.client || ""}${ctx.selectedScope === ref.id && !ctx.selectedCommit ? " selected" : ""}`, (event) => {
       event?.stopPropagation?.();
       if (session) ctx.onOpenSession(session);

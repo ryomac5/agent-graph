@@ -12,7 +12,7 @@ import { nameAtFirstPrompt, syncKitNames } from "./kit-names.ts";
 const POLL_MS = 2000;
 const MATCH_WINDOW_MS = 10_000;
 interface TranscriptRow {
-  type: string; uuid?: string; timestamp?: string; isMeta?: boolean; entrypoint?: string;
+  type: string; uuid?: string; timestamp?: string; isMeta?: boolean; entrypoint?: string; continuedInSessionId?: string;
   message?: { model?: string; content?: string | { type: string; text?: string; name?: string; input?: { command?: unknown } }[] };
 }
 // コミットを作るコマンド。コミットとセッションを結ぶために拾う
@@ -63,9 +63,16 @@ async function readRows(path: string): Promise<TranscriptRow[]> {
   for await (const line of createInterface({ input: createReadStream(path, { encoding: "utf8" }), crlfDelay: Infinity })) {
     let row: TranscriptRow;
     try { row = JSON.parse(line); } catch { continue; }
-    if (row.type === "user" || row.type === "assistant") rows.push(row);
+    if (row.type === "user" || row.type === "assistant" || row.type === "continued-in") rows.push(row);
   }
   return rows;
+}
+
+// Claude Code は会話を裏に回すと別の会話 ID で続け、元の記録の最後に continued-in を書く。その続き先
+export function continuedIn(rows: Iterable<TranscriptRow>): string | undefined {
+  let target: string | undefined;
+  for (const row of rows) if (row.type === "continued-in" && typeof row.continuedInSessionId === "string") target = row.continuedInSessionId;
+  return target;
 }
 
 // 登録済みの UUID と PJ のパスから履歴を引く。hook の既存の往復を全文で補い、非表示の印は残す。
@@ -118,6 +125,8 @@ export function startClaudeObserver(stores: Map<string, Store>, options: { root?
         const rows = await readRows(path);
         const snapshot = parseClaudeRows(rows);
         store.recordSessionCommands(session.id, commitCommands(rows));
+        const successor = continuedIn(rows);
+        if (successor && successor !== session.id) store.setContinuedIn(session.id, successor);
         if (snapshot.model) store.setSessionModel(session.id, snapshot.model);
         if (snapshot.lastAt) {
           // 終わった扱いの会話でも、終わったあとの発言が増えていれば別のプロセスで再開している

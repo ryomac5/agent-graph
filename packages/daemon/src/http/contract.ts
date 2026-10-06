@@ -137,6 +137,9 @@ export interface SessionView {
   turns: Turn[];
   nodes: NodeDetail[];
   edges: EdgeDetail[];
+  // この会話を作る会話 ID の鎖。Claude Code は会話を裏に回すと別の ID で続けるので、鎖を 1 つの会話として見せる。
+  // id は鎖の末尾で、今の操作を受ける会話 ID
+  memberIds: string[];
 }
 
 // planner のグラフ。タスクは kind task の node、依存は kind depends の edge。

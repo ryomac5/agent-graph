@@ -69,6 +69,8 @@ export interface Session {
 export interface SessionRow extends Session {
   status: SessionStatus;
   lastSeenAt: string;
+  // この会話を続けた会話 ID。Claude Code が裏に回すと別の ID で続ける。あれば、この ID の会話はもう使われていない
+  continuedIn?: string;
 }
 
 export interface TurnRow {
@@ -101,6 +103,7 @@ function sessionFromRow(row: Record<string, unknown>): SessionRow {
     ...(row.waiting_reason === null ? {} : { waitingReason: String(row.waiting_reason) as WaitingReason }),
     ...(optional(row.goal) === undefined ? {} : { goal: String(row.goal) }),
     ...(optional(row.model) === undefined ? {} : { model: String(row.model) }),
+    ...(row.continued_in === null || row.continued_in === undefined ? {} : { continuedIn: String(row.continued_in) }),
   };
 }
 
@@ -307,6 +310,12 @@ export class Store {
       .map((row) => ({ sessionId: String(row.session_id), at: String(row.at), command: String(row.command) }));
   }
 
+  // 記録の continued-in から読んだ続き先を残す
+  setContinuedIn(id: string, successor: string): void {
+    const result = this.db.prepare("UPDATE sessions SET continued_in = ? WHERE id = ? AND continued_in IS NOT ?").run(successor, id, successor);
+    if (result.changes > 0) this.notifyChange();
+  }
+
   setSessionModel(id: string, model: string): void {
     const result = this.db.prepare("UPDATE sessions SET model = ? WHERE id = ? AND model IS NOT ?").run(model, id, model);
     if (result.changes > 0) this.notifyChange();
@@ -352,6 +361,7 @@ export class Store {
           this.db.prepare(`UPDATE ${table} SET session_id = ? WHERE session_id = ?`).run(realId, ghostId);
         }
         this.db.prepare("UPDATE OR IGNORE session_commands SET session_id = ? WHERE session_id = ?").run(realId, ghostId);
+        this.db.prepare("UPDATE sessions SET continued_in = ? WHERE continued_in = ?").run(realId, ghostId);
         this.db.prepare("DELETE FROM session_commands WHERE session_id = ?").run(ghostId);
         // 片割れだけが番号を持っていたら本物に移し、片割れは番号なしに戻す。移した由来を session.named に残す
         const target = this.db.prepare("SELECT name, repo_key, trace_id FROM sessions WHERE id = ?").get(realId);

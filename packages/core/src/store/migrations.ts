@@ -203,4 +203,9 @@ export const migrations: readonly Migration[] = [
       PRIMARY KEY (session_id, at, command)
     );`,
   },
+  {
+    // Claude Code は会話を裏に回すと別の会話 ID で続け、元の記録に continued-in を書く。その続き先
+    version: 6,
+    sql: "ALTER TABLE sessions ADD COLUMN continued_in TEXT;",
+  },
 ];

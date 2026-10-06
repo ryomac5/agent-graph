@@ -280,3 +280,17 @@ test("Claude はプロセスの死で終えた会話でも、終わったあと�
   assert.equal(session.pid, undefined);
   assert.equal(session.lastSeenAt, "2026-10-06T13:00:00.000Z");
 });
+
+test("Claude の記録の continued-in から、会話を続けた先の会話 ID を残す", async (t) => {
+  const store = fixture(); store.updateSessionClient("thread", "claude");
+  const root = await mkdtemp(join(tmpdir(), "graph-claude-continued-"));
+  t.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
+  await mkdir(join(root, "-repo"));
+  await writeFile(join(root, "-repo", "thread.jsonl"), [
+    { type: "user", uuid: "u1", timestamp: at, message: { content: "状況を整理したい" } },
+    { type: "continued-in", timestamp: at, sessionId: "thread", continuedInSessionId: "next-id" },
+  ].map((row) => JSON.stringify(row)).join("\n"));
+  const observer = startClaudeObserver(new Map([["r", store]]), { root, intervalMs: 60_000 });
+  await observer.tick(); await observer.stop();
+  assert.equal(store.getSession("thread")!.continuedIn, "next-id");
+});

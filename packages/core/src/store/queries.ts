@@ -79,6 +79,7 @@ function sessionFromRow(row: Record<string, unknown>): SessionRow {
     ...(text(row.waiting_reason) === undefined ? {} : { waitingReason: String(row.waiting_reason) as WaitingReason }),
     ...(text(row.goal) === undefined ? {} : { goal: String(row.goal) }),
     ...(text(row.model) === undefined ? {} : { model: String(row.model) }),
+    ...(text(row.continued_in) === undefined ? {} : { continuedIn: String(row.continued_in) }),
   };
 }
 

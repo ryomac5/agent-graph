@@ -1,5 +1,6 @@
 import { listSessions } from "../../../../core/src/store/queries.ts";
 import { buildChanges, type SessionRef } from "../../git-changes.ts";
+import { chainTails } from "../views.ts";
 import { sendJson, type Route } from "../route.ts";
 
 const PAGE_SIZE = 60;
@@ -12,7 +13,15 @@ export const changesRoute: Route = {
     const store = options.openStores.get(repo);
     const root = store?.db.prepare("SELECT root_path FROM repos WHERE key = ?").get(repo)?.root_path;
     if (!store || typeof root !== "string") { sendJson(response, 404, { error: "Project not found" }); return; }
-    const names = new Map<string, SessionRef>(listSessions(store.db, repo).map((session) => [session.id, { id: session.id, name: session.name, client: session.client, startedAt: session.startedAt }]));
+    // コミットは鎖のどの会話 ID で作っても、鎖の末尾の会話として札を付ける
+    const sessions = listSessions(store.db, repo);
+    const tails = chainTails(sessions);
+    const byId = new Map(sessions.map((session) => [session.id, session]));
+    const names = new Map<string, SessionRef>(sessions.map((session) => {
+      const tail = byId.get(tails.get(session.id) ?? session.id) ?? session;
+      const first = sessions.filter((item) => (tails.get(item.id) ?? item.id) === tail.id).map((item) => item.startedAt).sort()[0] ?? tail.startedAt;
+      return [session.id, { id: tail.id, name: tail.name || session.name, client: tail.client, startedAt: first }];
+    }));
     try {
       sendJson(response, 200, await buildChanges(root, store.listSessionCommands(repo), names, { limit: PAGE_SIZE, skip }));
     } catch (error) {

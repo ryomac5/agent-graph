@@ -442,3 +442,39 @@ test("一覧のカードには生きたセッションを新しい順に 3 つ�
   const ended = buildOverview(new Map([["r", store]]), now).projects[0];
   assert.deepEqual(ended.sessions.map((session) => session.name), ["repo-001"], "生きたものが無ければ最後に終わった 1 つ");
 });
+
+test("continued-in の鎖は 1 つの会話にまとめ、生死と宛先は末尾、始まりと最初の指示は先頭、会話と委譲は鎖全体から出す", (t) => {
+  const store = withStore(t);
+  const at = (minute: number) => `2026-10-06T10:${String(minute).padStart(2, "0")}:00.000Z`;
+  // ターミナルの会話 a を裏に回して b で続けた。a のプロセスはまだ生きているので running のまま
+  store.insertSession({ id: "a", repoKey: "r", name: "repo-014", client: "claude", traceId: trace, startedAt: at(0) });
+  store.insertSession({ id: "b", repoKey: "r", name: "repo-014", client: "claude", traceId: trace, startedAt: at(30) });
+  store.setSessionGoalIfEmpty("a", "状況を整理したい");
+  store.insertTurn({ id: "ta", sessionId: "a", at: at(1), prompt: "状況を整理したい" });
+  store.insertTurn({ id: "tb", sessionId: "b", at: at(31), prompt: "続けて" });
+  store.insertDelegation({ id: "d1", repoKey: "r", sessionId: "a", role: "research", title: "調べる", status: "done" });
+  store.setContinuedIn("a", "b");
+  const sessions = buildProjectView(store, "r", now)!.sessions;
+  assert.equal(sessions.length, 1, "鎖の途中の会話は別に並べない");
+  const [chain] = sessions;
+  assert.equal(chain.id, "b");
+  assert.deepEqual(chain.memberIds, ["a", "b"]);
+  assert.equal(chain.name, "repo-014");
+  assert.equal(chain.status, "running");
+  assert.equal(chain.startedAt, at(0));
+  assert.equal(chain.goal, "状況を整理したい");
+  assert.deepEqual(chain.turns.map((turn) => turn.prompt), ["状況を整理したい", "続けて"]);
+  assert.ok(chain.nodes.some((node) => node.id === "d1"), "前の会話 ID の委譲も出す");
+  assert.ok(chain.edges.every((edge) => edge.from !== "a" && edge.to !== "a"), "委譲の線は末尾の会話から出す");
+  assert.equal(buildOverview(new Map([["r", store]]), now).projects[0].liveSessions, 1);
+});
+
+test("続き先が DB に無い会話は、もう使われていないので終わったものとして見せる", (t) => {
+  const store = withStore(t);
+  store.insertSession({ id: "a", repoKey: "r", name: "repo-002", client: "claude", traceId: trace, startedAt: ts });
+  store.insertTurn({ id: "ta", sessionId: "a", at: ts, prompt: "やって" });
+  store.setContinuedIn("a", "unknown-successor");
+  const [only] = buildProjectView(store, "r", now)!.sessions;
+  assert.equal(only.status, "ended");
+  assert.equal(buildOverview(new Map([["r", store]]), now).projects[0].liveSessions, 0, "ターミナルのプロセスが生きていても稼働中に数えない");
+});

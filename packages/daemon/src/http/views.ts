@@ -167,8 +167,73 @@ function sessionView(store: Store, session: ReturnType<typeof listSessions>[numb
     ...(session.waitingReason ? { waitingReason: session.waitingReason } : {}),
     startedAt: session.startedAt, ...(session.endedAt ? { endedAt: session.endedAt } : {}),
     ...(session.goal ? { goal: session.goal } : {}), ...(session.model ? { model: session.model } : {}),
-    turns: listRecentTurns(store.db, session.id, TURN_LIMIT).map(turnView), nodes, edges,
+    turns: listRecentTurns(store.db, session.id, TURN_LIMIT).map(turnView), nodes, edges, memberIds: [session.id],
   };
+}
+
+type SessionRecord = ReturnType<typeof listSessions>[number];
+
+// 会話の鎖の末尾。continued-in の続き先をたどる。続き先が DB に無ければ、その手前で止める
+export function chainTails(sessions: SessionRecord[]): Map<string, string> {
+  const byId = new Map(sessions.map((session) => [session.id, session]));
+  const tails = new Map<string, string>();
+  for (const session of sessions) {
+    let current = session;
+    const seen = new Set([session.id]);
+    while (current.continuedIn && byId.has(current.continuedIn) && !seen.has(current.continuedIn)) {
+      current = byId.get(current.continuedIn)!;
+      seen.add(current.id);
+    }
+    tails.set(session.id, current.id);
+  }
+  return tails;
+}
+
+// 鎖を 1 つの会話にまとめる。生きているかと操作の宛先は末尾で決め、始まりと最初の指示は先頭から取る。
+// 会話と委譲は鎖全体を並べる。続き先が DB に無い会話はもう使われていないので、終わったものとして見せる
+export function mergeChains(views: SessionView[], records: SessionRecord[]): SessionView[] {
+  const tails = chainTails(records);
+  const byId = new Map(records.map((record) => [record.id, record]));
+  const groups = new Map<string, SessionView[]>();
+  for (const view of views) {
+    const tail = tails.get(view.id) ?? view.id;
+    groups.set(tail, [...(groups.get(tail) ?? []), view]);
+  }
+  const merged: SessionView[] = [];
+  for (const [tailId, members] of groups) {
+    const tail = members.find((member) => member.id === tailId);
+    if (!tail) continue;
+    members.sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+    const first = members[0];
+    const moved = !!byId.get(tailId)?.continuedIn;
+    const memberIds = members.map((member) => member.id);
+    const remap = (id: string) => memberIds.includes(id) ? tailId : id;
+    const turns = new Map<string, Turn>();
+    for (const member of members) for (const turn of member.turns) {
+      const key = `${turn.at}\0${turn.prompt}`;
+      if (!turns.has(key)) turns.set(key, turn);
+    }
+    const status = moved ? "ended" as const : tail.status;
+    const endedAt = status === "ended" ? tail.endedAt ?? tail.turns.at(-1)?.at ?? tail.startedAt : undefined;
+    const name = tail.name !== UNNAMED ? tail.name : [...members].reverse().find((member) => member.name !== UNNAMED)?.name ?? UNNAMED;
+    const goal = members.find((member) => member.goal)?.goal;
+    const root: NodeDetail = { ...tail.nodes[0], title: name || tail.nodes[0].title, status, startedAt: first.startedAt, ...(goal ? { task: goal } : {}) };
+    delete root.endedAt;
+    if (endedAt) root.endedAt = endedAt;
+    const view: SessionView = {
+      ...tail, name, status, startedAt: first.startedAt, ...(goal ? { goal } : {}),
+      turns: [...turns.values()].sort((a, b) => a.at.localeCompare(b.at)).slice(-TURN_LIMIT),
+      nodes: [root, ...members.flatMap((member) => member.nodes.filter((node) => node.kind !== "root"))],
+      edges: members.flatMap((member) => member.edges.map((edge) => ({ ...edge,
+        id: edge.id.split(member.id).join(tailId), from: remap(edge.from), to: remap(edge.to) }))),
+      memberIds,
+    };
+    delete view.endedAt;
+    if (endedAt) view.endedAt = endedAt;
+    if (status === "ended") delete view.waitingReason;
+    merged.push(view);
+  }
+  return merged;
 }
 
 function prUrlOf(output: string): string | undefined {
@@ -331,9 +396,10 @@ export function buildProjectView(store: Store, repoKey: string, now = new Date()
   }
   const bySession = new Map<string, DelegationRow[]>();
   for (const row of delegations) bySession.set(row.sessionId, [...(bySession.get(row.sessionId) ?? []), row]);
+  const records = listSessions(store.db, repoKey);
   return {
     project: { key: repo.key, name: repo.name, rootPath: repo.rootPath },
-    sessions: listSessions(store.db, repoKey).map((session) => sessionView(store, session, bySession.get(session.id) ?? [], context))
+    sessions: mergeChains(records.map((session) => sessionView(store, session, bySession.get(session.id) ?? [], context)), records)
       .filter((session) => !isEmptyEnded(session, graphs) && !isUnprompted(session, graphs)),
     graphs: graphs.map((graph) => graphView(graph, graphEvents.get(graph.id) ?? [], delegations, context)),
     usage: buildUsage(latestUsageSamples(store.db)),

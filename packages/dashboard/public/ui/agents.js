@@ -71,7 +71,7 @@ export function buildAgents(view, ctx, sessionScope, commits = new Map()) {
     const turns = (session.turns || []).length;
     const meta = [`${turns}${turns >= TURN_PAGE ? "+" : ""} ${turns === 1 ? "turn" : "turns"}`];
     if (children.length) meta.push(`${children.length} ${children.length === 1 ? "agent" : "agents"}`);
-    const made = commits.get(session.id) || 0;
+    const made = (session.memberIds || [session.id]).reduce((sum, id) => sum + (commits.get(id) || 0), 0);
     if (made) meta.push(`${made} ${made === 1 ? "commit" : "commits"}`);
     meta.push(statusLabel(session.status));
     row.append(el("div", meta.join(" · "), "agent-meta"));

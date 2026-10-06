@@ -69,7 +69,7 @@ export function renderDiff(aside, entry, commit, view, ctx) {
   if (refs.length) {
     const chips = el("div", undefined, "change-sessions");
     for (const ref of refs) {
-      const session = ((view && view.sessions) || []).find((item) => item.id === ref.id);
+      const session = ((view && view.sessions) || []).find((item) => item.id === ref.id || (item.memberIds || []).includes(ref.id));
       const chip = button(undefined, `session-chip ${ref.client || ""}`, () => { if (session) ctx.onOpenSession(session); });
       chip.append(el("span", CLIENT_LABEL[ref.client] || ref.client || "", "session-chip-client"), el("span", ref.name, "session-chip-name"));
       chip.title = session ? `Open the conversation of ${ref.name}` : `${ref.name} is not loaded`;

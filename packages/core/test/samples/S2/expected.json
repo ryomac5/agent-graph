@@ -1,0 +1,29 @@
+{
+  "runs": [
+    {
+      "id": "child:1",
+      "conversation_id": "child",
+      "generation": 1,
+      "state": "unknown",
+      "reason": "no_updates",
+      "last_evidence": {
+        "fact_id": "s2-child",
+        "kind": "run.created"
+      },
+      "last_evidence_ts": "2026-01-01T00:01:00.000Z"
+    },
+    {
+      "id": "parent:1",
+      "conversation_id": "parent",
+      "generation": 1,
+      "state": "unknown",
+      "reason": "no_updates",
+      "last_evidence": {
+        "fact_id": "s2-start",
+        "kind": "run.created"
+      },
+      "last_evidence_ts": "2026-01-01T00:00:00.000Z"
+    }
+  ],
+  "connections": []
+}

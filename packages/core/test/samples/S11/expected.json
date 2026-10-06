@@ -1,0 +1,32 @@
+{
+  "runs": [
+    {
+      "id": "observed:1",
+      "conversation_id": "observed",
+      "generation": 1,
+      "state": "unknown",
+      "reason": "process_list_failed",
+      "pid": 202,
+      "start_fingerprint": "observed-process",
+      "last_evidence": {
+        "fact_id": "s11-start",
+        "kind": "run.created"
+      },
+      "last_evidence_ts": "2026-01-01T00:00:00.000Z"
+    }
+  ],
+  "connections": [
+    {
+      "id": "mcp-1",
+      "run_id": "observed:1",
+      "type": "mcp",
+      "fingerprint": "mcp-process",
+      "state": "disconnected",
+      "last_evidence": {
+        "fact_id": "s11-disconnect",
+        "kind": "connection.state_changed"
+      },
+      "last_evidence_ts": "2026-01-01T00:03:00.000Z"
+    }
+  ]
+}

@@ -1,0 +1,70 @@
+[
+  {
+    "seq": 99,
+    "fact_id": "s3-old",
+    "source": "hook",
+    "source_event_id": "s3-old",
+    "kind": "run.created",
+    "subject": "run:conversation:1",
+    "payload": {
+      "conversation_id": "conversation",
+      "generation": 1,
+      "state": "running",
+      "pid": 101,
+      "start_fingerprint": "old-process"
+    },
+    "payload_hash": "structural-sample",
+    "source_ts": "2026-01-01T00:00:00.000Z",
+    "observed_ts": "2026-01-01T00:59:00.000Z",
+    "schema_version": 1,
+    "cursor": null,
+    "confidence": "confirmed",
+    "supersedes": null
+  },
+  {
+    "seq": 98,
+    "fact_id": "s3-resume",
+    "source": "hook",
+    "source_event_id": "s3-resume",
+    "kind": "run.created",
+    "subject": "run:conversation:2",
+    "payload": {
+      "conversation_id": "conversation",
+      "generation": 2,
+      "state": "running"
+    },
+    "payload_hash": "structural-sample",
+    "source_ts": "2026-01-01T00:01:00.000Z",
+    "observed_ts": "2026-01-01T00:59:00.000Z",
+    "schema_version": 1,
+    "cursor": null,
+    "confidence": "confirmed",
+    "supersedes": null
+  },
+  {
+    "seq": 97,
+    "fact_id": "s3-death",
+    "source": "hook",
+    "source_event_id": "s3-death",
+    "kind": "run.state_changed",
+    "subject": "run:conversation:1",
+    "payload": {
+      "generation": 1,
+      "state": "ended",
+      "end_evidence": {
+        "kind": "process_check",
+        "succeeded": true,
+        "matches": false,
+        "pid": 101,
+        "start_fingerprint": "old-process"
+      }
+    },
+    "payload_hash": "structural-sample",
+    "source_ts": "2026-01-01T00:02:00.000Z",
+    "observed_ts": "2026-01-01T00:59:00.000Z",
+    "schema_version": 1,
+    "cursor": null,
+    "confidence": "confirmed",
+    "supersedes": null
+  }
+]

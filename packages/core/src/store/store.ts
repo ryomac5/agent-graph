@@ -291,10 +291,19 @@ export class Store {
     return moved;
   }
 
+  // 片割れが持っていた Claude の本体の pid を、pid の無い本物に移す。生きていれば以後の生死判定に使える
+  private adoptGhostProcess(ghost: Record<string, unknown>, realId: string, at: string): void {
+    if (ghost.pid === null || ghost.pid === undefined) return;
+    const real = this.db.prepare("SELECT pid, status FROM sessions WHERE id = ?").get(realId);
+    if (!real || real.pid !== null || real.status === "ended") return;
+    this.setSessionProcess(realId, Number(ghost.pid), ghost.pid_started_at === null || ghost.pid_started_at === undefined
+      ? undefined : String(ghost.pid_started_at), at);
+  }
+
   // 過去に割れた Claude のセッションをまとめて寄せる。別 id は ULID、Claude の id は UUID の形をしている。
   // 同じリポジトリで 10 秒以内に始まった Claude の id がちょうど 1 つのときだけ寄せる。複数あれば取り違えるので触らない
   mergeSplitClaudeSessions(at: string): number {
-    const ghosts = this.db.prepare(`SELECT id, repo_key, started_at FROM sessions
+    const ghosts = this.db.prepare(`SELECT id, repo_key, started_at, pid, pid_started_at FROM sessions
       WHERE client = 'claude' AND length(id) = 26 AND id NOT LIKE '%-%'`).all();
     let merged = 0;
     for (const ghost of ghosts) {
@@ -307,7 +316,23 @@ export class Store {
       const status = this.db.prepare("SELECT status FROM sessions WHERE id = ?").get(ghost.id);
       // 中身が無く終わった別 id は寄せ済み。何度起動しても同じ結果にする
       if (Number(hasContent?.n ?? 0) === 0 && status?.status === "ended") continue;
-      if (this.mergeSessionInto(String(ghost.id), String(partners[0].id), at)) merged++;
+      if (this.mergeSessionInto(String(ghost.id), String(partners[0].id), at)) {
+        this.adoptGhostProcess(ghost, String(partners[0].id), at);
+        merged++;
+      }
+    }
+    // 生きている片割れ。同じリポジトリに pid を持たない生きた Claude の本物がちょうど 1 つなら、そこに寄せて pid を移す。
+    // hook で登録した本物は pid を持たず、片割れは shim が記録した Claude の本体の pid を持っている
+    const live = this.db.prepare(`SELECT id, repo_key, pid, pid_started_at FROM sessions WHERE client = 'claude'
+      AND status != 'ended' AND pid IS NOT NULL AND length(id) = 26 AND id NOT LIKE '%-%'`).all();
+    for (const ghost of live) {
+      const partners = this.db.prepare(`SELECT id FROM sessions WHERE client = 'claude' AND repo_key = ? AND status != 'ended'
+        AND pid IS NULL AND id LIKE '%-%-%-%-%'`).all(String(ghost.repo_key));
+      if (partners.length !== 1) continue;
+      const realId = String(partners[0].id);
+      if (!this.mergeSessionInto(String(ghost.id), realId, at)) continue;
+      this.adoptGhostProcess(ghost, realId, at);
+      merged++;
     }
     return merged;
   }

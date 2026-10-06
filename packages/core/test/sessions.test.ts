@@ -230,3 +230,20 @@ test("過去に割れた Claude のセッションは 10 秒以内の相手が 1
   assert.equal(store.db.prepare("SELECT session_id FROM delegations WHERE id = 'd2'").get()?.session_id, "01M45WRPM3KJYBBBBBBBBBBBBB");
   assert.equal(store.mergeSplitClaudeSessions("2026-10-05T05:00:00.000Z"), 0);
 });
+
+test("生きている片割れは、pid を持たない生きた本物がちょうど 1 つのときだけ寄せ、pid を移す", (t) => {
+  const store = withStore(t);
+  const add = (id: string, repoKey: string, pid?: number) =>
+    store.insertNamedSession({ id, repoKey, client: "claude", traceId: "a".repeat(32), startedAt: "2026-10-06T10:20:00.000Z", ...(pid ? { pid } : {}) });
+  // 本物は 9 月から続く会話を claude -c で再開したもの。片割れは今日の shim が作った
+  add("fa3cb783-77f1-4c34-8434-9da0dd41db81", "r");
+  add("01M48BMEHR38A97ABNGT5EJSGN", "r", 87592);
+  // 別のリポジトリでは本物が 2 つあるので触らない
+  add("aaaaaaaa-0000-4000-8000-000000000001", "other");
+  add("aaaaaaaa-0000-4000-8000-000000000002", "other");
+  add("01M48BP4NM4JAAAAAAAAAAAAAA", "other", 88240);
+  assert.equal(store.mergeSplitClaudeSessions("2026-10-06T10:40:00.000Z"), 1);
+  assert.equal(store.getSession("01M48BMEHR38A97ABNGT5EJSGN")?.status, "ended");
+  assert.equal(store.getSession("fa3cb783-77f1-4c34-8434-9da0dd41db81")?.pid, 87592);
+  assert.equal(store.getSession("01M48BP4NM4JAAAAAAAAAAAAAA")?.status, "running");
+});

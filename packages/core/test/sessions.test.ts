@@ -261,6 +261,9 @@ test("片割れの番号を本物に移すと片割れは番号なしに戻り�
   const named = store.listEvents().filter((event) => event.kind === "session.named");
   assert.deepEqual(named.map((event) => [event.session, event.ts, event.payload]), [
     [real, "2026-10-05T04:00:00.000Z", { sessionId: real, name: "repo-001", reason: `merged from ${ghost}` }]]);
+  // 番号なしに戻した片割れは終わっているので、人の指示が来ても番号を取らない
+  assert.equal(store.nameSessionAtFirstPrompt(ghost, "2026-10-05T04:30:00.000Z"), undefined);
+  assert.equal(store.getSession(ghost)?.name, "");
   // 両方が番号を持つときはどちらも変えない
   const other = "01M45WRPM3KJYABCDEFGHJKMNQ";
   store.insertNamedSession({ id: other, repoKey: "r", ...base });

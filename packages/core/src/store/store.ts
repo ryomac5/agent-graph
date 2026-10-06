@@ -208,7 +208,8 @@ export class Store {
     this.db.exec("BEGIN IMMEDIATE");
     let name: string | undefined;
     try {
-      const session = this.db.prepare("SELECT name, repo_key, trace_id FROM sessions WHERE id = ?").get(id);
+      // 終わったセッションには付けない。寄せたあとの片割れもここに入る
+      const session = this.db.prepare("SELECT name, repo_key, trace_id FROM sessions WHERE id = ? AND status != 'ended'").get(id);
       if (session && session.name === UNNAMED) {
         const forked = this.db.prepare(`SELECT json_extract(payload, '$.parentSessionId') AS parent FROM events
           WHERE kind = 'session.forked' AND session_id = ? ORDER BY ts DESC, id DESC LIMIT 1`).get(id);

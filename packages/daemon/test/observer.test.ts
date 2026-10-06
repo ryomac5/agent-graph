@@ -9,6 +9,14 @@ import { parseClaudeRows, startClaudeObserver } from "../src/claude-observe.ts";
 import { buildProjectView } from "../src/http/views.ts";
 
 const at = "2026-10-05T01:00:00.000Z";
+// ps の lstart と同じ形の起動時刻。iso から seconds ずらした地方時で返す
+function lstart(iso: string, seconds: number): string {
+  const date = new Date(Date.parse(iso) + seconds * 1000);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `${days[date.getDay()]} ${months[date.getMonth()]} ${String(date.getDate()).padStart(2, " ")} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())} ${date.getFullYear()}`;
+}
 function fixture() {
   const store = openStore(":memory:");
   store.upsertRepo({ key: "r", name: "repo", rootPath: "/repo" });
@@ -175,7 +183,7 @@ test("Claude の転写から入れた会話は、人の指示があれば番号�
   const store = openStore(":memory:");
   store.upsertRepo({ key: "r", name: "repo", rootPath: "/repo" });
   for (const id of ["human", "headless", "tagged"]) {
-    store.insertUnnamedSession({ id, repoKey: "r", client: "claude", traceId: "a".repeat(32), startedAt: at });
+    store.insertUnnamedSession({ id, repoKey: "r", client: "claude", traceId: "a".repeat(32), startedAt: at, pid: 4242, pidStartedAt: lstart(at, -60) });
   }
   const root = await mkdtemp(join(tmpdir(), "graph-claude-name-"));
   t.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
@@ -191,8 +199,60 @@ test("Claude の転写から入れた会話は、人の指示があれば番号�
     await writeFile(join(root, "-repo", `${id}.jsonl`), entries.map((row) => JSON.stringify(row)).join("\n"));
   }
   const observer = startClaudeObserver(new Map([["r", store]]), { root, intervalMs: 60_000 });
+  // 途中で落ちても見回りを止め、テストを終わらせる
+  t.after(() => observer.stop());
   await observer.tick(); await observer.stop();
   assert.deepEqual(["human", "headless", "tagged"].map((id) => store.getSession(id)?.name), ["repo-001", "", ""]);
   assert.equal(store.listTurns("headless").length, 1, "無人実行の会話も turns には入る");
   assert.deepEqual(buildProjectView(store, "r")!.sessions.map((session) => session.id), ["human"]);
+});
+
+test("fork の転写に写された親の指示では、session.forked が無くても番号を取らない", async (t) => {
+  const store = openStore(":memory:");
+  store.upsertRepo({ key: "r", name: "repo", rootPath: "/repo" });
+  // 親は番号を持つ。fork は親の行を写した転写を持ち、session.forked はまだ無い
+  store.insertSession({ id: "parent", repoKey: "r", name: "repo-001", client: "claude", traceId: "a".repeat(32), startedAt: at });
+  const forkStart = "2026-10-05T02:00:00.000Z";
+  store.insertUnnamedSession({ id: "fork", repoKey: "r", client: "claude", traceId: "b".repeat(32), startedAt: forkStart,
+    pid: 4243, pidStartedAt: lstart(forkStart, 0) });
+  const root = await mkdtemp(join(tmpdir(), "graph-claude-fork-"));
+  t.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
+  // 写された行は sessionId も fork の id に書き換わり、時刻だけが親のまま残る
+  const copied = [{ type: "user", uuid: "c1", timestamp: at, entrypoint: "cli", sessionId: "fork", message: { content: "親への指示" } },
+    { type: "assistant", uuid: "c2", timestamp: at, sessionId: "fork", message: { model: "m", content: [{ type: "text", text: "親の応答" }] } }];
+  await mkdir(join(root, "-repo"));
+  const path = join(root, "-repo", "fork.jsonl");
+  await writeFile(path, copied.map((row) => JSON.stringify(row)).join("\n"));
+  const observer = startClaudeObserver(new Map([["r", store]]), { root, intervalMs: 60_000 });
+  // 途中で落ちても見回りを止め、テストを終わらせる
+  t.after(() => observer.stop());
+  await observer.tick();
+  assert.equal(store.getSession("fork")?.name, "", "親の行では番号を取らない");
+  assert.equal(store.listEvents().filter((event) => event.kind === "session.named").length, 0);
+  // fork 自身の指示が来れば番号を取る
+  await writeFile(path, [...copied, { type: "user", uuid: "o1", timestamp: "2026-10-05T02:00:05.000Z", entrypoint: "cli",
+    sessionId: "fork", message: { content: "続きをお願いします" } }].map((row) => JSON.stringify(row)).join("\n"));
+  await observer.tick(); await observer.stop();
+  assert.equal(store.getSession("fork")?.name, "repo-002");
+});
+
+test("daemon の停止中に受けた指示は、登録より古くても起動後なら番号を取り、起動時刻が取れるまでは待つ", async (t) => {
+  const store = openStore(":memory:");
+  store.upsertRepo({ key: "r", name: "repo", rootPath: "/repo" });
+  const processStart = "2026-10-05T01:00:00.000Z";
+  // 登録は daemon の再起動後。指示はそれより前に来ていた
+  store.insertUnnamedSession({ id: "late", repoKey: "r", client: "claude", traceId: "a".repeat(32), startedAt: "2026-10-05T03:00:00.000Z", pid: 4244 });
+  const root = await mkdtemp(join(tmpdir(), "graph-claude-late-"));
+  t.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
+  await mkdir(join(root, "-repo"));
+  await writeFile(join(root, "-repo", "late.jsonl"), JSON.stringify({ type: "user", uuid: "l1", timestamp: "2026-10-05T01:00:10.000Z",
+    entrypoint: "cli", sessionId: "late", message: { content: "停止中の指示" } }));
+  const observer = startClaudeObserver(new Map([["r", store]]), { root, intervalMs: 60_000 });
+  // 途中で落ちても見回りを止め、テストを終わらせる
+  t.after(() => observer.stop());
+  await observer.tick();
+  assert.equal(store.getSession("late")?.name, "", "起動時刻が無いうちは付けない");
+  store.setSessionProcess("late", 4244, lstart(processStart, 0), "2026-10-05T03:00:30.000Z");
+  await observer.tick(); await observer.stop();
+  assert.equal(store.getSession("late")?.name, "repo-001");
 });

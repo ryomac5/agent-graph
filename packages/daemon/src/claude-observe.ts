@@ -4,7 +4,7 @@ import { createInterface } from "node:readline";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { createHash } from "node:crypto";
-import type { Store } from "../../core/src/store/store.ts";
+import { UNNAMED, type Store } from "../../core/src/store/store.ts";
 import { listRepos, listSessions } from "../../core/src/store/queries.ts";
 import { isHumanPrompt, summarize } from "./sessions.ts";
 
@@ -92,10 +92,17 @@ export function startClaudeObserver(stores: Map<string, Store>, options: { root?
             .get(session.id, turn.prompt, turn.at, MATCH_WINDOW_MS);
           put.run(match ? String(match.id) : turn.id, session.id, turn.at, turn.prompt, summarize(turn.reply), turn.reply || null);
         }
-        // daemon の停止中に受けた指示も、最初の人の指示で番号を付ける。無人実行の会話は付けない
-        const first = snapshot.headless ? undefined : snapshot.turns.find((turn) => isHumanPrompt(turn.prompt));
+        // daemon の停止中に受けた指示も、最初の人の指示で番号を付ける。無人実行の会話は付けない。
+        // fork の転写は親の行を写し、sessionId も fork の id に書き換えるので、行では親の行と見分けられない。
+        // そこでプロセスの起動より後の指示だけを使う。起動時刻が取れるまでは付けずに待つ
+        const startedAt = session.pidStartedAt === undefined ? NaN : Date.parse(session.pidStartedAt);
+        const first = snapshot.headless || Number.isNaN(startedAt) ? undefined
+          : snapshot.turns.find((turn) => Date.parse(turn.at) >= startedAt && isHumanPrompt(turn.prompt));
         if (first) store.nameSessionAtFirstPrompt(session.id, first.at || new Date().toISOString());
-        mtimes.set(path, info.mtimeMs);
+        // 起動時刻を待つ間は読み直す。見回りが起動時刻を補ったあとの回で番号を付ける
+        const waiting = !first && !snapshot.headless && Number.isNaN(startedAt) && session.name === UNNAMED
+          && snapshot.turns.some((turn) => isHumanPrompt(turn.prompt));
+        if (!waiting) mtimes.set(path, info.mtimeMs);
       }
     } catch (error) { (options.onError || console.error)(error); }
   };

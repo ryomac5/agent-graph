@@ -269,6 +269,7 @@ type EventKind =
   | "acceptance.evaluated"
   | "review.evaluated"
   | "delegation.finished"
+  | "delegation.lost"         // 親セッションの終了で失われた委譲
   | "usage.sampled"           // 利用枠の観測
   | "guard.denied";           // hook が危険操作を止めた
 

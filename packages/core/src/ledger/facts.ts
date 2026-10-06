@@ -14,6 +14,21 @@ export type RelationKind = "continued" | "forked" | "compacted" | "copied" | "de
 export type ConnectionKind = "mcp" | "herdr" | "app" | "pid" | "ws";
 export type BodyState = "stored" | "omitted" | "unavailable";
 
+export interface ProjectPayload {
+  repository_id: string;
+  root_path: string;
+  display_name: string;
+  name_prefix: string;
+  state: "registered" | "unregistered";
+}
+export interface UnsupportedObservationPayload {
+  source_kind: Source;
+  file_path: string;
+  format_name: string;
+  format_version: string;
+  reason: string;
+}
+
 export interface TaskPayload {
   name?: string;
   purpose: string;
@@ -137,6 +152,8 @@ export interface MessageMembershipPayload {
   active: boolean;
 }
 export interface EntityPayloads {
+  project: ProjectPayload;
+  observation: UnsupportedObservationPayload;
   task: TaskPayload;
   conversation: ConversationPayload;
   relation: RelationPayload;
@@ -154,16 +171,19 @@ export type EntityKind = keyof EntityPayloads;
 export const ENTITY_KINDS = [
   "task", "conversation", "relation", "run", "connection", "message", "delegation",
   "artifact", "alias", "approval", "finding", "message_membership",
+  "project", "observation",
 ] as const satisfies readonly EntityKind[];
 
 // 訂正は同じ実体の部分変更として表し、取り消す事実を必須にする。
 export type FactPayloads = {
-  [E in EntityKind as `${E}.created`]: EntityPayloads[E];
+  [E in Exclude<EntityKind, "observation"> as `${E}.created`]: EntityPayloads[E];
 } & {
-  [E in EntityKind as `${E}.updated`]: Partial<EntityPayloads[E]>;
+  [E in Exclude<EntityKind, "observation"> as `${E}.updated`]: Partial<EntityPayloads[E]>;
 } & {
-  [E in EntityKind as `${E}.corrected`]: Partial<EntityPayloads[E]>;
+  [E in Exclude<EntityKind, "observation"> as `${E}.corrected`]: Partial<EntityPayloads[E]>;
 } & {
+  "project.state_changed": Pick<ProjectPayload, "state">;
+  "observation.unsupported": UnsupportedObservationPayload;
   "task.state_changed": Pick<TaskPayload, "state">;
   "conversation.task_changed": { task_id: string | null };
   "relation.state_changed": Pick<RelationPayload, "active">;

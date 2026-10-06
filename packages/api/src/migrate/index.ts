@@ -6,6 +6,7 @@ import { backup, DatabaseSync } from "node:sqlite";
 import type { SQLInputValue } from "node:sqlite";
 import { createRepositoryId } from "../../../core/src/ledger/index.ts";
 import type { AppendResult, Confidence, Fact, FactInput, FactKind, FactPayloads, JsonValue, Ledger, Provider } from "../../../core/src/ledger/index.ts";
+import type { BatchLedger } from "../service/batch-ledger.ts";
 
 const FALLBACK_TS = "1970-01-01T00:00:00.000Z";
 const FACT_BATCH_SIZE = 1000;
@@ -24,6 +25,9 @@ export interface MigrationReport {
 export interface MigrationOptions {
   /** 各 DB の最新の複製を一つ保持する。省略時は旧 DB の隣に保存する。 */
   backupDirectory?: string;
+  /** 各 DB の追記が確定した後に、まとめて投影を反映する。 */
+  afterDatabase?: () => void;
+  batch?: <T>(operation: () => T) => T;
 }
 
 function readLatestVersions(ledger: Ledger): Map<string, LegacyVersion> {
@@ -126,7 +130,9 @@ export async function migrateLegacyDatabases(
         const snapshot = new DatabaseSync(snapshotPath, { readOnly: true });
         try {
           // 各取り込みは専用の複製を読む。保存した最新のバックアップとは分ける。
-          migrateSnapshot(snapshot, ledger, report, versions, path);
+          const batch = options.batch ?? (ledger as Partial<BatchLedger>).batch ?? ((operation) => operation());
+          batch(() => migrateSnapshot(snapshot, ledger, report, versions, path));
+          options.afterDatabase?.();
         } finally {
           snapshot.close();
         }

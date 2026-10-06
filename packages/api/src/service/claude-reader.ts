@@ -6,7 +6,8 @@ import { observeClaudeFile } from "../observe/claude/index.ts";
 import type { ClaudeObservation } from "../observe/claude/index.ts";
 import type { FileCursor } from "../observe/files.ts";
 
-export function observeClaudeHistories(ledger: Ledger, directory: string, facts: Fact[]): ClaudeObservation[] {
+export function observeClaudeHistories(ledger: Ledger, directory: string, facts: Fact[],
+  batch: <T>(operation: () => T) => T = (operation) => operation()): ClaudeObservation[] {
   const cursors = new Map<string, FileCursor>();
   const conversations = new Map<string, Fact[]>();
   const identities = new Map(projectEntities(facts, "conversation").map((conversation) => [
@@ -44,7 +45,7 @@ export function observeClaudeHistories(ledger: Ledger, directory: string, facts:
             return result;
           },
         };
-        results.push(observeClaudeFile(fileLedger, file, { cursor: cursors.get(resolve(file)) }));
+        results.push(batch(() => observeClaudeFile(fileLedger, file, { cursor: cursors.get(resolve(file)) })));
       }
     }
   }

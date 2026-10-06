@@ -57,15 +57,16 @@ export function createKitObserver(ledger: Ledger) {
     observe(): KitObservationResult {
       const facts = ledger.readSince(0, Number.MAX_SAFE_INTEGER);
       const projects = projectProjects(facts).filter((entry) => entry.state === "registered" && entry.root_path);
+      const result: KitObservationResult = { appended: 0, duplicates: 0, pending: 0, deferred: 0 };
+      if (projects.length === 0) return result;
       const registered = new Set(projects.map((entry) => entry.id));
       const conversations = new Map<string, string[]>();
-      for (const conversation of projectConversations(facts).conversations) {
+      for (const conversation of projectConversations(facts.filter((fact) => fact.kind.startsWith("conversation."))).conversations) {
         if (!conversation.native_id) continue;
         const matches = conversations.get(conversation.native_id) ?? [];
         matches.push(conversation.id);
         conversations.set(conversation.native_id, matches);
       }
-      const result: KitObservationResult = { appended: 0, duplicates: 0, pending: 0, deferred: 0 };
       for (const project of projects) {
         const snapshot = reader.readNames(project.root_path!);
         if (snapshot.deferred) result.deferred += 1;

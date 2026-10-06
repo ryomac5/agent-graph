@@ -16,6 +16,9 @@ export interface HostCapabilities {
 }
 export interface UserInput { text: string; attachments?: JsonValue[] }
 export type Decision = string | { decision: string; updatedInput?: JsonValue };
+/** Claude の外部連携の読み込み方。disabled は claude.ai の連携だけを止め、strict は MCP をすべて止める。 */
+export type IntegrationMode = "disabled" | "strict" | "enabled";
+export const INTEGRATION_MODES: readonly IntegrationMode[] = ["disabled", "strict", "enabled"];
 export interface StartRequest {
   runId: RunId;
   conversationId: string;
@@ -24,6 +27,7 @@ export interface StartRequest {
   input: UserInput;
   model: ModelChoice;
   env?: Record<string, string>;
+  integrationMode?: IntegrationMode;
 }
 export interface ResumeRequest extends StartRequest { nativeId: string }
 export interface ForkRequest extends ResumeRequest { model: ModelChoice }

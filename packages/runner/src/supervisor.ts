@@ -131,7 +131,8 @@ export class Supervisor {
         this.publish({ type: "evt", seq });
       }
       this.append({ ...this.stamp(), source, kind: "run.updated", subject: `run:${request.runId}`, confidence: "confirmed",
-        payload: { launch: { cwd: request.cwd, model: request.model }, generation: request.generation } } as FactInput);
+        payload: { launch: { cwd: request.cwd, model: request.model, ...(request.integrationMode ? { integrationMode: request.integrationMode } : {}) },
+          generation: request.generation } } as FactInput);
       handle = operation === "start" ? await host.start(request)
         : operation === "resume" ? await host.resume(request as ResumeRequest) : await host.fork(request as ForkRequest);
       if (handle.runId !== request.runId || operation === "resume" && handle.nativeId !== (request as ResumeRequest).nativeId) {

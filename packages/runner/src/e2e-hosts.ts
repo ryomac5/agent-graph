@@ -209,16 +209,26 @@ async function runChecks(): Promise<void> {
     assert.equal(status.hosts.claude.authentication.type, "subscription");
     assert.equal(status.hosts.claude.authentication.verified, true);
     console.log("authentication:", JSON.stringify(status.hosts.claude.authentication));
-    const baseline = evidence(claude, "init").map((fact) => fact.payload);
-    console.log("baseline integrations:", JSON.stringify(baseline));
-    for (const integrationMode of ["strict", "disabled"]) {
+    type InitEvidence = { integration_mode?: string; mcp_servers?: { name: string; source?: string }[] };
+    const inits = (run: ManagedRun) => evidence(run, "init").map((fact) => (fact.payload as { last_evidence: InitEvidence }).last_evidence);
+    const claudeai = (init: InitEvidence) => (init.mcp_servers ?? []).filter((server) => server.source === "claudeai");
+    // 既定の管理する実行は、claude.ai の外部連携を読み込まない。
+    const baseline = inits(claude);
+    console.log("default integrations:", JSON.stringify(baseline));
+    assert.ok(baseline.length, "init integration list missing");
+    assert.ok(baseline.every((init) => init.integration_mode === "disabled" && claudeai(init).length === 0), "default run loaded claude.ai integrations");
+    const trials: Record<string, InitEvidence[]> = {};
+    for (const integrationMode of ["strict", "enabled"]) {
       const candidate = await start("claude", "Reply OK. Do not use tools.", { integrationMode });
       await waitIdle(candidate);
-      const init = evidence(candidate, "init"); assert.ok(init.length, "init integration list missing");
-      console.log(`${integrationMode} integration trial:`, JSON.stringify(init.map((fact) => fact.payload)));
+      const init = inits(candidate); assert.ok(init.length, "init integration list missing");
+      assert.ok(init.every((entry) => entry.integration_mode === integrationMode));
+      trials[integrationMode] = init;
+      console.log(`${integrationMode} integrations:`, JSON.stringify(init));
       await command("close", { runId: candidate.runId });
     }
-    console.log("PASS 6 (trial results recorded; absence in baseline cannot prove suppression)");
+    assert.ok(trials.strict.every((init) => (init.mcp_servers ?? []).length === 0), "strict run loaded MCP servers");
+    console.log(`PASS 6 (default has no claude.ai integrations; enabled loads ${claudeai(trials.enabled[0]).length})`);
     const records = projectEntityRecords<{ base_sha: string; cwd: string }>(readFacts(), "run");
     assert.ok(records.filter((run) => run.cwd).every((run) => run.base_sha));
     console.log("PASS: checks 1, 2, 3, 4, 6");

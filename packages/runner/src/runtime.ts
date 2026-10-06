@@ -5,8 +5,10 @@ import { projectEntityRecords } from "../../core/src/ledger/projections/delegati
 import { createNativeId } from "../../core/src/ledger/projections/relations.ts";
 import { projectRuns } from "../../core/src/ledger/projections/runs.ts";
 import { projectApprovals } from "../../core/src/ledger/projections/approvals.ts";
-import type { AgentHost, Decision, ModelChoice, StartRequest, UserInput } from "./host/contract.ts";
-import { ClaudeHost } from "./hosts/claude/index.ts";
+import { INTEGRATION_MODES, type AgentHost, type Decision, type IntegrationMode, type ModelChoice, type StartRequest, type UserInput } from "./host/contract.ts";
+import { ClaudeHost, type ClaudeHostOptions } from "./hosts/claude/index.ts";
+
+type Launch = { cwd: string; model: ModelChoice; integrationMode?: IntegrationMode };
 import { CodexHost } from "./hosts/codex/index.ts";
 import { Recovery, type RecoveryAction } from "./recovery.ts";
 import { serveSocket, type SocketRequest, type RunnerEvent } from "./socket.ts";
@@ -23,6 +25,11 @@ function readText(value: unknown, field: string): string {
 function readModel(value: unknown): ModelChoice {
   const model = readObject(value);
   return { model: readText(model.model, "model"), ...(model.effort === undefined ? {} : { effort: readText(model.effort, "effort") }) };
+}
+function readIntegrationMode(value: unknown): { integrationMode?: IntegrationMode } {
+  if (value === undefined) return {};
+  if (!INTEGRATION_MODES.includes(value as IntegrationMode)) throw new TypeError("Invalid integrationMode");
+  return { integrationMode: value as IntegrationMode };
 }
 function readInput(value: unknown): UserInput {
   const input = readObject(value);
@@ -62,7 +69,7 @@ export class RunnerRuntime {
     for (const host of hosts) this.supervisor.registerHost(host);
   }
   private readFacts() { return this.ledger.readSince(0, Number.MAX_SAFE_INTEGER); }
-  private readRuns(facts: readonly Fact[] = this.readFacts()) { return projectEntityRecords<RunPayload & { launch?: { cwd: string; model: ModelChoice } }>(facts, "run") as (RunPayload & { id: string; launch?: { cwd: string; model: ModelChoice } })[]; }
+  private readRuns(facts: readonly Fact[] = this.readFacts()) { return projectEntityRecords<RunPayload & { launch?: Launch }>(facts, "run") as (RunPayload & { id: string; launch?: Launch })[]; }
   private readConversation(id: string, facts: readonly Fact[] = this.readFacts()) {
     const conversation = projectEntityRecords<ConversationPayload>(facts, "conversation").filter((entry) => entry.id === id || entry.provider && entry.native_id && createNativeId(entry.provider, entry.native_id) === id)
       .sort((a, b) => Number(b.origin === "managed") - Number(a.origin === "managed"))[0];
@@ -179,8 +186,7 @@ export class RunnerRuntime {
     const req: StartRequest = { runId: p.runId === undefined ? randomUUID() : readText(p.runId, "runId"), conversationId,
       generation: operation === "resume" ? Math.max(0, ...sourceRuns.map((run) => run.generation)) + 1 : 1,
       cwd: readText(p.cwd ?? saved?.cwd, "cwd"), model: readModel(p.model ?? saved?.model), input: readInput(p.input),
-      ...(p.integrationMode === "strict" ? { env: { AGENT_GRAPH_STRICT_MCP_CONFIG: "1" } } :
-        p.integrationMode === "disabled" ? { env: { ENABLE_CLAUDEAI_MCP_SERVERS: "false" } } : {}) };
+      ...readIntegrationMode(p.integrationMode ?? saved?.integrationMode) };
     this.opening.add(conversationId);
     try {
       const handle = operation === "start" ? await this.supervisor.start(host.provider, req)
@@ -205,8 +211,8 @@ export class RunnerRuntime {
   }
 }
 
-export async function serveRunner(ledger: Ledger, path: string, options: { hosts?: readonly AgentHost[]; isolation?: "shared" | "worktree" } = {}) {
-  const hosts = options.hosts ?? [new ClaudeHost(undefined, { enableFork: true }), new CodexHost()];
+export async function serveRunner(ledger: Ledger, path: string, options: { hosts?: readonly AgentHost[]; isolation?: "shared" | "worktree"; claude?: ClaudeHostOptions } = {}) {
+  const hosts = options.hosts ?? [new ClaudeHost(undefined, { enableFork: true, ...options.claude }), new CodexHost()];
   let runtime: RunnerRuntime;
   let ready = false;
   const socket = await serveSocket(path, (request) => {

@@ -259,10 +259,33 @@ test("enabled Claude fork fixes a new native ID and integration trial options re
   t.after(() => host.close("fork-run"));
   const handle = await host.fork({ runId: "fork-run", conversationId: "fork-conversation", generation: 1,
     nativeId: "original-native", cwd: "/tmp", model: { model: "haiku" }, input: { text: "continue" },
-    env: { AGENT_GRAPH_STRICT_MCP_CONFIG: "1", ENABLE_CLAUDEAI_MCP_SERVERS: "false" } });
+    integrationMode: "strict" });
   assert.equal(host.capabilities().fork, true);
   assert.equal(options?.forkSession, true); assert.equal(options?.resume, "original-native");
   assert.equal(options?.sessionId, handle.nativeId); assert.notEqual(handle.nativeId, "original-native");
   assert.equal(options?.strictMcpConfig, true); assert.deepEqual(options?.mcpServers, {});
   assert.equal(options?.env?.ENABLE_CLAUDEAI_MCP_SERVERS, "false");
+});
+
+test("runtime validates integrationMode, passes it to the host and keeps it for resume", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "runtime-integration-mode-")); createRepository(directory);
+  const ledger = openLedger(join(directory, "ledger.db"));
+  const host = new FakeHost();
+  const runtime = new RunnerRuntime(ledger, [host], () => {});
+  t.after(async () => { await runtime.close(); ledger.close(); rmSync(directory, { recursive: true, force: true }); });
+  const command = (command: string, payload: object) => runtime.command({ type: "req", cmd_id: command, command, payload: payload as any });
+  t.mock.method(host, "resume", async (request: ResumeRequest) => ({ ...await host.start(request), nativeId: request.nativeId }));
+  await runtime.recover();
+  const payload = { provider: "claude", cwd: directory, model: { model: "fake" }, input: { text: "go" } };
+  await assert.rejects(command("start", { ...payload, integrationMode: "all" }), /Invalid integrationMode/);
+  await command("start", { ...payload, runId: "plain", conversationId: "plain" });
+  assert.equal(host.starts.at(-1)?.integrationMode, undefined);
+  await command("start", { ...payload, runId: "enabled", conversationId: "enabled", integrationMode: "enabled" });
+  assert.equal(host.starts.at(-1)?.integrationMode, "enabled");
+  host.emit("enabled", { type: "exit", exitCode: 0 });
+  await waitUntil(() => projectRuns(ledger.readSince(0, 1000)).some((run) => run.conversation_id === "enabled" && run.state === "ended"));
+  await command("resume", { conversationId: "enabled", input: { text: "again" } });
+  assert.equal(host.starts.at(-1)?.integrationMode, "enabled");
+  host.emit("plain", { type: "exit", exitCode: 0 });
+  for (const request of host.starts.slice(-1)) host.emit(request.runId, { type: "exit", exitCode: 0 });
 });

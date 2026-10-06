@@ -8,9 +8,10 @@ import { openLedger } from "../../core/src/ledger/ledger.ts";
 import { ledgerDbPath, runnerSocketPath } from "./paths.ts";
 import { MAX_FRAME_BYTES, PROTOCOL_VERSION } from "./socket.ts";
 import { serveRunner } from "./runtime.ts";
+import { INTEGRATION_MODES, type IntegrationMode } from "./host/contract.ts";
 
 const STATUS_TIMEOUT_MS = 5000;
-const HELP = "Usage: agent-graph-runner serve [--socket <path>] [--db <path>] | status [--socket <path>]";
+const HELP = "Usage: agent-graph-runner serve [--socket <path>] [--db <path>] [--claude-integrations disabled|strict|enabled] | status [--socket <path>]";
 
 export function queryStatus(path: string): Promise<unknown> {
   return new Promise((resolveStatus, reject) => {
@@ -53,12 +54,17 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
   if (command !== "serve" && command !== "status") throw new TypeError(HELP);
   let socketPath = runnerSocketPath();
   let dbPath = ledgerDbPath();
+  let integrationMode: IntegrationMode | undefined;
   for (let index = 0; index < flags.length; index += 1) {
     const flag = flags[index];
     const value = flags[++index];
     if (!value || value.startsWith("--")) throw new TypeError(`Missing value for ${flag}`);
     if (flag === "--socket") socketPath = resolve(value);
     else if (flag === "--db" && command === "serve") dbPath = resolve(value);
+    else if (flag === "--claude-integrations" && command === "serve") {
+      if (!INTEGRATION_MODES.includes(value as IntegrationMode)) throw new TypeError(`Invalid value for ${flag}: ${value}`);
+      integrationMode = value as IntegrationMode;
+    }
     else throw new TypeError(`Unknown option: ${flag}`);
   }
   if (command === "status") { console.log(JSON.stringify(await queryStatus(socketPath))); return; }
@@ -67,7 +73,7 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
   let runner: Awaited<ReturnType<typeof serveRunner>> | undefined;
   let stop: () => void = () => {};
   try {
-    runner = await serveRunner(ledger, socketPath);
+    runner = await serveRunner(ledger, socketPath, integrationMode ? { claude: { integrationMode } } : {});
     console.log(JSON.stringify({ socket: socketPath, db: dbPath }));
     await new Promise<void>((resolveStop) => {
       stop = resolveStop;

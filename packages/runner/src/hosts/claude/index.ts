@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { query, type AccountInfo, type CanUseTool, type Options, type PermissionResult, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { JsonValue } from "../../../../core/src/ledger/facts.ts";
-import type { AgentHost, ApprovalId, Decision, ForkRequest, HostCapabilities, HostEvent, HostFact, ModelChoice, ModelInfo, ResumeRequest, RunHandle, StartRequest, UserInput } from "../../host/contract.ts";
+import type { AgentHost, ApprovalId, Decision, ForkRequest, HostCapabilities, HostEvent, HostFact, IntegrationMode, ModelChoice, ModelInfo, ResumeRequest, RunHandle, StartRequest, UserInput } from "../../host/contract.ts";
 import { AsyncQueue } from "./queue.ts";
 
 export type ClaudeQuery = AsyncIterable<SDKMessage> & Pick<Query, "interrupt" | "setModel" | "close" | "accountInfo" | "supportedModels">;
@@ -10,8 +10,10 @@ export type QueryFactory = (args: { prompt: AsyncIterable<SDKUserMessage>; optio
 export interface ClaudeCapabilities extends HostCapabilities {
   authentication: { type: "unknown" | "subscription" | "api_key"; verified: boolean; subscriptionType?: string; apiProvider?: string };
 }
+export interface ClaudeHostOptions { enableFork?: boolean; integrationMode?: IntegrationMode }
 interface OpenRun {
   request: StartRequest;
+  integrationMode: IntegrationMode;
   sessionId: string;
   input: AsyncQueue<SDKUserMessage>;
   events: AsyncQueue<HostEvent>;
@@ -52,8 +54,8 @@ export class ClaudeHost implements AgentHost {
   private epoch = randomUUID();
   private sequence = 0;
   private timestamp = 0;
-  private options: { enableFork?: boolean };
-  constructor(factory: QueryFactory = query, options: { enableFork?: boolean } = {}) { this.factory = factory; this.options = options; }
+  private options: ClaudeHostOptions;
+  constructor(factory: QueryFactory = query, options: ClaudeHostOptions = {}) { this.factory = factory; this.options = options; }
   capabilities(): ClaudeCapabilities {
     return { start: true, resume: true, fork: this.options.enableFork ?? false, interrupt: true, approvals: true, setModel: true, delta: true,
       authentication: { ...this.authentication }, degraded: [...this.degraded] };
@@ -71,13 +73,16 @@ export class ClaudeHost implements AgentHost {
     const input = new AsyncQueue<SDKUserMessage>();
     const events = new AsyncQueue<HostEvent>();
     const childProcess: OpenRun["process"] = {};
+    // 管理する実行の既定は disabled。claude.ai の外部連携を読み込まず、プラグインの MCP は残す。
+    const integrationMode = req.integrationMode ?? this.options.integrationMode ?? "disabled";
     let run: OpenRun;
     const sdkQuery = this.factory({ prompt: input, options: {
       cwd: req.cwd, model: req.model.model, effort,
       ...(forkFrom ? { sessionId, resume: forkFrom, forkSession: true } : resume ? { resume: sessionId } : { sessionId }),
-      ...(req.env?.AGENT_GRAPH_STRICT_MCP_CONFIG === "1" ? { strictMcpConfig: true, mcpServers: {} } : {}),
+      ...(integrationMode === "strict" ? { strictMcpConfig: true, mcpServers: {} } : {}),
       settingSources: ["user", "project"], permissionMode: "default", includePartialMessages: true, persistSession: true,
-      env: { ...process.env, ...req.env, CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1", AGENT_GRAPH_MANAGED: "1",
+      env: { ...process.env, ...req.env, ...(integrationMode === "enabled" ? {} : { ENABLE_CLAUDEAI_MCP_SERVERS: "false" }),
+        CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1", AGENT_GRAPH_MANAGED: "1",
         AGENT_GRAPH_RUN_ID: req.runId, AGENT_GRAPH_CONVERSATION_ID: req.conversationId, AGENT_GRAPH_GENERATION: String(req.generation) },
       canUseTool: (name, toolInput, options) => this.requestApproval(run, name, toolInput, options),
       spawnClaudeCodeProcess(options) {
@@ -89,7 +94,7 @@ export class ClaudeHost implements AgentHost {
         return child;
       },
     } });
-    run = { request: req, sessionId, input, events, query: sdkQuery, reader: Promise.resolve(), closed: false,
+    run = { request: req, integrationMode, sessionId, input, events, query: sdkQuery, reader: Promise.resolve(), closed: false,
       finished: false, sawState: false, firstResult: true, turns: [], interrupted: new Set(), tasks: new Set(), activeTasks: new Set(),
       childConversations: new Map(), process: childProcess, lastInterrupted: false };
     this.runs.set(req.runId, run);
@@ -206,7 +211,7 @@ export class ClaudeHost implements AgentHost {
     const runSubject = `run:${run.request.runId}` as const;
     if (message.type === "system" && message.subtype === "init") {
       if (message.session_id !== run.sessionId) throw new Error("Claude init session_id does not match the requested sessionId");
-      this.emitFact(run, { kind: "run.updated", subject: runSubject, payload: { last_evidence: toJson({ kind: "init", mcp_servers: message.mcp_servers }) } });
+      this.emitFact(run, { kind: "run.updated", subject: runSubject, payload: { last_evidence: toJson({ kind: "init", integration_mode: run.integrationMode, mcp_servers: message.mcp_servers }) } });
     } else if (message.type === "system" && message.subtype === "session_state_changed") {
       run.sawState = true;
       this.degraded.delete("session_state_events_unavailable");

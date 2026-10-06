@@ -456,3 +456,35 @@ test("Claude verifies authentication only from the first result", async () => {
   assert.equal(failed.host.capabilities().authentication.verified, false);
   assert.ok(failed.host.capabilities().degraded?.includes("authentication_required"));
 });
+
+test("Claude managed runs skip claude.ai integrations by default and switch by host option or request", async () => {
+  const previous = process.env.ENABLE_CLAUDEAI_MCP_SERVERS;
+  process.env.ENABLE_CLAUDEAI_MCP_SERVERS = "true";
+  try {
+    const cases: [ConstructorParameters<typeof ClaudeHost>[1], StartRequest["integrationMode"], string, string | undefined, boolean][] = [
+      [{}, undefined, "disabled", "false", false],
+      [{ integrationMode: "strict" }, undefined, "strict", "false", true],
+      [{ integrationMode: "enabled" }, undefined, "enabled", "true", false],
+      [{ integrationMode: "strict" }, "enabled", "enabled", "true", false],
+      [{ integrationMode: "enabled" }, "disabled", "disabled", "false", false],
+    ];
+    for (const [options, requested, mode, env, strict] of cases) {
+      const queries: FakeQuery[] = [];
+      const host = new ClaudeHost((args) => { const query = new FakeQuery(args); queries.push(query); return query; }, options);
+      const handle = await host.start({ ...makeRequest(), ...(requested ? { integrationMode: requested } : {}) });
+      const { events, done } = collect(handle);
+      const query = queries[0];
+      assert.equal(query.options.env?.ENABLE_CLAUDEAI_MCP_SERVERS, env, mode);
+      assert.equal(query.options.strictMcpConfig === true, strict, mode);
+      assert.deepEqual(query.options.mcpServers, strict ? {} : undefined, mode);
+      query.emit({ type: "system", subtype: "init", session_id: handle.nativeId, apiKeySource: "none", mcp_servers: [] });
+      await flush();
+      const init = getFacts(events).find((fact) => fact.kind === "run.updated" && JSON.stringify(fact.payload).includes('"kind":"init"'));
+      assert.equal((init?.payload as { last_evidence?: { integration_mode?: string } } | undefined)?.last_evidence?.integration_mode, mode);
+      await host.close("run-1");
+      await done;
+    }
+  } finally {
+    if (previous === undefined) delete process.env.ENABLE_CLAUDEAI_MCP_SERVERS; else process.env.ENABLE_CLAUDEAI_MCP_SERVERS = previous;
+  }
+});

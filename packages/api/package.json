@@ -4,5 +4,8 @@
   "type": "module",
   "scripts": {
     "test": "node --import ./test/setup.ts --test \"test/**/*.test.ts\""
+  },
+  "bin": {
+    "agent-graph-api": "./src/cli.ts"
   }
 }

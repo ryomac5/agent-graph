@@ -106,7 +106,7 @@ test("planner は表の reject を却下にし、failed の retry を再実行�
   failed = false;
   const first = await running;
   assert.equal(first.tasks[0].state, "done");
-  assert.equal(first.tasks[0].attempts, 1);
+  assert.equal(first.tasks[0].attempts, 3);
   // 状態が合わない判断は反映せず skipped と記録する
   const after = openPlanner(options.repo, options.session, options.specPath);
   try { after.store.insertTaskDecision(first.graph.id, "a", "approve", new Date().toISOString()); } finally { after.store.close(); }

@@ -1,0 +1,6 @@
+[
+  { "name": "success", "requestId": "s18-success", "states": ["accepted", "assigned", "running", "verifying", "reviewing", "done"], "reason": "" },
+  { "name": "failure", "requestId": "s18-failure", "states": ["accepted", "assigned", "running", "failed"], "reason": "Host failed" },
+  { "name": "interruption", "requestId": "s18-interruption", "states": ["accepted", "assigned", "running", "interrupted"], "reason": "Explicit interruption" },
+  { "name": "denial", "requestId": "s18-denial", "states": ["accepted", "denied"], "reason": "No eligible host" }
+]

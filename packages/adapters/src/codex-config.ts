@@ -1,6 +1,7 @@
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { selectShim, type RelayOptions } from "./relay.ts";
 
-export interface CodexOptions { shimPath: string; nodePath: string }
+export interface CodexOptions extends RelayOptions { nodePath: string }
 export interface CodexInstallOptions extends CodexOptions { configPath: string }
 
 const TOOL_TIMEOUT_SEC = 1800;
@@ -8,14 +9,17 @@ const SERVER = "agent-graph";
 const TOOL_KEY = "mcp_servers.agent-graph.tools.delegate.approval_mode";
 // 値を生成時に固定せず、各セッションの接続先とトレース文脈を shim に渡す。
 const SHIM_ENV_VARS = ["AGENT_GRAPH_SOCKET", "XDG_STATE_HOME", "TRACEPARENT", "TRACESTATE", "AGENT_GRAPH_SESSION", "CODEX_THREAD_ID", "CODEX_HOME"];
+function relayEnvironment(options: CodexOptions): string[] {
+  return options.relay === "v2" ? [...SHIM_ENV_VARS, "AGENT_GRAPH_RUNNER_SOCKET", "AGENT_GRAPH_MANAGED", "CLAUDE_CODE_SESSION_ID"] : SHIM_ENV_VARS;
+}
 
 export function renderCodexConfig(options: CodexOptions): string {
-  return `[mcp_servers.${SERVER}]\ncommand = ${JSON.stringify(options.nodePath)}\nargs = [${JSON.stringify(options.shimPath)}]\nenv_vars = ${JSON.stringify(SHIM_ENV_VARS)}\ntool_timeout_sec = ${TOOL_TIMEOUT_SEC}\n\n[mcp_servers.${SERVER}.env]\nAGENT_GRAPH_CLIENT = "codex"\n\n[mcp_servers.${SERVER}.tools.delegate]\napproval_mode = "approve"\n`;
+  return `[mcp_servers.${SERVER}]\ncommand = ${JSON.stringify(options.nodePath)}\nargs = [${JSON.stringify(selectShim(options))}]\nenv_vars = ${JSON.stringify(relayEnvironment(options))}\ntool_timeout_sec = ${TOOL_TIMEOUT_SEC}\n\n[mcp_servers.${SERVER}.env]\nAGENT_GRAPH_CLIENT = "codex"\n\n[mcp_servers.${SERVER}.tools.delegate]\napproval_mode = "approve"\n`;
 }
 
 export function renderCodexOverrides(options: CodexOptions): string[] {
   return [
-    "-c", `mcp_servers.${SERVER}={command=${JSON.stringify(options.nodePath)},args=[${JSON.stringify(options.shimPath)}],env={AGENT_GRAPH_CLIENT="codex"},env_vars=${JSON.stringify(SHIM_ENV_VARS)},tool_timeout_sec=${TOOL_TIMEOUT_SEC},required=true}`,
+    "-c", `mcp_servers.${SERVER}={command=${JSON.stringify(options.nodePath)},args=[${JSON.stringify(selectShim(options))}],env={AGENT_GRAPH_CLIENT="codex"},env_vars=${JSON.stringify(relayEnvironment(options))},tool_timeout_sec=${TOOL_TIMEOUT_SEC},required=true}`,
     "-c", `${TOOL_KEY}="approve"`,
   ];
 }

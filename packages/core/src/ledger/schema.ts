@@ -1,6 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
+import { projectConversations, encodeNameOrder, extractProvisionalName } from "./projections/conversations.ts";
+import { projectMessages } from "./projections/messages.ts";
+import type { Fact } from "./facts.ts";
+import { collectProjectionDependencies } from "./projections/dependencies.ts";
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
+export const FACT_SCHEMA_VERSION = 1;
 export const FACTS_DDL = `CREATE TABLE facts (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
   fact_id TEXT NOT NULL UNIQUE,
@@ -84,7 +89,53 @@ function migrateToVersion1(db: DatabaseSync): void {
   db.exec(FACTS_DDL);
   db.exec(PROJECTION_DDL);
 }
-const MIGRATIONS = [migrateToVersion1] as const;
+function migrateToVersion2(db: DatabaseSync): void {
+  db.exec(`CREATE INDEX facts_subject_seq ON facts (subject, seq);
+    CREATE TABLE fact_projection_dependencies (
+      projection TEXT NOT NULL, subject TEXT NOT NULL, direction TEXT NOT NULL,
+      key TEXT NOT NULL, seq INTEGER NOT NULL,
+      PRIMARY KEY (projection, subject, direction, key, seq)
+    ) WITHOUT ROWID;
+    CREATE INDEX fact_projection_dependency_lookup
+      ON fact_projection_dependencies (projection, direction, key, subject, seq);`);
+  const insertDependency = db.prepare("INSERT OR IGNORE INTO fact_projection_dependencies VALUES (?, ?, ?, ?, ?)");
+  for (const row of db.prepare("SELECT * FROM facts ORDER BY seq").iterate()) {
+    const fact = { ...row, payload: row.payload === null ? null : JSON.parse(String(row.payload)) } as Fact;
+    for (const dependency of collectProjectionDependencies(fact)) {
+      insertDependency.run(dependency.projection, fact.subject, dependency.direction, dependency.key, fact.seq);
+    }
+  }
+  db.exec(`ALTER TABLE conversations ADD COLUMN name TEXT;
+    ALTER TABLE conversations ADD COLUMN name_is_provisional INTEGER NOT NULL DEFAULT 0;
+    CREATE TABLE message_name_inputs (
+      id TEXT PRIMARY KEY, source_time REAL NOT NULL, source_event_id TEXT NOT NULL, name TEXT NOT NULL, message_order TEXT NOT NULL
+    );
+    CREATE TABLE conversation_name_candidates (
+      id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, message_id TEXT NOT NULL,
+      source_time REAL NOT NULL, source_event_id TEXT NOT NULL, name TEXT NOT NULL, message_order TEXT NOT NULL
+    );
+    CREATE INDEX conversation_name_first ON conversation_name_candidates
+      (conversation_id, source_time, source_event_id, message_order);
+    CREATE INDEX membership_message ON message_memberships (message_id);`);
+  const lastSeq = Number(db.prepare("SELECT last_seq FROM projection_state WHERE id = 1").get()!.last_seq);
+  const facts = db.prepare("SELECT * FROM facts WHERE seq <= ?").all(lastSeq).map((row) => ({
+    ...row, payload: row.payload === null ? null : JSON.parse(String(row.payload)),
+  } as Fact));
+  const update = db.prepare("UPDATE conversations SET name = ?, name_is_provisional = ? WHERE id = ?");
+  for (const conversation of projectConversations(facts).conversations) {
+    update.run(conversation.name, Number(conversation.name_is_provisional), conversation.id);
+  }
+  const insert = db.prepare("INSERT INTO message_name_inputs VALUES (?, ?, ?, ?, ?)");
+  for (const message of projectMessages(facts).messages) {
+    insert.run(message.id, Date.parse(message.source_ts), encodeNameOrder(message.source_event_id),
+      extractProvisionalName(message.body), encodeNameOrder(message.id));
+  }
+  db.exec(`INSERT INTO conversation_name_candidates
+    SELECT m.id, m.conversation_id, m.message_id, n.source_time, n.source_event_id, n.name, n.message_order
+    FROM message_memberships m JOIN message_name_inputs n ON n.id = m.message_id
+    WHERE m.active = 1 AND m.conversation_id IS NOT NULL AND n.name <> '';`);
+}
+const MIGRATIONS = [migrateToVersion1, migrateToVersion2] as const;
 
 export function initializeSchema(db: DatabaseSync): void {
   db.exec("BEGIN IMMEDIATE");

@@ -1,5 +1,5 @@
 // 右の詳細パネル。root は会話の吹き出し、子は属性と往復と Accept と Scope と Review と Output
-import { fmtElapsed, fmtTokens, fmtWhen, modelLabel, statusClass, statusLabel, statusDescription } from "../lib/format.js";
+import { fmtElapsed, fmtTokens, fmtWhen, modelLabel, statusClass, statusLabel, statusDescription, MODEL_CHOICES, modelChoiceOf } from "../lib/format.js";
 import { actionsFor } from "../lib/status.js";
 import { parseMarkdown } from "../lib/markdown.js";
 import { button, el } from "./dom.js";
@@ -327,22 +327,38 @@ function addDetailToolbar(aside, ctx) {
   aside.insertBefore(bar, aside.firstChild);
 }
 
+// モデルの切り替え。選択肢から選び、いまと違うものを選んだときだけ切り替えを送れる
 function buildModelForm(scope, ctx) {
   const form = el("form", undefined, "model-form");
-  const input = el("input");
-  input.value = scope.model || "";
-  input.setAttribute("aria-label", "モデル名");
-  input.placeholder = "モデル名";
+  const select = el("select");
+  select.setAttribute("aria-label", "モデル");
+  const current = modelChoiceOf(scope.model);
+  // 観測したモデルがどの選択肢にも当たらなければ、いまのモデルとして先頭に出す
+  if (!current) {
+    const unknown = el("option", scope.model ? modelLabel(scope.model) : "モデル不明");
+    unknown.value = "";
+    select.append(unknown);
+  }
+  for (const choice of MODEL_CHOICES) {
+    const option = el("option", choice.label);
+    option.value = choice.value;
+    if (choice.value === current) option.selected = true;
+    select.append(option);
+  }
+  select.value = current;
   const submit = el("button", "モデル変更", "toolbar-button");
   submit.type = "submit";
+  const sync = () => { submit.disabled = !select.value || select.value === current; };
+  select.addEventListener("change", sync);
+  sync();
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (!input.value.trim()) return;
+    if (!select.value || select.value === current) return;
     submit.disabled = true;
-    await ctx.onAction({ action: "set_model", sessionId: scope.sessionId, model: input.value.trim() });
-    submit.disabled = false;
+    await ctx.onAction({ action: "set_model", sessionId: scope.sessionId, model: select.value });
+    sync();
   });
-  form.append(input, submit);
+  form.append(select, submit);
   return form;
 }
 

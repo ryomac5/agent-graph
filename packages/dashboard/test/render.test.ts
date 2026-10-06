@@ -178,3 +178,34 @@ test("吹き出しは Markdown の記号を外して見出しと太字とコー�
   assert.equal(bubble.querySelectorAll("b").length, 0, "外からの HTML が要素になった");
   assert.ok(html.includes("<b>x</b>"), "外からの HTML が文字として残っていない");
 });
+
+test("モデルの切り替えは選択式で、いまのモデルを選んだ状態から違うものを選んだときだけ別名を送る", async () => {
+  const sent: Json[] = [];
+  const scope = { ...scopesOf(project)[0], client: "claude", status: "running", model: "claude-opus-5-5[1m]" };
+  const aside = document.createElement("aside");
+  renderDetail(aside, scope, null, ctx({ onAction: async (request: Json) => { sent.push(request); return "ok"; } }));
+  const form = aside.querySelector(".model-form")!;
+  assert.equal(form.querySelectorAll("input").length, 0, "文字の入力欄が残っている");
+  const select = form.querySelector("select")! as unknown as { value: string; dispatch: (name: string, event?: unknown) => void; children: { value: string; textContent: string }[] };
+  assert.deepEqual(select.children.map((option) => option.value), ["fable", "opus", "opus[1m]", "sonnet", "haiku"]);
+  assert.equal(select.value, "opus[1m]");
+  const submit = form.querySelector("button")! as unknown as { disabled: boolean };
+  assert.equal(submit.disabled, true, "いまと同じモデルで押せてしまう");
+  select.value = "sonnet";
+  select.dispatch("change");
+  assert.equal(submit.disabled, false);
+  (form as unknown as { dispatch: (name: string, event?: unknown) => void }).dispatch("submit", { preventDefault() {} });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(sent.map((request) => [request.action, request.model]), [["set_model", "sonnet"]]);
+});
+
+test("モデル名の選択肢への対応は 1M と系列を見分け、知らないモデルは空にする", async () => {
+  const lib = await import("../src/index.ts");
+  assert.equal(lib.modelChoiceOf("claude-opus-5-5"), "opus");
+  assert.equal(lib.modelChoiceOf("claude-opus-5-5[1m]"), "opus[1m]");
+  assert.equal(lib.modelChoiceOf("claude-sonnet-5-5"), "sonnet");
+  assert.equal(lib.modelChoiceOf("claude-haiku-4-5-20251001"), "haiku");
+  assert.equal(lib.modelChoiceOf("claude-fable-5-1"), "fable");
+  assert.equal(lib.modelChoiceOf("gpt-6-astra"), "");
+  assert.equal(lib.modelChoiceOf(undefined), "");
+});

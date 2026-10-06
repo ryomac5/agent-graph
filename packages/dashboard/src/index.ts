@@ -1,6 +1,6 @@
 // 画面の純粋な処理を型付きで再公開する。実体は public/lib/ の ES module
 export {
-  STATUS_CLASS, STATUS_LABEL, statusClass, statusLabel, familyOf, kindTitle, roleLabel, modelLabel, fitWords,
+  STATUS_CLASS, STATUS_LABEL, statusClass, statusLabel, familyOf, kindTitle, roleLabel, modelLabel, fitWords, MODEL_CHOICES, modelChoiceOf,
   fmtWhen, fmtUntil, fmtElapsed, fmtTokens,
 } from "../public/lib/format.js";
 export type { StatusClass, NodeLike, FitResult } from "../public/lib/format.js";

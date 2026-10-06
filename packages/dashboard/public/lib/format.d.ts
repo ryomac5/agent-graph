@@ -26,6 +26,8 @@ export function familyOf(node: NodeLike | undefined): "anthropic" | "openai" | "
 export function kindTitle(node: NodeLike | undefined): string;
 export function roleLabel(node: NodeLike | undefined): string;
 export function modelLabel(id: string | undefined): string;
+export const MODEL_CHOICES: { value: string; label: string }[];
+export function modelChoiceOf(model: string | undefined): string;
 export function fitWords(text: string | undefined, maxChars?: number): FitResult;
 export function fmtWhen(value: string | Date | undefined, full?: boolean, now?: Date): string;
 export function fmtUntil(value: string | Date | undefined, now?: Date): string;

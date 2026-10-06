@@ -166,7 +166,7 @@ export function startCodexObserver(stores: Map<string, Store>, options: {
   const sessionPaths = new Map<string, string>();
   const applied = new Map<string, number>();
   let inflight: Promise<void> | undefined;
-  const tick = (): Promise<void> => inflight ??= (async () => {
+  const run = async (): Promise<void> => {
     try {
       if (Date.now() - indexedAt > INDEX_INTERVAL_MS) { paths = (await listLogs(root)).sort(); indexedAt = Date.now(); }
       const read = async (path: string) => {
@@ -267,8 +267,15 @@ export function startCodexObserver(stores: Map<string, Store>, options: {
         }
       }
     } catch (error) { (options.onError || console.error)(error); }
-    finally { inflight = undefined; }
-  })();
+  };
+  // 前の回が終わるまで次を始めない。後始末は代入のあとに予約する。
+  // run の中で await を通らずに終わると、finally の中で戻した値を ??= の代入が上書きし、二度と動かなくなっていた
+  const tick = (): Promise<void> => {
+    if (inflight) return inflight;
+    const current = run().finally(() => { if (inflight === current) inflight = undefined; });
+    inflight = current;
+    return current;
+  };
   const timer = setInterval(() => { void tick(); }, options.intervalMs || POLL_MS);
   void tick();
   return { tick, stop: async () => { clearInterval(timer); await inflight; } };

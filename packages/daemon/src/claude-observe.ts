@@ -45,7 +45,7 @@ export function startClaudeObserver(stores: Map<string, Store>, options: { root?
   const paths = new Map<string, string>();
   const mtimes = new Map<string, number>();
   let inflight: Promise<void> | undefined;
-  const tick = (): Promise<void> => inflight ??= (async () => {
+  const run = async (): Promise<void> => {
     try {
       for (const store of stores.values()) for (const repo of listRepos(store.db)) for (const session of listSessions(store.db, repo.key)) {
         if (session.client !== "claude" || !/^[A-Za-z0-9_-]+$/.test(session.id)) continue;
@@ -91,8 +91,15 @@ export function startClaudeObserver(stores: Map<string, Store>, options: { root?
         mtimes.set(path, info.mtimeMs);
       }
     } catch (error) { (options.onError || console.error)(error); }
-    finally { inflight = undefined; }
-  })();
+  };
+  // 前の回が終わるまで次を始めない。後始末は代入のあとに予約する。
+  // run の中で await を通らずに終わると、finally の中で戻した値を ??= の代入が上書きし、二度と動かなくなっていた
+  const tick = (): Promise<void> => {
+    if (inflight) return inflight;
+    const current = run().finally(() => { if (inflight === current) inflight = undefined; });
+    inflight = current;
+    return current;
+  };
   const timer = setInterval(() => { void tick(); }, options.intervalMs || POLL_MS);
   void tick();
   return { tick, stop: async () => { clearInterval(timer); await inflight; } };

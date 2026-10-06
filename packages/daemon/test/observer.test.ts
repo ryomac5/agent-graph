@@ -153,3 +153,20 @@ test("Codex のアーカイブはプロセスが残っていても終了扱い�
   await restarted.tick(); await restarted.stop();
   assert.equal(store.getSession("thread")!.status, "ended");
 });
+
+test("空の store で起動した観測も、あとから足した store を次の回で読む", async (t) => {
+  // デーモンは store を開く前に観測を起動する。最初の回が await を通らずに終わると、以後の回が二度と動かなかった
+  const store = fixture(); store.updateSessionClient("thread", "claude");
+  const root = await mkdtemp(join(tmpdir(), "graph-claude-late-"));
+  t.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
+  await mkdir(join(root, "-repo"));
+  await writeFile(join(root, "-repo", "thread.jsonl"), JSON.stringify({ type: "assistant", timestamp: at, message: { model: "claude-opus-5-5", content: [] } }));
+  const stores = new Map<string, ReturnType<typeof fixture>>();
+  const claude = startClaudeObserver(stores, { root, intervalMs: 60_000 });
+  const codex = startCodexObserver(stores, { root, intervalMs: 60_000 });
+  await claude.tick(); await codex.tick();
+  stores.set("r", store);
+  await claude.tick();
+  assert.equal(store.getSession("thread")?.model, "claude-opus-5-5");
+  await claude.stop(); await codex.stop();
+});

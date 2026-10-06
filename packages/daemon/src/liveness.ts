@@ -73,12 +73,19 @@ export function startLivenessMonitor(stores: Map<string, Store>, options: Livene
   const schedule = options.setIntervalImpl ?? setInterval;
   const clear = options.clearIntervalImpl ?? clearInterval;
   let inflight: Promise<void> | undefined;
-  const tick = (): Promise<void> => inflight ??= (async () => {
+  const run = async (): Promise<void> => {
     try {
       for (const store of stores.values()) await reconcileLiveness(store, options);
     } catch (error) { (options.onError ?? console.error)(error); }
-    finally { inflight = undefined; }
-  })();
+  };
+  // 前の回が終わるまで次を始めない。後始末は代入のあとに予約する。
+  // run の中で await を通らずに終わると、finally の中で戻した値を ??= の代入が上書きし、二度と動かなくなっていた
+  const tick = (): Promise<void> => {
+    if (inflight) return inflight;
+    const current = run().finally(() => { if (inflight === current) inflight = undefined; });
+    inflight = current;
+    return current;
+  };
   const timer = schedule(() => { void tick(); }, options.intervalMs ?? LIVENESS_INTERVAL_MS);
   return { tick, stop: async () => { clear(timer); await inflight; } };
 }

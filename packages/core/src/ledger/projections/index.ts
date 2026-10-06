@@ -8,6 +8,7 @@ import { projectFindings } from "./findings.ts";
 import { projectMessages } from "./messages.ts";
 import { projectNames } from "./names.ts";
 import { projectRuns } from "./runs.ts";
+import { projectProjects, projectUnsupportedObservations } from "./projects.ts";
 
 export * from "./approvals.ts";
 export * from "./artifacts.ts";
@@ -19,6 +20,7 @@ export * from "./messages.ts";
 export * from "./names.ts";
 export * from "./relations.ts";
 export * from "./runs.ts";
+export * from "./projects.ts";
 
 export function project(facts: readonly Fact[]) {
   return {
@@ -31,6 +33,8 @@ export function project(facts: readonly Fact[]) {
     artifacts: projectArtifacts(facts),
     approvals: projectApprovals(facts),
     findings: projectFindings(facts),
+    projects: projectProjects(facts),
+    unsupported_observations: projectUnsupportedObservations(facts),
   };
 }
 

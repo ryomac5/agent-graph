@@ -3,20 +3,32 @@
 ## 目的
 
 agent-graph は AI エージェント間の委譲を記録し、可視化し、割り当てを改善する常駐デーモンである。
-設計の正本は `docs/agents/architecture.md`。実装の前に必ず読む。
+設計の正本は `docs/agents/architecture-v2.md` である。実装の前に必ず読む。
+旧い `docs/agents/architecture.md` は、移行が終わるまでの参照用である。
 
 ## パッケージ
 
 pnpm workspace のモノレポ。`packages/core`、`daemon`、`dashboard`、`adapters`、`planner` に分ける。
-責務と依存してよい先は設計書の「部品の責務と境界」の表を参照する。
-2 段目は `packages/core` の実行アダプタと委譲処理、`packages/daemon` の MCP・ソケット・エントリ、および双方向 e2e を実装する。
-3 段目は core の割り当て層と daemon の利用枠取得を結線する。
-4 段目は daemon の HTTP と SSE を dashboard の静的ファイルに結線し、双方向の辺と表示遅延を e2e で確認する。SSE は `/api/events` が全体の `overview` か `project` を送り、ダッシュボードは Overview・プロジェクトのグラフ・NodeDetail・判断待ちの Approve/Reject/Retry を表示する。根の系統は shim の hello.client（AGENT_GRAPH_CLIENT=claude または codex）から記録する。
-5 段目はプラグイン・設定の生成、`POST /api/sessions` の根登録、新規リポジトリでの委譲を `AGENT_GRAPH_E2E=1 bash scripts/e2e-stage5.sh` で確認する。
+責務と依存してよい先は設計書の「パッケージ」の表を参照する。
+
+## 実装の段階
+
+段の詳細と受け入れは、設計書の「実装の段階」に従う。
+各段で触るパッケージは、設計書の段の記述に限る。
+
+- 段 1 台帳の核: core に台帳と秘匿と状態の規則と投影と再構築を置く
+- 段 2 取り込みと移行: 旧い DB の変換と api の取り込みと別名の取り込みを作る
+- 段 3 runner とホスト: runner とホストと承認と api の WebSocket を作る
+- 段 4 受付と委譲: 受付と MCP の受け口と runner での planner の実行を作る
+- 段 5 画面の土台: Vite と React で一覧と会話と承認の受け箱を作る
+- 段 6 成果物とレビューと検索: 成果物の確定とレビューと委譲の木と横断検索を作る
+- 段 7 Settings と公開水準: Settings と旧い daemon の削除と公開の判定を行う
+
+## 旧い作りの操作
+
 `agent-graph-install --claude-plugin-dir <dir>` で生成し、Claude Code に `--plugin-dir <dir>` を渡す。
 Codex は `agent-graph-install --codex-config <path>` で指定先に導入するか、`--print-codex-overrides` の出力を 1 行 1 引数として `codex exec` に渡す（既存の設定を書き換えない）。
 個人の割り当て設定は `~/.config/agent-graph/policy.toml`（`XDG_CONFIG_HOME` 優先）に置く。
-6 段目は planner のグラフ実行・承認ゲート・PR と旧版比較を `AGENT_GRAPH_E2E=1 bash scripts/e2e-stage6.sh` で確認する。
 `agent-graph-plan run --session <id> [--spec path] [--max-parallel n] [--no-pr]` で実行する。spec の既定は `.agents/graph/<id>/tasks.yaml`。
 `agent-graph-plan status|approve|reject|retry [task] --session <id>` で状態確認・判断を行う。失敗したタスクも retry できる。
 
@@ -37,7 +49,15 @@ Codex は `agent-graph-install --codex-config <path>` で指定先に導入す�
 共通のコーディング規約は `~/.codex/AGENTS.md` を正本とする。ここには差分だけ書く。
 
 - 実装は Node 互換の TypeScript とする。Bun でも動く形を保つ
-- `core` は Node 標準と `node:sqlite` 以外に依存を追加しない
+- `core` は Node 標準と `node:sqlite` だけに依存する
+- 依存は設計書の「依存」の表にあるものを、表の段でだけ足す
+- `runner` は段 3 で `@anthropic-ai/claude-agent-sdk` を足す。`api` は段 3 で `ws` を足す
+- `dashboard` は段 5 で `react` と `react-dom` と `vite` と `@vitejs/plugin-react` を足す
+- `dashboard` は段 6 で `@xyflow/react` を足す
+- MIT 以外のライセンスの依存は、段の受け入れでライセンスを確かめる
+- 旧い `daemon` と旧い画面には手を入れない
+- 新しい作りは `runner` と `api` に積む
+- 画面の文言は英語を既定にする。日本語は設定で選べる翻訳として持つ
 - テストは `node:test` を使う。TypeScript は Node の型除去で直接実行する
 - enum や namespace など型除去で消せない構文は使わない
 - 状態は作業リポジトリの外に置く。置き場は設計書の「置き場」の表に従う

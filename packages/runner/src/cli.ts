@@ -6,8 +6,8 @@ import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { openLedger } from "../../core/src/ledger/ledger.ts";
 import { ledgerDbPath, runnerSocketPath } from "./paths.ts";
-import { MAX_FRAME_BYTES, PROTOCOL_VERSION, serveSocket, type RunnerSocket } from "./socket.ts";
-import { Supervisor } from "./supervisor.ts";
+import { MAX_FRAME_BYTES, PROTOCOL_VERSION } from "./socket.ts";
+import { serveRunner } from "./runtime.ts";
 
 const STATUS_TIMEOUT_MS = 5000;
 const HELP = "Usage: agent-graph-runner serve [--socket <path>] [--db <path>] | status [--socket <path>]";
@@ -64,17 +64,10 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
   if (command === "status") { console.log(JSON.stringify(await queryStatus(socketPath))); return; }
   mkdirSync(dirname(dbPath), { recursive: true, mode: 0o700 });
   const ledger = openLedger(dbPath);
-  let socket: RunnerSocket | undefined;
-  let supervisor: Supervisor;
+  let runner: Awaited<ReturnType<typeof serveRunner>> | undefined;
   let stop: () => void = () => {};
   try {
-    socket = await serveSocket(socketPath, (request) => {
-      if (request.command === "status") return { ...supervisor.status() };
-      if (request.command === "prepare_update") return { ...supervisor.prepareUpdate() };
-      throw new Error(`Unknown command: ${request.command}`);
-    });
-    // 待受を確保してから復旧し、二重起動が稼働中の実行を変更するのを防ぐ。
-    supervisor = new Supervisor(ledger, (event) => socket!.publish(event));
+    runner = await serveRunner(ledger, socketPath);
     console.log(JSON.stringify({ socket: socketPath, db: dbPath }));
     await new Promise<void>((resolveStop) => {
       stop = resolveStop;
@@ -84,8 +77,7 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
   } finally {
     process.removeListener("SIGINT", stop);
     process.removeListener("SIGTERM", stop);
-    await socket?.close();
-    ledger.close();
+    try { await runner?.close(); } finally { ledger.close(); }
   }
 }
 

@@ -8,7 +8,7 @@ import { OBSERVATION_POLL_MS, openObservationService } from "./service/index.ts"
 import { DEFAULT_WS_PORT, startWebSocketServer } from "./ws/index.ts";
 import { pollObservation } from "./service/poll.ts";
 
-const HELP = "Usage: agent-graph-api ingest --once | migrate --from <path> | rebuild | serve [--db <path>] [--port <port>] [--runner-socket <path>]";
+const HELP = "Usage: agent-graph-api ingest --once | migrate --from <path> | rebuild | serve [--db <path>] [--port <port>] [--runner-socket <path>] [--no-observe]";
 
 function listDatabases(path: string, excludedPaths: Set<string>): string[] {
   if (statSync(path).isFile()) return excludedPaths.has(realpathSync(path)) ? [] : [path];
@@ -29,8 +29,10 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
   let port = DEFAULT_WS_PORT;
   let runnerPath: string | undefined;
   let once = false;
+  let observe = true;
   for (let index = 0; index < flags.length; index += 1) {
     const flag = flags[index];
+    if (flag === "--no-observe" && command === "serve") { observe = false; continue; }
     if (flag === "--once" && command === "ingest") { once = true; continue; }
     if (!["--db", "--db-path", "--state-dir", "--from", "--port", "--runner-socket"].includes(flag)) throw new TypeError(`Unknown option: ${flag}`);
     const value = flags[++index];
@@ -59,7 +61,7 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
       });
       console.log(JSON.stringify(report));
     } else {
-      const report = pollObservation(() => service.ingestOnce());
+      const report = observe ? pollObservation(() => service.ingestOnce()) : { appended: 0 };
       const hook = await startHookServer(service.ledger, 0);
       const endpoint = join(service.outbox, ".endpoint");
       let observationTimer: ReturnType<typeof setInterval> | undefined;
@@ -81,7 +83,7 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
           const poll = (action: () => unknown) => {
             try { pollObservation(action); } catch (error) { reject(error); }
           };
-          observationTimer = setInterval(() => poll(() => service.ingestOnce()), OBSERVATION_POLL_MS);
+          if (observe) observationTimer = setInterval(() => poll(() => service.ingestOnce()), OBSERVATION_POLL_MS);
         });
       } finally {
         clearInterval(observationTimer);

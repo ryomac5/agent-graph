@@ -7,6 +7,7 @@ import { projectRuns } from "../../core/src/ledger/projections/runs.ts";
 import type { ConversationPayload } from "../../core/src/ledger/facts.ts";
 import type { AgentHost, HostEvent, RunHandle, StartRequest, ResumeRequest, ForkRequest } from "./host/contract.ts";
 import type { RunnerEvent } from "./socket.ts";
+import { recordWorktree } from "./worktree.ts";
 
 const ACTIVE_STATES = new Set(["starting", "running", "waiting_approval", "waiting_input"]);
 const TERMINAL_DELEGATIONS = new Set(["done", "failed", "interrupted", "denied"]);
@@ -16,6 +17,7 @@ export interface UpdateStatus { activeRuns: number; activeDelegations: number }
 export class Supervisor {
   private hosts = new Map<Provider, AgentHost>();
   private tasks = new Map<string, Promise<void>>();
+  private openRuns = new Set<string>();
   private facts: Fact[] = [];
   private epoch = randomUUID();
   private counter = 0;
@@ -24,10 +26,12 @@ export class Supervisor {
   private ledger: Ledger;
   private publish: (event: RunnerEvent) => void;
 
-  constructor(ledger: Ledger, publish: (event: RunnerEvent) => void = () => {}) {
+  private options: { recover?: boolean; isolation?: "shared" | "worktree" };
+  constructor(ledger: Ledger, publish: (event: RunnerEvent) => void = () => {}, options: { recover?: boolean; isolation?: "shared" | "worktree" } = {}) {
+    this.options = options;
     this.ledger = ledger;
     this.publish = publish;
-    this.recover();
+    if (options.recover !== false) this.recover();
   }
   registerHost(host: AgentHost): void {
     if (this.hosts.has(host.provider)) throw new Error("Host already registered");
@@ -41,7 +45,7 @@ export class Supervisor {
     }
   }
   private stamp(): { source_event_id: string; source_ts: string } {
-    this.lastTimestamp = Math.max(Date.now(), this.lastTimestamp + 1);
+    this.lastTimestamp = Math.max(Date.now(), this.lastTimestamp + 1, ...this.readFacts().slice(-READ_BATCH_SIZE).map((fact) => Date.parse(fact.source_ts) + 1));
     return { source_event_id: `${this.epoch}:${String(++this.counter).padStart(12, "0")}`, source_ts: new Date(this.lastTimestamp).toISOString() };
   }
   private append(fact: FactInput): void {
@@ -118,9 +122,22 @@ export class Supervisor {
     }
     let handle: RunHandle;
     try {
+      if (this.options.isolation) {
+        const stamp = this.stamp();
+        const tree = recordWorktree(this.ledger, { runId: request.runId, generation: request.generation, provider,
+          cwd: request.cwd, isolation: this.options.isolation, sourceEventId: stamp.source_event_id, sourceTs: stamp.source_ts });
+        request = { ...request, cwd: tree.cwd };
+        const seq = this.readFacts().at(-1)!.seq;
+        this.publish({ type: "evt", seq });
+      }
+      this.append({ ...this.stamp(), source, kind: "run.updated", subject: `run:${request.runId}`, confidence: "confirmed",
+        payload: { launch: { cwd: request.cwd, model: request.model }, generation: request.generation } } as FactInput);
       handle = operation === "start" ? await host.start(request)
         : operation === "resume" ? await host.resume(request as ResumeRequest) : await host.fork(request as ForkRequest);
-      if (handle.runId !== request.runId) throw new Error("Host returned a different run ID");
+      if (handle.runId !== request.runId || operation === "resume" && handle.nativeId !== (request as ResumeRequest).nativeId) {
+        await host.close(handle.runId);
+        throw new Error("Host returned a different run or native ID");
+      }
       this.append({ ...this.stamp(), source, kind: "conversation.updated", subject: `conversation:${request.conversationId}`,
         confidence: "confirmed", payload: { native_id: handle.nativeId } });
       this.append({ ...this.stamp(), source, kind: "run.updated", subject: `run:${request.runId}`,
@@ -130,12 +147,17 @@ export class Supervisor {
         payload: { state: "unknown", reason: error instanceof Error ? error.message : String(error) } });
       throw error;
     }
+    this.attach(provider, request, handle);
+    return handle;
+  }
+  attach(provider: Provider, request: StartRequest, handle: RunHandle): void {
+    this.openRuns.add(request.runId);
     const task = this.consume(provider, request, handle);
     this.tasks.set(request.runId, task);
     // エラーは wait で呼び出し元へ返し、未処理の Promise 拒否を防ぐ。
     void task.catch(() => {});
-    return handle;
   }
+  isOpen(runId: string): boolean { return this.openRuns.has(runId); }
   async wait(runId: string): Promise<void> {
     const task = this.tasks.get(runId);
     if (!task) throw new Error("Unknown run");
@@ -152,7 +174,7 @@ export class Supervisor {
     } catch (error) {
       this.recordEvent(provider, request, { type: "state", state: "unknown", reason: error instanceof Error ? error.message : String(error) });
       throw error;
-    }
+    } finally { this.openRuns.delete(request.runId); }
   }
   private recordEvent(provider: Provider, request: StartRequest, event: HostEvent): void {
     if (event.type === "delta") {

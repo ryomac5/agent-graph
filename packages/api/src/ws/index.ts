@@ -113,3 +113,5 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
     },
   };
 }
+
+export { WebSocket };

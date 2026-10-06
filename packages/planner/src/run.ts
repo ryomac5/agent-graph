@@ -5,6 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { decisionAllowed, newTraceId, openStore, repoKey, stateDbPath, ulid, type GraphRecord, type Store, type TaskRecord } from "../../core/src/index.ts";
 import { isDecision, markApplied, pendingDecisions, recordDecision, DECISION_POLL_MS } from "./decisions.ts";
 import { connectDelegate } from "./mcp-client.ts";
+import { buildPlannerConstraints, connectIntake, createPlannerRequestId } from "./intake-client.ts";
 import { buildTaskPrompt } from "./prompt.ts";
 import { renderReport, type TaskReport } from "./report.ts";
 import { nextAttempt } from "./retry.ts";
@@ -104,7 +105,7 @@ function applyDecisions(repo: string, store: Store, graph: GraphRecord, tasks: T
     let effect = "skipped";
     if (task && current && isDecision(decision.action) && decisionAllowed(current.state, decision.action)) {
       effect = "applied";
-      if (decision.action === "retry") store.updateTask(graph.id, task.id, "planned", current.state === "failed" ? current.attempts : 0);
+      if (decision.action === "retry") store.updateTask(graph.id, task.id, "planned", current.attempts);
       else if (decision.action === "reject") store.updateTask(graph.id, task.id, "rejected");
       else if (task.executor === "human") store.updateTask(graph.id, task.id, "done");
       else integrateTask(repo, store, graph, task);
@@ -129,15 +130,21 @@ function claimRun(path: string): () => void {
   return () => unlinkSync(path);
 }
 
-export async function runGraph(options: RunOptions, dependencies: { connect?: typeof connectDelegate } = {}): Promise<{ graph: GraphRecord; tasks: TaskRecord[]; integration: string }> {
+type DelegateConnection = Pick<Awaited<ReturnType<typeof connectIntake>>, "delegate" | "close">;
+type ConnectPlanner = (options: Parameters<typeof connectIntake>[0]) => Promise<DelegateConnection>;
+
+export async function runGraph(options: RunOptions, dependencies: { connect?: ConnectPlanner } = {}): Promise<{ graph: GraphRecord; tasks: TaskRecord[]; integration: string }> {
   const maxParallel = options.maxParallel ?? 3;
   if (!Number.isSafeInteger(maxParallel) || maxParallel < 1) throw new Error("maxParallel must be a positive integer");
   const { root, spec, store, key, fingerprint } = openPlanner(options.repo, options.session, options.specPath);
   let release: (() => void) | undefined;
-  let client: Awaited<ReturnType<typeof connectDelegate>> | undefined;
-  let connection: ReturnType<typeof connectDelegate> | undefined;
+  let client: DelegateConnection | undefined;
+  let connection: Promise<DelegateConnection> | undefined;
   const active = new Map<string, Promise<void>>();
   try {
+    for (const task of spec.tasks) {
+      if (["codex", "doc-light", "doc-heavy"].includes(task.executor)) buildPlannerConstraints(task);
+    }
     release = claimRun(join(dirname(stateDbPath(key)), `planner-${options.session}.lock`));
     store.upsertRepo({ key, rootPath: root, name: basename(root) });
     if (!store.db.prepare("SELECT id FROM sessions WHERE id = ?").get(options.session)) {
@@ -185,17 +192,24 @@ export async function runGraph(options: RunOptions, dependencies: { connect?: ty
         const role = roleForExecutor(task.executor);
         if (role !== "implement" && role !== "document") throw new Error(`Invalid delegate role: ${role}`);
         const cwd = createTaskWorktree(root, namespace, task.id);
-        if (task.model || task.review_model) store.appendGraphEvent(currentGraph, "model.ignored", {
-          taskId: task.id, model: task.model, review_model: task.review_model, reason: "割り当ては daemon が決める",
+        const constraints = buildPlannerConstraints(task);
+        if (task.review_model) store.appendGraphEvent(currentGraph, "model.ignored", {
+          taskId: task.id, review_model: task.review_model, reason: "受付の制約はレビュアーのモデルを個別に指定できない",
         });
-        // hello は元リポジトリから送り、delegate の cwd だけを worktree にする。
-        connection ??= (dependencies.connect ?? connectDelegate)({ cwd: root,
+        if (constraints) store.appendGraphEvent(currentGraph, "model.constrained", {
+          taskId: task.id, model: task.model, constraints, reason: "系統と最低 tier を制約にし、最終モデルは受付が割り当てる",
+        });
+        const transport = process.env.AGENT_GRAPH_PLANNER_TRANSPORT ?? "intake";
+        if (transport !== "intake" && transport !== "mcp") throw new Error(`Unknown planner transport: ${transport}`);
+        // 接続の基準は元リポジトリ、依頼の cwd は既存の worktree にする。
+        connection ??= (dependencies.connect ?? (transport === "mcp" ? connectDelegate : connectIntake))({ cwd: root,
           env: { AGENT_GRAPH_SESSION: options.session, TRACEPARENT: "", TRACESTATE: "", AGENT_GRAPH_DELEGATION: "" } });
         client = await connection;
         const upstream = spec.tasks.filter((source) => task.depends_on.includes(source.id));
         const prompt = buildTaskPrompt({ goal: spec.goal, task, upstream });
-        const result = await client.delegate({ role, title: task.title, task: prompt, accept: task.accept,
-          scope: task.scope, outputs: task.outputs, review: task.review, timeoutSec: task.timeout_sec, cwd });
+        const result = await client.delegate({ requestId: createPlannerRequestId(currentGraph.id, task.id, current.attempts + 1),
+          source: "planner", role, title: task.title, task: prompt, accept: task.accept,
+          scope: task.scope, outputs: task.outputs, review: task.review, constraints, timeoutSec: task.timeout_sec, cwd });
         store.appendGraphEvent(currentGraph, "task.result", { taskId: task.id, ...result });
         store.db.prepare("UPDATE delegations SET task_id = ? WHERE id = ?").run(task.id, result.delegationId);
         if (result.status === "done") integrateTask(root, store, currentGraph, task);

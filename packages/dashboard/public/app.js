@@ -87,6 +87,8 @@ function headerCounts() {
 }
 
 const ctx = {
+  // 変更できるモデルと effort の一覧。起動時に /api/models から読む
+  models: { claude: [], codex: [] },
   get dismissed() { return state.dismissed; },
   get expandedArchive() { return state.expandedArchive; },
   get selectedScope() { return state.selectedScope; },
@@ -300,3 +302,10 @@ document.addEventListener("keydown", (ev) => {
 setupSplitter(document, localStorage, () => { previousCanvas = ""; render(); });
 syncFeeds();
 render();
+// モデルの一覧は起動時に 1 回読む。読めなければ切り替えの欄は空のまま出す
+fetch("/api/models").then((response) => response.ok ? response.json() : undefined).then((catalog) => {
+  if (!catalog || !Array.isArray(catalog.claude) || !Array.isArray(catalog.codex)) return;
+  ctx.models = catalog;
+  previousDetail = "";
+  render();
+}).catch(() => {});

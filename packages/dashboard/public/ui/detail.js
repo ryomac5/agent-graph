@@ -1,5 +1,5 @@
 // 右の詳細パネル。root は会話の吹き出し、子は属性と往復と Accept と Scope と Review と Output
-import { fmtElapsed, fmtTokens, fmtWhen, modelLabel, statusClass, statusLabel, statusDescription, MODEL_CHOICES, modelChoiceOf } from "../lib/format.js";
+import { fmtElapsed, fmtTokens, fmtWhen, modelLabel, statusClass, statusLabel, statusDescription } from "../lib/format.js";
 import { actionsFor } from "../lib/status.js";
 import { parseMarkdown } from "../lib/markdown.js";
 import { button, el } from "./dom.js";
@@ -168,7 +168,7 @@ export function renderRootDetail(aside, scope, ctx) {
   const description = statusDescription(scope.status);
   if (description) parts.splice(1, 0, el("p", description, "status-note"));
   if (scope.client && ["claude", "codex"].includes(scope.client) && cls !== "ended") parts.push(buildSayForm(scope, ctx));
-  if (scope.client === "claude" && cls !== "ended") head.append(buildModelForm(scope, ctx));
+  if ((scope.client === "claude" || scope.client === "codex") && cls !== "ended") head.append(buildModelForm(scope, ctx));
   aside.replaceChildren(...parts);
   keepChatAtEnd(ctx, `${scope.id}/root`, chat);
 }
@@ -327,38 +327,64 @@ function addDetailToolbar(aside, ctx) {
   aside.insertBefore(bar, aside.firstChild);
 }
 
-// モデルの切り替え。選択肢から選び、いまと違うものを選んだときだけ切り替えを送れる
+// effort の表示名
+const EFFORT_LABEL = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max", ultra: "Ultra" };
+
+// モデルと effort の切り替え。変更できる全モデルを版つきで選び、選んだモデルが受け付ける effort を選ぶ。
+// いまと違うモデルか、effort を選んだときだけ送れる
 function buildModelForm(scope, ctx) {
   const form = el("form", undefined, "model-form");
-  const select = el("select");
-  select.setAttribute("aria-label", "モデル");
-  const current = modelChoiceOf(scope.model);
-  // 観測したモデルがどの選択肢にも当たらなければ、いまのモデルとして先頭に出す
+  const choices = (ctx.models && ctx.models[scope.client]) || [];
+  const modelSelect = el("select", undefined, "model-select");
+  modelSelect.setAttribute("aria-label", "モデル");
+  const current = choices.find((choice) => choice.id === scope.model) ? scope.model : "";
+  // 観測したモデルが一覧に無ければ、いまのモデルとして先頭に出す
   if (!current) {
-    const unknown = el("option", scope.model ? modelLabel(scope.model) : "モデル不明");
+    const unknown = el("option", scope.model ? `${modelLabel(scope.model)} (現在)` : "モデル不明");
     unknown.value = "";
-    select.append(unknown);
+    modelSelect.append(unknown);
   }
-  for (const choice of MODEL_CHOICES) {
-    const option = el("option", choice.label);
-    option.value = choice.value;
-    if (choice.value === current) option.selected = true;
-    select.append(option);
+  for (const choice of choices) {
+    const option = el("option", choice.id === current ? `${choice.label} (現在)` : choice.label);
+    option.value = choice.id;
+    if (choice.id === current) option.selected = true;
+    modelSelect.append(option);
   }
-  select.value = current;
-  const submit = el("button", "モデル変更", "toolbar-button");
+  modelSelect.value = current;
+  const effortSelect = el("select", undefined, "effort-select");
+  effortSelect.setAttribute("aria-label", "effort");
+  const submit = el("button", "変更", "toolbar-button");
   submit.type = "submit";
-  const sync = () => { submit.disabled = !select.value || select.value === current; };
-  select.addEventListener("change", sync);
+  const fillEfforts = () => {
+    const choice = choices.find((item) => item.id === (modelSelect.value || current));
+    const keep = el("option", "effort はそのまま");
+    keep.value = "";
+    effortSelect.replaceChildren(keep);
+    for (const effort of (choice && choice.efforts) || []) {
+      const option = el("option", choice.defaultEffort === effort ? `${EFFORT_LABEL[effort] || effort} (既定)` : EFFORT_LABEL[effort] || effort);
+      option.value = effort;
+      effortSelect.append(option);
+    }
+    effortSelect.value = "";
+    effortSelect.disabled = !choice || !choice.efforts.length;
+  };
+  const sync = () => {
+    const model = modelSelect.value || current;
+    submit.disabled = !model || (model === current && !effortSelect.value);
+  };
+  modelSelect.addEventListener("change", () => { fillEfforts(); sync(); });
+  effortSelect.addEventListener("change", sync);
+  fillEfforts();
   sync();
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (!select.value || select.value === current) return;
+    const model = modelSelect.value || current;
+    if (!model || (model === current && !effortSelect.value)) return;
     submit.disabled = true;
-    await ctx.onAction({ action: "set_model", sessionId: scope.sessionId, model: select.value });
+    await ctx.onAction({ action: "set_model", sessionId: scope.sessionId, model, ...(effortSelect.value ? { effort: effortSelect.value } : {}) });
     sync();
   });
-  form.append(select, submit);
+  form.append(modelSelect, effortSelect, submit);
   return form;
 }
 

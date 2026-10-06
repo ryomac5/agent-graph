@@ -2,6 +2,7 @@ import type { Route } from "../route.ts";
 import { actionRoute } from "./action.ts";
 import { eventsRoute } from "./events.ts";
 import { graphRoute } from "./graph.ts";
+import { modelsRoute } from "./models.ts";
 import { observeRoute } from "./observe.ts";
 import { overviewRoute } from "./overview.ts";
 import { projectRoute } from "./project.ts";
@@ -24,4 +25,5 @@ export const routes: Route[] = [
   sayRoute,
   graphRoute,
   turnsRoute,
+  modelsRoute,
 ];

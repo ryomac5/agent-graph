@@ -2,6 +2,8 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { parseAction, performAction } from "./actions.ts";
 import { findPaneId, sayToSession } from "./say.ts";
+import { switchCodexModel, type PaneControl } from "./codex-model.ts";
+import { findModelChoice } from "./models.ts";
 import { NotFoundError } from "./sessions.ts";
 import { getRepo, listDelegations } from "../../core/src/store/queries.ts";
 import type { Store } from "../../core/src/store/store.ts";
@@ -34,6 +36,15 @@ function findCreatedPane(value: unknown): string | undefined {
 
 function quoteShell(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+// herdr の操作を Codex の選択画面の操作の形にする
+function paneControl(control: ControlClient): PaneControl {
+  return {
+    read: (pane) => control.run(["pane", "read", pane, "--source", "visible"]),
+    keys: async (pane, ...keys) => { for (const key of keys) await control.run(["pane", "send-keys", pane, key]); },
+    prompt: async (pane, text) => { await control.run(["agent", "prompt", pane, text]); },
+  };
 }
 
 async function waitForSwitch(control: ControlClient, pane: string, present: boolean): Promise<boolean> {
@@ -74,16 +85,26 @@ export async function controlAction(body: unknown, stores: Map<string, Store>, c
       return { ok: true, message: `${session.name} に終了を送りました。終了を観測すると履歴に移ります` };
     }
     if (request.action === "set_model") {
-      if (session.client !== "claude") return { ok: false, message: "Codex のモデル変更は Codex の画面から行ってください" };
+      if (session.client !== "claude" && session.client !== "codex") return { ok: false, message: "このセッションはモデルを切り替えられません" };
+      const choice = findModelChoice(session.client, request.model ?? "");
+      if (!choice) return { ok: false, message: `${request.model} はこのセッションで選べるモデルではありません` };
+      if (request.effort && !choice.efforts.includes(request.effort)) return { ok: false, message: `${choice.label} は ${request.effort} を選べません` };
       const pane = findPaneId(await control.run(["agent", "list"]), session.id);
       if (!pane) return { ok: false, message: "Herdr で起動したセッションが見つかりません" };
+      if (session.client === "codex") {
+        // Codex の /model は引数を受け取らない。選択画面を読みながら操作し、その会話だけに効かせる
+        const result = await switchCodexModel(paneControl(control), pane, { slug: choice.id, label: choice.label, effort: request.effort });
+        return { ok: result.ok, message: `${session.name}: ${result.message}` };
+      }
       await control.run(["agent", "prompt", pane, `/model ${request.model}`]);
       if (await waitForSwitch(control, pane, true)) {
         await control.run(["pane", "send-keys", pane, "enter"]);
         if (!await waitForSwitch(control, pane, false)) return { ok: false, message: "モデル変更の確認が完了していません" };
       }
+      // Claude Code の /effort は引数をそのまま受け付ける
+      if (request.effort) await control.run(["agent", "prompt", pane, `/effort ${request.effort}`]);
       // 送信成功と適用確認を混同しない。現在モデルは後続の観測で更新する。
-      return { ok: true, message: `${session.name} にモデル変更を送りました。適用後のモデルは観測で更新されます` };
+      return { ok: true, message: `${session.name} に ${choice.label}${request.effort ? ` ${request.effort}` : ""} への変更を送りました。適用後のモデルは観測で更新されます` };
     }
     const row = listDelegations(store.db, repo.key).find((item) => item.id === request.delegationId && item.sessionId === session.id);
     if (!row) throw new NotFoundError(`Delegation not found: ${request.delegationId}`);

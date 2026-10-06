@@ -2,7 +2,7 @@
 export const TOKEN_META_NAME = "agent-graph-token";
 export const TOKEN_HEADER = "X-Agent-Graph-Token";
 // 契約の ActionRequest にある項目だけを送る
-const REQUEST_KEYS = ["action", "repo", "graphId", "taskId", "sessionId", "turnId", "delegationId", "model", "client"];
+const REQUEST_KEYS = ["action", "repo", "graphId", "taskId", "sessionId", "turnId", "delegationId", "model", "effort", "client"];
 
 export function readToken(doc = globalThis.document) {
   const meta = doc && doc.querySelector ? doc.querySelector(`meta[name="${TOKEN_META_NAME}"]`) : null;

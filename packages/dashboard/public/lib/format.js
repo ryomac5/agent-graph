@@ -165,23 +165,3 @@ export function fmtTokens(tokens) {
   const short = (n) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n));
   return `${short(tokens.input || 0)} in · ${short(tokens.output || 0)} out`;
 }
-
-// モデル切り替えの選択肢。値は Claude Code の /model がそのまま受け付ける別名で、常にその系列の最新版を指す
-export const MODEL_CHOICES = [
-  { value: "fable", label: "Fable" },
-  { value: "opus", label: "Opus" },
-  { value: "opus[1m]", label: "Opus 1M" },
-  { value: "sonnet", label: "Sonnet" },
-  { value: "haiku", label: "Haiku" },
-];
-
-// 観測したモデル名が、どの選択肢にあたるか。claude-opus-5-5[1m] は opus[1m]、claude-sonnet-5-5 は sonnet。当たらなければ空
-export function modelChoiceOf(model) {
-  const name = String(model || "").toLowerCase();
-  if (!name) return "";
-  if (name.includes("fable")) return "fable";
-  if (name.includes("opus")) return /\[1m\]|-1m\b/.test(name) ? "opus[1m]" : "opus";
-  if (name.includes("sonnet")) return "sonnet";
-  if (name.includes("haiku")) return "haiku";
-  return "";
-}

@@ -179,33 +179,36 @@ test("吹き出しは Markdown の記号を外して見出しと太字とコー�
   assert.ok(html.includes("<b>x</b>"), "外からの HTML が文字として残っていない");
 });
 
-test("モデルの切り替えは選択式で、いまのモデルを選んだ状態から違うものを選んだときだけ別名を送る", async () => {
+test("モデルの切り替えは版つきの全モデルと、選んだモデルが受け付ける effort から選び、変わるときだけ送る", async () => {
   const sent: Json[] = [];
-  const scope = { ...scopesOf(project)[0], client: "claude", status: "running", model: "claude-opus-5-5[1m]" };
+  const models = {
+    claude: [{ id: "claude-opus-5-5", label: "Opus 5.5", efforts: ["low", "high", "max"] }, { id: "claude-opus-5", label: "Opus 5", efforts: ["low"] },
+      { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5", efforts: [] }],
+    codex: [{ id: "gpt-6-astra", label: "GPT-6-Astra", efforts: ["low", "medium", "ultra"], defaultEffort: "medium" }],
+  };
+  const scope = { ...scopesOf(project)[0], client: "claude", status: "running", model: "claude-opus-5-5" };
   const aside = document.createElement("aside");
-  renderDetail(aside, scope, null, ctx({ onAction: async (request: Json) => { sent.push(request); return "ok"; } }));
-  const form = aside.querySelector(".model-form")!;
-  assert.equal(form.querySelectorAll("input").length, 0, "文字の入力欄が残っている");
-  const select = form.querySelector("select")! as unknown as { value: string; dispatch: (name: string, event?: unknown) => void; children: { value: string; textContent: string }[] };
-  assert.deepEqual(select.children.map((option) => option.value), ["fable", "opus", "opus[1m]", "sonnet", "haiku"]);
-  assert.equal(select.value, "opus[1m]");
+  renderDetail(aside, scope, null, ctx({ models, onAction: async (request: Json) => { sent.push(request); return "ok"; } }));
+  const form = aside.querySelector(".model-form")! as unknown as FakeElement & { dispatch: (name: string, event?: unknown) => void };
+  const [modelSelect, effortSelect] = form.querySelectorAll("select") as unknown as ({ value: string; disabled: boolean; dispatch: (name: string) => void; children: { value: string; textContent: string }[] })[];
+  assert.deepEqual(modelSelect.children.map((option) => option.textContent), ["Opus 5.5 (現在)", "Opus 5", "Haiku 4.5"]);
+  assert.equal(modelSelect.value, "claude-opus-5-5");
+  assert.deepEqual(effortSelect.children.map((option) => option.value), ["", "low", "high", "max"]);
   const submit = form.querySelector("button")! as unknown as { disabled: boolean };
-  assert.equal(submit.disabled, true, "いまと同じモデルで押せてしまう");
-  select.value = "sonnet";
-  select.dispatch("change");
+  assert.equal(submit.disabled, true, "何も変えていないのに押せる");
+  // 同じモデルでも effort を選べば送れる
+  effortSelect.value = "max"; effortSelect.dispatch("change");
   assert.equal(submit.disabled, false);
-  (form as unknown as { dispatch: (name: string, event?: unknown) => void }).dispatch("submit", { preventDefault() {} });
+  form.dispatch("submit", { preventDefault() {} });
   await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.deepEqual(sent.map((request) => [request.action, request.model]), [["set_model", "sonnet"]]);
-});
-
-test("モデル名の選択肢への対応は 1M と系列を見分け、知らないモデルは空にする", async () => {
-  const lib = await import("../src/index.ts");
-  assert.equal(lib.modelChoiceOf("claude-opus-5-5"), "opus");
-  assert.equal(lib.modelChoiceOf("claude-opus-5-5[1m]"), "opus[1m]");
-  assert.equal(lib.modelChoiceOf("claude-sonnet-5-5"), "sonnet");
-  assert.equal(lib.modelChoiceOf("claude-haiku-4-5-20251001"), "haiku");
-  assert.equal(lib.modelChoiceOf("claude-fable-5-1"), "fable");
-  assert.equal(lib.modelChoiceOf("gpt-6-astra"), "");
-  assert.equal(lib.modelChoiceOf(undefined), "");
+  assert.deepEqual(sent.map((request) => [request.model, request.effort]), [["claude-opus-5-5", "max"]]);
+  // effort を持たないモデルに替えると effort の欄は使えない
+  modelSelect.value = "claude-haiku-4-5-20251001"; modelSelect.dispatch("change");
+  assert.equal(effortSelect.disabled, true);
+  // Codex のセッションには Codex の一覧と既定の印を出す
+  const codexAside = document.createElement("aside");
+  renderDetail(codexAside, { ...scope, client: "codex", model: "gpt-6-astra" } as unknown as typeof scope, null, ctx({ models }));
+  const codexSelects = codexAside.querySelectorAll("select") as unknown as { children: { textContent: string }[] }[];
+  assert.deepEqual(codexSelects[0].children.map((option) => option.textContent), ["GPT-6-Astra (現在)"]);
+  assert.deepEqual(codexSelects[1].children.map((option) => option.textContent), ["effort はそのまま", "Low", "Medium (既定)", "Ultra"]);
 });

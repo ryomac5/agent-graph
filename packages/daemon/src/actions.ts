@@ -1,3 +1,4 @@
+import { EFFORTS } from "./models.ts";
 import { decisionAllowed, type GraphRecord, type Store, type TaskDecision } from "../../core/src/store/store.ts";
 import type { ActionRequest, ActionResult } from "./http/contract.ts";
 import { NotFoundError } from "./sessions.ts";
@@ -22,7 +23,7 @@ function repoKeyOf(value: unknown): string {
 // body を検べて ActionRequest にする。不正なら TypeError。
 export function parseAction(body: unknown): ActionRequest {
   if (!body || typeof body !== "object" || Array.isArray(body)) throw new TypeError("Invalid action body");
-  const { action, repo, graphId, taskId, sessionId, turnId, model, client, delegationId } = body as Record<string, unknown>;
+  const { action, repo, graphId, taskId, sessionId, turnId, model, effort, client, delegationId } = body as Record<string, unknown>;
   if (typeof action !== "string" || !ACTIONS.has(action as ActionRequest["action"])) throw new TypeError(`Unknown action: ${String(action)}`);
   const request: ActionRequest = { action: action as ActionRequest["action"], repo: repoKeyOf(repo) };
   if (DECISIONS.has(action as TaskDecision)) {
@@ -35,6 +36,10 @@ export function parseAction(body: unknown): ActionRequest {
     request.sessionId = ident(sessionId, "sessionId");
     if (typeof model !== "string" || !/^[A-Za-z0-9._\[\]-]{1,100}$/.test(model)) throw new TypeError("Invalid model");
     request.model = model;
+    if (effort !== undefined && effort !== "") {
+      if (typeof effort !== "string" || !(EFFORTS as readonly string[]).includes(effort)) throw new TypeError("Invalid effort");
+      request.effort = effort;
+    }
   } else if (action === "rerun_delegation") {
     request.delegationId = ident(delegationId, "delegationId");
     request.sessionId = ident(sessionId, "sessionId");

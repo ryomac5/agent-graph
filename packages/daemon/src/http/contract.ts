@@ -151,8 +151,14 @@ export interface ActionRequest {
   turnId?: string;
   delegationId?: string;
   model?: string;
+  // set_model のときの effort。選んだモデルが受け付ける段階だけ
+  effort?: string;
   client?: "claude" | "codex";
 }
+
+// 変更できるモデル 1 つ。id は /model に渡す名前、efforts は選べる段階。空なら effort を選べない
+export interface ModelChoice { id: string; label: string; efforts: string[]; defaultEffort?: string }
+export interface ModelCatalog { claude: ModelChoice[]; codex: ModelChoice[] }
 
 export interface ActionResult {
   ok: boolean;

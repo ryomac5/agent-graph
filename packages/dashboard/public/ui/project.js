@@ -91,7 +91,8 @@ export function buildProjectSection(view, ctx, failure = "") {
     const archive = el("details", undefined, "ended-sessions");
     archive.open = ended.some((s) => s.id === ctx.selectedScope);
     archive.append(el("summary", `履歴 · ${ended.length}`));
-    const list = el("nav", undefined, "session-picker");
+    // 履歴は高さを閉じ込めず、キャンバスごとスクロールして下まで見られるようにする
+    const list = el("nav", undefined, "session-picker session-history");
     for (const session of ended) addSession(session, list);
     archive.append(list);
     archiveBox = archive;

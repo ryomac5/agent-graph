@@ -672,3 +672,6 @@ form.say textarea { min-height: 60px; }
   body.is-overview #splitter, body.detail-expanded #splitter { display: none; }
   body.resizing, body.resizing * { cursor: col-resize !important; user-select: none; }
 }
+
+/* 履歴の一覧は高さを閉じ込めない。普通のホイールでキャンバスごと下までスクロールする */
+.session-picker.session-history { max-height: none; overflow: visible; }

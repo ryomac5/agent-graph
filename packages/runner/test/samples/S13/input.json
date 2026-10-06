@@ -1,0 +1,7 @@
+[
+  "runner-absent",
+  "stopped-after-connect",
+  "disconnected-after-acceptance",
+  "response-lost-after-result",
+  "api-restart"
+]

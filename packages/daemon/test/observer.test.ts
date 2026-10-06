@@ -170,3 +170,29 @@ test("空の store で起動した観測も、あとから足した store を次
   assert.equal(store.getSession("thread")?.model, "claude-opus-5-5");
   await claude.stop(); await codex.stop();
 });
+
+test("Claude の転写から入れた会話は、人の指示があれば番号を取り、無人実行なら取らない", async (t) => {
+  const store = openStore(":memory:");
+  store.upsertRepo({ key: "r", name: "repo", rootPath: "/repo" });
+  for (const id of ["human", "headless", "tagged"]) {
+    store.insertUnnamedSession({ id, repoKey: "r", client: "claude", traceId: "a".repeat(32), startedAt: at });
+  }
+  const root = await mkdtemp(join(tmpdir(), "graph-claude-name-"));
+  t.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
+  const user = (uuid: string, content: string, entrypoint = "cli") => ({ type: "user", uuid, timestamp: at, entrypoint, message: { content } });
+  const transcripts: Record<string, unknown[]> = {
+    // daemon の停止中に人が指示した会話。先頭はタグだけの入力
+    human: [user("h0", "<system-reminder>文脈</system-reminder>"), user("h1", "認証を直して")],
+    headless: [user("p1", "無人実行です。作業してください", "sdk-cli")],
+    tagged: [user("t1", "<task-notification>\n<task-id>a</task-id>\n</task-notification>")],
+  };
+  await mkdir(join(root, "-repo"));
+  for (const [id, entries] of Object.entries(transcripts)) {
+    await writeFile(join(root, "-repo", `${id}.jsonl`), entries.map((row) => JSON.stringify(row)).join("\n"));
+  }
+  const observer = startClaudeObserver(new Map([["r", store]]), { root, intervalMs: 60_000 });
+  await observer.tick(); await observer.stop();
+  assert.deepEqual(["human", "headless", "tagged"].map((id) => store.getSession(id)?.name), ["repo-001", "", ""]);
+  assert.equal(store.listTurns("headless").length, 1, "無人実行の会話も turns には入る");
+  assert.deepEqual(buildProjectView(store, "r")!.sessions.map((session) => session.id), ["human"]);
+});

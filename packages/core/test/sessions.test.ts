@@ -247,3 +247,23 @@ test("生きている片割れは、pid を持たない生きた本物がちょ�
   assert.equal(store.getSession("fa3cb783-77f1-4c34-8434-9da0dd41db81")?.pid, 87592);
   assert.equal(store.getSession("01M48BP4NM4JAAAAAAAAAAAAAA")?.status, "running");
 });
+
+test("片割れの番号を本物に移すと片割れは番号なしに戻り、由来を session.named に残す", (t) => {
+  const store = withStore(t);
+  const base = { client: "claude", traceId: "a".repeat(32), startedAt: "2026-10-05T03:07:00.000Z" };
+  const real = "0da2d9d3-6b79-4c34-8434-9da0dd41db81";
+  const ghost = "01M45WRPM3KJYABCDEFGHJKMNP";
+  store.insertUnnamedSession({ id: real, repoKey: "r", ...base });
+  store.insertNamedSession({ id: ghost, repoKey: "r", ...base, pid: 123 });
+  assert.equal(store.mergeSessionInto(ghost, real, "2026-10-05T04:00:00.000Z"), true);
+  assert.equal(store.getSession(real)?.name, "repo-001");
+  assert.equal(store.getSession(ghost)?.name, "");
+  const named = store.listEvents().filter((event) => event.kind === "session.named");
+  assert.deepEqual(named.map((event) => [event.session, event.ts, event.payload]), [
+    [real, "2026-10-05T04:00:00.000Z", { sessionId: real, name: "repo-001", reason: `merged from ${ghost}` }]]);
+  // 両方が番号を持つときはどちらも変えない
+  const other = "01M45WRPM3KJYABCDEFGHJKMNQ";
+  store.insertNamedSession({ id: other, repoKey: "r", ...base });
+  assert.equal(store.mergeSessionInto(other, real, "2026-10-05T05:00:00.000Z"), true);
+  assert.deepEqual([store.getSession(real)?.name, store.getSession(other)?.name], ["repo-001", "repo-002"]);
+});

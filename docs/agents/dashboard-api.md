@@ -37,7 +37,11 @@
 
 pid は hook から送らない。hook の親は shell のことがあり、根のプロセスとは限らない。
 根の pid は shim の hello だけで記録し、デーモンは `ps` の起動時刻と組で保存して生死判定に使う。起動時刻が取れずに空のまま残った pid は、生きていれば 30 秒ごとの見回りで起動時刻を補う。
-初回の登録で `<repo名>-NNN` の名前を振る。同じ `id` の再登録では名前を変えず、`session.started` も再記録しない。
+登録と根の hello では名前を振らない。`<repo名>-NNN` の番号は最初の人の指示で振り、`session.named` に理由を残す。
+人の指示とは、空でなく、タグだけでなく、`<task-notification>` を含まず、引数の無いスラッシュコマンドだけでもない本文を指す。
+`--fork-session` で起きた会話は、起動行の `--resume` から親を `session.forked` に残し、親の番号を継ぐ。
+無人実行の会話は番号を振らない。hook は turn_start に `headless` を付け、転写は `entrypoint` の `sdk-cli` などで見分ける。
+番号を持たず委譲もグラフも無いセッションは画面に出さない。同じ `id` の再登録では名前を変えず、`session.started` も再記録しない。
 終了済みのセッションが同じ `id` で再登録されたら `status` を `running` に戻し、`endedAt` を消す。`lost` にした委譲は戻さない。MCP の根の hello も同じ扱い。
 
 `POST /api/sessions/<id>/end` は body `{}` で受け、`status` を `ended` にして `endedAt` を入れる。すでに終わっていれば何もせず 200 を返す。
@@ -48,7 +52,7 @@ pid は hook から送らない。hook の親は shell のことがあり、根�
 
 | `kind` | 項目 | 効果 |
 | --- | --- | --- |
-| `turn_start` | `prompt` | `turns` に行を作る。最初の `prompt` を `goal` にする。待ちを解除する |
+| `turn_start` | `prompt` `headless?` | `turns` に行を作る。最初の `prompt` を `goal` にする。待ちを解除する。最初の人の指示で番号を振る |
 | `turn_done` | `summary?`, `reply` | 直近の未完の turn に `summary` を付ける。`summary` が無ければ `reply` の先頭 3 行。`reply` は 6000 字まで。待ちを解除する |
 | `waiting` | `reason` | `status` を `waiting` にし、`waitingReason` に `permission` か `question` を入れる |
 | `resumed` | なし | 待ちを解除する。PostToolUse の AskUserQuestion |

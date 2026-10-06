@@ -219,6 +219,9 @@ sequenceDiagram
 デーモンは呼び出し側がどのセッションか知る必要がある。
 `adapters` は各クライアントに stdio の薄い shim を登録する。
 shim は自分の環境変数から `TRACEPARENT` と `AGENT_GRAPH_SESSION` と cwd を読み、Unix ソケット経由でデーモンに転送する。
+無人実行の `claude -p` の子には `AGENT_GRAPH_HEADLESS=1` と `AGENT_GRAPH_PARENT_SESSION` も渡す。
+hook はこのどちらか、または `CLAUDE_CODE_ENTRYPOINT` の `sdk-cli` などを見て、その会話に番号を振らせない。
+セッションの番号は最初の人の指示で振る。fork は親の番号を継ぐ。
 デーモン本体は 1 つで、shim はクライアントごとに起きる。
 
 呼び出し側の系統は、登録時の環境変数 `AGENT_GRAPH_CLIENT` で決める。
@@ -257,6 +260,8 @@ interface TraceContext {
 
 type EventKind =
   | "session.started"         // hook が根の起動を登録する
+  | "session.forked"          // fork で起きた会話の親。番号を継ぐ元
+  | "session.named"           // 番号を振った。最初の人の指示か、片割れからの移し替え
   | "delegation.requested"
   | "assignment.decided"
   | "execution.started"

@@ -6,20 +6,24 @@ import { homedir } from "node:os";
 import { createHash } from "node:crypto";
 import type { Store } from "../../core/src/store/store.ts";
 import { listRepos, listSessions } from "../../core/src/store/queries.ts";
-import { summarize } from "./sessions.ts";
+import { isHumanPrompt, summarize } from "./sessions.ts";
 
 const POLL_MS = 2000;
 const MATCH_WINDOW_MS = 10_000;
 interface TranscriptRow {
-  type: string; uuid?: string; timestamp?: string; isMeta?: boolean;
+  type: string; uuid?: string; timestamp?: string; isMeta?: boolean; entrypoint?: string;
   message?: { model?: string; content?: string | { type: string; text?: string }[] };
 }
+// claude -p や SDK の会話は転写の entrypoint がこの値になる。対話は cli
+const HEADLESS_ENTRYPOINTS = new Set(["sdk-cli", "sdk-ts", "sdk-py"]);
+
 export function parseClaudeRows(rows: Iterable<TranscriptRow>): {
-  model?: string; turns: { id: string; at: string; prompt: string; reply: string }[];
+  model?: string; headless?: true; turns: { id: string; at: string; prompt: string; reply: string }[];
 } {
   const result: ReturnType<typeof parseClaudeRows> = { turns: [] };
   let current: typeof result.turns[number] | undefined;
   for (const row of rows) {
+    if (row.type === "user" && HEADLESS_ENTRYPOINTS.has(row.entrypoint ?? "")) result.headless = true;
     if (!row.message || row.isMeta) continue;
     const content = row.message.content;
     const text = typeof content === "string" ? content
@@ -88,6 +92,9 @@ export function startClaudeObserver(stores: Map<string, Store>, options: { root?
             .get(session.id, turn.prompt, turn.at, MATCH_WINDOW_MS);
           put.run(match ? String(match.id) : turn.id, session.id, turn.at, turn.prompt, summarize(turn.reply), turn.reply || null);
         }
+        // daemon の停止中に受けた指示も、最初の人の指示で番号を付ける。無人実行の会話は付けない
+        const first = snapshot.headless ? undefined : snapshot.turns.find((turn) => isHumanPrompt(turn.prompt));
+        if (first) store.nameSessionAtFirstPrompt(session.id, first.at || new Date().toISOString());
         mtimes.set(path, info.mtimeMs);
       }
     } catch (error) { (options.onError || console.error)(error); }

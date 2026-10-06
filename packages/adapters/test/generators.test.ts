@@ -277,3 +277,30 @@ test("hook は祖先をたどって comm が claude のプロセスの pid を�
   // 祖先に Claude がいなければ何も返さない
   assert.equal(claudePid(() => { throw new Error("no such process"); }), undefined);
 });
+
+test("無人実行の 3 つの印のどれかで turn_start に headless を付け、どれも無ければ人の指示として送る", () => {
+  const keys = ["AGENT_GRAPH_HEADLESS", "AGENT_GRAPH_PARENT_SESSION", "CLAUDE_CODE_ENTRYPOINT"] as const;
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const input = { session_id: "s", prompt: "作業して" };
+  try {
+    const cases: [Partial<Record<typeof keys[number], string>>, boolean][] = [
+      [{ AGENT_GRAPH_HEADLESS: "1" }, true],
+      [{ AGENT_GRAPH_PARENT_SESSION: "dotfiles-001" }, true],
+      [{ CLAUDE_CODE_ENTRYPOINT: "sdk-cli" }, true],
+      [{ CLAUDE_CODE_ENTRYPOINT: "cli" }, false],
+      [{ AGENT_GRAPH_HEADLESS: "0", AGENT_GRAPH_PARENT_SESSION: "" }, false],
+      [{}, false],
+    ];
+    for (const [env, headless] of cases) {
+      for (const key of keys) delete process.env[key];
+      Object.assign(process.env, env);
+      const body = observeBody("turn_start", input);
+      assert.equal(body?.headless, headless ? true : undefined, JSON.stringify(env));
+      assert.equal(body?.prompt, "作業して");
+    }
+  } finally {
+    for (const key of keys) {
+      if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key];
+    }
+  }
+});

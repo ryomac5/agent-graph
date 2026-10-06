@@ -213,6 +213,15 @@ function toolDoneBody(sessionId: string, input: HookInput): Record<string, unkno
     ...(agentId ? { agentId } : {}) };
 }
 
+// Claude が -p や SDK で動くときの CLAUDE_CODE_ENTRYPOINT。対話の起動は cli になる
+const HEADLESS_ENTRYPOINTS = new Set(["sdk-cli", "sdk-ts", "sdk-py"]);
+
+// 無人実行か。agent-graph の子、dotfiles のスケジューラの子、claude -p のどれかなら真
+export function isHeadless(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.AGENT_GRAPH_HEADLESS === "1" || Boolean(env.AGENT_GRAPH_PARENT_SESSION)
+    || HEADLESS_ENTRYPOINTS.has(env.CLAUDE_CODE_ENTRYPOINT ?? "");
+}
+
 // 観測の本文を組み立てる。送らないときは undefined。
 export function observeBody(kind: string, input: HookInput): Record<string, unknown> | undefined {
   if (!input.session_id) return undefined;
@@ -230,7 +239,7 @@ export function observeBody(kind: string, input: HookInput): Record<string, unkn
   if (input.agent_id) return undefined;
   // 無人実行の子の指示は人の指示ではない。daemon はこの印を見て番号を付けない
   if (kind === "turn_start") return { kind, sessionId, prompt: typeof input.prompt === "string" ? input.prompt : "",
-    ...(process.env.AGENT_GRAPH_HEADLESS === "1" ? { headless: true } : {}) };
+    ...(isHeadless() ? { headless: true } : {}) };
   if (kind === "turn_done") {
     if (input.stop_hook_active) return undefined;
     const reply = ((typeof input.last_assistant_message === "string" && input.last_assistant_message.trim())

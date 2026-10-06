@@ -311,8 +311,16 @@ export class Store {
         for (const table of ["delegations", "turns", "graphs"]) {
           this.db.prepare(`UPDATE ${table} SET session_id = ? WHERE session_id = ?`).run(realId, ghostId);
         }
-        // 片割れだけが番号を持っていたら本物に移す
-        this.db.prepare("UPDATE sessions SET name = ? WHERE id = ? AND name = ?").run(String(ghost.name), realId, UNNAMED);
+        // 片割れだけが番号を持っていたら本物に移し、片割れは番号なしに戻す。移した由来を session.named に残す
+        const target = this.db.prepare("SELECT name, repo_key, trace_id FROM sessions WHERE id = ?").get(realId);
+        if (ghost.name !== UNNAMED && target && target.name === UNNAMED) {
+          const name = String(ghost.name);
+          this.db.prepare("UPDATE sessions SET name = ? WHERE id = ?").run(name, realId);
+          this.db.prepare("UPDATE sessions SET name = ? WHERE id = ?").run(UNNAMED, ghostId);
+          this.appendEvent({ id: ulid(), ts: at, kind: "session.named", repo: String(target.repo_key), session: realId,
+            trace: { traceId: String(target.trace_id), spanId: newSpanId() },
+            payload: { sessionId: realId, name, reason: `merged from ${ghostId}` } }, { notify: false });
+        }
         if (ghost.status !== "ended") {
           this.db.prepare(`UPDATE sessions SET status = 'ended', ended_at = ?, ended_reason = 'explicit', waiting_reason = NULL
             WHERE id = ?`).run(at, ghostId);

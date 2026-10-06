@@ -1,0 +1,45 @@
+{
+  "facts": {
+    "conversation.created": 3,
+    "message.created": 5,
+    "message_membership.created": 5,
+    "relation.created": 2
+  },
+  "conversations": [
+    [
+      "background",
+      "unattended",
+      "observed"
+    ],
+    [
+      "dialogue",
+      "interactive",
+      "observed"
+    ],
+    [
+      "retired",
+      "unattended",
+      "observed"
+    ]
+  ],
+  "messages": [
+    "s1-background",
+    "s1-first",
+    "s1-resume-source",
+    "s1-resume-target",
+    "s1-retired"
+  ],
+  "membershipCount": 5,
+  "relations": [
+    [
+      "continued",
+      "background",
+      "retired"
+    ],
+    [
+      "continued",
+      "dialogue",
+      "background"
+    ]
+  ]
+}

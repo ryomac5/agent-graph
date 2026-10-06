@@ -1,0 +1,2 @@
+{"parentUuid":null,"isSidechain":false,"userType":"external","cwd":"/fictional/project","sessionId":"background","version":"2.1.285","type":"user","uuid":"s1-background","timestamp":"2026-10-06T10:00:00.000Z","entrypoint":"sdk-cli","message":{"role":"user","content":"Continue work."}}
+{"type":"continued-in","sessionId":"background","continuedInSessionId":"retired","timestamp":"2026-10-06T10:03:00.000Z"}

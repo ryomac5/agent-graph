@@ -1,0 +1,9 @@
+[
+  {"source":"intake","source_event_id":"s17-01","source_ts":"2026-10-07T00:00:01Z","confidence":"confirmed","kind":"delegation.created","subject":"delegation:s17","payload":{"request_id":"s17","role":"implementer","title":"[redacted]","state":"received","attempt":1,"task":"[redacted]"}},
+  {"source":"host-claude","source_event_id":"s17-02","source_ts":"2026-10-07T00:00:02Z","confidence":"confirmed","kind":"conversation.created","subject":"conversation:child","payload":{"provider":"claude","native_id":"child","origin":"managed","type":"unattended","history_format":"jsonl"}},
+  {"source":"host-claude","source_event_id":"s17-03","source_ts":"2026-10-07T00:00:03Z","confidence":"confirmed","kind":"run.created","subject":"run:child","payload":{"conversation_id":"child","generation":1,"state":"running"}},
+  {"source":"intake","source_event_id":"s17-04","source_ts":"2026-10-07T00:00:04Z","confidence":"confirmed","kind":"delegation.state_changed","subject":"delegation:s17","payload":{"attempt":1,"state":"running","run_id":"child"}},
+  {"source":"host-claude","source_event_id":"s17-05","source_ts":"2026-10-07T00:00:05Z","confidence":"confirmed","kind":"message.created","subject":"message:answer","payload":{"provider":"claude","native_id":"answer","role":"assistant","body":"[redacted]","body_state":"stored"}},
+  {"source":"host-claude","source_event_id":"s17-06","source_ts":"2026-10-07T00:00:06Z","confidence":"confirmed","kind":"run.state_changed","subject":"run:child","payload":{"state":"ended","end_evidence":{"kind":"host_exit","exit_code":0}}},
+  {"source":"intake","source_event_id":"s17-07","source_ts":"2026-10-07T00:00:07Z","confidence":"confirmed","kind":"delegation.state_changed","subject":"delegation:s17","payload":{"attempt":1,"state":"done","result":{"text":"[redacted]"}}}
+]

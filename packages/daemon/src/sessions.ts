@@ -5,6 +5,7 @@ import { repoKey, stateDbPath } from "../../core/src/paths.ts";
 import { openStore, UNNAMED, type Store, type WaitingReason } from "../../core/src/store/store.ts";
 import { newSpanId, newTraceId } from "../../core/src/trace.ts";
 import { ulid } from "../../core/src/ulid.ts";
+import { nameAtFirstPrompt } from "./kit-names.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -158,7 +159,7 @@ export const observers: Record<string, Observer> = {
     if (prompt.trim()) store.setSessionGoalIfEmpty(sessionId, prompt.trim().slice(0, GOAL_LIMIT));
     store.insertTurn({ id: ulid(), sessionId, at, prompt });
     // 無人実行の子は人の指示を受けないので番号を取らない
-    if (body.headless !== true && isHumanPrompt(prompt)) store.nameSessionAtFirstPrompt(sessionId, at);
+    if (body.headless !== true && isHumanPrompt(prompt)) nameAtFirstPrompt(store, sessionId, at);
   },
   turn_done: (store, { sessionId, at, body }) => {
     const reply = optionalString(body.reply, REPLY_LIMIT) ?? "";

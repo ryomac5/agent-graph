@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { UNNAMED, type Store } from "../../core/src/store/store.ts";
 import { listRepos, listSessions } from "../../core/src/store/queries.ts";
 import { isHumanPrompt, summarize } from "./sessions.ts";
-import { syncKitNames } from "./kit-names.ts";
+import { nameAtFirstPrompt, syncKitNames } from "./kit-names.ts";
 
 const POLL_MS = 2000;
 const MATCH_WINDOW_MS = 10_000;
@@ -138,7 +138,7 @@ export function startClaudeObserver(stores: Map<string, Store>, options: { root?
         const startedAt = session.pidStartedAt === undefined ? NaN : Date.parse(session.pidStartedAt);
         const first = snapshot.headless || Number.isNaN(startedAt) ? undefined
           : snapshot.turns.find((turn) => Date.parse(turn.at) >= startedAt && isHumanPrompt(turn.prompt));
-        if (first) store.nameSessionAtFirstPrompt(session.id, first.at || new Date().toISOString());
+        if (first) nameAtFirstPrompt(store, session.id, first.at || new Date().toISOString());
         // 起動時刻を待つ間は読み直す。見回りが起動時刻を補ったあとの回で番号を付ける
         const waiting = !first && !snapshot.headless && Number.isNaN(startedAt) && session.name === UNNAMED
           && snapshot.turns.some((turn) => isHumanPrompt(turn.prompt));

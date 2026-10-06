@@ -14,6 +14,7 @@ import { listRepos, listSessions } from "../../core/src/store/queries.ts";
 import { inferRole, tierOf } from "./observe.ts";
 import { isHumanPrompt, summarize } from "./sessions.ts";
 import { COMMIT_COMMAND } from "./claude-observe.ts";
+import { nameAtFirstPrompt } from "./kit-names.ts";
 
 const execFileAsync = promisify(execFile);
 const POLL_MS = 2000;
@@ -137,7 +138,7 @@ export function applyCodexSnapshot(store: Store, session: SessionRow, snapshot: 
   for (const turn of snapshot.turns) {
     put.run(turn.id, session.id, turn.at, turn.prompt, turn.reply === undefined ? null : summarize(turn.reply), turn.reply ?? null);
     if (turn.prompt) store.setSessionGoalIfEmpty(session.id, turn.prompt.slice(0, 200));
-    if (isHumanPrompt(turn.prompt)) store.nameSessionAtFirstPrompt(session.id, turn.at || new Date().toISOString());
+    if (isHumanPrompt(turn.prompt)) nameAtFirstPrompt(store, session.id, turn.at || new Date().toISOString());
   }
 }
 

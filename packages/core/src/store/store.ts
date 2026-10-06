@@ -204,8 +204,9 @@ export class Store {
   }
 
   // 最初の人の指示で番号を付ける。fork なら親の番号を継ぐ。付けた理由は session.named に残す。
-  // すでに番号があれば何もしない。付けた名前を返す
-  nameSessionAtFirstPrompt(id: string, at: string): string | undefined {
+  // すでに番号があれば何もしない。付けた名前を返す。
+  // allocate を渡すと、自前の数え方の代わりにそれで番号を取る。undefined を返したら今は付けない
+  nameSessionAtFirstPrompt(id: string, at: string, allocate?: () => string | undefined): string | undefined {
     this.db.exec("BEGIN IMMEDIATE");
     let name: string | undefined;
     try {
@@ -217,9 +218,9 @@ export class Store {
         const parentId = forked?.parent ? String(forked.parent) : undefined;
         const parent = parentId === undefined ? undefined
           : this.db.prepare("SELECT name FROM sessions WHERE id = ? AND name != ?").get(parentId, UNNAMED);
-        name = parent ? String(parent.name) : this.nextSessionName(String(session.repo_key));
-        this.db.prepare("UPDATE sessions SET name = ? WHERE id = ?").run(name, id);
-        this.appendEvent({ id: ulid(), ts: at, kind: "session.named", repo: String(session.repo_key), session: id,
+        name = parent ? String(parent.name) : allocate ? allocate() : this.nextSessionName(String(session.repo_key));
+        if (name !== undefined) this.db.prepare("UPDATE sessions SET name = ? WHERE id = ?").run(name, id);
+        if (name !== undefined) this.appendEvent({ id: ulid(), ts: at, kind: "session.named", repo: String(session.repo_key), session: id,
           trace: { traceId: String(session.trace_id), spanId: newSpanId() },
           payload: { sessionId: id, name, reason: "first_prompt", ...(parent ? { forkOf: parentId } : {}) } }, { notify: false });
       }

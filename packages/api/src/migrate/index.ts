@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { backup, DatabaseSync } from "node:sqlite";
 import type { SQLInputValue } from "node:sqlite";
 import { createRepositoryId } from "../../../core/src/ledger/index.ts";
@@ -16,6 +16,8 @@ export interface MigrationReport {
   databases: number;
   rows: Record<string, number>;
   facts: Partial<Record<FactKind, number>>;
+  unsupported: number;
+  errors: { path: string; reason: string }[];
   unknown: number;
   inferred: number;
 }
@@ -53,14 +55,17 @@ function hash(value: string): string {
 function readText(row: Row, key: string): string | undefined {
   return row[key] == null ? undefined : String(row[key]);
 }
+class UnsupportedRow extends Error {}
+
 function readJson(row: Row, key: string): JsonValue {
   const value = readText(row, key);
-  return value === undefined ? null : JSON.parse(value);
+  if (value === undefined) return null;
+  try { return JSON.parse(value); } catch { throw new UnsupportedRow(`旧 ${key} の JSON を読めません`); }
 }
 function readProvider(row: Row): Provider {
   const client = String(row.client);
   if (client === "claude" || client === "codex") return client;
-  throw new TypeError(`未対応の旧 client: ${client}`);
+  throw new UnsupportedRow(`未対応の旧 client: ${client}`);
 }
 function resolveRepository(root: string): string {
   // 実在するリポジトリでは作業ツリーも git 共通ディレクトリで同一視する。
@@ -88,11 +93,19 @@ function appendFact(ledger: Ledger, input: FactInput): AppendResult {
 export async function migrateLegacyDatabases(
   paths: readonly string[], ledger: Ledger, options: MigrationOptions = {},
 ): Promise<MigrationReport> {
-  const report: MigrationReport = { databases: 0, rows: {}, facts: {}, unknown: 0, inferred: 0 };
+  const report: MigrationReport = { databases: 0, rows: {}, facts: {}, unsupported: 0, errors: [], unknown: 0, inferred: 0 };
   const versions = readLatestVersions(ledger);
-  for (const path of [...new Set(paths.map((value) => realpathSync(value)))].sort()) {
-    const db = new DatabaseSync(path, { readOnly: true });
+  const seenPaths = new Set<string>();
+  for (const inputPath of [...new Set(paths.map((value) => resolve(value)))].sort()) {
+    let db: DatabaseSync | undefined;
+    let readingInput = true;
     try {
+      const path = realpathSync(inputPath);
+      if (seenPaths.has(path)) continue;
+      seenPaths.add(path);
+      db = new DatabaseSync(path, { readOnly: true });
+      db.prepare("SELECT name FROM sqlite_master").all();
+      readingInput = false;
       // backup は WAL 内の確定済みのページも複製する。失敗したら追記を始めない。
       const directory = options.backupDirectory ?? `${path}.migration-backups`;
       mkdirSync(directory, { recursive: true });
@@ -113,7 +126,7 @@ export async function migrateLegacyDatabases(
         const snapshot = new DatabaseSync(snapshotPath, { readOnly: true });
         try {
           // 各取り込みは専用の複製を読む。保存した最新のバックアップとは分ける。
-          migrateSnapshot(snapshot, ledger, report, versions);
+          migrateSnapshot(snapshot, ledger, report, versions, path);
         } finally {
           snapshot.close();
         }
@@ -121,14 +134,20 @@ export async function migrateLegacyDatabases(
         rmSync(temporary, { recursive: true, force: true });
       }
       report.databases += 1;
+    } catch (error) {
+      // 読めない入力だけを飛ばす。バックアップと台帳の障害は呼び出し元へ返す。
+      if (!readingInput || !(error instanceof Error && "code" in error
+        && (["SQLITE_CORRUPT", "SQLITE_NOTADB", "SQLITE_CANTOPEN", "ENOENT", "EACCES", "EPERM"].includes(String(error.code))
+          || (error.code === "ERR_SQLITE_ERROR" && "errcode" in error && [11, 14, 26].includes(Number(error.errcode)))))) throw error;
+      report.errors.push({ path: inputPath, reason: error.message });
     } finally {
-      db.close();
+      db?.close();
     }
   }
   return report;
 }
 
-function migrateSnapshot(db: DatabaseSync, ledger: Ledger, report: MigrationReport, versions: Map<string, LegacyVersion>): void {
+function migrateSnapshot(db: DatabaseSync, ledger: Ledger, report: MigrationReport, versions: Map<string, LegacyVersion>, path: string): void {
   const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => String(row.name)));
   function readRows(table: string): Row[] {
     if (!tables.has(table)) return [];
@@ -168,6 +187,22 @@ function migrateSnapshot(db: DatabaseSync, ledger: Ledger, report: MigrationRepo
     if (confidence === "inferred") report.inferred += 1;
     return result.fact_id;
   }
+  function unsupported(table: string, key: string, reason: string): void {
+    emit(table, key, "observation.unsupported", `observation:${identify("unsupported", JSON.stringify([table, key]))}`, {
+      source_kind: "legacy", file_path: path, format_name: table, format_version: "legacy", reason,
+    });
+    report.unsupported += 1;
+  }
+  function migrateRows(table: string, rows: Row[], convert: (row: Row) => void): void {
+    for (const row of rows) {
+      try { convert(row); } catch (error) {
+        if (!(error instanceof UnsupportedRow)) throw error;
+        unsupported(table, JSON.stringify([row.id ?? row.delegation_id ?? row.key, row.seq ?? null]), error.message);
+      }
+    }
+  }
+  const migratedSessions = new Set<string>();
+  const migratedDelegations = new Set<string>();
   function conversationId(id: string): string { return identify("conversation", id); }
   function runId(id: string): string { return identify("run", id); }
   for (const row of repos) {
@@ -177,19 +212,29 @@ function migrateSnapshot(db: DatabaseSync, ledger: Ledger, report: MigrationRepo
       name_prefix: String(row.name), state: "registered",
     });
   }
-  for (const row of sessions) {
+  migrateRows("sessions", sessions, (row) => {
     const id = String(row.id);
     const ts = String(row.started_at);
     const taskId = identify("task", id);
+    const planner = row.client === "planner";
+    const provider = planner ? undefined : readProvider(row);
+    if (row.status != null && !["running", "waiting", "ended"].includes(String(row.status))) {
+      throw new UnsupportedRow(`未対応の旧 session status: ${row.status}`);
+    }
+    if (!projects.has(String(row.repo_key))) throw new UnsupportedRow("旧 session の repo がありません");
     emit("sessions", id, "task.created", `task:${taskId}`, {
       purpose: readText(row, "goal") ?? "", project: projects.get(String(row.repo_key))!, state: "open",
-    }, ts);
-    emit("sessions", id, "conversation.created", `conversation:${conversationId(id)}`, {
-      provider: readProvider(row), native_id: id, origin: "observed", type: "interactive", history_format: "legacy", task_id: taskId,
+      ...(planner ? { origin: "planner" } : {}),
     }, ts);
     emit("sessions", id, "alias.created", `alias:${identify("alias", id + String(row.name))}`, {
       entity_id: taskId, kind: "legacy", name: String(row.name),
     }, ts);
+    migratedSessions.add(id);
+    if (planner) return;
+    emit("sessions", id, "conversation.created", `conversation:${conversationId(id)}`, {
+      provider: provider!, native_id: id, origin: "observed", type: "interactive", history_format: "legacy", task_id: taskId,
+    }, ts);
+
     emit("sessions", id, "run.created", `run:${runId(id)}`, {
       conversation_id: conversationId(id), generation: 0, state: "starting", started_ts: ts,
       repository_id: projects.get(String(row.repo_key))!,
@@ -210,6 +255,10 @@ function migrateSnapshot(db: DatabaseSync, ledger: Ledger, report: MigrationRepo
     ] as const) {
       const target = readText(row, column);
       if (!target) continue;
+      if (sessionById.has(target) && !["claude", "codex"].includes(String(sessionById.get(target)!.client))) {
+        unsupported("sessions", `${id}:${column}`, "旧関係の対象は会話ではありません");
+        continue;
+      }
       if (!sessionById.has(target)) {
         emit("sessions", `${id}:${column}:target`, "conversation.created", `conversation:${conversationId(target)}`, {
           provider: readProvider(row), native_id: target, origin: "observed", type: "interactive", history_format: "legacy",
@@ -220,10 +269,11 @@ function migrateSnapshot(db: DatabaseSync, ledger: Ledger, report: MigrationRepo
         evidence: { table: "sessions", column, session_id: id, value: target }, confidence,
       }, ts, confidence);
     }
-  }
-  for (const row of readRows("turns")) {
+  });
+  migrateRows("turns", readRows("turns"), (row) => {
     const session = sessionById.get(String(row.session_id));
-    if (!session) throw new Error("旧 turn の session がありません");
+    if (!session || !migratedSessions.has(String(row.session_id))) throw new UnsupportedRow("旧 turn の session がありません、または未対応です");
+    readProvider(session);
     for (const [column, role] of [["prompt", "user"], ["reply", "assistant"]] as const) {
       const body = readText(row, column) ?? (column === "reply" ? readText(row, "summary") : undefined);
       if (body === undefined) continue;
@@ -236,40 +286,62 @@ function migrateSnapshot(db: DatabaseSync, ledger: Ledger, report: MigrationRepo
         message_id: messageId, conversation_id: conversationId(String(row.session_id)), active: row.hidden !== 1,
       }, String(row.at));
     }
-  }
-  const requests = new Map(readRows("delegation_requests").map((row) => [String(row.delegation_id), row]));
+  });
+  const requestRows = readRows("delegation_requests");
+  const requests = new Map<string, JsonValue>();
   const delegations = readRows("delegations");
   const delegationById = new Map(delegations.map((row) => [String(row.id), row]));
+  migrateRows("delegation_requests", requestRows, (row) => {
+    const id = String(row.delegation_id);
+    if (!delegationById.has(id)) throw new UnsupportedRow("旧 request の delegation がありません");
+    requests.set(id, readJson(row, "request"));
+  });
   function delegationTs(row: Row): string {
     return readText(sessionById.get(String(row.session_id)) ?? {}, "started_at") ?? FALLBACK_TS;
   }
-  for (const row of delegations) {
+  migrateRows("delegations", delegations, (row) => {
     const id = String(row.id);
     const request = requests.get(id);
     const parent = row.session_id == null ? undefined : String(row.session_id);
     const states: Record<string, FactPayloads["delegation.state_changed"]["state"]> = {
       pending: "received", running: "running", done: "done", failed: "failed", timeout: "failed", denied: "denied", lost: "interrupted",
     };
+    if (row.kind != null && !["delegation", "subagent"].includes(String(row.kind))) {
+      throw new UnsupportedRow(`未対応の旧 delegation kind: ${row.kind}`);
+    }
+    if (!Object.hasOwn(states, String(row.status))) throw new UnsupportedRow(`未対応の旧 delegation status: ${row.status}`);
+    const planner = parent !== undefined && sessionById.get(parent)?.client === "planner" && migratedSessions.has(parent);
+    const knownParent = parent !== undefined && migratedSessions.has(parent);
     const subject = `delegation:${identify("delegation", id)}` as const;
     emit("delegations", id, "delegation.created", subject, {
       request_id: id, role: String(row.role), title: String(row.title), attempt: 0, state: "received",
-      ...(parent ? { parent_run_id: runId(parent) } : {}),
+      ...(knownParent && !planner ? { parent_run_id: runId(parent!) } : {}),
       ...(row.task == null ? {} : { task: String(row.task) }),
       ...(row.scope == null ? {} : { scope: readJson(row, "scope") as string[] }),
       ...(row.worktree == null ? {} : { cwd: String(row.worktree) }),
       constraints: { legacy_parent_id: readText(row, "parent_id") ?? null, legacy_kind: String(row.kind ?? "delegation"),
-        request: request ? readJson(request, "request") : null, outputs: readJson(row, "outputs") },
-    }, delegationTs(row), parent ? "confirmed" : "unknown");
+        request: request ?? null, outputs: readJson(row, "outputs") },
+    }, delegationTs(row), knownParent ? "confirmed" : "unknown");
+    migratedDelegations.add(id);
+    if (planner) {
+      emit("delegations", id, "relation.created", `relation:${identify("planner-delegation", id)}`, {
+        type: "delegated", from_id: identify("task", parent!), to_id: id, active: true,
+        confidence: "confirmed", evidence: { table: "delegations", column: "session_id", session_id: parent!, client: "planner" },
+      }, delegationTs(row));
+    }
     emit("delegations", id, "delegation.state_changed", subject, {
-      attempt: Number(row.round_trips ?? 0), state: states[String(row.status)] ?? "received",
+      attempt: Number(row.round_trips ?? 0), state: states[String(row.status)],
       ...(row.output == null ? {} : { result: String(row.output) }),
     }, delegationTs(row));
-  }
+  });
   for (const table of ["delegation_rounds", "assignments", "acceptances", "reviews"]) {
-    for (const row of readRows(table)) {
+    migrateRows(table, readRows(table), (row) => {
       const id = String(row.delegation_id);
       const delegation = delegationById.get(id);
-      if (!delegation) throw new Error("旧試行の delegation がありません");
+      if (!delegation || !migratedDelegations.has(id)) throw new UnsupportedRow("旧試行の delegation がありません、または未対応です");
+      if (table === "delegation_rounds" && !["request", "reinstruct", "report"].includes(String(row.kind))) {
+        throw new UnsupportedRow(`未対応の旧 round kind: ${row.kind}`);
+      }
       // request/report の対を同じ試行にする。reinstruct から次の試行になる。
       const attempt = table === "delegation_rounds" ? Math.floor((Number(row.seq) - 1) / 2) : Number(delegation.round_trips ?? 0);
       const payload: FactPayloads["delegation.attempt_created"] = { attempt };
@@ -284,6 +356,6 @@ function migrateSnapshot(db: DatabaseSync, ledger: Ledger, report: MigrationRepo
       if (table === "delegation_rounds") payload.assignment = { legacy_round: { kind: String(row.kind), text: String(row.text), at: String(row.at) } };
       emit(table, JSON.stringify([id, row.seq ?? null]), "delegation.attempt_created",
         `delegation:${identify("delegation", id)}`, payload, readText(row, "at") ?? delegationTs(delegation));
-    }
+    });
   }
 }

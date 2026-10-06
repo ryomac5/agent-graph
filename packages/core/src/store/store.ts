@@ -84,6 +84,7 @@ export interface TurnRow {
 // 委譲が生きているとみなす状態。親セッションの終了で lost にする対象。
 const ACTIVE_DELEGATION_STATUSES = ["requested", "planned", "running", "waiting"];
 const SESSION_NAME_WIDTH = 3;
+const COMMAND_LIMIT = 4000;
 // 番号をまだ持たないセッションの name。人の指示が来るまでこの値のまま
 export const UNNAMED = "";
 
@@ -278,6 +279,19 @@ export class Store {
     return result.changes > 0;
   }
 
+  // 会話の記録から拾ったコミットのコマンドを貯める。同じものは二度入れない
+  recordSessionCommands(sessionId: string, commands: { at: string; command: string }[]): void {
+    if (!commands.length) return;
+    const put = this.db.prepare("INSERT OR IGNORE INTO session_commands (session_id, at, command) VALUES (?, ?, ?)");
+    for (const item of commands) put.run(sessionId, item.at, item.command.slice(0, COMMAND_LIMIT));
+  }
+
+  listSessionCommands(repoKey: string): { sessionId: string; at: string; command: string }[] {
+    return this.db.prepare(`SELECT c.session_id, c.at, c.command FROM session_commands c
+      JOIN sessions s ON s.id = c.session_id WHERE s.repo_key = ? ORDER BY c.at`).all(repoKey)
+      .map((row) => ({ sessionId: String(row.session_id), at: String(row.at), command: String(row.command) }));
+  }
+
   setSessionModel(id: string, model: string): void {
     const result = this.db.prepare("UPDATE sessions SET model = ? WHERE id = ? AND model IS NOT ?").run(model, id, model);
     if (result.changes > 0) this.notifyChange();
@@ -322,6 +336,8 @@ export class Store {
         for (const table of ["delegations", "turns", "graphs"]) {
           this.db.prepare(`UPDATE ${table} SET session_id = ? WHERE session_id = ?`).run(realId, ghostId);
         }
+        this.db.prepare("UPDATE OR IGNORE session_commands SET session_id = ? WHERE session_id = ?").run(realId, ghostId);
+        this.db.prepare("DELETE FROM session_commands WHERE session_id = ?").run(ghostId);
         // 片割れだけが番号を持っていたら本物に移し、片割れは番号なしに戻す。移した由来を session.named に残す
         const target = this.db.prepare("SELECT name, repo_key, trace_id FROM sessions WHERE id = ?").get(realId);
         if (ghost.name !== UNNAMED && target && target.name === UNNAMED) {

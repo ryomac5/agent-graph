@@ -1,8 +1,13 @@
-// Project ページ。セッションごとの枠と goal と Started、planner のグラフの枠、終了セッションの畳み
+// Project ページ。Graph と Changes と Agents のタブを持つ
 import { statusClass, statusLabel } from "../lib/format.js";
 import { isLive } from "../lib/status.js";
 import { button, el } from "./dom.js";
 import { renderGraph } from "./graph.js";
+import { buildAgents } from "./agents.js";
+import { buildChanges } from "./changes.js";
+
+// 個別画面のタブ。Graph は今のセッションの委譲、Changes は Git の流れ、Agents は過去のセッション
+export const PROJECT_TABS = [["graph", "Graph"], ["changes", "Changes"], ["agents", "Agents"]];
 
 // SessionView と GraphView を、グラフの描画が読む共通の scope にする
 export function sessionScope(session) {
@@ -47,7 +52,7 @@ function buildGroup(scope, ctx) {
   return group;
 }
 
-// view は契約の ProjectView。終了したセッションは畳んで、生きているものだけを常に見せる。
+// view は契約の ProjectView。Graph の切り替えには生きたセッションと、選んでいるセッションを並べる。
 // failure は /api/project の取得に失敗した理由。あれば Unavailable を出す
 export function buildProjectSection(view, ctx, failure = "") {
   const section = el("section", undefined, "project");
@@ -66,7 +71,16 @@ export function buildProjectSection(view, ctx, failure = "") {
     menu.append(choices);
     controls.append(menu);
   }
-  section.append(heading);
+  const tab = ctx.projectTab || "graph";
+  const tabs = el("nav", undefined, "project-tabs");
+  tabs.setAttribute("role", "tablist");
+  for (const [key, label] of PROJECT_TABS) {
+    const control = button(label, key === tab ? "selected" : "", () => ctx.onProjectTab(key));
+    control.setAttribute("role", "tab");
+    control.setAttribute("aria-selected", String(key === tab));
+    tabs.append(control);
+  }
+  section.append(tabs, heading);
   if (failure) section.append(el("p", `Unavailable: ${failure}`, "hint"));
   const sessions = view.sessions || [];
   const graphs = view.graphs || [];
@@ -85,27 +99,31 @@ export function buildProjectSection(view, ctx, failure = "") {
   };
   for (const session of sessions.filter(isLive)) addSession(session, picker);
   heading.append(picker, controls);
-  let archiveBox;
-  const ended = sessions.filter((s) => !isLive(s));
-  if (ended.length) {
-    const archive = el("details", undefined, "ended-sessions");
-    archive.open = ended.some((s) => s.id === ctx.selectedScope);
-    archive.append(el("summary", `History · ${ended.length}`));
-    // 履歴は高さを閉じ込めず、キャンバスごとスクロールして下まで見られるようにする
-    const list = el("nav", undefined, "session-picker session-history");
-    for (const session of ended) addSession(session, list);
-    archive.append(list);
-    archiveBox = archive;
-  }
   const selected = sessions.find((s) => s.id === selectedId) || sessions.find(isLive) || sessions[0];
+  // 終わったセッションを選んだときも、Graph の切り替えに並べて今どれを見ているかを示す
+  if (selected && !isLive(selected)) addSession(selected, picker);
+  if (selected && ctx.onOpenConversation) controls.append(button("Open conversation", "toolbar-button open-conversation", () => ctx.onOpenConversation(sessionScope(selected))));
+  if (tab === "changes") {
+    picker.hidden = true;
+    section.append(buildChanges(view, ctx.changesFor ? ctx.changesFor(view.project.key) : undefined, ctx));
+    return section;
+  }
+  if (tab === "agents") {
+    picker.hidden = true;
+    const commits = new Map();
+    const entry = ctx.changesFor ? ctx.changesFor(view.project.key, false) : undefined;
+    for (const commit of (entry && entry.data && entry.data.commits) || []) {
+      for (const ref of commit.sessions) commits.set(ref.id, (commits.get(ref.id) || 0) + 1);
+    }
+    section.append(buildAgents(view, ctx, sessionScope, commits));
+    return section;
+  }
   if (selected) {
-    if (ctx.onOpenConversation) controls.append(button("Open conversation", "toolbar-button open-conversation", () => ctx.onOpenConversation(sessionScope(selected))));
     section.append(buildGroup(sessionScope(selected), ctx));
     for (const graph of graphs.filter((g) => g.sessionId === selected.id)) section.append(buildGroup(graphScope(graph, sessions), ctx));
   }
   for (const graph of graphs.filter((g) => !sessions.some((s) => s.id === g.sessionId))) section.append(buildGroup(graphScope(graph, sessions), ctx));
   if (!sessions.length && !graphs.length) section.append(el("p", "No sessions. Start one with +.", "empty"));
-  if (archiveBox) section.append(archiveBox);
   return section;
 }
 

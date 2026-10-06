@@ -13,6 +13,7 @@ import { ulid } from "../../core/src/ulid.ts";
 import { listRepos, listSessions } from "../../core/src/store/queries.ts";
 import { inferRole, tierOf } from "./observe.ts";
 import { isHumanPrompt, summarize } from "./sessions.ts";
+import { COMMIT_COMMAND } from "./claude-observe.ts";
 
 const execFileAsync = promisify(execFile);
 const POLL_MS = 2000;
@@ -23,6 +24,7 @@ interface ObservedTurn { id: string; at: string; prompt: string; reply?: string 
 export interface CodexSnapshot {
   threadId: string; parentThreadId?: string; cwd: string; model?: string;
   startedAt: string; updatedAt: string; turns: ObservedTurn[]; status: "running" | "done" | "failed";
+  commands: { at: string; command: string }[];
 }
 
 const stableId = (thread: string, turn: string) => "cx-" + createHash("sha256").update(`${thread}:${turn}`).digest("hex").slice(0, 24);
@@ -41,11 +43,20 @@ export function parseCodexRows(rows: Iterable<LogRow>): CodexSnapshot | undefine
       snapshot = { threadId: p.id, cwd: p.cwd, startedAt: at || p.timestamp, updatedAt: at || p.timestamp,
         ...(typeof p.model === "string" && p.model ? { model: p.model } : {}),
         parentThreadId: p.source?.subagent?.spawn?.parent_thread_id ?? p.thread_source?.subagent?.spawn?.parent_thread_id,
-        turns: [], status: "running" };
+        turns: [], status: "running", commands: [] };
     }
     if (!snapshot) continue;
     if (at) snapshot.updatedAt = at;
     if (row.type === "turn_context" && typeof p.model === "string") snapshot.model = p.model;
+    // exec_command の cmd から git commit を拾う。コミットとセッションを結ぶのに使う
+    if (row.type === "response_item" && p.type === "function_call" && typeof p.arguments === "string" && at) {
+      let command = "";
+      try {
+        const args = JSON.parse(p.arguments);
+        command = typeof args.cmd === "string" ? args.cmd : Array.isArray(args.command) ? args.command.join(" ") : "";
+      } catch { command = ""; }
+      if (COMMIT_COMMAND.test(command)) snapshot.commands.push({ at, command });
+    }
     if (row.type === "event_msg" && p.type === "task_started") {
       current = { id: stableId(snapshot.threadId, String(p.turn_id || at)), at, prompt: pendingPrompt };
       pendingPrompt = "";
@@ -93,7 +104,8 @@ async function readSnapshot(path: string): Promise<CodexSnapshot | undefined> {
     // 暗号化推論やコマンド出力は保持しない。
     if (["session_meta", "turn_context"].includes(row.type)
       || (row.type === "event_msg" && ["task_started", "user_message", "task_complete", "turn_aborted", "task_failed"].includes(row.payload?.type))
-      || (row.type === "response_item" && row.payload?.type === "message")) rows.push(row);
+      || (row.type === "response_item" && row.payload?.type === "message")
+      || (row.type === "response_item" && row.payload?.type === "function_call" && /commit/.test(String(row.payload?.arguments)))) rows.push(row);
   }
   return parseCodexRows(rows);
 }
@@ -113,6 +125,7 @@ async function listLogs(root: string, depth = 0): Promise<string[]> {
 
 export function applyCodexSnapshot(store: Store, session: SessionRow, snapshot: CodexSnapshot): void {
   if (snapshot.model) store.setSessionModel(session.id, snapshot.model);
+  store.recordSessionCommands(session.id, snapshot.commands);
   // app-server 経由のスレッドは pid で生死を判定できない。記録の新しい会話を最後の動きとして残す
   const latest = snapshot.turns.map((turn) => turn.at).filter(Boolean).sort().at(-1);
   if (latest && latest > session.lastSeenAt) {
@@ -130,6 +143,8 @@ export function applyCodexSnapshot(store: Store, session: SessionRow, snapshot: 
 
 function applyChild(store: Store, session: SessionRow, child: CodexSnapshot, parentId?: string): string {
   const id = stableId(child.threadId, "subagent");
+  // 子のコミットも親のセッションのものとして結ぶ
+  store.recordSessionCommands(session.id, child.commands);
   const task = child.turns.find((turn) => turn.prompt)?.prompt || "";
   const output = child.turns.filter((turn) => turn.reply).map((turn) => turn.reply).join("\n\n");
   const title = task.split("\n").find(Boolean)?.slice(0, 100) || "Codex subagent";
@@ -265,6 +280,8 @@ export function startCodexObserver(stores: Map<string, Store>, options: {
             const childKey = `${session.id}:${candidate}`;
             const childMtime = snapshots.get(candidate)!.mtime;
             const id = stableId(child.threadId, "subagent");
+  // 子のコミットも親のセッションのものとして結ぶ
+  store.recordSessionCommands(session.id, child.commands);
             if (applied.get(childKey) !== childMtime) {
               applyChild(store, session, child, byThread.get(child.parentThreadId));
               applied.set(childKey, childMtime);

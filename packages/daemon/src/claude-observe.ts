@@ -1,7 +1,7 @@
 import { createReadStream, type Stats } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { createInterface } from "node:readline";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { createHash } from "node:crypto";
 import { UNNAMED, type Store } from "../../core/src/store/store.ts";
@@ -12,7 +12,22 @@ const POLL_MS = 2000;
 const MATCH_WINDOW_MS = 10_000;
 interface TranscriptRow {
   type: string; uuid?: string; timestamp?: string; isMeta?: boolean; entrypoint?: string;
-  message?: { model?: string; content?: string | { type: string; text?: string }[] };
+  message?: { model?: string; content?: string | { type: string; text?: string; name?: string; input?: { command?: unknown } }[] };
+}
+// コミットを作るコマンド。コミットとセッションを結ぶために拾う
+export const COMMIT_COMMAND = /\bgit\b[^\n]*\bcommit\b/;
+
+// 記録の行から、Bash で打った git commit を時刻つきで拾う
+export function commitCommands(rows: Iterable<TranscriptRow>): { at: string; command: string }[] {
+  const found: { at: string; command: string }[] = [];
+  for (const row of rows) {
+    if (row.type !== "assistant" || !row.timestamp || !Array.isArray(row.message?.content)) continue;
+    for (const part of row.message.content) {
+      const command = part.type === "tool_use" && typeof part.input?.command === "string" ? part.input.command : "";
+      if (COMMIT_COMMAND.test(command)) found.push({ at: row.timestamp, command });
+    }
+  }
+  return found;
 }
 // claude -p や SDK の会話は転写の entrypoint がこの値になる。対話は cli
 const HEADLESS_ENTRYPOINTS = new Set(["sdk-cli", "sdk-ts", "sdk-py"]);
@@ -40,6 +55,16 @@ export function parseClaudeRows(rows: Iterable<TranscriptRow>): {
     }
   }
   return result;
+}
+
+async function readRows(path: string): Promise<TranscriptRow[]> {
+  const rows: TranscriptRow[] = [];
+  for await (const line of createInterface({ input: createReadStream(path, { encoding: "utf8" }), crlfDelay: Infinity })) {
+    let row: TranscriptRow;
+    try { row = JSON.parse(line); } catch { continue; }
+    if (row.type === "user" || row.type === "assistant") rows.push(row);
+  }
+  return rows;
 }
 
 // 登録済みの UUID と PJ のパスから履歴を引く。hook の既存の往復を全文で補い、非表示の印は残す。
@@ -76,14 +101,20 @@ export function startClaudeObserver(stores: Map<string, Store>, options: { root?
           ({ path, info } = matches[0]);
         }
         paths.set(session.id, path);
-        if (mtimes.get(path) === info.mtimeMs) continue;
-        const rows: TranscriptRow[] = [];
-        for await (const line of createInterface({ input: createReadStream(path, { encoding: "utf8" }), crlfDelay: Infinity })) {
-          let row: TranscriptRow;
-          try { row = JSON.parse(line); } catch { continue; }
-          if (row.type === "user" || row.type === "assistant") rows.push(row);
+        // 子エージェントの記録は <セッション>/subagents/ にある。子のコミットも親のセッションのものとして拾う
+        const subagents = join(dirname(path), session.id, "subagents");
+        for (const name of await readdir(subagents).catch(() => [] as string[])) {
+          if (!name.endsWith(".jsonl")) continue;
+          const file = join(subagents, name);
+          const fileInfo = await stat(file).catch(() => undefined);
+          if (!fileInfo || mtimes.get(file) === fileInfo.mtimeMs) continue;
+          store.recordSessionCommands(session.id, commitCommands(await readRows(file)));
+          mtimes.set(file, fileInfo.mtimeMs);
         }
+        if (mtimes.get(path) === info.mtimeMs) continue;
+        const rows = await readRows(path);
         const snapshot = parseClaudeRows(rows);
+        store.recordSessionCommands(session.id, commitCommands(rows));
         if (snapshot.model) store.setSessionModel(session.id, snapshot.model);
         if (snapshot.lastAt) {
           // 終わった扱いの会話でも、終わったあとの発言が増えていれば別のプロセスで再開している

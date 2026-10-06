@@ -193,4 +193,14 @@ export const migrations: readonly Migration[] = [
       request TEXT NOT NULL
     );`,
   },
+  {
+    // 会話の記録から拾った git commit のコマンド。コミットとセッションを結ぶのに使う
+    version: 5,
+    sql: `CREATE TABLE session_commands (
+      session_id TEXT NOT NULL,
+      at TEXT NOT NULL,
+      command TEXT NOT NULL,
+      PRIMARY KEY (session_id, at, command)
+    );`,
+  },
 ];

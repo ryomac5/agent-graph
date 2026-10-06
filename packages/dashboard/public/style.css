@@ -718,3 +718,71 @@ form.say textarea { min-height: 60px; }
 
 /* 履歴の一覧は高さを閉じ込めない。普通のホイールでキャンバスごと下までスクロールする */
 .session-picker.session-history { max-height: none; overflow: visible; }
+
+/* 個別画面のタブ */
+.project-tabs { display: inline-flex; gap: 2px; padding: 3px; margin: 0 0 18px; border-radius: 10px; background: #e8e8ed; }
+.project-tabs button { border: 0; padding: 6px 16px; border-radius: 8px; background: transparent; color: var(--muted); font-size: 13px; font-weight: 500; cursor: pointer; }
+.project-tabs button.selected { background: white; color: var(--text); box-shadow: 0 1px 4px #00000012; }
+.project-tabs button:hover:not(.selected) { color: var(--text); }
+
+/* Changes。コミットの件名を主役にし、作ったセッションを札で添える */
+.changes { display: flex; flex-direction: column; gap: 28px; max-width: 920px; }
+.change-section { display: flex; flex-direction: column; gap: 8px; }
+.change-section-title { margin: 0 0 4px; font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.change-day { margin: 14px 0 2px; font-size: 12px; font-weight: 600; color: var(--text); }
+.change-day:first-of-type { margin-top: 0; }
+.change { padding: 12px 16px; border-radius: 12px; background: white; border: 1px solid #e5e5ea; }
+.change.unlinked { background: #fbfbfd; }
+.change.branch { border-left: 3px solid var(--running); }
+.change.is-merge { border-left: 3px solid #8e8ef7; }
+.change.nested { padding: 8px 0 0; border: 0; border-top: 1px solid #efeff2; border-radius: 0; background: none; }
+.change-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.change-subject { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; line-height: 1.45; overflow-wrap: anywhere; }
+.change.nested .change-subject { font-size: 13px; font-weight: 500; }
+.change-branch { flex-shrink: 0; font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px; padding: 1px 7px; border-radius: 5px; background: #eaf3ff; color: var(--running); }
+.change-manual { flex-shrink: 0; font-size: 11.5px; color: var(--muted); }
+.change-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 5px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.change-meta code { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11.5px; color: var(--text); }
+.change-stat { color: var(--text); }
+.change-children { margin-top: 8px; }
+.change-children > summary { cursor: pointer; font-size: 12px; color: var(--muted); }
+.change-children[open] > summary { margin-bottom: 4px; }
+.change-sessions { display: flex; flex-wrap: wrap; gap: 6px; flex-shrink: 0; }
+.session-chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px 2px 3px; border-radius: 999px; border: 1px solid #e5e5ea; background: white; font-size: 12px; cursor: pointer; }
+.session-chip:hover:not(:disabled) { border-color: #c7c7cc; }
+.session-chip.selected { border-color: var(--running); box-shadow: 0 0 0 2px #007aff1f; }
+.session-chip:disabled { cursor: default; opacity: .6; }
+.session-chip-client { font-size: 10.5px; font-weight: 600; padding: 1px 6px; border-radius: 999px; }
+.session-chip.claude .session-chip-client { color: var(--claude); background: #f7ede5; }
+.session-chip.codex .session-chip-client { color: var(--codex); background: #eaf3ff; }
+.session-chip-name { font-weight: 500; }
+.change-more { align-self: center; }
+
+/* Agents。セッションを新しい順に並べ、選んだものは子のエージェントまで開く */
+.agents { display: flex; flex-direction: column; gap: 12px; max-width: 920px; }
+.agent-search { width: 100%; padding: 9px 12px; border-radius: 10px; border: 1px solid #e5e5ea; background: white; font: inherit; font-size: 13px; }
+.agent-search:focus { outline: 2px solid #007aff40; border-color: var(--running); }
+.agent-list-rows { display: flex; flex-direction: column; gap: 8px; }
+.agent-item { border-radius: 12px; background: white; border: 1px solid #e5e5ea; overflow: hidden; }
+.agent-item.selected { border-color: var(--running); box-shadow: 0 0 0 3px #007aff14; }
+.agent-row { display: block; width: 100%; text-align: left; padding: 12px 16px; border: 0; background: none; font: inherit; color: inherit; cursor: pointer; }
+.agent-row:hover { background: #fafafc; }
+.agent-line { display: flex; align-items: center; gap: 8px; min-width: 0; white-space: nowrap; }
+.agent-dot { width: 7px; height: 7px; border-radius: 50%; background: #c7c7cc; flex-shrink: 0; }
+.on-running .agent-dot, .agent-row.on-running .agent-dot { background: var(--running); }
+.on-waiting .agent-dot { background: #e8a200; }
+.on-failed .agent-dot { background: var(--failed); }
+.on-done .agent-dot { background: var(--done); }
+.agent-name { font-size: 13.5px; }
+.agent-model { color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.agent-when { margin-left: auto; flex-shrink: 0; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.agent-goal { margin-top: 6px; font-size: 13px; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-last { margin-top: 2px; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-meta { margin-top: 6px; font-size: 11.5px; color: var(--muted); }
+.agent-children { display: flex; flex-direction: column; padding: 4px 8px 8px 30px; border-top: 1px solid #efeff2; background: #fbfbfd; }
+.agent-child { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 8px; border: 0; border-radius: 8px; background: none; font: inherit; font-size: 12.5px; text-align: left; cursor: pointer; white-space: nowrap; }
+.agent-child:hover { background: #f0f0f4; }
+.agent-child.selected { background: #eaf3ff; }
+.agent-child-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.agent-child-model, .agent-child-state { flex-shrink: 0; color: var(--muted); font-size: 11.5px; }
+.session-picker[hidden] { display: none; }

@@ -113,13 +113,64 @@ test("planner のグラフは task を同じ丸で描き、waiting_human を紫�
   assert.equal(directionWord({ fromFamily: "openai", toFamily: "openai" }), "");
 });
 
-test("プロジェクトは簡潔なセッション切替と常時表示のグラフと履歴を出す", () => {
+test("プロジェクトは Graph と Changes と Agents のタブを持ち、Graph は生きたセッションの切替とグラフを出す", () => {
   const section = buildProjectSection(project, ctx());
   const html = String(section);
   assert.equal(section.querySelector(".session-group")!.tagName, "section", "グラフは開閉枠に隠さない");
-  for (const word of ["agent-graph", "agent-graph-001-s10", "session-picker", "Plan", "History · 1", "agent-graph-001-s9", "planner"]) {
+  for (const word of ["agent-graph", "agent-graph-001-s10", "session-picker", "Plan", "planner", "project-tabs", "Graph", "Changes", "Agents"]) {
     assert.ok(html.includes(word), `${word} が無い`);
   }
+  assert.ok(!html.includes("History ·"), "終わったセッションの畳みは無い");
+  assert.ok(!html.includes("agent-graph-001-s9"), "終わったセッションは選ぶまで Graph に並べない");
+  const picked = String(buildProjectSection(project, ctx({ selectedScope: "s9" })));
+  assert.ok(picked.includes("agent-graph-001-s9"), "選んだ終わったセッションは切替に並べる");
+});
+
+test("Changes は作業中のブランチと日ごとのコミットを出し、セッションの札で会話を開く", () => {
+  const opened: string[] = [];
+  const commit = (sha: string, subject: string, at: string, sessions: Json[], merge?: Json) => ({ sha, short: sha.slice(0, 7), subject, author: "r", at,
+    files: 2, insertions: 10, deletions: 3, sessions, ...(merge ? { merge } : {}) });
+  const s10 = { id: "s10", name: "agent-graph-001-s10", client: "claude" };
+  const data = { branch: "main", hasMore: true,
+    branches: [{ name: "feat/tabs", ahead: 2, at: "2026-09-25T06:00:00.000Z", subject: "タブを足す", sessions: [s10] }],
+    commits: [
+      commit("aaaaaaaa1", "Merge pull request #3 from r/feat/list", "2026-09-25T05:00:00.000Z", [s10],
+        { branch: "feat/list", commits: [commit("bbbbbbbb2", "一覧を作る", "2026-09-25T04:00:00.000Z", [s10])] }),
+      commit("cccccccc3", "手で直す", "2026-09-24T03:00:00.000Z", []),
+    ] };
+  const section = buildProjectSection(project, ctx({ projectTab: "changes", changesFor: () => ({ data }),
+    onOpenSession: (session: Json) => opened.push(String(session.id)), onMoreChanges() {} }));
+  const html = String(section);
+  for (const word of ["In progress", "feat/tabs", "2 commits ahead of main", "History of main", "Merge feat/list", "1 commit", "一覧を作る",
+    "aaaaaaa", "+10 −3", "2 files", "No agent", "手で直す", "Load older commits", "session-chip claude"]) {
+    assert.ok(html.includes(word), `${word} が無い`);
+  }
+  assert.ok(!html.includes("session-group"), "Changes ではグラフを出さない");
+  (section.querySelector(".session-chip") as FakeElement).dispatch("click");
+  assert.deepEqual(opened, ["s10"]);
+  assert.ok(String(buildProjectSection(project, ctx({ projectTab: "changes", changesFor: () => ({ loading: true }) }))).includes("Loading git history"));
+  assert.ok(String(buildProjectSection(project, ctx({ projectTab: "changes", changesFor: () => ({ error: "Could not read git history: x" }) }))).includes("Could not read git history"));
+});
+
+test("Agents は今と過去のセッションを並べ、選んだセッションの子を出し、検索で絞り込む", () => {
+  const selected: string[] = [];
+  const data = { branch: "main", hasMore: false, branches: [], commits: [{ sha: "a", short: "a", subject: "x", author: "r", at: "2026-09-25T05:00:00.000Z",
+    files: 1, insertions: 1, deletions: 0, sessions: [{ id: "s9", name: "agent-graph-001-s9", client: "codex" }] }] };
+  const section = buildProjectSection(project, ctx({ projectTab: "agents", selectedScope: "s10", changesFor: () => ({ data }),
+    onSelect: (scope: Json, node: string | null) => selected.push(`${scope.id}:${node}`), onAgentQuery() {} }));
+  const html = String(section);
+  for (const word of ["agent-search", "agent-graph-001-s10", "agent-graph-001-s9", "Live", "1 commit", "agent-children", "旧版のダッシュボード"]) {
+    assert.ok(html.includes(word), `${word} が無い`);
+  }
+  const rows = section.querySelectorAll(".agent-item");
+  assert.ok(String(rows[0]).includes("agent-graph-001-s10"), "生きたセッションを先に並べる");
+  (section.querySelector(".agent-child") as FakeElement).dispatch("click");
+  assert.match(selected[0], /^s10:/);
+  const search = section.querySelector(".agent-search") as FakeElement & { value: string };
+  search.value = "段 6 の";
+  search.dispatch("input");
+  assert.equal(rows[0].hidden, true);
+  assert.equal(rows[1].hidden, false);
 });
 
 test("root の詳細は会話の吹き出しと Show more と × を出し、隠した往復を除く", () => {

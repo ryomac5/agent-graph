@@ -14,6 +14,9 @@ import { readToken, sendAction, sendSay } from "./ui/action.js";
 const TOKEN = readToken(document);
 const PROJECT_KEY = "agent-graph:project";
 const DISMISS_KEY = "agent-graph:dismissed";
+const TAB_KEY = "agent-graph:project-tab";
+// Changes は 20 秒より古ければ取り直す
+const CHANGES_STALE_MS = 20_000;
 const CANVAS_MARGIN = 64;
 
 function loadJson(key, fallback) {
@@ -35,6 +38,9 @@ const state = {
   expandedRounds: new Set(), hiddenTurns: new Set(), factsOpen: { value: false }, chatView: { key: "", top: 0, stick: true },
   drafts: new Map(),
   history: new Map(), historyEnd: new Set(),
+  projectTab: ["graph", "changes", "agents"].includes(localStorage.getItem(TAB_KEY)) ? localStorage.getItem(TAB_KEY) : "graph",
+  // repo key → /api/changes の取得結果。{ data, loading, error, at }
+  changes: new Map(), agentQuery: "",
 };
 let previousCanvas = "";
 let previousDetail = "";
@@ -131,6 +137,29 @@ const ctx = {
     document.body.classList.add("mobile-conversation");
     render();
   },
+  get projectTab() { return state.projectTab; },
+  onProjectTab: (tab) => {
+    state.projectTab = tab;
+    localStorage.setItem(TAB_KEY, tab);
+    previousCanvas = "";
+    render();
+  },
+  // load が真なら、無いか古いときに取りに行く。Agents はコミットの数を添えるだけなので取りに行かない
+  changesFor: (key, load = true) => {
+    const entry = state.changes.get(key);
+    if (load && (!entry || (!entry.loading && Date.now() - (entry.at || 0) > CHANGES_STALE_MS))) queueMicrotask(() => loadChanges(key));
+    return entry;
+  },
+  onMoreChanges: (key) => loadChanges(key, true),
+  onOpenSession: (session) => {
+    state.selectedScope = session.id;
+    state.selectedNode = null;
+    document.body.classList.add("mobile-conversation");
+    previousCanvas = "";
+    render();
+  },
+  get agentQuery() { return state.agentQuery; },
+  onAgentQuery: (query) => { state.agentQuery = query; },
   onBackToSessions: () => document.body.classList.remove("mobile-conversation", "detail-expanded"),
   onToggleDismiss: (scope, nodeId) => {
     const key = dismissKey(scope.id, nodeId);
@@ -174,6 +203,32 @@ const ctx = {
     if (!result.ok) { state.hiddenTurns.delete(key); previousDetail = ""; render(); }
   },
 };
+
+// /api/changes を読む。more なら古いコミットを足し、そうでなければ先頭を取り直して読み足した分は残す
+async function loadChanges(key, more = false) {
+  const entry = state.changes.get(key) || {};
+  if (entry.loading) return;
+  state.changes.set(key, { ...entry, loading: true });
+  const params = new URLSearchParams({ repo: key });
+  if (more && entry.data) params.set("skip", String(entry.data.commits.length));
+  let next;
+  try {
+    const response = await fetch(`/api/changes?${params}`);
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) next = { ...entry, loading: false, error: body.error || `Could not load changes (${response.status})`, at: Date.now() };
+    else if (more && entry.data) next = { data: { ...entry.data, commits: [...entry.data.commits, ...body.commits], hasMore: body.hasMore }, loading: false, at: entry.at };
+    else {
+      const fresh = new Set(body.commits.map((commit) => commit.sha));
+      const kept = entry.data ? entry.data.commits.slice(body.commits.length).filter((commit) => !fresh.has(commit.sha)) : [];
+      next = { data: { ...body, commits: [...body.commits, ...kept], hasMore: kept.length ? entry.data.hasMore : body.hasMore }, loading: false, at: Date.now() };
+    }
+  } catch (error) {
+    next = { ...entry, loading: false, error: `Could not load changes: ${error instanceof Error ? error.message : error}`, at: Date.now() };
+  }
+  state.changes.set(key, next);
+  previousCanvas = "";
+  render();
+}
 
 // Overview と Project ページの切り替え。null で Overview へ戻す
 function openProject(key, additive = false) {
@@ -244,7 +299,8 @@ function renderCanvas(enter) {
   canvas.classList.remove("overview");
   ctx.orbSlots.clear();
   ctx.maxWidth = Math.max(360, canvas.clientWidth - CANVAS_MARGIN);
-  const signature = JSON.stringify([state.selectedProjects, selectedViews(), state.selectedScope, state.selectedNode, [...state.dismissed], [...state.expandedArchive], ctx.maxWidth]);
+  const changes = state.projectTab === "graph" ? [] : state.selectedProjects.map((key) => state.changes.get(key) || null);
+  const signature = JSON.stringify([state.selectedProjects, selectedViews(), state.selectedScope, state.selectedNode, [...state.dismissed], [...state.expandedArchive], ctx.maxWidth, state.projectTab, changes]);
   if (signature === previousCanvas && !enter) return;
   previousCanvas = signature;
   const view = el("div", undefined, "project-view" + (enter ? " enter" : ""));
@@ -258,8 +314,13 @@ function renderCanvas(enter) {
     view.append(section);
   }
   const scrollTop = canvas.scrollTop;
+  // 検索欄に打っている途中で描き直しても、入力と位置を保つ
+  const focused = document.activeElement && document.activeElement.classList && document.activeElement.classList.contains("agent-search")
+    ? { start: document.activeElement.selectionStart, end: document.activeElement.selectionEnd } : null;
   canvas.replaceChildren(view);
   canvas.scrollTop = scrollTop;
+  const search = focused && canvas.querySelector(".agent-search");
+  if (search) { search.focus(); search.setSelectionRange(focused.start, focused.end); }
   for (const holder of canvas.querySelectorAll(".graph-holder")) if (holder.startSparks) holder.startSparks();
 }
 

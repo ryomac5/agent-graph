@@ -60,6 +60,7 @@ test("HTTP graph と SSE は委譲を配信し、静的ファイルを制限す�
   const staticDir = join(directory, "public");
   mkdirSync(staticDir);
   writeFileSync(join(staticDir, "index.html"), "<!doctype html><html><head><meta charset=\"utf-8\"></head><body>hello</body></html>");
+  writeFileSync(join(staticDir, "app.js"), "export {};");
   writeFileSync(join(directory, "secret"), "private content");
   const tokenPath = join(directory, "run", "dashboard.token");
   let server;
@@ -78,6 +79,9 @@ test("HTTP graph と SSE は委譲を配信し、静的ファイルを制限す�
   const graph = await (await fetch(`${base}/api/graph?repo=repo&session=session`)).json();
   assert.equal(graph.nodes.length, 2);
   assert.deepEqual(graph.edges, [{ from: "session", to: "first", fromFamily: "anthropic", toFamily: "openai" }]);
+  // 画面の部品は更新のたびに取り直させる
+  assert.equal((await fetch(`${base}/app.js`)).headers.get("cache-control"), "no-cache");
+  assert.equal((await fetch(`${base}/`)).headers.get("cache-control"), "no-store");
   const index = await fetch(`${base}/`);
   assert.equal(index.status, 200);
   const token = readFileSync(tokenPath, "utf8").trim();

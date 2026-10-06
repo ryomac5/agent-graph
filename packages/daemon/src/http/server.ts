@@ -61,7 +61,8 @@ async function sendStatic(response: ServerResponse, staticDir: string, pathname:
     response.end(injectToken(await readFile(actual, "utf8"), token));
     return;
   }
-  response.writeHead(200, { "content-type": MIME[extname(actual)] ?? "application/octet-stream" });
+  // 画面の部品は版の印なしで読み込むので、毎回確かめさせる。付けないと更新後も古い画面が残る
+  response.writeHead(200, { "content-type": MIME[extname(actual)] ?? "application/octet-stream", "cache-control": "no-cache" });
   createReadStream(actual).pipe(response);
 }
 

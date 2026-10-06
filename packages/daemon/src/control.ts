@@ -68,29 +68,29 @@ export async function controlAction(body: unknown, stores: Map<string, Store>, c
     if (request.action === "new_session") {
       const created = await control.run(["workspace", "create", "--label", repo.name, "--cwd", repo.rootPath, "--no-focus"]);
       const pane = findCreatedPane(JSON.parse(created));
-      if (!pane) return { ok: false, message: "起動先を取得できませんでした" };
+      if (!pane) return { ok: false, message: "Could not find where to launch" };
       const executable = process.env[request.client === "claude" ? "AGENT_GRAPH_CLAUDE_BIN" : "AGENT_GRAPH_CODEX_BIN"] || request.client!;
       await control.run(["pane", "run", pane, `export HERDR_PANE_ID=${pane}; export PATH=${quoteShell(process.env.PATH ?? "")}; ${quoteShell(executable)}`]);
-      return { ok: true, message: `${repo.name} で ${request.client} を起動しました` };
+      return { ok: true, message: `Launched ${request.client} in ${repo.name}` };
     }
     const session = store.getSession(request.sessionId!);
     if (!session || session.repoKey !== repo.key) throw new NotFoundError(`Session not found: ${request.sessionId}`);
-    if (session.status === "ended") return { ok: false, message: "終了済みのセッションには操作できません" };
+    if (session.status === "ended") return { ok: false, message: "This session has ended" };
     if (request.action === "stop_session") {
-      if (session.client !== "claude") return { ok: false, message: "このセッションは元の画面から停止してください" };
-      if (store.countActiveDelegations(session.id)) return { ok: false, message: "子が実行中なので停止できません" };
+      if (session.client !== "claude") return { ok: false, message: "Stop this session from its own terminal" };
+      if (store.countActiveDelegations(session.id)) return { ok: false, message: "Cannot stop while a child is running" };
       const pane = findPaneId(await control.run(["agent", "list"]), session.id);
-      if (!pane) return { ok: false, message: "Herdr で起動したセッションが見つかりません" };
+      if (!pane) return { ok: false, message: "No Herdr pane found for this session" };
       await control.run(["agent", "prompt", pane, "/exit"]);
-      return { ok: true, message: `${session.name} に終了を送りました。終了を観測すると履歴に移ります` };
+      return { ok: true, message: `Sent exit to ${session.name}. It moves to history once the exit is seen.` };
     }
     if (request.action === "set_model") {
-      if (session.client !== "claude" && session.client !== "codex") return { ok: false, message: "このセッションはモデルを切り替えられません" };
+      if (session.client !== "claude" && session.client !== "codex") return { ok: false, message: "This session cannot switch models" };
       const choice = findModelChoice(session.client, request.model ?? "");
-      if (!choice) return { ok: false, message: `${request.model} はこのセッションで選べるモデルではありません` };
-      if (request.effort && !choice.efforts.includes(request.effort)) return { ok: false, message: `${choice.label} は ${request.effort} を選べません` };
+      if (!choice) return { ok: false, message: `${request.model} is not available for this session` };
+      if (request.effort && !choice.efforts.includes(request.effort)) return { ok: false, message: `${choice.label} does not support ${request.effort}` };
       const pane = findPaneId(await control.run(["agent", "list"]), session.id);
-      if (!pane) return { ok: false, message: "Herdr で起動したセッションが見つかりません" };
+      if (!pane) return { ok: false, message: "No Herdr pane found for this session" };
       if (session.client === "codex") {
         // Codex の /model は引数を受け取らない。選択画面を読みながら操作し、その会話だけに効かせる
         const result = await switchCodexModel(paneControl(control), pane, { slug: choice.id, label: choice.label, effort: request.effort });
@@ -99,35 +99,35 @@ export async function controlAction(body: unknown, stores: Map<string, Store>, c
       await control.run(["agent", "prompt", pane, `/model ${request.model}`]);
       if (await waitForSwitch(control, pane, true)) {
         await control.run(["pane", "send-keys", pane, "enter"]);
-        if (!await waitForSwitch(control, pane, false)) return { ok: false, message: "モデル変更の確認が完了していません" };
+        if (!await waitForSwitch(control, pane, false)) return { ok: false, message: "The model switch was not confirmed" };
       }
       // Claude Code の /effort は引数をそのまま受け付ける
       if (request.effort) await control.run(["agent", "prompt", pane, `/effort ${request.effort}`]);
       // 送信成功と適用確認を混同しない。現在モデルは後続の観測で更新する。
-      return { ok: true, message: `${session.name} に ${choice.label}${request.effort ? ` ${request.effort}` : ""} への変更を送りました。適用後のモデルは観測で更新されます` };
+      return { ok: true, message: `Sent the switch to ${choice.label}${request.effort ? ` ${request.effort}` : ""} to ${session.name}. The model updates once observed.` };
     }
     const row = listDelegations(store.db, repo.key).find((item) => item.id === request.delegationId && item.sessionId === session.id);
     if (!row) throw new NotFoundError(`Delegation not found: ${request.delegationId}`);
-    if (!["failed", "lost", "timeout"].includes(row.status)) return { ok: false, message: "再実行できる状態ではありません" };
+    if (!["failed", "lost", "timeout"].includes(row.status)) return { ok: false, message: "This delegation cannot be retried now" };
     const retryKey = `${repo.key}:${row.id}`;
-    if (pendingRetries.has(retryKey)) return { ok: false, message: "この委譲は再実行中です" };
+    if (pendingRetries.has(retryKey)) return { ok: false, message: "This delegation is already being retried" };
     if (row.kind === "subagent") {
-      if (!row.task) return { ok: false, message: "再実行する依頼文が記録されていません" };
+      if (!row.task) return { ok: false, message: "No recorded task to retry" };
       return sayToSession({ repo: repo.key, sessionId: session.id,
         text: `失敗または追跡が途切れたサブエージェント「${row.title}」を再実行し、結果を確認してください。依頼文: ${row.task}` }, stores,
         { list: () => control.run(["agent", "list"]), prompt: async (pane, text) => { await control.run(["agent", "prompt", pane, text]); } });
     }
     const saved = store.db.prepare("SELECT request FROM delegation_requests WHERE delegation_id = ?").get(row.id);
-    if (!saved) return { ok: false, message: "元の実行条件が保存されていません。親セッションから再依頼してください" };
+    if (!saved) return { ok: false, message: "The original run settings were not saved. Ask again from the parent session." };
     const original = JSON.parse(String(saved.request)) as DelegateRequest;
     pendingRetries.add(retryKey);
     void runDelegation(original, { repoKey: repo.key, repoRoot: repo.rootPath, sessionId: session.id,
       parentDelegationId: row.parentId, orchestratorModel: session.model }, { ...retryDeps, store })
       .catch((error) => console.error("delegation retry:", error))
       .finally(() => pendingRetries.delete(retryKey));
-    return { ok: true, message: `「${row.title}」の再実行を開始しました` };
+    return { ok: true, message: `Retrying "${row.title}"` };
   } catch (error) {
     if (error instanceof NotFoundError) throw error;
-    return { ok: false, message: `操作に失敗しました: ${error instanceof Error ? error.message : String(error)}` };
+    return { ok: false, message: `Action failed: ${error instanceof Error ? error.message : String(error)}` };
   }
 }

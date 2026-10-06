@@ -25,7 +25,7 @@ function renderMarkdown(body, text) {
   const lines = parseMarkdown(text);
   lines.forEach((line, index) => {
     const row = el("span", undefined, `md-${line.type}`);
-    if (line.type === "bullet") row.append(el("span", "・", "md-mark"));
+    if (line.type === "bullet") row.append(el("span", "• ", "md-mark"));
     for (const span of line.spans) {
       row.append(el(span.type === "text" ? "span" : span.type === "strong" ? "strong" : "code", span.text));
     }
@@ -46,11 +46,11 @@ export function buildBubble(round, tone, key, ctx) {
   renderMarkdown(body, text);
   wrap.append(body);
   if (long) {
-    const more = button(open ? "折りたたむ" : "全文を表示", "more", () => {
+    const more = button(open ? "Show less" : "Show more", "more", () => {
       const nowOpen = !ctx.expandedRounds.has(key);
       if (nowOpen) ctx.expandedRounds.add(key); else ctx.expandedRounds.delete(key);
       body.classList.toggle("clamp", !nowOpen);
-      more.textContent = nowOpen ? "折りたたむ" : "全文を表示";
+      more.textContent = nowOpen ? "Show less" : "Show more";
     });
     wrap.append(more);
   }
@@ -87,13 +87,13 @@ function buildSayForm(scope, ctx) {
   const form = el("form", undefined, "say");
   const box = el("textarea");
   box.rows = 2;
-  box.placeholder = "メッセージを入力…";
-  box.setAttribute("aria-label", `${scope.name} へのメッセージ`);
+  box.placeholder = "Message…";
+  box.setAttribute("aria-label", `Message to ${scope.name}`);
   box.value = ctx.drafts?.get(scope.id) || "";
   box.addEventListener("input", () => ctx.drafts?.set(scope.id, box.value));
-  const button = el("button", "送信 ↑", "say-send");
+  const button = el("button", "Send ↑", "say-send");
   button.type = "submit";
-  box.title = "⌘ / Ctrl + Enter で送信";
+  box.title = "⌘ / Ctrl + Enter to send";
   const note = el("p", "", "say-note");
   const submit = async () => {
     const text = box.value.trim();
@@ -124,9 +124,9 @@ export function renderRootDetail(aside, scope, ctx) {
   summary.append(el("span", "", "dot"), el("span", scope.name, "node-name"));
   if (cls === "waiting") summary.append(el("span", scope.waitingReason ? `Waiting · ${scope.waitingReason}` : "Waiting", "node-state"));
   else if (cls === "ended") summary.append(el("span", statusLabel(scope.status), "node-state"));
-  summary.append(el("span", scope.model || "モデル未取得", "node-model"));
+  summary.append(el("span", scope.model || "Model unknown", "node-model"));
   const more = el("span", "⋯", "facts-label");
-  more.title = "セッション情報・操作";
+  more.title = "Session info & actions";
   summary.append(more);
   head.append(summary);
   const dl = el("dl");
@@ -140,23 +140,23 @@ export function renderRootDetail(aside, scope, ctx) {
   head.append(dl);
   if (cls !== "ended") {
     const row = el("p", undefined, "end-row");
-    row.append(button("履歴へ移す", undefined, () => {
-      if (ctx.confirm(`${scope.name} を履歴へ移します。プロセスは停止しません。`)) ctx.onAction({ action: "end_session", sessionId: scope.sessionId });
+    row.append(button("Archive", undefined, () => {
+      if (ctx.confirm(`Archive ${scope.name}? The process keeps running.`)) ctx.onAction({ action: "end_session", sessionId: scope.sessionId });
     }));
-    if (scope.client === "claude") row.append(button("停止", undefined, () => {
-      if (ctx.confirm(`${scope.name} を停止しますか？`)) ctx.onAction({ action: "stop_session", sessionId: scope.sessionId });
+    if (scope.client === "claude") row.append(button("Stop", undefined, () => {
+      if (ctx.confirm(`Stop ${scope.name}?`)) ctx.onAction({ action: "stop_session", sessionId: scope.sessionId });
     }));
     head.append(row);
   }
   const chat = el("div", undefined, "chat");
-  if (ctx.onLoadHistory && !ctx.historyEnd?.has(scope.id)) chat.append(button("以前の会話を読み込む", "toolbar-button", async (event) => {
+  if (ctx.onLoadHistory && !ctx.historyEnd?.has(scope.id)) chat.append(button("Load earlier messages", "toolbar-button", async (event) => {
     const control = event.currentTarget;
     control.disabled = true;
     await ctx.onLoadHistory(scope);
     control.disabled = false;
   }));
   const turns = (scope.turns || []).filter((t) => !t.hidden && !ctx.hiddenTurns.has(`${scope.id}::${t.id}`));
-  if (!turns.length) chat.append(el("p", "会話はまだありません。メッセージが記録されると、ここに表示されます。", "chat-empty"));
+  if (!turns.length) chat.append(el("p", "No messages yet. They will appear here once recorded.", "chat-empty"));
   for (const t of turns) {
     const asked = buildBubble({ role: "root", text: t.prompt || "", at: t.at }, tone, `${scope.id}/${t.id}/prompt`, ctx);
     asked.classList.add("has-close");
@@ -200,7 +200,7 @@ export function renderNodeDetail(aside, scope, node, ctx) {
   const head = buildHead(tone, ctx);
   const summary = el("summary");
   summary.append(el("span", "", "dot"), el("span", node.title || node.id, "node-name"));
-  const model = node.model || "モデル未取得";
+  const model = node.model || "Model unknown";
   if (model) summary.append(el("span", model, "node-model"));
   head.append(summary);
   const dl = el("dl");
@@ -249,7 +249,7 @@ export function renderNodeDetail(aside, scope, node, ctx) {
     for (const [action, label] of actions) {
       bar.append(button(label, action, async () => {
         // reject は取り消せない。誤クリックで走らないよう確認を挟む
-        if (action === "reject" && !ctx.confirm(`${node.id} を却下します。取り消せません。`)) return;
+        if (action === "reject" && !ctx.confirm(`Reject ${node.id}? This cannot be undone.`)) return;
         for (const b of bar.children) b.disabled = true;
         // 契約の ActionRequest の項目だけ。2 つ目の引数は画面の隠し設定を外す鍵
         const message = await ctx.onAction(node.kind === "task"
@@ -285,7 +285,7 @@ export function renderNodeDetail(aside, scope, node, ctx) {
   if (node.output) { const d = el("details"); d.append(el("summary", "Text"), el("pre", node.output)); parts.push(el("h3", "Output"), d); }
   const technical = parts.filter((part) => part !== head && part !== chat && !part.classList.contains("status-note") && !part.classList.contains("actions") && part.id !== "action-result");
   const info = el("details", undefined, "execution-info");
-  info.append(el("summary", "検証・実行情報"), ...technical);
+  info.append(el("summary", "Verification & run details"), ...technical);
   aside.replaceChildren(head, ...parts.filter((part) => part.classList.contains("status-note")), chat,
     ...parts.filter((part) => part.classList.contains("actions") || part.id === "action-result"), ...(technical.length ? [info] : []));
 
@@ -307,24 +307,24 @@ export function renderDetail(aside, scope, nodeId, ctx) {
 function addDetailToolbar(aside, ctx) {
   if (!ctx.onExpandDetail) return;
   const bar = el("div", undefined, "detail-toolbar");
-  if (ctx.onBackToSessions) bar.append(button("‹ グラフ", "toolbar-button mobile-back", ctx.onBackToSessions));
+  if (ctx.onBackToSessions) bar.append(button("‹ Graph", "toolbar-button mobile-back", ctx.onBackToSessions));
   if (ctx.selectedNode) {
     const back = button("‹", "toolbar-button", () => ctx.onSelect({ id: ctx.selectedScope }, null));
-    back.setAttribute("aria-label", "‹ セッションの会話");
-    back.title = "セッションの会話へ戻る";
+    back.setAttribute("aria-label", "‹ Session conversation");
+    back.title = "Back to the session conversation";
     bar.append(back);
   }
   const latest = button("↓", "toolbar-button", () => {
     const chat = aside.querySelector(".chat");
     if (chat) { chat.scrollTop = chat.scrollHeight; ctx.chatView.stick = true; }
   });
-  latest.setAttribute("aria-label", "最新の会話へ");
-  latest.title = "最新の会話へ";
+  latest.setAttribute("aria-label", "Jump to latest");
+  latest.title = "Jump to latest";
   bar.append(latest);
   const expanded = globalThis.document.body.classList.contains("detail-expanded");
   const expand = button(expanded ? "↙" : "↗", "toolbar-button", ctx.onExpandDetail);
-  expand.setAttribute("aria-label", expanded ? "縮小 ↙" : "拡大 ↗");
-  expand.title = expanded ? "会話を縮小" : "会話を拡大";
+  expand.setAttribute("aria-label", expanded ? "Collapse ↙" : "Expand ↗");
+  expand.title = expanded ? "Collapse conversation" : "Expand conversation";
   expand.setAttribute("aria-pressed", String(expanded));
   bar.append(expand);
   aside.insertBefore(bar, aside.firstChild);
@@ -339,16 +339,16 @@ function buildModelForm(scope, ctx) {
   const form = el("form", undefined, "model-form");
   const choices = (ctx.models && ctx.models[scope.client]) || [];
   const modelSelect = el("select", undefined, "model-select");
-  modelSelect.setAttribute("aria-label", "モデル");
+  modelSelect.setAttribute("aria-label", "Model");
   const current = choices.find((choice) => choice.id === scope.model) ? scope.model : "";
   // 観測したモデルが一覧に無ければ、いまのモデルとして先頭に出す
   if (!current) {
-    const unknown = el("option", scope.model ? `${modelLabel(scope.model)} (現在)` : "モデル不明");
+    const unknown = el("option", scope.model ? `${modelLabel(scope.model)} (current)` : "Unknown model");
     unknown.value = "";
     modelSelect.append(unknown);
   }
   for (const choice of choices) {
-    const option = el("option", choice.id === current ? `${choice.label} (現在)` : choice.label);
+    const option = el("option", choice.id === current ? `${choice.label} (current)` : choice.label);
     option.value = choice.id;
     if (choice.id === current) option.selected = true;
     modelSelect.append(option);
@@ -356,15 +356,15 @@ function buildModelForm(scope, ctx) {
   modelSelect.value = current;
   const effortSelect = el("select", undefined, "effort-select");
   effortSelect.setAttribute("aria-label", "effort");
-  const submit = el("button", "変更", "toolbar-button");
+  const submit = el("button", "Apply", "toolbar-button");
   submit.type = "submit";
   const fillEfforts = () => {
     const choice = choices.find((item) => item.id === (modelSelect.value || current));
-    const keep = el("option", "effort はそのまま");
+    const keep = el("option", "Keep effort");
     keep.value = "";
     effortSelect.replaceChildren(keep);
     for (const effort of (choice && choice.efforts) || []) {
-      const option = el("option", choice.defaultEffort === effort ? `${EFFORT_LABEL[effort] || effort} (既定)` : EFFORT_LABEL[effort] || effort);
+      const option = el("option", choice.defaultEffort === effort ? `${EFFORT_LABEL[effort] || effort} (default)` : EFFORT_LABEL[effort] || effort);
       option.value = effort;
       effortSelect.append(option);
     }

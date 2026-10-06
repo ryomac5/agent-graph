@@ -36,7 +36,7 @@ test("approve と reject は待ちのタスクだけ、retry は failed も task
   const { store, stores } = fixture();
   t.after(() => store.close());
   assert.deepEqual(performAction({ action: "approve", repo, graphId: "G1", taskId: "gate" }, stores, now),
-    { ok: true, message: "gate を承認した。planner が反映する" });
+    { ok: true, message: "Approved gate. The planner will pick it up." });
   assert.equal(performAction({ action: "reject", repo, graphId: "G1", taskId: "merge" }, stores, now).ok, true);
   assert.equal(performAction({ action: "retry", repo, graphId: "G1", taskId: "broken" }, stores, now).ok, true);
   // 状態が合わないときは記録せず ok: false
@@ -62,11 +62,11 @@ test("end_session は状態だけ ended にし、hide_turn は hidden を立て�
   store.insertDelegation({ id: "d2", repoKey: repo, sessionId: "s1", role: "implement", title: "d2", status: "requested" });
   // 走っている委譲があれば断る。委譲は lost にしない
   const busy = performAction({ action: "end_session", repo, sessionId: "s1" }, stores, now);
-  assert.equal(busy.ok, false); assert.match(busy.message, /2 件/);
+  assert.equal(busy.ok, false); assert.match(busy.message, /2 running/);
   assert.equal(store.getSession("s1")?.status, "running");
   assert.equal(store.db.prepare("SELECT status FROM delegations WHERE id = 'd1'").get()?.status, "running");
   store.finishDelegation("d1", "done"); store.finishDelegation("d2", "failed");
-  assert.deepEqual(performAction({ action: "end_session", repo, sessionId: "s1" }, stores, now), { ok: true, message: "repo-001 を終了した" });
+  assert.deepEqual(performAction({ action: "end_session", repo, sessionId: "s1" }, stores, now), { ok: true, message: "Archived repo-001" });
   const session = store.getSession("s1");
   assert.equal(session?.status, "ended"); assert.equal(session?.endedAt, now.toISOString());
   assert.equal(store.db.prepare("SELECT status FROM delegations WHERE id = 'd1'").get()?.status, "done");
@@ -151,7 +151,7 @@ test("POST /api/action はトークン無しを拒み、通れば ActionResult �
 
   const ok = await raw(port, { ...json, [TOKEN_HEADER]: token }, approve);
   assert.equal(ok.status, 200);
-  assert.deepEqual(JSON.parse(ok.body), { ok: true, message: "gate を承認した。planner が反映する" });
+  assert.deepEqual(JSON.parse(ok.body), { ok: true, message: "Approved gate. The planner will pick it up." });
   assert.deepEqual(decisions(store), [{ taskId: "gate", action: "approve" }]);
 
   const denied = await raw(port, { ...json, [TOKEN_HEADER]: token }, JSON.stringify({ action: "approve", repo, graphId: "G1", taskId: "work" }));

@@ -75,7 +75,7 @@ export function parseCodexRows(rows: Iterable<LogRow>): CodexSnapshot | undefine
       current = undefined;
     }
     if (row.type === "event_msg" && ["turn_aborted", "task_failed"].includes(p.type)) {
-      if (current && !current.reply) current.reply = typeof p.message === "string" ? p.message : "実行が中断されました";
+      if (current && !current.reply) current.reply = typeof p.message === "string" ? p.message : "The run was interrupted";
       snapshot.status = "failed";
       current = undefined;
     }

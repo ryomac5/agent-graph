@@ -65,11 +65,11 @@ function decide(store: Store, request: ActionRequest, now: Date): ActionResult {
   if (!task) throw new NotFoundError(`Task not found: ${request.taskId}`);
   const action = request.action as TaskDecision;
   if (!decisionAllowed(task.state, action)) {
-    return { ok: false, message: `${task.id} は操作できる状態ではない（現在: ${task.state}）` };
+    return { ok: false, message: `${task.id} cannot be changed in its current state (${task.state})` };
   }
   store.insertTaskDecision(graph.id, task.id, action, now.toISOString());
-  const label = { approve: "承認", retry: "再試行", reject: "却下" }[action];
-  return { ok: true, message: `${task.id} を${label}した。planner が反映する` };
+  const label = { approve: "Approved", retry: "Retrying", reject: "Rejected" }[action];
+  return { ok: true, message: `${label} ${task.id}. The planner will pick it up.` };
 }
 
 // 走っている委譲があるセッションは終えない。終えると子が lost と記録され、実際の状態と食い違う。
@@ -77,11 +77,11 @@ function endSession(store: Store, request: ActionRequest, now: Date): ActionResu
   const id = request.sessionId!;
   const session = store.getSession(id);
   if (!session || session.repoKey !== request.repo) throw new NotFoundError(`Session not found: ${id}`);
-  if (session.status === "ended") return { ok: false, message: `${session.name} は終了済み` };
+  if (session.status === "ended") return { ok: false, message: `${session.name} has already ended` };
   const active = store.countActiveDelegations(id);
-  if (active > 0) return { ok: false, message: `${session.name} は走っている委譲が ${active} 件あるので終えられない` };
+  if (active > 0) return { ok: false, message: `${session.name} still has ${active} running delegation(s)` };
   store.endSession(id, now.toISOString(), "explicit");
-  return { ok: true, message: `${session.name} を終了した` };
+  return { ok: true, message: `Archived ${session.name}` };
 }
 
 function hideTurn(store: Store, request: ActionRequest): ActionResult {
@@ -89,9 +89,9 @@ function hideTurn(store: Store, request: ActionRequest): ActionResult {
   const turn = store.getTurn(id);
   const session = turn && store.getSession(turn.sessionId);
   if (!turn || !session || session.repoKey !== request.repo) throw new NotFoundError(`Turn not found: ${id}`);
-  if (turn.hidden) return { ok: false, message: `${id} は非表示済み` };
+  if (turn.hidden) return { ok: false, message: `${id} is already hidden` };
   store.setTurnHidden(id, true);
-  return { ok: true, message: `${id} の履歴を非表示にした` };
+  return { ok: true, message: `Hid ${id}` };
 }
 
 // POST /api/action の本体。不正な body は TypeError、未知の対象は NotFoundError。

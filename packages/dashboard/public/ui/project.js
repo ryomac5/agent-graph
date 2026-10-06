@@ -28,7 +28,7 @@ function buildGroup(scope, ctx) {
   const group = el("section", undefined, `session-group ${cls}${scope.kind === "planner" ? " planner" : ""}${cls === "ended" ? " ended" : ""}`);
   group.setAttribute("data-scope", scope.id);
   if (scope.kind === "planner") {
-    const title = el("h4", "実行計画", "graph-title");
+    const title = el("h4", "Plan", "graph-title");
     title.title = scope.goal || scope.name;
     group.append(title);
   }
@@ -36,12 +36,12 @@ function buildGroup(scope, ctx) {
   const roster = el("div", undefined, "node-roster");
   for (const node of scope.nodes.filter((n) => n.kind !== "root")) {
     const control = button(node.title || node.id, `toolbar-button ${node.id === ctx.selectedNode ? "selected" : ""}`, () => ctx.onSelect(scope, node.id));
-    control.append(el("small", `${node.model || "モデル未取得"} · ${statusLabel(node.status)}`));
+    control.append(el("small", `${node.model || "Model unknown"} · ${statusLabel(node.status)}`));
     roster.append(control);
   }
   if (roster.children.length) {
     const list = el("details", undefined, "agent-list");
-    list.append(el("summary", `エージェント一覧 · ${roster.children.length}`), roster);
+    list.append(el("summary", `Agents · ${roster.children.length}`), roster);
     group.append(list);
   }
   return group;
@@ -58,8 +58,8 @@ export function buildProjectSection(view, ctx, failure = "") {
   if (ctx.onNewSession) {
     const menu = el("details", undefined, "new-session-menu");
     const summary = el("summary", "＋");
-    summary.setAttribute("aria-label", "新規セッション");
-    summary.title = "新規セッション";
+    summary.setAttribute("aria-label", "New session");
+    summary.title = "New session";
     menu.append(summary);
     const choices = el("div", undefined, "new-session-choices");
     for (const client of ["claude", "codex"]) choices.append(button(client === "claude" ? "Claude" : "Codex", "toolbar-button", () => { menu.open = false; ctx.onNewSession(view.project.key, client); }));
@@ -72,13 +72,13 @@ export function buildProjectSection(view, ctx, failure = "") {
   const graphs = view.graphs || [];
   const selectedId = graphs.find((g) => `graph:${g.id}` === ctx.selectedScope)?.sessionId || ctx.selectedScope;
   const picker = el("nav", undefined, "session-picker");
-  picker.setAttribute("aria-label", "セッション");
+  picker.setAttribute("aria-label", "Sessions");
 
   const addSession = (session, target) => {
     const scope = sessionScope(session);
     const control = button(undefined, session.id === selectedId ? "selected" : "", () => ctx.onSelect(scope, null));
     control.setAttribute("aria-pressed", String(session.id === selectedId));
-    control.title = `${session.name} · ${session.model || "モデル未取得"} · ${statusLabel(session.status)}`;
+    control.title = `${session.name} · ${session.model || "Model unknown"} · ${statusLabel(session.status)}`;
     control.setAttribute("aria-label", `${session.name} · ${statusLabel(session.status)}`);
     control.append(el("span", "", `session-state on-${statusClass(session.status)}`), el("strong", session.name));
     target.append(control);
@@ -90,7 +90,7 @@ export function buildProjectSection(view, ctx, failure = "") {
   if (ended.length) {
     const archive = el("details", undefined, "ended-sessions");
     archive.open = ended.some((s) => s.id === ctx.selectedScope);
-    archive.append(el("summary", `履歴 · ${ended.length}`));
+    archive.append(el("summary", `History · ${ended.length}`));
     // 履歴は高さを閉じ込めず、キャンバスごとスクロールして下まで見られるようにする
     const list = el("nav", undefined, "session-picker session-history");
     for (const session of ended) addSession(session, list);
@@ -99,12 +99,12 @@ export function buildProjectSection(view, ctx, failure = "") {
   }
   const selected = sessions.find((s) => s.id === selectedId) || sessions.find(isLive) || sessions[0];
   if (selected) {
-    if (ctx.onOpenConversation) controls.append(button("会話を開く", "toolbar-button open-conversation", () => ctx.onOpenConversation(sessionScope(selected))));
+    if (ctx.onOpenConversation) controls.append(button("Open conversation", "toolbar-button open-conversation", () => ctx.onOpenConversation(sessionScope(selected))));
     section.append(buildGroup(sessionScope(selected), ctx));
     for (const graph of graphs.filter((g) => g.sessionId === selected.id)) section.append(buildGroup(graphScope(graph, sessions), ctx));
   }
   for (const graph of graphs.filter((g) => !sessions.some((s) => s.id === g.sessionId))) section.append(buildGroup(graphScope(graph, sessions), ctx));
-  if (!sessions.length && !graphs.length) section.append(el("p", "セッションがありません。＋ から開始できます。", "empty"));
+  if (!sessions.length && !graphs.length) section.append(el("p", "No sessions. Start one with +.", "empty"));
   if (archiveBox) section.append(archiveBox);
   return section;
 }

@@ -70,12 +70,12 @@ test("Codex で選べない effort や知らないモデルは、選択画面を
   const luna = fakeCodex(MODELS, LEVELS, ["Max"]);
   const noUltra = await switchCodexModel(luna.control, "p", { slug: "gpt-6-luna", label: "GPT-6-Luna", effort: "ultra" }, noWait);
   assert.equal(noUltra.ok, false);
-  assert.match(noUltra.message, /ultra を選べません/);
+  assert.match(noUltra.message, /does not support ultra/);
   assert.deepEqual(luna.sent.slice(-2), ["escape", "escape"]);
   const unknown = fakeCodex(MODELS, LEVELS, ["Max"]);
   const missing = await switchCodexModel(unknown.control, "p", { slug: "gpt-9", label: "GPT-9" }, noWait);
   assert.equal(missing.ok, false);
-  assert.match(missing.message, /GPT-9 が見つかりません/);
+  assert.match(missing.message, /GPT-9 was not found/);
 });
 
 test("モデルの一覧は Claude の版つきの名前と、models_cache.json の Codex の選択肢と effort を持つ", () => {

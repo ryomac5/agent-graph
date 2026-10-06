@@ -98,7 +98,7 @@ test("状態表は契約の全 Status を引け、lost と ended は沈んだ灰
   assert.equal(lib.statusClass("denied"), "failed");
   assert.equal(lib.statusClass("waiting_human"), "waiting");
   assert.equal(lib.statusLabel("waiting_human"), "Waiting");
-  assert.equal(lib.statusLabel("lost"), "Lost · 追跡断");
+  assert.equal(lib.statusLabel("lost"), "Lost");
 });
 
 test("隠す処理と畳む処理。× で隠した子孫もまとめ、古い完了の末端は自動で畳む", () => {
@@ -199,12 +199,12 @@ test("吹き出しの Markdown は見出し、箇条書き、太字、コード�
   assert.deepEqual(lib.parseMarkdown(undefined), [{ type: "line", spans: [] }]);
 });
 
-test("fmtAgo は過ぎた時間を日本語で短く出し、1 週間を超えたら日付にする", () => {
+test("fmtAgo は過ぎた時間を英語で短く出し、1 週間を超えたら日付にする", () => {
   const now = new Date(2026, 8, 25, 12, 0);
-  assert.equal(lib.fmtAgo(new Date(2026, 8, 25, 11, 59, 30), now), "たった今");
-  assert.equal(lib.fmtAgo(new Date(2026, 8, 25, 11, 55), now), "5 分前");
-  assert.equal(lib.fmtAgo(new Date(2026, 8, 25, 9, 0), now), "3 時間前");
-  assert.equal(lib.fmtAgo(new Date(2026, 8, 23, 12, 0), now), "2 日前");
+  assert.equal(lib.fmtAgo(new Date(2026, 8, 25, 11, 59, 30), now), "just now");
+  assert.equal(lib.fmtAgo(new Date(2026, 8, 25, 11, 55), now), "5m ago");
+  assert.equal(lib.fmtAgo(new Date(2026, 8, 25, 9, 0), now), "3h ago");
+  assert.equal(lib.fmtAgo(new Date(2026, 8, 23, 12, 0), now), "2d ago");
   assert.equal(lib.fmtAgo(new Date(2026, 8, 1, 10, 5), now), "Sep 1 10:05");
   assert.equal(lib.fmtAgo(undefined, now), "");
 });

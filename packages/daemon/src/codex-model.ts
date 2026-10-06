@@ -62,25 +62,25 @@ export async function switchCodexModel(control: PaneControl, pane: string, targe
   };
   await control.prompt(pane, "/model");
   const models = await waitFor(control, pane, (screen) => screen.includes("Select Model"), sleep);
-  if (!models) return fail("Codex のモデルの選択画面が開きませんでした");
+  if (!models) return fail("The Codex model picker did not open");
   const row = parseRows(models).find((item) => item.label === target.label);
-  if (!row || row.number > 9) return fail(`選択画面に ${target.label} が見つかりませんでした`);
+  if (!row || row.number > 9) return fail(`${target.label} was not found in the picker`);
   await control.keys(pane, String(row.number));
   const levels = await waitFor(control, pane, (screen) => screen.includes(`Reasoning Level for ${target.label}`), sleep);
-  if (!levels) return fail("effort の選択画面が開きませんでした");
+  if (!levels) return fail("The effort picker did not open");
   const effort = target.effort || parseRows(levels).find((item) => item.selected)?.label.toLowerCase() || "";
   if (target.effort && ADVANCED_ROWS[target.effort]) {
-    if (!await moveTo(control, pane, MORE_ROW, sleep)) return fail("effort の追加の選択肢に移れませんでした");
+    if (!await moveTo(control, pane, MORE_ROW, sleep)) return fail("Could not open the extra effort options");
     await control.keys(pane, "enter");
-    if (!await waitFor(control, pane, (screen) => screen.includes("Advanced Reasoning"), sleep)) return fail("effort の追加の選択画面が開きませんでした");
-    if (!await moveTo(control, pane, ADVANCED_ROWS[target.effort], sleep)) return fail(`${target.label} は ${target.effort} を選べません`);
+    if (!await waitFor(control, pane, (screen) => screen.includes("Advanced Reasoning"), sleep)) return fail("The extra effort picker did not open");
+    if (!await moveTo(control, pane, ADVANCED_ROWS[target.effort], sleep)) return fail(`${target.label} does not support ${target.effort}`);
   } else if (target.effort) {
     if (!EFFORT_ROWS[target.effort] || !await moveTo(control, pane, EFFORT_ROWS[target.effort], sleep)) {
-      return fail(`${target.label} は ${target.effort} を選べません`);
+      return fail(`${target.label} does not support ${target.effort}`);
     }
   }
   await control.keys(pane, "s");
   const applied = await waitFor(control, pane, (screen) => screen.includes("Model changed to") || screen.includes(target.label), sleep);
-  if (!applied) return { ok: false, message: "切り替えの確認が表示されませんでした。適用後のモデルは観測で更新されます" };
-  return { ok: true, message: `${target.label}${target.effort ? ` ${target.effort}` : effort ? ` ${effort}` : ""} に切り替えました。この会話だけに効きます` };
+  if (!applied) return { ok: false, message: "The switch was not confirmed. The model updates once observed." };
+  return { ok: true, message: `Switched to ${target.label}${target.effort ? ` ${target.effort}` : effort ? ` ${effort}` : ""} for this conversation only` };
 }

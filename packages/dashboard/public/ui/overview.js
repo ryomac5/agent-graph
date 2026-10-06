@@ -4,12 +4,12 @@ import { fmtAgo, modelLabel, statusClass } from "../lib/format.js";
 import { orbState, visibleProjects } from "../lib/status.js";
 import { button, el, keyActivate } from "./dom.js";
 
-const CARD_STATE = { waiting: "判断待ち", failed: "失敗あり", running: "実行中", done: "完了", idle: "待機中", quiet: "休止中" };
-const SESSION_STATE = { running: "作業中", waiting: "判断待ち", failed: "失敗", done: "待機中", planned: "待機中", ended: "終了" };
-const WAITING_REASON = { permission: "許可待ち", question: "質問待ち" };
+const CARD_STATE = { waiting: "Waiting", failed: "Failed", running: "Running", done: "Done", idle: "Idle", quiet: "Quiet" };
+const SESSION_STATE = { running: "Working", waiting: "Waiting", failed: "Failed", done: "Idle", planned: "Idle", ended: "Ended" };
+const WAITING_REASON = { permission: "Needs permission", question: "Has a question" };
 const CLIENT_LABEL = { claude: "Claude", codex: "Codex", planner: "Planner" };
 // 件数のチップ。人を待たせているものから並べる
-const STAT_ORDER = [["waiting", "判断待ち"], ["failed", "失敗"], ["running", "実行中"], ["done", "完了"]];
+const STAT_ORDER = [["waiting", "Waiting"], ["failed", "Failed"], ["running", "Running"], ["done", "Done"]];
 
 const shortPath = (path) => String(path || "").replace(/^\/Users\/[^/]+/, "~");
 
@@ -33,10 +33,10 @@ function sessionRow(session, now) {
   line.append(el("span", session.name, "card-session-name"));
   if (session.model) line.append(el("span", modelLabel(session.model), "card-session-model"));
   const state = (kind === "waiting" && WAITING_REASON[session.waitingReason]) || SESSION_STATE[kind] || session.status;
-  line.append(el("span", session.delegations ? `${state} · 委譲 ${session.delegations}` : state, "card-session-state"));
+  line.append(el("span", session.delegations ? `${state} · ${session.delegations} delegated` : state, "card-session-state"));
   row.append(line);
   const meta = el("div", undefined, "card-session-meta");
-  meta.append(el("span", session.lastPrompt || "指示はまだありません", "card-session-prompt"), el("span", fmtAgo(session.lastAt, now), "card-session-when"));
+  meta.append(el("span", session.lastPrompt || "No prompts yet", "card-session-prompt"), el("span", fmtAgo(session.lastAt, now), "card-session-when"));
   row.append(meta);
   return row;
 }
@@ -47,7 +47,7 @@ export function updateCard(slot, project, unavailable = false, now = new Date())
   const card = slot.firstElementChild;
   card.className = `project-card on-${status}` + (state.quiet ? " quiet" : "");
   card.title = project.rootPath || project.name;
-  const label = unavailable ? "取得できません" : CARD_STATE[status] || status;
+  const label = unavailable ? "Unavailable" : CARD_STATE[status] || status;
   card.setAttribute("aria-label", `${project.name} · ${label}`);
 
   const head = el("div", undefined, "card-head");
@@ -61,7 +61,7 @@ export function updateCard(slot, project, unavailable = false, now = new Date())
 
   const stats = el("div", undefined, "card-stats");
   const live = Number(project.liveSessions || 0);
-  stats.append(el("span", live ? `セッション ${live}` : "稼働中のセッションなし", "card-stat"));
+  stats.append(el("span", live ? `${live} ${live === 1 ? "session" : "sessions"}` : "No live sessions", "card-stat"));
   for (const [key, text] of STAT_ORDER) {
     const count = Number((project.counts || {})[key] || 0);
     if (count) stats.append(el("span", `${text} ${count}`, `card-stat on-${key}`));
@@ -71,7 +71,7 @@ export function updateCard(slot, project, unavailable = false, now = new Date())
   const sessions = project.sessions || [];
   if (sessions.length) {
     const list = el("ul", undefined, "card-sessions");
-    if (!live) list.append(el("li", "最後のセッション", "card-sessions-caption"));
+    if (!live) list.append(el("li", "Last session", "card-sessions-caption"));
     for (const session of sessions) list.append(sessionRow(session, now));
     parts.push(list);
   }
@@ -84,10 +84,10 @@ function summaryLine(projects) {
     total.live += Number(project.liveSessions || 0);
     for (const key of ["waiting", "failed", "running"]) total[key] += Number((project.counts || {})[key] || 0);
   }
-  const parts = [`${projects.length} プロジェクト`, `セッション ${total.live}`];
-  if (total.running) parts.push(`実行中 ${total.running}`);
-  if (total.waiting) parts.push(`判断待ち ${total.waiting}`);
-  if (total.failed) parts.push(`失敗 ${total.failed}`);
+  const parts = [`${projects.length} ${projects.length === 1 ? "project" : "projects"}`, `${total.live} ${total.live === 1 ? "session" : "sessions"}`];
+  if (total.running) parts.push(`${total.running} running`);
+  if (total.waiting) parts.push(`${total.waiting} waiting`);
+  if (total.failed) parts.push(`${total.failed} failed`);
   return parts.join(" · ");
 }
 
@@ -100,10 +100,10 @@ export function renderOverview(canvas, overview, ctx, unavailable = new Map()) {
   const page = el("section", undefined, "workspace");
   const heading = el("div", undefined, "workspace-heading");
   const title = el("div");
-  title.append(el("h2", "プロジェクト"), el("p", overview ? summaryLine(projects) : "", "workspace-description"));
+  title.append(el("h2", "Projects"), el("p", overview ? summaryLine(projects) : "", "workspace-description"));
   const filters = el("div", undefined, "project-filters");
-  filters.setAttribute("aria-label", "表示するプロジェクト");
-  for (const [show, label] of [[false, "稼働中"], [true, "すべて"]]) {
+  filters.setAttribute("aria-label", "Project filter");
+  for (const [show, label] of [[false, "Active"], [true, "All"]]) {
     const control = button(label, Boolean(ctx.showInactive) === show ? "selected" : "", () => ctx.onShowInactive(show));
     control.setAttribute("aria-pressed", String(Boolean(ctx.showInactive) === show));
     filters.append(control);
@@ -111,7 +111,7 @@ export function renderOverview(canvas, overview, ctx, unavailable = new Map()) {
   heading.append(title, filters);
   const inner = el("div", undefined, "overview-inner");
   page.append(heading, inner);
-  if (!projects.length) inner.append(el("p", overview ? (ctx.showInactive ? "まだプロジェクトがありません。" : "稼働中のプロジェクトはありません。履歴は「すべて」から確認できます。") : "接続しています…", "empty"));
+  if (!projects.length) inner.append(el("p", overview ? (ctx.showInactive ? "No projects yet." : "No active projects. See All for history.") : "Connecting…", "empty"));
   const keys = new Set(projects.map((p) => p.key));
   for (const [key, slot] of ctx.orbSlots) if (!keys.has(key)) { slot.remove(); ctx.orbSlots.delete(key); }
   const now = new Date();

@@ -30,8 +30,8 @@ test("Overview は稼働中のプロジェクトをカードで描き、状態�
   const c = ctx();
   renderOverview(canvas, overview, c);
   const html = String(canvas);
-  for (const word of ["Kaggriculture", "agent-graph", "dotfiles", "obsidian", "失敗 7", "判断待ち 1", "実行中 3", "待機中", "on-failed", "on-waiting", "on-running", "card-slot",
-    "~/00_project/agent-graph", "agent-graph-001", "Opus 5.5", "許可待ち · 委譲 3", "一覧画面を作り直して", "Codex", "GPT 6.1 Sol", "指示はまだありません"]) {
+  for (const word of ["Kaggriculture", "agent-graph", "dotfiles", "obsidian", "Failed 7", "Waiting 1", "Running 3", "Idle", "on-failed", "on-waiting", "on-running", "card-slot",
+    "~/00_project/agent-graph", "agent-graph-001", "Opus 5.5", "Needs permission · 3 delegated", "一覧画面を作り直して", "Codex", "GPT 6.1 Sol", "No prompts yet"]) {
     assert.ok(html.includes(word), `${word} が無い`);
   }
   assert.ok(canvas.classList.contains("overview"));
@@ -49,7 +49,7 @@ test("ヘッダーはピル列と件数と利用枠の色分けと Live を出�
   const projects = overview.projects as Json[];
   renderHeader(doc, { projects, selected: ["agent-graph"], counts: { running: 3, waiting: 1, failed: 1, done: 12 }, usage: overview.usage, connection: "live", updatedAt: "2026-09-25T06:40:12.000Z" }, ctx());
   const html = String(doc.body);
-  for (const word of ["プロジェクト一覧", "1 / 5 projects", "Running 3", "Waiting 1", "Failed 1", "Done 12", "on-running", "on-waiting", "Session", "Week Fable", "usage-fill high", "usage-fill warn", "92%", "36%", "Live", "connection live", "Updated"]) {
+  for (const word of ["All projects", "1 / 5 projects", "Running 3", "Waiting 1", "Failed 1", "Done 12", "on-running", "on-waiting", "Session", "Week Fable", "usage-fill high", "usage-fill warn", "92%", "36%", "Live", "connection live", "Updated"]) {
     assert.ok(html.includes(word), `${word} が無い`);
   }
   assert.equal(doc.getElementById("head-sub")!.hidden, false);
@@ -115,17 +115,17 @@ test("プロジェクトは簡潔なセッション切替と常時表示のグ�
   const section = buildProjectSection(project, ctx());
   const html = String(section);
   assert.equal(section.querySelector(".session-group")!.tagName, "section", "グラフは開閉枠に隠さない");
-  for (const word of ["agent-graph", "agent-graph-001-s10", "session-picker", "実行計画", "履歴 · 1", "agent-graph-001-s9", "planner"]) {
+  for (const word of ["agent-graph", "agent-graph-001-s10", "session-picker", "Plan", "History · 1", "agent-graph-001-s9", "planner"]) {
     assert.ok(html.includes(word), `${word} が無い`);
   }
 });
 
-test("root の詳細は会話の吹き出しと全文を表示と × を出し、隠した往復を除く", () => {
+test("root の詳細は会話の吹き出しと Show more と × を出し、隠した往復を除く", () => {
   const aside = doc.getElementById("detail")!;
   const scope = scopesOf(project)[0];
   renderDetail(aside, scope, null, ctx());
   const html = String(aside);
-  for (const word of ["agent-graph-001-s10", "from-root", "from-agent", "全文を表示", "bubble-close", "Running…", "契約を固定して", "履歴へ移す", "Goal", "Session ID"]) {
+  for (const word of ["agent-graph-001-s10", "from-root", "from-agent", "Show more", "bubble-close", "Running…", "契約を固定して", "Archive", "Goal", "Session ID"]) {
     assert.ok(html.includes(word), `${word} が無い`);
   }
   renderDetail(aside, scope, null, ctx({ hiddenTurns: new Set([`${scope.id}::t1`]) }));
@@ -192,7 +192,7 @@ test("モデルの切り替えは版つきの全モデルと、選んだモデ�
   renderDetail(aside, scope, null, ctx({ models, onAction: async (request: Json) => { sent.push(request); return "ok"; } }));
   const form = aside.querySelector(".model-form")! as unknown as FakeElement & { dispatch: (name: string, event?: unknown) => void };
   const [modelSelect, effortSelect] = form.querySelectorAll("select") as unknown as ({ value: string; disabled: boolean; dispatch: (name: string) => void; children: { value: string; textContent: string }[] })[];
-  assert.deepEqual(modelSelect.children.map((option) => option.textContent), ["Opus 5.5 (現在)", "Opus 5", "Haiku 4.5"]);
+  assert.deepEqual(modelSelect.children.map((option) => option.textContent), ["Opus 5.5 (current)", "Opus 5", "Haiku 4.5"]);
   assert.equal(modelSelect.value, "claude-opus-5-5");
   assert.deepEqual(effortSelect.children.map((option) => option.value), ["", "low", "high", "max"]);
   const submit = form.querySelector("button")! as unknown as { disabled: boolean };
@@ -210,6 +210,6 @@ test("モデルの切り替えは版つきの全モデルと、選んだモデ�
   const codexAside = document.createElement("aside");
   renderDetail(codexAside, { ...scope, client: "codex", model: "gpt-6-astra" } as unknown as typeof scope, null, ctx({ models }));
   const codexSelects = codexAside.querySelectorAll("select") as unknown as { children: { textContent: string }[] }[];
-  assert.deepEqual(codexSelects[0].children.map((option) => option.textContent), ["GPT-6-Astra (現在)"]);
-  assert.deepEqual(codexSelects[1].children.map((option) => option.textContent), ["effort はそのまま", "Low", "Medium (既定)", "Ultra"]);
+  assert.deepEqual(codexSelects[0].children.map((option) => option.textContent), ["GPT-6-Astra (current)"]);
+  assert.deepEqual(codexSelects[1].children.map((option) => option.textContent), ["Keep effort", "Low", "Medium (default)", "Ultra"]);
 });

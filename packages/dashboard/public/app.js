@@ -101,7 +101,7 @@ const ctx = {
     const params = new URLSearchParams({ repo: projectKeyOf(scope.id), session: scope.sessionId });
     if (scope.turns.length) params.set("before", scope.turns[0].id);
     const response = await fetch(`/api/turns?${params}`);
-    if (!response.ok) { toast("履歴を取得できませんでした"); return; }
+    if (!response.ok) { toast("Could not load history"); return; }
     const data = await response.json();
     state.history.set(scope.id, [...(data.turns || []), ...(state.history.get(scope.id) || [])]);
     if (!data.hasMore) state.historyEnd.add(scope.id);

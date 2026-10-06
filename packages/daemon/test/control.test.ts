@@ -44,9 +44,9 @@ test("子の再実行は planner と分け、元の条件が無いときは理�
   const { store, stores } = fixture(); t.after(() => store.close());
   store.insertDelegation({ id: "d", repoKey: "r", sessionId: "s", role: "research", title: "調査", status: "failed", task: "依頼" });
   const result = await controlAction({ action: "rerun_delegation", repo: "r", sessionId: "s", delegationId: "d" }, stores);
-  assert.equal(result.ok, false); assert.match(result.message, /実行条件/);
+  assert.equal(result.ok, false); assert.match(result.message, /run settings/);
   store.finishDelegation("d", "running");
-  assert.match((await controlAction({ action: "rerun_delegation", repo: "r", sessionId: "s", delegationId: "d" }, stores)).message, /状態/);
+  assert.match((await controlAction({ action: "rerun_delegation", repo: "r", sessionId: "s", delegationId: "d" }, stores)).message, /cannot be retried/);
 });
 
 test("再実行は依頼・受け入れ条件・scope を保存どおり使い、二重起動を防ぎ、古い失敗を残す", async (t) => {
@@ -66,7 +66,7 @@ test("再実行は依頼・受け入れ条件・scope を保存どおり使い�
     accept: async (req) => { checks = req.commands; return { passed: true, results: [], scopeViolations: [] }; },
   });
   assert.equal(result.ok, true);
-  assert.match((await controlAction(body, stores)).message, /再実行中/);
+  assert.match((await controlAction(body, stores)).message, /already being retried/);
   release();
   for (let i = 0; i < 100; i++) {
     if (store.db.prepare("SELECT 1 FROM delegations WHERE id != 'd' AND status = 'done'").get()) break;

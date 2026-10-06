@@ -54,26 +54,26 @@ export function findPaneId(listJson: string, sessionId: string): string | undefi
 export async function sayToSession(body: unknown, stores: Map<string, Store>, client: Herdr = herdr): Promise<ActionResult> {
   const input = parseSay(body);
   const text = input.text.replace(CONTROL_CHARS, "").trim();
-  if (!text) return { ok: false, message: "本文が空です" };
-  if (text.startsWith("/")) return { ok: false, message: "先頭が / の本文は送れません" };
-  if (text.length > SAY_MAX_CHARS) return { ok: false, message: `長すぎます（${SAY_MAX_CHARS} 字まで）` };
+  if (!text) return { ok: false, message: "The message is empty" };
+  if (text.startsWith("/")) return { ok: false, message: "Messages starting with / cannot be sent" };
+  if (text.length > SAY_MAX_CHARS) return { ok: false, message: `Too long (max ${SAY_MAX_CHARS} characters)` };
   const store = stores.get(input.repo);
   if (!store) throw new NotFoundError(`Repo not found: ${input.repo}`);
   const session = store.getSession(input.sessionId);
   if (!session || session.repoKey !== input.repo) throw new NotFoundError(`Session not found: ${input.sessionId}`);
-  if (!["claude", "codex"].includes(session.client)) return { ok: false, message: "このセッションにはメッセージを送れません" };
-  if (session.status === "ended") return { ok: false, message: `${session.name} は終了済みです` };
+  if (!["claude", "codex"].includes(session.client)) return { ok: false, message: "This session cannot receive messages" };
+  if (session.status === "ended") return { ok: false, message: `${session.name} has already ended` };
   let paneId: string | undefined;
   try { paneId = findPaneId(await client.list(), input.sessionId); }
   catch { paneId = undefined; }
-  if (!paneId) return { ok: false, message: `${session.name} の pane が herdr に見つかりません。herdr で起動したセッションだけ送れます` };
+  if (!paneId) return { ok: false, message: `No Herdr pane found for ${session.name}. Only sessions started in Herdr can receive messages.` };
   const oneLine = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).join(" ");
   try {
     await client.prompt(paneId, oneLine);
   } catch (error) {
     const detail = error && typeof error === "object" && "message" in error ? String((error as Error).message) : String(error);
-    return { ok: false, message: `送信に失敗しました: ${detail.slice(0, 200)}` };
+    return { ok: false, message: `Send failed: ${detail.slice(0, 200)}` };
   }
   const name = getRepo(store.db, input.repo)?.name ?? input.repo;
-  return { ok: true, message: `${name} の ${session.name} に送りました` };
+  return { ok: true, message: `Sent to ${session.name} in ${name}` };
 }

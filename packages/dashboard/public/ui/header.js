@@ -4,7 +4,7 @@ import { STATE_TEXT, usageLevel } from "../lib/status.js";
 import { button, el } from "./dom.js";
 
 function buildProjectBar(projects, selectedKeys, ctx) {
-  const home = button("プロジェクト一覧", "back" + (!selectedKeys.length ? " on" : ""), () => ctx.onOpen(null));
+  const home = button("All projects", "back" + (!selectedKeys.length ? " on" : ""), () => ctx.onOpen(null));
   home.setAttribute("aria-current", !selectedKeys.length ? "page" : "false");
   const parts = [home];
   for (const project of projects) {

@@ -12,8 +12,8 @@ export const STATUS_CLASS = {
 export const STATUS_LABEL = {
   planned: "Planned", running: "Running", verifying: "Verifying", reviewing: "Reviewing", merging: "Merging",
   waiting: "Waiting", waiting_human: "Waiting", conflict: "Conflict", unverified: "Unverified",
-  done: "Done", idle: "Done", failed: "Failed · 実行失敗", rejected: "Rejected", timeout: "Timeout", denied: "Denied",
-  stalled: "Stalled", lost: "Lost · 追跡断", ended: "Ended",
+  done: "Done", idle: "Done", failed: "Failed", rejected: "Rejected", timeout: "Timeout", denied: "Denied",
+  stalled: "Stalled", lost: "Lost", ended: "Ended",
 };
 
 export function statusClass(status) { return STATUS_CLASS[status] || "planned"; }
@@ -21,11 +21,11 @@ export function statusLabel(status) { return STATUS_LABEL[status] || String(stat
 
 export function statusDescription(status) {
   return {
-    failed: "実行または受け入れ検証に失敗しました。出力・検証結果で原因を確認できます。",
-    lost: "終了結果を取得できず、追跡が途切れました。実行の失敗が確認された状態ではありません。",
-    timeout: "制限時間を超えて実行を停止しました。",
-    denied: "割り当て条件や利用枠を満たさず、実行を開始できませんでした。",
-    ended: "セッションは終了しています。会話と委譲の履歴は引き続き確認できます。",
+    failed: "The run or its acceptance check failed. See the output and checks for the cause.",
+    lost: "Tracking was lost before the result came back. This does not mean the run failed.",
+    timeout: "Stopped after exceeding the time limit.",
+    denied: "Could not start: assignment rules or usage limits were not met.",
+    ended: "The session has ended. Its conversation and delegations remain viewable.",
   }[status] || "";
 }
 
@@ -139,12 +139,12 @@ export function fmtAgo(value, now = new Date()) {
   const d = toDate(value);
   if (!d) return "";
   const min = Math.floor((now - d) / 60000);
-  if (min < 1) return "たった今";
-  if (min < 60) return `${min} 分前`;
+  if (min < 1) return "just now";
+  if (min < 60) return `${min}m ago`;
   const hour = Math.floor(min / 60);
-  if (hour < 24) return `${hour} 時間前`;
+  if (hour < 24) return `${hour}h ago`;
   const day = Math.floor(hour / 24);
-  if (day < 7) return `${day} 日前`;
+  if (day < 7) return `${day}d ago`;
   return fmtWhen(d, false, now);
 }
 

@@ -29,7 +29,7 @@ test("空・/ 始まり・長すぎる本文は送らず ok: false", async (t) =
   t.after(() => store.close());
   const base = { repo, sessionId };
   assert.equal((await sayToSession({ ...base, text: "   " }, stores)).ok, false);
-  assert.match((await sayToSession({ ...base, text: "/exit" }, stores)).message, /\/ の本文/);
+  assert.match((await sayToSession({ ...base, text: "/exit" }, stores)).message, /starting with \//);
   assert.equal((await sayToSession({ ...base, text: "x".repeat(4001) }, stores)).ok, false);
   // 未知の repo は NotFoundError
   await assert.rejects(sayToSession({ repo: "other-0", sessionId, text: "x" }, new Map()), NotFoundError);
@@ -42,7 +42,7 @@ test("claude 以外・ended のセッションには送らない", async (t) => 
   store.endSession(sessionId, new Date().toISOString(), "explicit");
   const result = await sayToSession({ repo, sessionId, text: "hi" }, stores);
   assert.equal(result.ok, false);
-  assert.match(result.message, /終了済み/);
+  assert.match(result.message, /already ended/);
   // 未知の対象は NotFoundError
   await assert.rejects(sayToSession({ repo, sessionId: "nope", text: "hi" }, stores), NotFoundError);
   await assert.rejects(sayToSession({ repo: "other-0", sessionId, text: "hi" }, stores), NotFoundError);
@@ -54,7 +54,7 @@ test("Codex も Herdr に対象が無ければ送らない", async (t) => {
   store.insertSession({ id: "sx", repoKey: repo, name: "repo-002", client: "codex", traceId: "b".repeat(32), startedAt });
   const result = await sayToSession({ repo, sessionId: "sx", text: "hi" }, stores, { list: async () => "{}", prompt: async () => {} });
   assert.equal(result.ok, false);
-  assert.match(result.message, /見つかりません/);
+  assert.match(result.message, /No Herdr pane found/);
 });
 
 test("pane が無ければ ok: false、あれば herdr prompt で送る", async (t) => {
@@ -68,16 +68,16 @@ test("pane が無ければ ok: false、あれば herdr prompt で送る", async 
   };
   const missing = await sayToSession({ repo, sessionId, text: "hi" }, stores, { list: async () => "{}", prompt: async () => {} });
   assert.equal(missing.ok, false);
-  assert.match(missing.message, /見つかりません/);
+  assert.match(missing.message, /No Herdr pane found/);
   const ok = await sayToSession({ repo, sessionId, text: "hi there" }, stores, client);
   assert.equal(ok.ok, true);
   assert.equal(sent, "w1:p1|hi there");
   // 改行は 1 行に潰す。list が壊れた JSON なら pane 無し扱い
   const broken = await sayToSession({ repo, sessionId, text: "a\nb" }, stores, { list: async () => "not json", prompt: async () => {} });
   assert.equal(broken.ok, false);
-  assert.match(broken.message, /見つかりません/);
+  assert.match(broken.message, /No Herdr pane found/);
   // prompt が失敗すれば ok: false
   const fail = await sayToSession({ repo, sessionId, text: "hi" }, stores, { list: async () => listJson, prompt: async () => { throw new Error("boom"); } });
   assert.equal(fail.ok, false);
-  assert.match(fail.message, /失敗/);
+  assert.match(fail.message, /Send failed/);
 });

@@ -1,0 +1,9 @@
+{
+  "at": "2026-10-06T17:09:19.582Z",
+  "command": "claude auth status",
+  "exitCode": 1,
+  "signal": null,
+  "loggedIn": false,
+  "authMethod": "none",
+  "apiProvider": "firstParty"
+}

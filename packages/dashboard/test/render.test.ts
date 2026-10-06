@@ -119,12 +119,12 @@ test("プロジェクトは簡潔なセッション切替と常時表示のグ�
   }
 });
 
-test("root の詳細は会話の吹き出しと More と × を出し、隠した往復を除く", () => {
+test("root の詳細は会話の吹き出しと全文を表示と × を出し、隠した往復を除く", () => {
   const aside = doc.getElementById("detail")!;
   const scope = scopesOf(project)[0];
   renderDetail(aside, scope, null, ctx());
   const html = String(aside);
-  for (const word of ["agent-graph-001-s10", "from-root", "from-agent", "More", "bubble-close", "Running…", "契約を固定して", "履歴へ移す", "Goal", "Session ID"]) {
+  for (const word of ["agent-graph-001-s10", "from-root", "from-agent", "全文を表示", "bubble-close", "Running…", "契約を固定して", "履歴へ移す", "Goal", "Session ID"]) {
     assert.ok(html.includes(word), `${word} が無い`);
   }
   renderDetail(aside, scope, null, ctx({ hiddenTurns: new Set([`${scope.id}::t1`]) }));

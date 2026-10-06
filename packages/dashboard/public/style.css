@@ -333,7 +333,7 @@ form.say .say-note { margin: 0; font-size: 12px; color: var(--muted); min-height
 .bubble-text .md-heading { font-weight: 600; color: var(--text); }
 .bubble-text .md-mark { color: var(--muted); }
 .bubble-text code { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.92em; background: rgba(255,255,255,0.06); padding: 0 3px; border-radius: 3px; }
-.bubble-text.clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 6; line-clamp: 6; overflow: hidden; }
+.bubble-text.clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 10; line-clamp: 10; overflow: hidden; }
 .bubble .more { margin-top: 4px; padding: 0; border: 0; background: none; cursor: pointer; font-size: 12px; color: var(--muted); text-decoration: underline; }
 .bubble .more:hover { color: var(--text); }
 .bubble-time { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
@@ -440,8 +440,6 @@ aside { padding: 24px; }
 .bubble { max-width: 96%; padding: 14px 16px; border: 0; font-size: 14px; line-height: 1.75; }
 .bubble.from-root { background: #eaf3ff; }
 .bubble.from-agent { background: var(--ink); border: 0; }
-.bubble-text.clamp { display: block; overflow: visible; }
-.bubble .more { display: none; }
 form.say { position: sticky; bottom: -24px; background: white; padding: 16px 0; border-top: 1px solid var(--line); }
 form.say textarea { background: #f5f5f7; border-radius: 12px; padding: 12px; }
 form.say .say-send { background: var(--running); color: white; border: 0; padding: 7px 18px; }

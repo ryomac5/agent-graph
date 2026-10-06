@@ -5,8 +5,9 @@ import { parseMarkdown } from "../lib/markdown.js";
 import { button, el } from "./dom.js";
 
 const KIND_LABEL = { root: "Root", task: "Task", delegation: "Delegation", subagent: "Subagent" };
-const CLAMP_LINES = 6;
-const CLAMP_CHARS = 320;
+// 長い吹き出しは最初の 10 行だけ出し、ボタンで全文を開く
+const CLAMP_LINES = 10;
+const CLAMP_CHARS = 400;
 const isLong = (text) => text.split("\n").length > CLAMP_LINES || text.length > CLAMP_CHARS;
 
 function addRow(dl, label, value, mono, hover) {
@@ -38,16 +39,18 @@ export function buildBubble(round, tone, key, ctx) {
   const fromRoot = round.role === "root";
   const wrap = el("div", undefined, `bubble ${fromRoot ? "from-root" : "from-agent"}${fromRoot ? "" : ` ${tone}`}`);
   const text = String(round.text == null ? "" : round.text);
+  const long = isLong(text);
   const open = ctx.expandedRounds.has(key);
-  const body = el("div", undefined, `bubble-text${open ? "" : " clamp"}`);
+  // 短い本文は切らない。切ったのにボタンがない吹き出しを作らない
+  const body = el("div", undefined, `bubble-text${long && !open ? " clamp" : ""}`);
   renderMarkdown(body, text);
   wrap.append(body);
-  if (isLong(text)) {
-    const more = button(open ? "Less" : "More", "more", () => {
+  if (long) {
+    const more = button(open ? "折りたたむ" : "全文を表示", "more", () => {
       const nowOpen = !ctx.expandedRounds.has(key);
       if (nowOpen) ctx.expandedRounds.add(key); else ctx.expandedRounds.delete(key);
       body.classList.toggle("clamp", !nowOpen);
-      more.textContent = nowOpen ? "Less" : "More";
+      more.textContent = nowOpen ? "折りたたむ" : "全文を表示";
     });
     wrap.append(more);
   }

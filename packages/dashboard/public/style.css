@@ -663,3 +663,12 @@ form.say textarea { min-height: 60px; }
   .project-heading .session-picker button { min-width: 0; flex: none; }
   .project-actions .open-conversation { padding: 5px 8px; font-size: 11px; }
 }
+
+/* グラフと会話の詳細のあいだの区切り。マウスのドラッグと矢印キーで詳細の幅を変え、ブラウザに記憶する */
+@media (min-width: 901px) {
+  :root { --aside-w: 34vw; }
+  main { grid-template-columns: 196px minmax(0, 1fr) 8px var(--aside-w); }
+  #splitter { display: block; border-left: 0; }
+  body.is-overview #splitter, body.detail-expanded #splitter { display: none; }
+  body.resizing, body.resizing * { cursor: col-resize !important; user-select: none; }
+}

@@ -5,7 +5,10 @@ const STEP = 24;
 export function setupSplitter(doc, storage, onChange) {
   const splitter = doc.getElementById("splitter");
   const root = doc.documentElement;
-  const clamp = (w) => Math.min(Math.max(w, 320), Math.floor(globalThis.innerWidth * 0.7));
+  // 詳細は 320px 以上。左のプロジェクトの一覧とグラフに少なくとも 320px を残す
+  const MIN_ASIDE = 320, MIN_CANVAS = 320;
+  const navWidth = () => doc.getElementById("workspace-nav")?.getBoundingClientRect().width ?? 0;
+  const clamp = (w) => Math.min(Math.max(w, MIN_ASIDE), Math.max(MIN_ASIDE, Math.floor(globalThis.innerWidth - navWidth() - MIN_CANVAS)));
   const apply = (w) => root.style.setProperty("--aside-w", `${clamp(w)}px`);
   const current = () => doc.getElementById("detail").getBoundingClientRect().width;
   const save = () => storage.setItem(KEY, String(Math.round(current())));

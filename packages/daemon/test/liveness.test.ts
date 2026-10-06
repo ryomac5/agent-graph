@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import test from "node:test";
 import { openStore, type Store } from "../../core/src/store/store.ts";
-import { isProcessAlive, processStartedAt, reconcileLiveness, startLivenessMonitor } from "../src/liveness.ts";
+import { isHostProcess, isProcessAlive, processStartedAt, reconcileLiveness, startLivenessMonitor } from "../src/liveness.ts";
 
 const ts = "2026-09-25T00:00:00.000Z";
 
@@ -120,4 +120,37 @@ test("pid が常駐プロセスを指すセッションは pid を当てにせ�
   assert.equal(store.getSession("stale-host")?.endedReason, "idle");
   assert.equal(store.getSession("fresh-host")?.status, "running");
   assert.equal(store.getSession("terminal")?.status, "running");
+});
+
+test("常駐の判定は、codex app-server と Claude のバックグラウンドセッションを常駐とし、ターミナルの Claude は常駐としない", async () => {
+  const table = new Map<number, string>([
+    [88265, "88240 /Users/r/.local/share/claude/versions/2.1.291 --resume /x/5783bf92.jsonl"],
+    [88240, "88026 /Users/r/.local/share/claude/ClaudeCode.app/Contents/MacOS/claude --bg-pty-host /tmp/cc-daemon/pty.sock 90"],
+    [87592, "3051 claude -c"],
+    [3051, "3046 -zsh"],
+    [19173, "25610 /Users/r/.codex/bin/codex app-server --listen unix"],
+  ]);
+  const ps = async (pid: number) => { const line = table.get(pid); if (!line) throw new Error("no such process"); return line; };
+  assert.equal(await isHostProcess(88265, ps), true);
+  assert.equal(await isHostProcess(19173, ps), true);
+  assert.equal(await isHostProcess(87592, ps), false);
+  assert.equal(await isHostProcess(99999, ps), false);
+});
+
+test("寄せたあと放置で終わった本物は、片割れに残った Claude の pid が生きていれば running に戻して pid を移す", async (t) => {
+  const store = fixture(t);
+  const base = { repoKey: "r", client: "claude", traceId: "a".repeat(32), startedAt: ts };
+  store.insertNamedSession({ id: "e34c542e-c349-477a-b5f3-3d6bab20a63a", ...base });
+  store.endSession("e34c542e-c349-477a-b5f3-3d6bab20a63a", ts, "idle");
+  store.insertNamedSession({ id: "01M43PZEB8KN6CVF8T1TN8JDAY", ...base, pid: 54834, pidStartedAt: "Mon Oct  5 00:02:04 2026" });
+  store.endSession("01M43PZEB8KN6CVF8T1TN8JDAY", ts, "explicit");
+  const now = new Date("2026-10-06T11:00:00.000Z");
+  // 片割れの pid が死んでいれば戻さない
+  await reconcileLiveness(store, { now: () => now, isAlive: async () => false, isHost: async () => false });
+  assert.equal(store.getSession("e34c542e-c349-477a-b5f3-3d6bab20a63a")?.status, "ended");
+  await reconcileLiveness(store, { now: () => now, isAlive: async (pid) => pid === 54834, isHost: async () => false });
+  const real = store.getSession("e34c542e-c349-477a-b5f3-3d6bab20a63a")!;
+  assert.equal(real.status, "running");
+  assert.equal(real.pid, 54834);
+  assert.equal(real.pidStartedAt, "Mon Oct  5 00:02:04 2026");
 });

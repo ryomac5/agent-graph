@@ -57,18 +57,19 @@ Claude が実装し Codex がレビューする流れが、1 つの木と 1 つ�
 - 結論: 土台の採用は確定した。未検証だった機能の代わりの手段は、確かめた手段へ置き換えた。
 
 再実行で確かめた結果と、決めた手段を次の表に示す。
-未確認のまま残る項目だけが、実機の確認の対象である。
+2026-10-07 の段 3 で、実機の確認の 1 から 4 と 6 を runner と api の構成で通した。
+表の手段は、すべて実機で確かめた本来の手段として確定した。
 
 | 機能 | 確かめた結果 | 決める手段 |
 | --- | --- | --- |
 | Claude の認証 | 本人の購読のログインで通った。`init.apiKeySource` は `none` だった。 | runner は launchd で隔離の外に置く。起動時に `accountInfo.subscriptionType` と最初の `result` の `is_error` で確かめる。 |
 | Claude の文字差分 | `includePartialMessages` で `text_delta` が届いた。 | `delta` として画面へ流す。完了した発言の事実が後から置き換える。 |
 | Claude の状態 | 環境変数 `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1` を渡したときだけ `session_state_changed` が届いた。 | ホストは必ずこの値を渡す。`idle` をターンの終わりの合図に使う。 |
-| Claude の承認 | `canUseTool` が呼ばれ、allow と deny の両方がモデルへ届いた。 | `canUseTool` を使う。`PermissionRequest` の hook 関数には頼らない。 |
-| Claude の中断 | `interrupt` が約 14 ミリ秒で効き、結果は `error_during_execution` と `is_error` が真で届いた。 | `interrupt` を使う。要求の記録と突き合わせ、失敗と区別して `interrupted` にする。 |
+| Claude の承認 | `canUseTool` が呼ばれ、allow と deny の両方がモデルへ届いた。読むだけの Bash は `canUseTool` を経ずに実行された。 | `canUseTool` を使う。`PermissionRequest` の hook 関数には頼らない。 |
+| Claude の中断 | `interrupt` が約 14 ミリ秒で効き、結果は `error_during_execution` と `is_error` が真で届いた。直後に閉じた子の終了コード 1 は中断として扱えた。 | `interrupt` を使う。要求の記録と突き合わせ、失敗と区別して `interrupted` にする。 |
 | Claude の再開 | 同じ `session_id` の `resume` で、前の内容が読み戻された。 | `resume` を使う。再開に失敗した会話は閲覧のみにし、新しい会話として続ける操作を出す。 |
 | Claude のモデル変更 | `setModel` が会話を開いたまま次のターンから効いた。 | `setModel` を使う。 |
-| Claude の外部連携 | `settingSources` が空でも、購読に紐づく外部連携が読み込まれた。 | 読み込まれる前提で扱う。止める手段は段 3 の実機の確認で試す。 |
+| Claude の外部連携 | `ENABLE_CLAUDEAI_MCP_SERVERS=false` で claude.ai の連携だけが消えた。`strictMcpConfig` ではプラグインの MCP も消えた。 | 管理する実行の既定は `disabled` とし、前者を渡す。`strict` と `enabled` は設定で選べる。 |
 | Codex の応答 | `item/agentMessage/delta` で届き、`item/completed` の `agentMessage` で確定した。 | delta は画面だけへ流す。`phase` が `final_answer` の本文を最終の応答として確定する。 |
 | Codex の承認 | `requestApproval` が届き、同じ ID で `accept` を返すと `serverRequest/resolved` が届いた。 | 同じ要求 ID で答え、`serverRequest/resolved` で承認を閉じる。 |
 | Codex の承認待ち | `activeFlags` に `waitingOnApproval` が出た。 | `waiting_approval` へ写す。 |
@@ -76,7 +77,7 @@ Claude が実装し Codex がレビューする流れが、1 つの木と 1 つ�
 | Codex の再開と分岐 | 全履歴の読み込みは非推奨の通知が出た。 | `thread/resume` と `thread/fork` では `excludeTurns: true` を渡す。 |
 | Codex の分岐のモデル | 省略すると元を継がず、既定のモデルになった。 | `thread/fork` では必ずモデルを指定する。 |
 | Codex の effort 変更 | 次の `turn/start` の指定で効いた。実行中の変更は拒否された。 | 次の `turn/start` で上書きする。実行中の変更は提供しない。 |
-| Codex のモデル変更 | 再実行では同じモデルの中の切り替えだけで、別モデルは未確認である。 | `turn/start` の `model` を使う。段 3 の実機の確認で一度確かめる。 |
+| Codex のモデル変更 | 段 3 で、別モデル `gpt-5.6-sol` への切り替えが次のターンから効いた。 | `turn/start` の `model` を使う。 |
 | Codex の hook | 差し込めない。 | 承認の要求と item の通知で判断する。 |
 
 ### 2. 外の会話の従の経路
@@ -592,7 +593,7 @@ interface AgentHost {
 - `result` の `is_error` が真でも、同じターンに中断の記録があれば、ターンを `interrupted` にし、実行は `idle` に戻す
 - 中断の記録がなければ、実行を `failed` にし、本文のエラーを原因にする
 - 中断の直後に閉じた子は、終了コード 1 を返すことがある。中断の記録があれば `failed` にせず、終了コードを記録だけ残す
-- 終了コード 1 の原因は、段 3 の実機の確認で確かめる
+- 段 3 の実機の確認で、終了コード 1 は中断の直後に閉じた子から出た。中断の記録があり `interrupted` として扱えた
 
 #### 認証
 
@@ -621,12 +622,20 @@ interface AgentHost {
 
 Claude の子は、`settingSources` が空でも、購読に紐づく外部連携を読み込む。
 再実行では、応答の後ろに外部連携の認可を促す文が付いた。
+管理する実行は、既定で claude.ai の外部連携を読み込まない。
 
-- 読み込まれることを前提にする。連携の道具は、既定で `canUseTool` が拒否し、承認の受け箱には出さない
-- 起動時の `init` に載る連携の一覧を、実行の記録に残す
+| 方式 | 動き |
+| --- | --- |
+| `disabled` | 既定の方式である。`ENABLE_CLAUDEAI_MCP_SERVERS=false` を渡し、プラグインの MCP は残す。 |
+| `strict` | `strictMcpConfig` と空の `mcpServers` を渡す。agent-graph のプラグインの MCP も止まる。 |
+| `enabled` | 利用者の設定のまま、claude.ai の外部連携も読み込む。 |
+
+- 方式は runner の起動の引数 `--claude-integrations` で決める。Settings ができたら `config.toml` から渡す
+- 開始の操作の `integrationMode` は、runner の方式より優先する。再開では前の方式を引き継ぐ
+- 起動時の `init` に載る連携の一覧と方式を、実行の記録に残す
+- 連携の道具は、どの方式でも `canUseTool` が拒否する。承認の受け箱には出さない
 - 認可を促す文は、通常の発言として残す。実行の状態の根拠にはしない
-- 読み込みを止める手段を、段 3 の実機の確認で試す。候補は `strictMcpConfig` と、環境変数 `ENABLE_CLAUDEAI_MCP_SERVERS=false` である
-- 止められた手段が見つかったら、ホストの既定にし、この節を書き換える
+- 段 3 の実機の確認で、`disabled` は claude.ai の連携だけを止めた。`strict` は一覧を空にした
 
 ### Codex のホスト
 
@@ -713,6 +722,9 @@ ChatGPT アプリが動かす app-server は、専用の接続であり、外か
 - 承認は、実行と要求の内容と提示した選択肢を持つ
 - 回答は、画面の `cmd` で受ける。回答の事実は台帳に追記する
 - Claude の既定は `permissionMode: 'default'` で、Codex の既定は `approvalPolicy: 'untrusted'` と `sandbox: 'workspace-write'` である
+- Claude の読むだけの Bash は、`default` でも `canUseTool` を経ずに実行される。承認の要求は生じない
+- この振る舞いは、利用者の設定を読まなくても変わらない。2026-10-07 の段 3 の実機の確認で確かめた
+- 実機の確認で承認を引き出す操作は、ファイルの書き込みを含める
 - 既定の方式は Settings で変えられる。方式を緩めたときは、その旨を実行の記録に残す
 - 承認待ちの時間に上限はない。期限切れは再起動か中断のときだけ起きる
 
@@ -1120,6 +1132,7 @@ Codex は、子の環境に `CODEX_THREAD_ID` を渡す。
 | Claude の認証の方式 | `config.toml` | 次の起動から効く。切り替えるときは動いている会話を確認する |
 | Claude の API キー | Keychain | 次の起動から効く。値は画面に再表示しない |
 | 承認の方式 | `config.toml` | 次のターンから効く。緩めた旨を実行の記録に残す |
+| Claude の外部連携 | `config.toml` | 次の新しい会話から効く。既定は `disabled` で、`strict` と `enabled` を選べる |
 | 隔離の既定の方針 | `config.toml` | 次の実行から効く |
 
 ### 割り当ての決まり

@@ -1,0 +1,8 @@
+{"method":"thread/status/changed","params":{"threadId":"child-S19","status":{"type":"idle"}}}
+{"method":"turn/started","params":{"threadId":"child-S19","turn":{"id":"child-turn-S19","status":"inProgress"}}}
+{"method":"item/agentMessage/delta","params":{"threadId":"child-S19","turnId":"child-turn-S19","itemId":"child-message-S19","delta":"CHILD-OK"}}
+{"method":"item/completed","params":{"threadId":"child-S19","turnId":"child-turn-S19","item":{"type":"agentMessage","id":"child-message-S19","text":"CHILD-OK","phase":"final_answer"}}}
+{"method":"turn/completed","params":{"threadId":"child-S19","turn":{"id":"child-turn-S19","status":"completed"}}}
+{"method":"item/completed","params":{"threadId":"PARENT","turnId":"PARENT_TURN","item":{"type":"collabAgentToolCall","id":"spawn-S19","tool":"spawnAgent","status":"completed","senderThreadId":"PARENT","receiverThreadIds":["child-S19"]}}}
+{"method":"item/completed","params":{"threadId":"PARENT","turnId":"PARENT_TURN","item":{"type":"collabAgentToolCall","id":"wait-S19","tool":"wait","status":"completed","senderThreadId":"PARENT","receiverThreadIds":["child-S19"]}}}
+{"method":"item/completed","params":{"threadId":"PARENT","turnId":"PARENT_TURN","item":{"type":"collabAgentToolCall","id":"close-S19","tool":"closeAgent","status":"completed","senderThreadId":"PARENT","receiverThreadIds":["child-S19"]}}}

@@ -1,0 +1,190 @@
+{
+  "facts": [
+    {
+      "source": "host-claude",
+      "source_ts": "2026-01-01T00:00:00.000Z",
+      "confidence": "confirmed",
+      "source_event_id": "conversation:claude",
+      "kind": "conversation.created",
+      "subject": "conversation:claude",
+      "payload": {
+        "provider": "claude",
+        "native_id": "native-claude",
+        "origin": "managed",
+        "type": "interactive",
+        "history_format": "jsonl"
+      }
+    },
+    {
+      "source": "host-claude",
+      "source_ts": "2026-01-01T00:00:00.000Z",
+      "confidence": "confirmed",
+      "source_event_id": "run:claude",
+      "kind": "run.created",
+      "subject": "run:claude",
+      "payload": {
+        "conversation_id": "claude",
+        "generation": 1,
+        "state": "waiting_approval"
+      }
+    },
+    {
+      "source": "host-claude",
+      "source_ts": "2026-01-01T00:00:02.000Z",
+      "confidence": "confirmed",
+      "source_event_id": "approval:claude",
+      "kind": "approval.created",
+      "subject": "approval:claude",
+      "payload": {
+        "run_id": "claude",
+        "request_id": "request-claude",
+        "state": "pending"
+      }
+    },
+    {
+      "source": "host-codex",
+      "source_ts": "2026-01-01T00:00:00.000Z",
+      "confidence": "confirmed",
+      "source_event_id": "conversation:codex",
+      "kind": "conversation.created",
+      "subject": "conversation:codex",
+      "payload": {
+        "provider": "codex",
+        "native_id": "native-codex",
+        "origin": "managed",
+        "type": "interactive",
+        "history_format": "jsonl"
+      }
+    },
+    {
+      "source": "host-codex",
+      "source_ts": "2026-01-01T00:00:00.000Z",
+      "confidence": "confirmed",
+      "source_event_id": "run:codex",
+      "kind": "run.created",
+      "subject": "run:codex",
+      "payload": {
+        "conversation_id": "codex",
+        "generation": 1,
+        "state": "running"
+      }
+    },
+    {
+      "source": "host-codex",
+      "source_ts": "2026-01-01T00:00:02.000Z",
+      "confidence": "confirmed",
+      "source_event_id": "approval:codex",
+      "kind": "approval.created",
+      "subject": "approval:codex",
+      "payload": {
+        "run_id": "codex",
+        "request_id": "request-codex",
+        "state": "pending"
+      }
+    },
+    {
+      "source": "host-codex",
+      "source_ts": "2026-01-01T00:00:00.000Z",
+      "confidence": "confirmed",
+      "source_event_id": "conversation:external",
+      "kind": "conversation.created",
+      "subject": "conversation:external",
+      "payload": {
+        "provider": "codex",
+        "native_id": "native-external",
+        "origin": "observed",
+        "type": "interactive",
+        "history_format": "jsonl"
+      }
+    },
+    {
+      "source": "host-codex",
+      "source_ts": "2026-01-01T00:00:00.000Z",
+      "confidence": "confirmed",
+      "source_event_id": "run:external",
+      "kind": "run.created",
+      "subject": "run:external",
+      "payload": {
+        "conversation_id": "external",
+        "generation": 1,
+        "state": "running"
+      }
+    },
+    {
+      "source": "host-codex",
+      "source_ts": "2026-01-01T00:00:02.000Z",
+      "confidence": "confirmed",
+      "source_event_id": "approval:external",
+      "kind": "approval.created",
+      "subject": "approval:external",
+      "payload": {
+        "run_id": "external",
+        "request_id": "request-external",
+        "state": "pending"
+      }
+    },
+    {
+      "source": "host-codex",
+      "source_ts": "2026-01-01T00:00:00.000Z",
+      "confidence": "confirmed",
+      "source_event_id": "conversation:done",
+      "kind": "conversation.created",
+      "subject": "conversation:done",
+      "payload": {
+        "provider": "codex",
+        "native_id": "native-done",
+        "origin": "managed",
+        "type": "interactive",
+        "history_format": "jsonl"
+      }
+    },
+    {
+      "source": "host-codex",
+      "source_ts": "2026-01-01T00:00:00.000Z",
+      "confidence": "confirmed",
+      "source_event_id": "run:done",
+      "kind": "run.created",
+      "subject": "run:done",
+      "payload": {
+        "conversation_id": "done",
+        "generation": 1,
+        "state": "running"
+      }
+    },
+    {
+      "source": "host-codex",
+      "source_ts": "2026-01-01T00:00:01.000Z",
+      "confidence": "confirmed",
+      "source_event_id": "exit:done",
+      "kind": "run.state_changed",
+      "subject": "run:done",
+      "payload": {
+        "generation": 1,
+        "state": "ended",
+        "end_evidence": {
+          "kind": "host_exit",
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "source": "host-codex",
+      "source_ts": "2026-01-01T00:00:02.000Z",
+      "confidence": "confirmed",
+      "source_event_id": "approval:done",
+      "kind": "approval.created",
+      "subject": "approval:done",
+      "payload": {
+        "run_id": "done",
+        "request_id": "request-done",
+        "state": "resolved"
+      }
+    }
+  ],
+  "events": [
+    {
+      "type": "state",
+      "state": "idle"
+    }
+  ]
+}

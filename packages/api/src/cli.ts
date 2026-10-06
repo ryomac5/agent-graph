@@ -4,10 +4,11 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { startHookServer } from "./hook/index.ts";
 import { migrateLegacyDatabases } from "./migrate/index.ts";
-import { OBSERVATION_POLL_MS, openObservationService, PROJECTION_POLL_MS } from "./service/index.ts";
+import { OBSERVATION_POLL_MS, openObservationService } from "./service/index.ts";
+import { DEFAULT_WS_PORT, startWebSocketServer } from "./ws/index.ts";
 import { pollObservation } from "./service/poll.ts";
 
-const HELP = "Usage: agent-graph-api ingest --once | migrate --from <path> | rebuild | serve [--db <path>] [--port <port>]";
+const HELP = "Usage: agent-graph-api ingest --once | migrate --from <path> | rebuild | serve [--db <path>] [--port <port>] [--runner-socket <path>]";
 
 function listDatabases(path: string, excludedPaths: Set<string>): string[] {
   if (statSync(path).isFile()) return excludedPaths.has(realpathSync(path)) ? [] : [path];
@@ -25,17 +26,19 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
   if (!["ingest", "migrate", "rebuild", "serve"].includes(command)) throw new TypeError(HELP);
   let dbPath: string | undefined;
   let from: string | undefined;
-  let port = 0;
+  let port = DEFAULT_WS_PORT;
+  let runnerPath: string | undefined;
   let once = false;
   for (let index = 0; index < flags.length; index += 1) {
     const flag = flags[index];
     if (flag === "--once" && command === "ingest") { once = true; continue; }
-    if (!["--db", "--db-path", "--state-dir", "--from", "--port"].includes(flag)) throw new TypeError(`Unknown option: ${flag}`);
+    if (!["--db", "--db-path", "--state-dir", "--from", "--port", "--runner-socket"].includes(flag)) throw new TypeError(`Unknown option: ${flag}`);
     const value = flags[++index];
     if (!value || value.startsWith("--")) throw new TypeError(`Missing value for ${flag}`);
     if (flag === "--db" || flag === "--db-path") dbPath = resolve(value);
     else if (flag === "--state-dir") dbPath = join(resolve(value), "agent-graph.db");
     else if (flag === "--from" && command === "migrate") from = resolve(value);
+    else if (flag === "--runner-socket" && command === "serve") runnerPath = resolve(value);
     else if (flag === "--port" && command === "serve") {
       port = Number(value);
       if (!Number.isSafeInteger(port) || port < 0 || port > 65535) throw new TypeError("Invalid port");
@@ -57,18 +60,20 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
       console.log(JSON.stringify(report));
     } else {
       const report = pollObservation(() => service.ingestOnce());
-      const hook = await startHookServer(service.ledger, port);
+      const hook = await startHookServer(service.ledger, 0);
       const endpoint = join(service.outbox, ".endpoint");
       let observationTimer: ReturnType<typeof setInterval> | undefined;
-      let projectionTimer: ReturnType<typeof setInterval> | undefined;
+      let websocket: Awaited<ReturnType<typeof startWebSocketServer>> | undefined;
       let stop: () => void = () => {};
       try {
+        websocket = await startWebSocketServer(service, { port, runnerPath });
         mkdirSync(service.outbox, { recursive: true, mode: 0o700 });
         const temporary = join(service.outbox, `.endpoint-${process.pid}.tmp`);
         const destination = JSON.stringify({ url: hook.url, token: hook.token });
         writeFileSync(temporary, destination, { mode: 0o600 });
         renameSync(temporary, endpoint);
-        console.log(JSON.stringify({ ...report, hook_url: hook.url, hook_endpoint_file: endpoint, db: service.dbPath }));
+        console.log(JSON.stringify({ ...report, hook_url: hook.url, hook_endpoint_file: endpoint, ws_url: websocket.wsUrl, snapshot_url: `${websocket.url}/snapshot`,
+          ws_token: websocket.token, db: service.dbPath }));
         await new Promise<void>((resolveStop, reject) => {
           stop = resolveStop;
           process.once("SIGINT", stop);
@@ -77,11 +82,10 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
             try { pollObservation(action); } catch (error) { reject(error); }
           };
           observationTimer = setInterval(() => poll(() => service.ingestOnce()), OBSERVATION_POLL_MS);
-          projectionTimer = setInterval(() => poll(() => service.catchUp()), PROJECTION_POLL_MS);
         });
       } finally {
         clearInterval(observationTimer);
-        clearInterval(projectionTimer);
+        await websocket?.close();
         process.removeListener("SIGINT", stop);
         process.removeListener("SIGTERM", stop);
         await hook.close();

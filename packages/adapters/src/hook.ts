@@ -47,7 +47,7 @@ export function summarize(text: string, lines = SUMMARY_LINES): string {
   return text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(0, lines).join("\n");
 }
 
-interface TranscriptEntry { type?: string; message?: { content?: unknown } }
+interface TranscriptEntry { type?: string; message?: { content?: unknown; model?: unknown } }
 
 // transcript の JSONL を読む。無ければ空。壊れた行は飛ばす。
 function readTranscript(transcriptPath: string | undefined): TranscriptEntry[] {
@@ -143,14 +143,26 @@ function toolStartBody(sessionId: string, input: HookInput): Record<string, unkn
 }
 
 // SubagentStop。報告は SubagentHandback の message を優先し、無ければ最終応答。
+// 最後の応答に使われたモデル。transcript の assistant の行に message.model として残る。合成の応答は飛ばす
+export function lastAssistantModel(transcriptPath: string | undefined): string {
+  const entries = readTranscript(transcriptPath);
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const model = entries[i].type === "assistant" ? entries[i].message?.model : undefined;
+    if (typeof model === "string" && model && !model.startsWith("<")) return model;
+  }
+  return "";
+}
+
 function subagentStopBody(sessionId: string, input: HookInput): Record<string, unknown> {
   const transcript = input.agent_transcript_path;
   const report = (handbackMessage(transcript) || (typeof input.last_assistant_message === "string" && input.last_assistant_message.trim())
     || lastAssistantText(transcript)).trim();
   const task = firstUserText(transcript);
+  // 子が実際に使ったモデル。呼び出しのときは別名か根のモデルしか分からない
+  const model = lastAssistantModel(transcript);
   return { kind: "subagent_stop", sessionId, ...(str(input.agent_id) ? { agentId: str(input.agent_id) } : {}),
     agentType: str(input.agent_type) ?? "", summary: summarize(report), report: report.slice(0, REPORT_LIMIT),
-    ...(task ? { task: task.slice(0, TASK_LIMIT) } : {}) };
+    ...(task ? { task: task.slice(0, TASK_LIMIT) } : {}), ...(model ? { model } : {}) };
 }
 
 // tool_response から子の agent_id を拾う。構造化なら agentId か agent_id、文字列なら "agentId: <id>" の行。

@@ -8,7 +8,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { generateClaudePlugin } from "../src/claude-plugin.ts";
 import { installCodexConfig, renderCodexConfig, renderCodexOverrides } from "../src/codex-config.ts";
-import { endSession, firstUserText, handbackMessage, lastAssistantText, observe, observeBody, registerSession, REPLY_LIMIT, REPORT_LIMIT, TASK_LIMIT } from "../src/hook.ts";
+import { endSession, firstUserText, handbackMessage, lastAssistantText, observe, observeBody, registerSession, REPLY_LIMIT, REPORT_LIMIT, TASK_LIMIT, lastAssistantModel } from "../src/hook.ts";
 
 const options = { shimPath: "/tmp/shim.ts", nodePath: process.execPath };
 const root = mkdtempSync(join(tmpdir(), "agent-graph-adapters-"));
@@ -252,4 +252,17 @@ test("hook は POST で session の登録と終了と観測を送る", async (t)
     else process.env.AGENT_GRAPH_PORT = previous;
     server.close();
   }
+});
+
+test("SubagentStop の本文は子の transcript の最後の応答のモデルを持ち、合成の応答は飛ばす", () => {
+  const root = mkdtempSync(join(tmpdir(), "ag-sub-model-"));
+  const transcript = join(root, "agent.jsonl");
+  writeFileSync(transcript, [
+    { type: "user", message: { content: "依頼" } },
+    { type: "assistant", message: { model: "claude-haiku-4-5-20251001", content: [{ type: "text", text: "済んだ" }] } },
+    { type: "assistant", message: { model: "<synthetic>", content: [{ type: "text", text: "合成" }] } },
+  ].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+  assert.equal(lastAssistantModel(transcript), "claude-haiku-4-5-20251001");
+  const body = observeBody("subagent_stop", { session_id: "s", agent_id: "a", agent_type: "Explore", agent_transcript_path: transcript })!;
+  assert.equal(body.model, "claude-haiku-4-5-20251001");
 });

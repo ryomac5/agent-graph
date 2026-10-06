@@ -245,3 +245,16 @@ test("POST /api/observe はサブエージェントの観測を通す", async (t
   assert.equal(row.status, "done");
   assert.equal(row.round_trips, 1);
 });
+
+test("SubagentStop に付いた実際のモデルで、呼び出しのときの別名や空のモデルを上書きする", async (t) => {
+  const { store, stores } = await createFixture(t);
+  observe({ kind: "subagent_request", sessionId: "s", toolUseId: "toolu_m", title: "調べる", task: "読む",
+    subagentType: "Explore", model: "sonnet" }, stores, at(1));
+  observe({ kind: "subagent_start", sessionId: "s", agentId: "agent-m", agentType: "Explore" }, stores, at(2));
+  observe({ kind: "subagent_stop", sessionId: "s", agentId: "agent-m", agentType: "Explore", report: "済んだ",
+    model: "claude-sonnet-5-5" }, stores, at(3));
+  const [row] = delegations(store);
+  assert.equal(row.status, "done");
+  assert.equal(row.model, "claude-sonnet-5-5");
+  assert.equal(row.tier, "mid");
+});

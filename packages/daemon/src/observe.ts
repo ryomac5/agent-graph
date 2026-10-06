@@ -276,6 +276,9 @@ export const subagentObservers: Record<string, Observer> = {
     record(store, session, "subagent.reported", at, { delegationId: target.id, output, summary,
       ...(agentId ? { agentId } : {}), ...(task ? { task } : {}) });
     store.insertDelegationRound(target.id, "report", output, at);
+    // 子の transcript から拾った実際のモデルで割り当てを直す。呼び出しのときは別名か空のことがある
+    const model = optionalString(body.model, 100);
+    if (model) store.db.prepare("UPDATE assignments SET model = ?, tier = ? WHERE delegation_id = ?").run(model, tierOf(model), target.id);
     record(store, session, "execution.finished", at, { delegationId: target.id, exitCode: 0 });
     finish(store, session, at, target, "done");
   },

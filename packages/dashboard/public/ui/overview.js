@@ -105,6 +105,7 @@ export function renderOverview(canvas, overview, ctx, unavailable = new Map()) {
   const title = el("div");
   title.append(el("h2", "Projects"), el("p", overview ? summaryLine(active) : "", "workspace-description"));
   heading.append(title);
+  if (ctx.onAddProject) heading.append(button("+ Add project", "toolbar-button add-project-button", () => ctx.onAddProject()));
   page.append(heading);
   const keys = new Set(listed.map((p) => p.key));
   for (const [key, slot] of ctx.orbSlots) if (!keys.has(key)) { slot.remove(); ctx.orbSlots.delete(key); }

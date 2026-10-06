@@ -65,3 +65,17 @@ test("メッセージは /api/say に本文を含めて送る", async () => {
   assert.equal(result.ok, true); assert.equal(calls[0].url, "/api/say");
   assert.deepEqual(JSON.parse(calls[0].init.body), { repo: "r", sessionId: "s", text: "続けてください\n次の依頼" });
 });
+
+test("プロジェクトの追加は /api/projects に pick と path だけを送り、取り消しは通知しない", async () => {
+  const { sendAddProject } = await import("../public/ui/action.js");
+  const calls: Call[] = [];
+  const notes: string[] = [];
+  const added = await sendAddProject({ pick: true, action: "reject" } as Record<string, unknown>,
+    { fetch: fakeFetch(200, { ok: true, message: "Added app", key: "app-1" }, calls), token: "tok", notify: (m) => notes.push(m) });
+  assert.equal(added.key, "app-1");
+  assert.equal(calls[0].url, "/api/projects");
+  assert.deepEqual(JSON.parse(calls[0].init.body), { pick: true });
+  const cancelled = await sendAddProject({ pick: true }, { fetch: fakeFetch(200, { ok: false, cancelled: true, message: "Cancelled" }, []), notify: (m) => notes.push(m) });
+  assert.equal(cancelled.cancelled, true);
+  assert.deepEqual(notes, ["Added app"]);
+});

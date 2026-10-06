@@ -13,7 +13,8 @@ export function readToken(doc = globalThis.document) {
 async function readResult(res) {
   try {
     const body = await res.json();
-    return { ok: res.ok && body.ok === true, message: body.message || body.error || `HTTP ${res.status}` };
+    return { ok: res.ok && body.ok === true, message: body.message || body.error || `HTTP ${res.status}`,
+      ...(typeof body.key === "string" ? { key: body.key } : {}), ...(body.cancelled === true ? { cancelled: true } : {}) };
   } catch {
     return { ok: false, message: `Server error ${res.status}` };
   }
@@ -29,9 +30,17 @@ export async function sendSay(body, { fetch: fetchFn = (...args) => globalThis.f
   return sendPost("/api/say", body, { fetch: fetchFn, token, notify });
 }
 
+// POST /api/projects。pick なら macOS のフォルダ選択を開き、path ならそのフォルダを追加する。
+// 取り消しは通知しない
+export async function sendAddProject(body, { fetch: fetchFn = (...args) => globalThis.fetch(...args), token = "", notify = () => {} } = {}) {
+  return sendPost("/api/projects", body, { fetch: fetchFn, token, notify: (message) => { if (message !== "Failed: Cancelled") notify(message); } });
+}
+
+const BODY_KEYS = { "/api/say": ["repo", "sessionId", "text"], "/api/projects": ["pick", "path"] };
+
 async function sendPost(path, body, { fetch: fetchFn, token, notify }) {
   const request = {};
-  for (const key of path === "/api/say" ? ["repo", "sessionId", "text"] : REQUEST_KEYS) if (body[key] !== undefined) request[key] = body[key];
+  for (const key of BODY_KEYS[path] || REQUEST_KEYS) if (body[key] !== undefined) request[key] = body[key];
   try {
     const res = await fetchFn(path, {
       method: "POST",

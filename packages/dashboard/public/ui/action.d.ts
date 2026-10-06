@@ -1,6 +1,6 @@
 export const TOKEN_META_NAME: string;
 export const TOKEN_HEADER: string;
-export interface ActionOutcome { ok: boolean; message: string }
+export interface ActionOutcome { ok: boolean; message: string; key?: string; cancelled?: boolean }
 export interface ActionDeps {
   fetch?: (url: string, init: { method: string; headers: Record<string, string>; body: string }) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
   token?: string;
@@ -9,3 +9,4 @@ export interface ActionDeps {
 export function readToken(doc?: unknown): string;
 export function sendAction(body: Record<string, unknown>, deps?: ActionDeps): Promise<ActionOutcome>;
 export function sendSay(body: Record<string, unknown>, deps?: ActionDeps): Promise<ActionOutcome>;
+export function sendAddProject(body: { pick?: boolean; path?: string }, deps?: ActionDeps): Promise<ActionOutcome>;

@@ -2,6 +2,7 @@ import type { TraceContext } from "./trace.ts";
 
 export type EventKind =
   | "session.started"
+  | "project.added"
   | "session.forked"
   | "session.named"
   | "delegation.requested"
@@ -18,6 +19,7 @@ export type EventKind =
 // 仮: payload の構造は設計書に未定義のため、各イベントの最小必須項目に留める。
 export interface EventPayload {
   "session.started": { sessionId: string };
+  "project.added": { rootPath: string };
   // --fork-session で起きた会話の親。番号を付けるときに親の番号を継ぐ
   "session.forked": { sessionId: string; parentSessionId: string };
   // 番号を付けた。reason は最初の人の指示か、片割れから移した由来。fork なら forkOf に親を残す

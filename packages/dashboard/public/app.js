@@ -10,7 +10,7 @@ import { renderOverview } from "./ui/overview.js?v=compact-20261005";
 import { buildProjectSection, scopesOf } from "./ui/project.js?v=compact-20261005";
 import { setupSplitter } from "./ui/splitter.js";
 import { toast } from "./ui/toast.js";
-import { readToken, sendAction, sendSay } from "./ui/action.js";
+import { readToken, sendAction, sendAddProject, sendSay } from "./ui/action.js";
 
 const TOKEN = readToken(document);
 const PROJECT_KEY = "agent-graph:project";
@@ -124,6 +124,19 @@ const ctx = {
     render();
   },
   onNewSession: async (repo, client) => postAction({ repo, action: "new_session", client }),
+  // フォルダを選んでプロジェクトを足し、足したプロジェクトを開く。選択の画面が開けなければパスを尋ねる
+  onAddProject: async () => {
+    let result = await sendAddProject({ pick: true }, { token: TOKEN, notify: toast });
+    if (!result.ok && /folder picker/.test(result.message || "")) {
+      const path = window.prompt("Folder path of the project");
+      if (!path) return;
+      result = await sendAddProject({ path }, { token: TOKEN, notify: toast });
+    }
+    if (!result.ok || !result.key) return;
+    const response = await fetch("/api/overview").catch(() => undefined);
+    if (response && response.ok) state.overview = await response.json();
+    openProject(result.key);
+  },
   maxWidth: 0, projectName: "",
   confirm: (text) => window.confirm(text),
   onOpen: (key, additive) => openProject(key, additive),

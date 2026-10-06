@@ -28,7 +28,7 @@ function ctx(extra: Json = {}): Json {
 
 test("Overview は稼働中を Active に、最近終わったものを Recent に、状態と件数と直近のセッションを添えて出す", () => {
   const canvas = doc.getElementById("canvas")!;
-  const c = ctx({ now: () => new Date("2026-09-25T07:00:00.000Z") });
+  const c = ctx({ now: () => new Date("2026-09-25T07:00:00.000Z"), onAddProject() {} });
   renderOverview(canvas, overview, c);
   const html = String(canvas);
   for (const word of ["Kaggriculture", "agent-graph", "dotfiles", "obsidian", "Failed 7", "Waiting 1", "Running 3", "Idle", "on-failed", "on-waiting", "on-running", "card-slot",
@@ -37,6 +37,7 @@ test("Overview は稼働中を Active に、最近終わったものを Recent �
   }
   assert.ok(canvas.classList.contains("overview"));
   assert.ok(!html.includes("project-filters"), "Active と All の切り替えは無い");
+  assert.ok(html.includes("+ Add project"), "プロジェクトを足すボタンがある");
   const [activeSection, recentSection] = canvas.querySelectorAll(".overview-section");
   assert.ok(String(activeSection).includes("Kaggriculture") && !String(activeSection).includes("notes-003"));
   assert.ok(String(recentSection).includes("notes-003"), "7 日以内に動いた終わったプロジェクトは Recent に出す");

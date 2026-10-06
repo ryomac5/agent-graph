@@ -15,6 +15,11 @@ function buildProjectBar(projects, selectedKeys, ctx) {
     pill.setAttribute("aria-pressed", picked ? "true" : "false");
     parts.push(pill);
   }
+  if (ctx.onAddProject) {
+    const add = button("+ Add project", "pill add-project", () => ctx.onAddProject());
+    add.title = "Choose a folder to add as a project";
+    parts.push(add);
+  }
   return parts;
 }
 

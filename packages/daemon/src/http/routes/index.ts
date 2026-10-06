@@ -8,6 +8,7 @@ import { modelsRoute } from "./models.ts";
 import { observeRoute } from "./observe.ts";
 import { overviewRoute } from "./overview.ts";
 import { projectRoute } from "./project.ts";
+import { projectsRoute } from "./projects.ts";
 import { reposRoute } from "./repos.ts";
 import { sayRoute } from "./say.ts";
 import { sessionsEndRoute } from "./sessions-end.ts";
@@ -30,4 +31,5 @@ export const routes: Route[] = [
   modelsRoute,
   changesRoute,
   diffRoute,
+  projectsRoute,
 ];

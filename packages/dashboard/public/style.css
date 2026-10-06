@@ -845,3 +845,6 @@ form.say textarea { min-height: 60px; }
 .diff-line.del .diff-sign { color: var(--failed); }
 .diff-text { white-space: pre; padding-right: 16px; }
 .diff-note { margin: 0; padding: 10px 12px; font-size: 12px; color: var(--muted); }
+.add-project-button { flex-shrink: 0; }
+#project-bar .pill.add-project { color: var(--muted); }
+#project-bar .pill.add-project:hover { color: var(--running); }

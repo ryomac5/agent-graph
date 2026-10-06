@@ -82,6 +82,22 @@ for (const sample of readdirSync(SAMPLES, { withFileTypes: true }).filter((entry
       assert.deepEqual(readTables(incremental.database), tables);
       rebuild(incremental.database);
       assert.deepEqual(readTables(incremental.database), tables);
+
+      const partitioned = openTestLedger(t);
+      let partitionSeed = seed + 1;
+      let position = 0;
+      let partitionCursor = 0;
+      while (position < reordered.length) {
+        partitionSeed = (Math.imul(partitionSeed, 1664525) + 1013904223) >>> 0;
+        const end = Math.min(position + 1 + partitionSeed % 5, reordered.length);
+        for (const input of reordered.slice(position, end)) partitioned.writer.append(input);
+        partitionCursor = applyIncremental(partitioned.database, partitionCursor).last_seq;
+        const partial = readTables(partitioned.database);
+        rebuild(partitioned.database);
+        assert.deepEqual(readTables(partitioned.database), partial, `seed=${seed}, end=${end}`);
+        position = end;
+      }
+      assert.deepEqual(readTables(partitioned.database), tables);
     }
     for (let split = 0; split <= inputs.length; split += 1) {
       const batched = openTestLedger(t);
@@ -104,6 +120,48 @@ for (const sample of readdirSync(SAMPLES, { withFileTypes: true }).filter((entry
 
 const TS = "2026-01-01T00:00:00Z";
 const BASE = { source: "host-codex", source_ts: TS, confidence: "confirmed" } as const;
+
+test("同じ subject の成果物の版付き ID への承認も到着順と区切りによらず stale になる", (t) => {
+  const inputs: FactInput[] = [
+    ...[1, 2].map((version): FactInput => ({
+      ...BASE, source_event_id: `artifact-v${version}`, source_ts: `2026-01-0${version}T00:00:00Z`,
+      kind: "artifact.version_created", subject: "artifact:a",
+      payload: { run_id: "r", version, repository_id: "repo", worktree_id: "tree",
+        base_sha: "base", head_sha: `head-${version}`, patch_hash: `patch-${version}`, untracked: [] },
+    })),
+    { ...BASE, source_event_id: "approve-v2", source_ts: "2026-01-03T00:00:00Z",
+      kind: "approval.created", subject: "approval:ap",
+      payload: { run_id: "r", request_id: "approve", state: "pending", artifact_id: "a@2", patch_hash: "patch-2" } },
+    { ...BASE, source_event_id: "artifact-v3", source_ts: "2026-01-04T00:00:00Z",
+      kind: "artifact.version_created", subject: "artifact:a",
+      payload: { run_id: "r", version: 3, repository_id: "repo", worktree_id: "tree",
+        base_sha: "base", head_sha: "head-3", patch_hash: "patch-3", untracked: [] } },
+  ];
+  for (let seed = 0; seed < SHUFFLE_REPETITIONS; seed += 1) {
+    const reordered = seed === 0 ? inputs : shuffleInputs(inputs, seed);
+    for (const partitioned of [false, true]) {
+      const incremental = openTestLedger(t);
+      const full = openTestLedger(t);
+      let cursor = 0;
+      let random = seed;
+      for (let position = 0; position < reordered.length;) {
+        random = (Math.imul(random, 1664525) + 1013904223) >>> 0;
+        const end = Math.min(position + (partitioned ? 1 + random % 3 : 1), reordered.length);
+        for (const input of reordered.slice(position, end)) {
+          incremental.writer.append(input);
+          full.writer.append(input);
+        }
+        cursor = applyIncremental(incremental.database, cursor).last_seq;
+        rebuild(full.database);
+        assert.deepEqual(readTables(incremental.database), readTables(full.database),
+          `seed=${seed}, partitioned=${partitioned}, end=${end}`);
+        position = end;
+      }
+      assert.equal(incremental.database.prepare("SELECT state FROM approvals WHERE id = 'ap'").get()!.state, "stale");
+    }
+  }
+});
+
 const ALL_ENTITIES: FactInput[] = [
   { ...BASE, source_event_id: "task", kind: "task.created", subject: "task:t", payload: { name: "Project-1", purpose: "Work", project: "Project", state: "active" } },
   { ...BASE, source_event_id: "conversation", kind: "conversation.created", subject: "conversation:c", payload: { provider: "codex", native_id: "native", origin: "managed", type: "interactive", history_format: "jsonl", task_id: "t" } },
@@ -259,4 +317,198 @@ test("空の台帳・再開・カーソルの検証・失敗時の原子性", (t
     assert.deepEqual(applyIncremental(reopened, 0), { generation: 1, last_seq: 1 });
     assert.equal(reopened.prepare("SELECT name FROM tasks").get()!.name, "Project-1");
   } finally { reopened.close(); }
+});
+
+
+test("固定種の任意の区切りで同一性の衝突・参照の訂正・遅着を再構築と照合する", (t) => {
+  const later = { ...BASE, source_ts: "2026-01-02T00:00:00Z" };
+  const inputs: FactInput[] = [
+    ...ALL_ENTITIES,
+    { ...ALL_ENTITIES[1], source_event_id: "conversation-peer", subject: "conversation:c2" },
+    { ...ALL_ENTITIES[5], source_event_id: "message-peer", subject: "message:m2" },
+    { ...BASE, kind: "message_membership.created", source_event_id: "membership-peer", subject: "message_membership:member2",
+      payload: { message_id: "m2", conversation_id: "c2", active: true } },
+    { ...ALL_ENTITIES[2], source_event_id: "relation-peer", subject: "relation:rel2",
+      payload: { ...ALL_ENTITIES[2].payload, from_id: "c2" } } as FactInput,
+    { ...ALL_ENTITIES[7], source_event_id: "delegation-peer", subject: "delegation:d2" },
+    { ...ALL_ENTITIES[8], source_event_id: "artifact-peer", subject: "artifact:a-peer" },
+    { ...later, source_event_id: "correct-conversation", kind: "conversation.corrected", subject: "conversation:c",
+      supersedes: createFactId(BASE.source, "conversation"), payload: { native_id: "changed-native" } },
+    { ...later, source_event_id: "correct-message", kind: "message.corrected", subject: "message:m",
+      supersedes: createFactId(BASE.source, "message"), payload: { native_id: "changed-message" } },
+    { ...later, source_event_id: "correct-membership", kind: "message_membership.corrected", subject: "message_membership:member",
+      supersedes: createFactId(BASE.source, "membership"), payload: { conversation_id: "c2" } },
+    { ...later, source_event_id: "correct-relation", kind: "relation.corrected", subject: "relation:rel",
+      supersedes: createFactId(BASE.source, "relation"), payload: { from_id: "c2", active: false } },
+    { ...later, source_event_id: "attempt", kind: "delegation.attempt_created", subject: "delegation:d",
+      payload: { attempt: 2, run_id: "r2" } },
+    { ...later, source_event_id: "origin-request", kind: "delegation.created", subject: "delegation:origin",
+      payload: { request_id: "origin-request", origin: { provider: "codex", native_id: "changed-native" },
+        role: "worker", title: "Origin", attempt: 0, state: "received" } },
+    { ...later, source_event_id: "artifact-successor", kind: "artifact.version_created", subject: "artifact:next",
+      payload: { ...ALL_ENTITIES[8].payload, run_id: "other-run", version: 2, previous_artifact_id: "a",
+        repository_id: "repo", worktree_id: "tree", base_sha: "base", head_sha: "next", patch_hash: "next", untracked: [] } },
+  ];
+  for (let seed = 1; seed <= SHUFFLE_REPETITIONS; seed += 1) {
+    const { writer, database } = openTestLedger(t);
+    const reordered = shuffleInputs(inputs, seed);
+    let cursor = 0;
+    let random = seed;
+    let position = 0;
+    while (position < reordered.length) {
+      random = (Math.imul(random, 1664525) + 1013904223) >>> 0;
+      const end = Math.min(position + 1 + random % 7, reordered.length);
+      for (const input of reordered.slice(position, end)) writer.append(input);
+      cursor = applyIncremental(database, cursor).last_seq;
+      const partial = readTables(database);
+      rebuild(database);
+      assert.deepEqual(readTables(database), partial, `seed=${seed}, end=${end}`);
+      position = end;
+    }
+  }
+});
+
+test("版 1 の台帳に索引を移行し、既存事実と続きの投影を保つ", (t) => {
+  const { writer, database } = openTestLedger(t);
+  for (const input of ALL_ENTITIES) writer.append(input);
+  const state = rebuild(database);
+  const originalFacts = writer.readSince(0, Number.MAX_SAFE_INTEGER);
+  assert.ok(originalFacts.every((fact) => fact.schema_version === 1));
+  const originalTables = readTables(database);
+  // 旧版と同じ構造に戻した複製を開き、移行を実際に通す。
+  const directory = mkdtempSync(join(tmpdir(), "ledger-v1-"));
+  const path = join(directory, "ledger.sqlite");
+  database.prepare("VACUUM INTO ?").run(path);
+  const legacy = new DatabaseSync(path);
+  legacy.exec("DROP TABLE fact_projection_dependencies; DROP INDEX facts_subject_seq");
+  legacy.exec("DROP TABLE conversation_name_candidates; DROP TABLE message_name_inputs; DROP INDEX membership_message; ALTER TABLE conversations DROP COLUMN name; ALTER TABLE conversations DROP COLUMN name_is_provisional");
+  legacy.prepare("UPDATE schema_version SET version = ?").run(1);
+  legacy.close();
+  const migrated = openLedger(path, { storageScope: "full_diff" });
+  const projection = new DatabaseSync(path);
+  t.after(() => { projection.close(); migrated.close(); rmSync(directory, { recursive: true }); });
+  assert.deepEqual(migrated.readSince(0, Number.MAX_SAFE_INTEGER), originalFacts);
+  assert.equal(projection.prepare("SELECT version FROM schema_version WHERE id = 1").get()!.version, 2);
+  assert.deepEqual(readTables(projection), originalTables);
+  assert.deepEqual(applyIncremental(projection, state.last_seq), state);
+  migrated.append({ ...BASE, source_event_id: "migration-update", source_ts: "2026-01-02T00:00:00Z",
+    kind: "message.updated", subject: "message:m", payload: { native_id: "after-migration" } });
+  applyIncremental(projection, state.last_seq);
+  const incremental = readTables(projection);
+  rebuild(projection);
+  assert.deepEqual(readTables(projection), incremental);
+});
+
+test("独立した実体の更新で無関係の投影行を削除・上書きしない", (t) => {
+  const { writer, database } = openTestLedger(t);
+  for (const input of ALL_ENTITIES) writer.append(input);
+  writer.append({ ...ALL_ENTITIES[0], source_event_id: "other-task", subject: "task:other" });
+  rebuild(database);
+  database.exec(`CREATE TRIGGER keep_unrelated_task BEFORE INSERT ON tasks
+    WHEN NEW.id = 'other' BEGIN SELECT RAISE(ABORT, 'unrelated insert'); END;
+    CREATE TRIGGER keep_unrelated_task_delete BEFORE DELETE ON tasks
+    WHEN OLD.id = 'other' BEGIN SELECT RAISE(ABORT, 'unrelated delete'); END;`);
+  writer.append({ ...BASE, source_event_id: "affected-task", kind: "task.updated", subject: "task:t",
+    source_ts: "2026-01-02T00:00:00Z", payload: { purpose: "Only this task" } });
+  applyIncremental(database, ALL_ENTITIES.length + 1);
+  assert.equal(database.prepare("SELECT purpose FROM tasks WHERE id = 't'").get()!.purpose, "Only this task");
+  assert.equal(database.prepare("SELECT purpose FROM tasks WHERE id = 'other'").get()!.purpose, "Work");
+});
+
+test("別 subject と native の端点が衝突しても遅い到着で状態を巻き戻さない", (t) => {
+  const { writer, database } = openTestLedger(t);
+  const inputs: FactInput[] = [
+    ALL_ENTITIES[1], ALL_ENTITIES[5],
+    { ...ALL_ENTITIES[1], source_event_id: "conversation-alias", subject: "conversation:c2" },
+    { ...ALL_ENTITIES[5], source_event_id: "message-alias", subject: "message:m2" },
+    { ...BASE, source_ts: "2026-01-03T00:00:00Z", source_event_id: "new-membership",
+      kind: "message_membership.created", subject: "message_membership:new",
+      payload: { message_id: "m", conversation_id: "c", active: false } },
+    { ...BASE, source_ts: "2026-01-03T00:00:00Z", source_event_id: "new-relation",
+      kind: "relation.created", subject: "relation:new", payload: {
+        type: "continued", from_id: "c", to_id: "parent", evidence: { observed: true }, confidence: "confirmed", active: false,
+      } },
+    { ...BASE, source_event_id: "late-membership-alias", kind: "message_membership.created", subject: "message_membership:alias",
+      payload: { message_id: "m2", conversation_id: "c2", active: true } },
+    { ...BASE, source_event_id: "late-relation-alias", kind: "relation.created", subject: "relation:alias", payload: {
+      type: "continued", from_id: "c2", to_id: "parent", evidence: { observed: true }, confidence: "confirmed", active: true,
+    } },
+    { ...BASE, source_event_id: "late-membership-native", kind: "message_membership.created", subject: "message_membership:native",
+      payload: { message_id: '["codex","native-message"]', conversation_id: '["codex","native"]', active: true } },
+    { ...BASE, source_event_id: "late-relation-native", kind: "relation.created", subject: "relation:native", payload: {
+      type: "continued", from_id: '["codex","native"]', to_id: "parent", evidence: { observed: true }, confidence: "confirmed", active: true,
+    } },
+  ];
+  let cursor = 0;
+  for (const input of inputs) {
+    writer.append(input);
+    cursor = applyIncremental(database, cursor).last_seq;
+    const partial = readTables(database);
+    rebuild(database);
+    assert.deepEqual(readTables(database), partial, input.source_event_id);
+  }
+  assert.equal(database.prepare("SELECT active FROM message_memberships").get()!.active, 0);
+  assert.equal(database.prepare("SELECT active FROM relations").get()!.active, 0);
+});
+
+test("仮名は古い発言の遅着・本文の訂正・所属の移動と無効化でも任意の区切りで一致する", (t) => {
+  const inputs: FactInput[] = [
+    { ...BASE, source_event_id: "name-c", kind: "conversation.created", subject: "conversation:c",
+      payload: { provider: "codex", native_id: "c", origin: "managed", type: "interactive", history_format: "jsonl" } },
+    { ...BASE, source_event_id: "name-d", kind: "conversation.created", subject: "conversation:d",
+      payload: { provider: "codex", native_id: "d", origin: "managed", type: "interactive", history_format: "jsonl" } },
+    ...[0, 1, 2, 3].flatMap((index): FactInput[] => [
+      { ...BASE, source_ts: new Date(Date.parse(TS) + index * 1000).toISOString(),
+        source_event_id: `name-message-${index}`, kind: "message.created", subject: `message:${index}`,
+        payload: { provider: "codex", native_id: String(index), version: 1, role: "user",
+          body: index === 0 ? " " : `First ${index}. Second sentence`, body_state: "stored" } },
+      { ...BASE, source_event_id: `name-member-${index}`, kind: "message_membership.created",
+        subject: `message_membership:${index}`, payload: { message_id: String(index), conversation_id: "c", active: true } },
+    ]),
+    { ...BASE, source_ts: "2026-01-02T00:00:00Z", source_event_id: "name-body", kind: "message.corrected",
+      subject: "message:1", supersedes: createFactId(BASE.source, "name-message-1"), payload: { body: "" } },
+    { ...BASE, source_ts: "2026-01-02T00:00:00Z", source_event_id: "name-move", kind: "message_membership.corrected",
+      subject: "message_membership:2", supersedes: createFactId(BASE.source, "name-member-2"), payload: { conversation_id: "d" } },
+    { ...BASE, source_ts: "2026-01-02T00:00:00Z", source_event_id: "name-inactive", kind: "message_membership.corrected",
+      subject: "message_membership:3", supersedes: createFactId(BASE.source, "name-member-3"), payload: { active: false } },
+  ];
+  for (let seed = 0; seed < SHUFFLE_REPETITIONS; seed += 1) {
+    const { writer, database } = openTestLedger(t);
+    const reordered = seed === 0 ? inputs : shuffleInputs(inputs, seed);
+    let cursor = 0;
+    let random = seed;
+    for (let position = 0; position < reordered.length;) {
+      random = (Math.imul(random, 1664525) + 1013904223) >>> 0;
+      const end = Math.min(position + (seed === 0 ? 1 : 1 + random % 4), reordered.length);
+      for (const input of reordered.slice(position, end)) writer.append(input);
+      cursor = applyIncremental(database, cursor).last_seq;
+      const partial = readTables(database);
+      rebuild(database);
+      assert.deepEqual(readTables(database), partial, `seed=${seed}, end=${end}`);
+      position = end;
+    }
+    assert.deepEqual(database.prepare("SELECT name, name_is_provisional FROM conversations ORDER BY id").all()
+      .map((row) => ({ ...row })), [
+      { name: null, name_is_provisional: 0 }, { name: "First 2.", name_is_provisional: 1 },
+    ]);
+  }
+});
+
+test("仮名候補の同時刻の Unicode 識別子も純粋な投影と同じ順で比較する", (t) => {
+  const { writer, database } = openTestLedger(t);
+  writer.append({ ...BASE, source_event_id: "unicode-c", kind: "conversation.created", subject: "conversation:c",
+    payload: { provider: "codex", native_id: "c", origin: "managed", type: "interactive", history_format: "jsonl" } });
+  let cursor = applyIncremental(database, 0).last_seq;
+  for (const id of ["\uE000", "😀"]) {
+    writer.append({ ...BASE, source_event_id: id, kind: "message.created", subject: `message:${id}`,
+      payload: { provider: "codex", native_id: id, version: 1, role: "user", body: id, body_state: "stored" } });
+    writer.append({ ...BASE, source_event_id: `member-${id}`, kind: "message_membership.created",
+      subject: `message_membership:${id}`, payload: { message_id: id, conversation_id: "c", active: true } });
+    cursor = applyIncremental(database, cursor).last_seq;
+    assert.equal(database.prepare("SELECT name FROM conversations").get()!.name,
+      project(writer.readSince(0, Number.MAX_SAFE_INTEGER)).conversations[0].name);
+  }
+  const incremental = readTables(database);
+  rebuild(database);
+  assert.deepEqual(readTables(database), incremental);
 });

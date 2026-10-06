@@ -1,0 +1,2 @@
+{"timestamp":"2026-10-06T11:13:04.993Z","type":"session_meta","payload":{"id":"fiction-other","timestamp":"2026-10-06T11:11:00.000Z","originator":"codex-tui","source":"vscode","history_mode":"legacy","cli_version":"0.160.1"}}
+{"timestamp":"2026-10-06T11:15:00.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"other-turn"}}

@@ -1,0 +1,38 @@
+[
+  {
+    "entity_id": "[\"claude\",\"11111111-1111-4111-8111-111111111114\"]",
+    "kind": "kit",
+    "name": "agent-graph-014",
+    "id": "[\"[\\\"claude\\\",\\\"11111111-1111-4111-8111-111111111114\\\"]\",\"kit\",\"agent-graph-014\"]"
+  },
+  {
+    "entity_id": "[\"claude\",\"15d3f2fb-71c6-4c58-9182-b3bc72d9d1c8\"]",
+    "kind": "kit",
+    "name": "dotfiles-017b",
+    "id": "[\"[\\\"claude\\\",\\\"15d3f2fb-71c6-4c58-9182-b3bc72d9d1c8\\\"]\",\"kit\",\"dotfiles-017b\"]"
+  },
+  {
+    "entity_id": "[\"claude\",\"22222222-2222-4222-8222-222222222222\"]",
+    "kind": "kit",
+    "name": "agent-graph-015",
+    "id": "[\"[\\\"claude\\\",\\\"22222222-2222-4222-8222-222222222222\\\"]\",\"kit\",\"agent-graph-015\"]"
+  },
+  {
+    "entity_id": "[\"claude\",\"5a6564c8-f316-4efb-9d65-3b1cabcdf098\"]",
+    "kind": "kit",
+    "name": "agent-graph-001-s3",
+    "id": "[\"[\\\"claude\\\",\\\"5a6564c8-f316-4efb-9d65-3b1cabcdf098\\\"]\",\"kit\",\"agent-graph-001-s3\"]"
+  },
+  {
+    "entity_id": "[\"claude\",\"90d326a8-e20b-483b-a101-577f49455497\"]",
+    "kind": "kit",
+    "name": "agent-graph-001",
+    "id": "[\"[\\\"claude\\\",\\\"90d326a8-e20b-483b-a101-577f49455497\\\"]\",\"kit\",\"agent-graph-001\"]"
+  },
+  {
+    "entity_id": "[\"claude\",\"fa3cb783-77f1-4c34-8434-9da0dd41db81\"]",
+    "kind": "kit",
+    "name": "agent-graph-001",
+    "id": "[\"[\\\"claude\\\",\\\"fa3cb783-77f1-4c34-8434-9da0dd41db81\\\"]\",\"kit\",\"agent-graph-001\"]"
+  }
+]

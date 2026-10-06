@@ -118,12 +118,24 @@ function isRootHello(hello: Hello): boolean {
 
 // hello を受けた時点で根の pid と起動時刻を記録する。委譲していない根も生死判定の材料を持つ。
 // 既存のセッションは running に戻して pid を更新し、未登録なら登録する。委譲の子からの hello では根を書き換えない。
+// git rev-parse が「Git の作業ツリーではない」で失敗したか
+function isOutsideRepo(error: unknown): boolean {
+  const detail = error && typeof error === "object" ? String((error as { stderr?: unknown }).stderr ?? (error as Error).message ?? "") : "";
+  return /not a git repository/i.test(detail);
+}
+
 export function createHelloHandler(stores: Map<string, Store>, latest = new Map<string, UsageSample>(),
   callers: Callers = new WeakMap()): HelloHandler {
   const connections = new Map<string, number>();
   return async (hello) => {
     if (!isRootHello(hello)) return;
-    const { store, key } = await repoStoreOf(stores, latest, hello.cwd);
+    let resolved: Awaited<ReturnType<typeof repoStoreOf>>;
+    try { resolved = await repoStoreOf(stores, latest, hello.cwd); } catch (error) {
+      // Git 管理外で起きた Claude や Codex は観測の対象外。利用枠の取得が起こす claude -p もここに来る
+      if (isOutsideRepo(error)) return;
+      throw error;
+    }
+    const { store, key } = resolved;
     const { caller } = callerOf(hello, store, callers);
     // 起動時刻の取得は await を挟む。セッションの読み取りはこの後で行い、並行した登録を見落とさない。
     const pidStartedAt = await processStartedAt(hello.pid);

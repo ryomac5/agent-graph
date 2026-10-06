@@ -315,3 +315,13 @@ test("起動時に状態置き場の全リポジトリの store を開き、run 
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("Git 管理外の hello は黙って無視し、セッションを作らない", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "ag-hello-outside-"));
+  t.after(async () => { await rm(dir, { recursive: true, force: true }); });
+  const stores = new Map<string, Store>();
+  const handler = createHelloHandler(stores);
+  const result = await handler({ type: "hello", cwd: dir, pid: process.pid, session: "s", client: "claude" });
+  assert.equal(result, undefined);
+  assert.equal(stores.size, 0);
+});

@@ -268,6 +268,16 @@ export class Store {
     return result.changes > 0;
   }
 
+  // 終わったあとに記録へ新しい発言が増えた。別のプロセスで再開されたので running に戻す。
+  // 古い pid は死んでいるので外し、以後は 30 分の規則で見る
+  reviveFromTranscript(id: string, seenAt: string): boolean {
+    const result = this.db.prepare(`UPDATE sessions SET status = 'running', ended_at = NULL, ended_reason = NULL,
+      waiting_reason = NULL, pid = NULL, pid_started_at = NULL, last_seen_at = ?
+      WHERE id = ? AND status = 'ended' AND ended_at < ?`).run(seenAt, id, seenAt);
+    if (result.changes > 0) this.notifyChange();
+    return result.changes > 0;
+  }
+
   setSessionModel(id: string, model: string): void {
     const result = this.db.prepare("UPDATE sessions SET model = ? WHERE id = ? AND model IS NOT ?").run(model, id, model);
     if (result.changes > 0) this.notifyChange();

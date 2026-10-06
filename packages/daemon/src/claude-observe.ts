@@ -18,13 +18,14 @@ interface TranscriptRow {
 const HEADLESS_ENTRYPOINTS = new Set(["sdk-cli", "sdk-ts", "sdk-py"]);
 
 export function parseClaudeRows(rows: Iterable<TranscriptRow>): {
-  model?: string; headless?: true; turns: { id: string; at: string; prompt: string; reply: string }[];
+  model?: string; headless?: true; lastAt?: string; turns: { id: string; at: string; prompt: string; reply: string }[];
 } {
   const result: ReturnType<typeof parseClaudeRows> = { turns: [] };
   let current: typeof result.turns[number] | undefined;
   for (const row of rows) {
     if (row.type === "user" && HEADLESS_ENTRYPOINTS.has(row.entrypoint ?? "")) result.headless = true;
     if (!row.message || row.isMeta) continue;
+    if (row.timestamp && (!result.lastAt || row.timestamp > result.lastAt)) result.lastAt = row.timestamp;
     const content = row.message.content;
     const text = typeof content === "string" ? content
       : Array.isArray(content) ? content.filter((part) => part.type === "text").map((part) => part.text || "").join("\n") : "";
@@ -84,6 +85,11 @@ export function startClaudeObserver(stores: Map<string, Store>, options: { root?
         }
         const snapshot = parseClaudeRows(rows);
         if (snapshot.model) store.setSessionModel(session.id, snapshot.model);
+        if (snapshot.lastAt) {
+          // 終わった扱いの会話でも、終わったあとの発言が増えていれば別のプロセスで再開している
+          if (session.status === "ended") store.reviveFromTranscript(session.id, snapshot.lastAt);
+          store.markSessionSeen(session.id, snapshot.lastAt);
+        }
         const put = store.db.prepare(`INSERT INTO turns (id, session_id, at, prompt, summary, reply) VALUES (?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET prompt = excluded.prompt, summary = excluded.summary, reply = excluded.reply`);
         for (const turn of snapshot.turns) {

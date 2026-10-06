@@ -256,3 +256,27 @@ test("daemon の停止中に受けた指示は、登録より古くても起動�
   await observer.tick(); await observer.stop();
   assert.equal(store.getSession("late")?.name, "repo-001");
 });
+
+test("Claude はプロセスの死で終えた会話でも、終わったあとの発言が記録に増えれば稼働に戻し古い pid を外す", async (t) => {
+  const store = fixture(); store.updateSessionClient("thread", "claude");
+  store.db.prepare("UPDATE sessions SET pid = 4242, pid_started_at = 'x' WHERE id = 'thread'").run();
+  store.endSession("thread", "2026-10-06T12:00:00.000Z", "process_exit");
+  const root = await mkdtemp(join(tmpdir(), "graph-claude-revive-"));
+  t.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
+  await mkdir(join(root, "-repo"));
+  const write = (stamp: string) => writeFile(join(root, "-repo", "thread.jsonl"), [
+    { type: "user", uuid: `u-${stamp}`, timestamp: stamp, message: { content: "続けて" } },
+    { type: "assistant", timestamp: stamp, message: { model: "claude-opus-5-5", content: [{ type: "text", text: "はい" }] } },
+  ].map((row) => JSON.stringify(row)).join("\n"));
+  await write("2026-10-06T11:00:00.000Z");
+  const before = startClaudeObserver(new Map([["r", store]]), { root, intervalMs: 60_000 });
+  await before.tick(); await before.stop();
+  assert.equal(store.getSession("thread")!.status, "ended", "終わる前の発言では戻さない");
+  await write("2026-10-06T13:00:00.000Z");
+  const after = startClaudeObserver(new Map([["r", store]]), { root, intervalMs: 60_000 });
+  await after.tick(); await after.stop();
+  const session = store.getSession("thread")!;
+  assert.equal(session.status, "running");
+  assert.equal(session.pid, undefined);
+  assert.equal(session.lastSeenAt, "2026-10-06T13:00:00.000Z");
+});

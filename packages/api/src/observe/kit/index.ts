@@ -3,6 +3,7 @@ import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { projectConversations, projectProjects } from "../../../../core/src/ledger/index.ts";
 import type { Ledger } from "../../../../core/src/ledger/index.ts";
+import { kitEventsPath, observeKitDelegationsFile } from "./delegations.ts";
 
 export interface KitSnapshot {
   names: ReadonlyMap<string, string>;
@@ -99,7 +100,15 @@ export function createKitObserver(ledger: Ledger) {
         else result.duplicates += 1;
         pending.delete(key);
       }
+      for (const project of projects) {
+        for (const fact of observeKitDelegationsFile(ledger, kitEventsPath(project.root_path!))) {
+          if (fact.status === "appended") result.appended += 1;
+          else if (fact.status === "duplicate") result.duplicates += 1;
+        }
+      }
       return result;
     },
   };
 }
+
+export { createKitDelegationObserver, kitEventsPath, observeKitDelegationsFile } from "./delegations.ts";

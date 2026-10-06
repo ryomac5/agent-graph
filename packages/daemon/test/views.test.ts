@@ -38,6 +38,8 @@ test("SessionView はセッションの状態と直近 50 件の turn を持つ"
   store.insertSession({ id: "p1", repoKey: "r", name: "p1", client: "planner", traceId: trace, startedAt: later });
   store.setSessionGoalIfEmpty("s1", "契約を固定する");
   store.setSessionWaiting("s1", "permission", later);
+  // 中身の無い終了済みは一覧から外れるので、終了の項目を確かめるために会話を 1 つ持たせる
+  store.insertTurn({ id: "s2-t", sessionId: "s2", at: ts, prompt: "codex の指示" });
   store.endSession("s2", later);
   for (let index = 0; index < TURN_LIMIT + 5; index++) {
     store.insertTurn({ id: `t${index}`, sessionId: "s1", at: `2026-09-25T00:${String(index).padStart(2, "0")}:00.000Z`, prompt: `p${index}` });
@@ -405,4 +407,17 @@ test("NodeDetail は delegations の列と delegation_rounds から task, output
   assert.equal(reviewer.scope, undefined);
   assert.equal(reviewer.worktree, undefined);
   assert.deepEqual(reviewer.rounds, [{ kind: "request", text: "レビューして", at: ts }, { kind: "report", text: "VERDICT: approve", at: later }]);
+});
+
+test("会話も委譲もグラフも持たずに終わったセッションは一覧に出さず、中身のあるものや生きたものは出す", (t) => {
+  const store = withStore(t);
+  const base = { repoKey: "r", client: "claude", traceId: trace, startedAt: ts };
+  store.insertSession({ id: "empty-ended", name: "repo-001", ...base });
+  store.endSession("empty-ended", ts, "process_exit");
+  store.insertSession({ id: "talked-ended", name: "repo-002", ...base });
+  store.insertTurn({ id: "t1", sessionId: "talked-ended", at: ts, prompt: "やあ" });
+  store.endSession("talked-ended", ts, "process_exit");
+  store.insertSession({ id: "live-empty", name: "repo-003", ...base });
+  const ids = project(store).sessions.map((session) => session.id).sort();
+  assert.deepEqual(ids, ["live-empty", "talked-ended"]);
 });

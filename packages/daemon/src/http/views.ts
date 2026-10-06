@@ -124,6 +124,12 @@ function turnView(turn: { id: string; at: string; prompt: string; summary?: stri
     ...(turn.summary === undefined ? {} : { summary: turn.summary }), ...(turn.reply === undefined ? {} : { reply: turn.reply }), ...(turn.hidden ? { hidden: true } : {}) };
 }
 
+// 会話も委譲もグラフも持たずに終わったセッションは見せる中身が無い。割れたセッションの残りもここに入る
+function isEmptyEnded(session: SessionView, graphs: GraphRow[]): boolean {
+  return session.status === "ended" && session.turns.length === 0
+    && session.nodes.every((node) => node.kind === "root") && !graphs.some((graph) => graph.sessionId === session.id);
+}
+
 function sessionView(store: Store, session: ReturnType<typeof listSessions>[number], rows: DelegationRow[],
   context: DelegationContext): SessionView {
   const family = familyOf(session.client);
@@ -297,7 +303,8 @@ export function buildProjectView(store: Store, repoKey: string, now = new Date()
   for (const row of delegations) bySession.set(row.sessionId, [...(bySession.get(row.sessionId) ?? []), row]);
   return {
     project: { key: repo.key, name: repo.name, rootPath: repo.rootPath },
-    sessions: listSessions(store.db, repoKey).map((session) => sessionView(store, session, bySession.get(session.id) ?? [], context)),
+    sessions: listSessions(store.db, repoKey).map((session) => sessionView(store, session, bySession.get(session.id) ?? [], context))
+      .filter((session) => !isEmptyEnded(session, graphs)),
     graphs: graphs.map((graph) => graphView(graph, graphEvents.get(graph.id) ?? [], delegations, context)),
     usage: buildUsage(latestUsageSamples(store.db)),
     updatedAt: now.toISOString(),

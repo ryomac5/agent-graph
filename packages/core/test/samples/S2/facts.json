@@ -1,0 +1,82 @@
+[
+  {
+    "seq": 99,
+    "fact_id": "s2-start",
+    "source": "hook",
+    "source_event_id": "s2-start",
+    "kind": "run.created",
+    "subject": "run:parent:1",
+    "payload": {
+      "conversation_id": "parent",
+      "generation": 1,
+      "state": "running"
+    },
+    "payload_hash": "structural-sample",
+    "source_ts": "2026-01-01T00:00:00.000Z",
+    "observed_ts": "2026-01-01T00:59:00.000Z",
+    "schema_version": 1,
+    "cursor": null,
+    "confidence": "confirmed",
+    "supersedes": null
+  },
+  {
+    "seq": 98,
+    "fact_id": "s2-child",
+    "source": "hook",
+    "source_event_id": "s2-child",
+    "kind": "run.created",
+    "subject": "run:child:1",
+    "payload": {
+      "conversation_id": "child",
+      "generation": 1,
+      "state": "running"
+    },
+    "payload_hash": "structural-sample",
+    "source_ts": "2026-01-01T00:01:00.000Z",
+    "observed_ts": "2026-01-01T00:59:00.000Z",
+    "schema_version": 1,
+    "cursor": null,
+    "confidence": "confirmed",
+    "supersedes": null
+  },
+  {
+    "seq": 59,
+    "fact_id": "s2-gap",
+    "source": "hook",
+    "source_event_id": "s2-gap",
+    "kind": "run.state_changed",
+    "subject": "run:parent:1",
+    "payload": {
+      "state": "unknown",
+      "reason": "no_updates",
+      "generation": 1
+    },
+    "payload_hash": "structural-sample",
+    "source_ts": "2026-01-01T00:40:00.000Z",
+    "observed_ts": "2026-01-01T00:59:00.000Z",
+    "schema_version": 1,
+    "cursor": null,
+    "confidence": "confirmed",
+    "supersedes": null
+  },
+  {
+    "seq": 58,
+    "fact_id": "s2-child-gap",
+    "source": "hook",
+    "source_event_id": "s2-child-gap",
+    "kind": "run.state_changed",
+    "subject": "run:child:1",
+    "payload": {
+      "state": "unknown",
+      "reason": "no_updates",
+      "generation": 1
+    },
+    "payload_hash": "structural-sample",
+    "source_ts": "2026-01-01T00:41:00.000Z",
+    "observed_ts": "2026-01-01T00:59:00.000Z",
+    "schema_version": 1,
+    "cursor": null,
+    "confidence": "confirmed",
+    "supersedes": null
+  }
+]

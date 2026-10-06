@@ -1,0 +1,37 @@
+{
+  "runs": [
+    {
+      "id": "conversation:1",
+      "conversation_id": "conversation",
+      "generation": 1,
+      "state": "ended",
+      "pid": 101,
+      "start_fingerprint": "old-process",
+      "last_evidence": {
+        "fact_id": "s3-death",
+        "kind": "run.state_changed"
+      },
+      "last_evidence_ts": "2026-01-01T00:02:00.000Z",
+      "end_evidence": {
+        "kind": "process_check",
+        "succeeded": true,
+        "matches": false,
+        "pid": 101,
+        "start_fingerprint": "old-process"
+      },
+      "ended_ts": "2026-01-01T00:02:00.000Z"
+    },
+    {
+      "id": "conversation:2",
+      "conversation_id": "conversation",
+      "generation": 2,
+      "state": "running",
+      "last_evidence": {
+        "fact_id": "s3-resume",
+        "kind": "run.created"
+      },
+      "last_evidence_ts": "2026-01-01T00:01:00.000Z"
+    }
+  ],
+  "connections": []
+}

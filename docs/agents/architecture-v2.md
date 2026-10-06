@@ -582,6 +582,8 @@ interface AgentHost {
 - `session_state_changed` を実行の状態へ写す。`idle` は `idle`、`running` は `running`、`requires_action` は `waiting_approval`
 - 最初のターンで `session_state_changed` が 1 件も届かなければ、縮退として runner の状態に出す。状態は `result` と `canUseTool` から導く
 - 承認は `canUseTool` で受ける。要求を承認の表に書き、画面の回答を返す。deny の文言はモデルに渡る
+- 読み取りだけの Bash は、`default` でも `canUseTool` を呼ばずに動く。利用者の設定がなくても同じである
+- 実機の確認で承認を引き出す操作は、ファイルの書き込みを含める。2026-10-07 の段 3 で確かめた
 - `task_started` と `task_notification` は、サブエージェントの会話と `delegated` の関係に写す
 - 使用量と費用は `result` から取り、実行ごとに記録する。費用は購読では目安であり、請求額として出さない
 

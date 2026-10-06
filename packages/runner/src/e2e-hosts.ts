@@ -11,6 +11,7 @@ import { projectEntityRecords } from "../../core/src/ledger/projections/delegati
 import { projectRuns } from "../../core/src/ledger/projections/runs.ts";
 import { projectApprovals } from "../../core/src/ledger/projections/approvals.ts";
 import type { JsonValue } from "../../core/src/ledger/facts.ts";
+import { APPROVAL_COMMANDS, findPendingApproval } from "./e2e-approval.ts";
 
 const TIMEOUT_MS = 180_000;
 const SHUTDOWN_MS = 10_000;
@@ -141,8 +142,9 @@ async function runChecks(): Promise<void> {
         && fact.subject === `run:${run.runId}` && JSON.stringify(fact.payload).includes('"kind":"result"'))), "new turn output");
       await waitIdle(run);
     }
-    async function approve(run: ManagedRun) {
-      const approval = await waitFor(() => projectApprovals(readFacts()).find((entry) => entry.run_id === run.runId && entry.state === "pending"), `approval ${run.runId}`);
+    const lastSeq = () => readFacts().at(-1)?.seq ?? 0;
+    async function approve(run: ManagedRun, sinceSeq: number) {
+      const approval = await waitFor(() => findPendingApproval(readFacts(), run.runId, sinceSeq), `approval ${run.runId}`);
       await command("answer", { approvalId: approval.id, decision: approval.available_decisions?.includes("allow") ? "allow" : "accept" });
       await waitIdle(run);
       assert.ok(projectApprovals(readFacts()).some((entry) => entry.id === approval.id && entry.state === "resolved"));
@@ -159,12 +161,14 @@ async function runChecks(): Promise<void> {
     console.log("PASS 1");
 
     console.log("2: Claude approval and answer");
-    await command("send", { runId: claude.runId, input: { text: "Use Bash to run exactly: sleep 1 && printf HOSTS-APPROVED. Request permission if required. Do not use other tools." } });
-    await approve(claude); console.log("PASS 2");
+    const beforeApproval = lastSeq();
+    await command("send", { runId: claude.runId, input: { text: `Use Bash to run exactly: ${APPROVAL_COMMANDS.claude}. Request permission if required. Do not use other tools.` } });
+    await approve(claude, beforeApproval); console.log("PASS 2");
 
     console.log("3: interrupt outcome, exit diagnostics, model and resume");
-    const interrupt = await start("claude", "Use Bash to run sleep 60. Do not use other tools.");
-    const pending = await waitFor(() => projectApprovals(readFacts()).find((entry) => entry.run_id === interrupt.runId && entry.state === "pending"), "interrupt permission");
+    const beforeInterrupt = lastSeq();
+    const interrupt = await start("claude", `Use Bash to run exactly: ${APPROVAL_COMMANDS.claudeInterrupt}. Do not use other tools.`);
+    const pending = await waitFor(() => findPendingApproval(readFacts(), interrupt.runId, beforeInterrupt), "interrupt permission");
     await command("answer", { approvalId: pending.id, decision: "allow" });
     await delay(1000);
     await command("interrupt", { runId: interrupt.runId });
@@ -178,12 +182,13 @@ async function runChecks(): Promise<void> {
     assert.equal(resumed.nativeId, claude.nativeId); await waitIdle(resumed); console.log("PASS 3");
 
     console.log("4: two Codex threads, approval, resume, fork, model switch, native child relation");
+    const beforeCodex = lastSeq();
     const [first, second] = await Promise.all([
-      start("codex", "Run exactly: sleep 1 && printf CODEX-APPROVED. Request permission. Do not use other tools."),
+      start("codex", `Run exactly: ${APPROVAL_COMMANDS.codex}. Request permission. Do not use other tools.`),
       start("codex", "Reply CODEX-PARALLEL. Do not use tools."),
     ]);
     assert.notEqual(first.nativeId, second.nativeId);
-    await approve(first); await waitIdle(second);
+    await approve(first, beforeCodex); await waitIdle(second);
     await command("close", { runId: first.runId });
     const codexResume: ManagedRun = await command("resume", { conversationId: first.conversationId, input: { text: "Reply CODEX-RESUMED. Do not use tools." } });
     assert.equal(codexResume.nativeId, first.nativeId); await waitIdle(codexResume);

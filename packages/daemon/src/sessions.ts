@@ -45,6 +45,18 @@ export function summarize(text: string, lines = SUMMARY_LINES): string {
 }
 
 // pid は受けない。根の pid は shim の hello だけで記録する。
+// hook が送った Claude の本体の pid を本物のセッションに付け、同じ Claude から割れた片割れを寄せる。
+// 片割れは shim が Claude の id を知らなかった頃に作られた ULID のセッションで、同じ pid を持つ
+export function adoptClaudeProcess(store: Store, sessionId: string, claudePid: unknown, at: string): void {
+  if (typeof claudePid !== "number" || !Number.isSafeInteger(claudePid) || claudePid <= 1) return;
+  const session = store.db.prepare("SELECT client, pid, status FROM sessions WHERE id = ?").get(sessionId);
+  if (!session || session.client !== "claude" || session.status === "ended") return;
+  if (session.pid === null || session.pid === undefined) store.setSessionProcess(sessionId, claudePid, undefined, at);
+  const ghosts = store.db.prepare(`SELECT id FROM sessions WHERE client = 'claude' AND pid = ? AND id != ?
+    AND status != 'ended' AND length(id) = 26 AND id NOT LIKE '%-%'`).all(claudePid, sessionId);
+  for (const ghost of ghosts) store.mergeSessionInto(String(ghost.id), sessionId, at);
+}
+
 export async function registerSession(body: unknown, stores: Map<string, Store>): Promise<void> {
   if (!body || typeof body !== "object" || Array.isArray(body)) throw new TypeError("Invalid session body");
   const { id, cwd, client, model } = body as Record<string, unknown>;
@@ -70,7 +82,10 @@ export async function registerSession(body: unknown, stores: Map<string, Store>)
   if (existing) store.resumeSession(id, ts);
   if (typeof model === "string" && model) store.setSessionModel(id, model);
   // hook の再送や MCP による先行登録でも、開始イベントは一度だけ記録する。
-  if (store.db.prepare("SELECT 1 FROM events WHERE kind = 'session.started' AND session_id = ?").get(id)) return;
+  if (store.db.prepare("SELECT 1 FROM events WHERE kind = 'session.started' AND session_id = ?").get(id)) {
+    adoptClaudeProcess(store, id, (body as Record<string, unknown>).claudePid, ts);
+    return;
+  }
   const traceId = existing ? String(existing.trace_id) : newTraceId();
   if (!existing) {
     store.insertNamedSession({ id, repoKey: key, client, traceId, startedAt: ts,
@@ -78,6 +93,7 @@ export async function registerSession(body: unknown, stores: Map<string, Store>)
   }
   store.appendEvent({ id: ulid(), ts, kind: "session.started", repo: key, session: id,
     trace: { traceId, spanId: newSpanId() }, payload: { sessionId: id } });
+  adoptClaudeProcess(store, id, (body as Record<string, unknown>).claudePid, ts);
 }
 
 // SessionEnd。未知のセッションは NotFoundError。すでに終わっていれば何もしない。
@@ -126,4 +142,5 @@ export function observe(body: unknown, stores: Map<string, Store>, now = new Dat
   const store = findStore(sessionId, stores);
   if (!store) throw new NotFoundError(`Session not found: ${sessionId}`);
   table[kind](store, { kind: kind as ObserveKind, sessionId, at: now.toISOString(), body: body as Record<string, unknown> });
+  adoptClaudeProcess(store, sessionId, (body as Record<string, unknown>).claudePid, now.toISOString());
 }

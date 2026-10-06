@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { execFileSync } from "node:child_process";
 import { readFileSync, realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { readDashboardPort } from "../../daemon/src/config.ts";
@@ -32,6 +33,27 @@ export interface HookInput {
   tool_use_id?: string;
   tool_response?: unknown;
   [key: string]: unknown;
+}
+
+// hook を起こした Claude Code の本体の pid。hook の親は shell のことがあるので、祖先をたどって comm が claude のものを探す。
+// 見つからなければ undefined。デーモンは本物のセッションに pid を付け、同じ Claude から割れた片割れを寄せる
+const realPs = (pid: number): string => execFileSync("ps", ["-o", "ppid=,comm=", "-p", String(pid)], { encoding: "utf8", timeout: 1000 });
+// 1 つの hook のプロセスの中では祖先は変わらないので、本物の ps でたどった結果だけを覚える
+let cachedClaudePid: number | undefined | null = null;
+export function claudePid(ps: (pid: number) => string = realPs): number | undefined {
+  if (ps === realPs && cachedClaudePid !== null) return cachedClaudePid;
+  let found: number | undefined;
+  let pid = process.ppid;
+  for (let depth = 0; depth < 6 && pid > 1; depth++) {
+    let line: string;
+    try { line = ps(pid).trim(); } catch { break; }
+    const match = /^(\d+)\s+(.*)$/.exec(line);
+    if (!match) break;
+    if (match[2].split("/").at(-1) === "claude") { found = pid; break; }
+    pid = Number(match[1]);
+  }
+  if (ps === realPs) cachedClaudePid = found;
+  return found;
 }
 
 async function post(path: string, body: unknown): Promise<void> {
@@ -104,11 +126,12 @@ export function firstUserText(transcriptPath: string | undefined): string {
   return "";
 }
 
-// pid は送らない。hook の親は shell のことがあり、根のプロセスとは限らない。pid は shim の hello だけで記録する。
+// hook の親は shell のことがあるので、親の pid ではなく祖先の Claude の pid を claudePid として送る。
 export async function registerSession(input: HookInput): Promise<void> {
   if (!input.session_id || !input.cwd) return;
+  const pid = claudePid();
   await post("/api/sessions", { id: input.session_id, cwd: input.cwd, client: "claude",
-    ...(typeof input.model === "string" && input.model ? { model: input.model } : {}) });
+    ...(typeof input.model === "string" && input.model ? { model: input.model } : {}), ...(pid ? { claudePid: pid } : {}) });
 }
 
 export async function endSession(input: HookInput): Promise<void> {
@@ -222,7 +245,8 @@ export function observeBody(kind: string, input: HookInput): Record<string, unkn
 
 export async function observe(kind: string, input: HookInput): Promise<void> {
   const body = observeBody(kind, input);
-  if (body) await post("/api/observe", body);
+  const pid = body ? claudePid() : undefined;
+  if (body) await post("/api/observe", pid ? { ...body, claudePid: pid } : body);
 }
 
 export async function runHook(argv: string[], stdin: NodeJS.ReadableStream): Promise<void> {

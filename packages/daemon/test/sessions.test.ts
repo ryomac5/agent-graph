@@ -248,3 +248,20 @@ test("委譲せず 30 分黙って ended にした根は次の turn で running 
   assert.equal(store.getSession("hooked")?.status, "ended");
   assert.equal(store.getSession("hooked")?.endedReason, "explicit");
 });
+
+test("hook が送った Claude の pid を本物のセッションに付け、同じ pid の割れた片割れを寄せる", async (t) => {
+  const { cwd, store, stores } = createFixture(t);
+  const real = "fa3cb783-77f1-4c34-8434-9da0dd41db81";
+  await registerSession({ id: real, cwd, client: "claude" }, stores);
+  const repoKey = store.getSession(real)!.repoKey;
+  const ghost = "01M48BMEHR38A97ABNGT5EJSGN";
+  store.insertNamedSession({ id: ghost, repoKey, client: "claude", traceId: "b".repeat(32), startedAt: new Date().toISOString(), pid: 87592 });
+  store.insertDelegation({ id: "d1", repoKey, sessionId: ghost, role: "implement", title: "x", status: "done" });
+  observe({ kind: "turn_start", sessionId: real, prompt: "p", claudePid: 87592 }, stores, new Date());
+  assert.equal(store.getSession(real)!.pid, 87592);
+  assert.equal(store.getSession(ghost)!.status, "ended");
+  assert.equal(store.db.prepare("SELECT session_id FROM delegations WHERE id = 'd1'").get()?.session_id, real);
+  // 不正な pid や Claude 以外のセッションには何もしない
+  observe({ kind: "turn_start", sessionId: real, prompt: "p", claudePid: "x" }, stores, new Date());
+  assert.equal(store.getSession(real)!.pid, 87592);
+});

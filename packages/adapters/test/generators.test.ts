@@ -8,7 +8,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { generateClaudePlugin } from "../src/claude-plugin.ts";
 import { installCodexConfig, renderCodexConfig, renderCodexOverrides } from "../src/codex-config.ts";
-import { endSession, firstUserText, handbackMessage, lastAssistantText, observe, observeBody, registerSession, REPLY_LIMIT, REPORT_LIMIT, TASK_LIMIT, lastAssistantModel } from "../src/hook.ts";
+import { endSession, firstUserText, handbackMessage, lastAssistantText, observe, observeBody, registerSession, REPLY_LIMIT, REPORT_LIMIT, TASK_LIMIT, lastAssistantModel, claudePid } from "../src/hook.ts";
 
 const options = { shimPath: "/tmp/shim.ts", nodePath: process.execPath };
 const root = mkdtempSync(join(tmpdir(), "agent-graph-adapters-"));
@@ -218,7 +218,9 @@ test("hook は POST で session の登録と終了と観測を送る", async (t)
     for await (const chunk of req) body += chunk;
     assert.equal(req.method, "POST");
     assert.equal(req.headers["content-type"], "application/json");
-    received.push({ url: req.url ?? "", body: JSON.parse(body) });
+    // claudePid はテストを走らせている Claude の祖先によって付いたり付かなかったりするので外して比べる
+    const { claudePid: _pid, ...rest } = JSON.parse(body) as Record<string, unknown>;
+    received.push({ url: req.url ?? "", body: rest });
     res.writeHead(200).end();
   });
   try {
@@ -265,4 +267,13 @@ test("SubagentStop の本文は子の transcript の最後の応答のモデル�
   assert.equal(lastAssistantModel(transcript), "claude-haiku-4-5-20251001");
   const body = observeBody("subagent_stop", { session_id: "s", agent_id: "a", agent_type: "Explore", agent_transcript_path: transcript })!;
   assert.equal(body.model, "claude-haiku-4-5-20251001");
+});
+
+test("hook は祖先をたどって comm が claude のプロセスの pid を見つける", () => {
+  // ps -o ppid=,comm= は「その pid の親」と「その pid 自身の名前」を返す。hook の親は shell で、その親が Claude の本体
+  const chain = new Map<number, string>([[process.ppid, "51341 /bin/sh"], [51341, "87592 /bin/zsh"],
+    [87592, "3051 /Users/r/.local/share/claude/ClaudeCode.app/Contents/MacOS/claude"]]);
+  assert.equal(claudePid((pid) => { const line = chain.get(pid); if (!line) throw new Error("no such process"); return line; }), 87592);
+  // 祖先に Claude がいなければ何も返さない
+  assert.equal(claudePid(() => { throw new Error("no such process"); }), undefined);
 });

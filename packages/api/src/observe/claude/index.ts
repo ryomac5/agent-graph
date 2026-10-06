@@ -2,19 +2,24 @@ import { readdirSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import { createNativeId, projectConversations, serializeValue } from "../../../../core/src/ledger/index.ts";
-import type { AppendResult, ConversationPayload, FactInput, JsonValue, Ledger } from "../../../../core/src/ledger/index.ts";
+import type { AppendResult, ConversationPayload, FactInput, JsonValue, Ledger, UnsupportedObservationPayload } from "../../../../core/src/ledger/index.ts";
 import { readAppendOnlyFile } from "../files.ts";
 import type { FileCursor, FileRead } from "../files.ts";
 
-// 2026-10-07 のレビューで実測された版を固定する。版のない旧記録は構造で判定する。
-export const SUPPORTED_CLAUDE_VERSIONS = [
-  "2.1.285", "2.1.286", "2.1.287", "2.1.288", "2.1.289", "2.1.290", "2.1.291",
-] as const;
 const HEADLESS_ENTRYPOINTS = new Set(["sdk-cli", "sdk-ts", "sdk-py"]);
-const METADATA_TYPES = new Set(["file-history-snapshot", "queue-operation", "progress", "summary",
-  "custom-title", "agent-name", "last-prompt", "pr-link", "system", "attachment", "ai-title",
-  "permission-mode", "mode", "atis-latch", "cost-state", "file-history-delta", "bridge-session"]);
+const IGNORED_TYPES = new Set(["file-history-snapshot", "queue-operation", "progress", "summary",
+  "custom-title", "agent-name", "last-prompt", "pr-link", "attachment", "ai-title",
+  "permission-mode", "mode", "atis-latch", "cost-state", "file-history-delta", "bridge-session",
+  "agent-setting", "relocated", "worktree-state"]);
+const IGNORED_SYSTEM_SUBTYPES = new Set(["api_error", "away_summary", "bridge_status", "informational",
+  "local_command", "model_refusal_fallback", "scheduled_task_fire", "stop_hook_summary", "turn_duration"]);
 type Row = { [key: string]: JsonValue };
+export interface ClaudeUnsupportedPayload extends UnsupportedObservationPayload {
+  record_type: string;
+  record_subtype: string | null;
+  count: number;
+}
+type UnsupportedInput = Extract<FactInput, { kind: "observation.unsupported" }> & { payload: ClaudeUnsupportedPayload };
 export interface ClaudeObserveOptions {
   cursor?: FileCursor;
   observedTs?: string;
@@ -40,8 +45,9 @@ function parseRow(text: string): Row | undefined {
 }
 function findUnsupportedReason(row: Row | undefined): string | undefined {
   if (!row) return "Invalid JSON object";
-  if (row.version !== undefined && !SUPPORTED_CLAUDE_VERSIONS.some((version) => version === row.version)) {
-    return "Unsupported Claude Code version";
+  if (row.subtype !== undefined && !(row.type === "system"
+    && (row.subtype === "compact_boundary" || IGNORED_SYSTEM_SUBTYPES.has(String(row.subtype))))) {
+    return "Unsupported record subtype";
   }
   if (row.type === "user" || row.type === "assistant") {
     const message = readObject(row.message);
@@ -50,9 +56,15 @@ function findUnsupportedReason(row: Row | undefined): string | undefined {
     }
   } else if (row.type === "continued-in") {
     if (!readString(row.continuedInSessionId)) return "Missing continuation native ID";
-  } else if (!METADATA_TYPES.has(String(row.type))) return "Unsupported record type";
-  if (row.timestamp !== undefined && !Number.isFinite(Date.parse(String(row.timestamp)))) return "Invalid timestamp";
+  } else if (row.type === "system" && row.subtype === "compact_boundary") {
+    if (!readString(row.uuid)) return "Missing compact boundary UUID";
+  } else if (row.type === "system" || IGNORED_TYPES.has(String(row.type))) {
+    return undefined;
+  } else return "Unsupported record type";
   return undefined;
+}
+function createUnsupportedEventId(path: string, row: Row | undefined, reason: string): string {
+  return JSON.stringify(["unsupported", path, readString(row?.type) ?? "unknown", readString(row?.subtype) ?? null, reason]);
 }
 
 export function observeClaudeFile(ledger: Ledger, path: string, options: ClaudeObserveOptions = {}): ClaudeObservation {
@@ -87,10 +99,17 @@ export function observeClaudeFile(ledger: Ledger, path: string, options: ClaudeO
     else if (appended.status === "duplicate") result.duplicates += 1;
     else result.conflicts.push(appended);
   }
+  const unsupported = new Map<string, UnsupportedInput>();
+  const knownUnsupported = new Set(existing.filter((fact) => fact.source === "transcript-claude"
+    && fact.kind === "observation.unsupported").map((fact) => fact.source_event_id));
+  const hasUnsupported = rows.some(({ row }) => {
+    const reason = findUnsupportedReason(row);
+    return reason !== undefined && !knownUnsupported.has(createUnsupportedEventId(absolutePath, row, reason));
+  });
   for (const { line, row } of rows) {
     const sourceTs = row && Number.isFinite(Date.parse(String(row.timestamp))) ? String(row.timestamp) : observedTs;
     const common = { source: "transcript-claude" as const, confidence: "confirmed" as const,
-      source_ts: sourceTs, observed_ts: observedTs, cursor: JSON.stringify(line.cursor) };
+      source_ts: sourceTs, observed_ts: observedTs, cursor: hasUnsupported ? null : JSON.stringify(line.cursor) };
     if (!previous && line === rows[0].line) {
       append({ ...common, kind: "conversation.created", subject: `conversation:${id}`,
         source_event_id: `conversation:${id}`, payload, cursor: null });
@@ -100,11 +119,19 @@ export function observeClaudeFile(ledger: Ledger, path: string, options: ClaudeO
     }
     const reason = findUnsupportedReason(row);
     if (reason) {
-      const formatVersion = String(row?.version ?? "unversioned");
-      const eventId = JSON.stringify(["unsupported", absolutePath, formatVersion, reason]);
-      append({ ...common, kind: "observation.unsupported", subject: `observation:${eventId}`,
-        source_event_id: eventId, payload: { source_kind: "transcript-claude", file_path: absolutePath,
-          format_name: "claude-jsonl", format_version: formatVersion, reason } });
+      const recordType = readString(row?.type) ?? "unknown";
+      const recordSubtype = readString(row?.subtype) ?? null;
+      const eventId = createUnsupportedEventId(absolutePath, row, reason);
+      const group = unsupported.get(eventId);
+      if (group) {
+        group.payload.count += 1;
+      } else {
+        unsupported.set(eventId, { ...common, kind: "observation.unsupported",
+          subject: `observation:${eventId}`, source_event_id: eventId,
+          payload: { source_kind: "transcript-claude", file_path: absolutePath,
+            format_name: "claude-jsonl", format_version: "structural", reason,
+            record_type: recordType, record_subtype: recordSubtype, count: 1 } });
+      }
       continue;
     }
     if (!row) continue;
@@ -119,7 +146,7 @@ export function observeClaudeFile(ledger: Ledger, path: string, options: ClaudeO
       const membershipId = JSON.stringify([messageId, id]);
       append({ ...common, kind: "message_membership.created", subject: `message_membership:${membershipId}`,
         source_event_id: `membership:${membershipId}`, payload: { message_id: messageId, conversation_id: id, active: true } });
-    } else if (row.type === "continued-in" || row.subtype === "compact_boundary") {
+    } else if (row.type === "continued-in" || (row.type === "system" && row.subtype === "compact_boundary")) {
       const type = row.type === "continued-in" ? "continued" : "compacted";
       const target = type === "continued" ? createNativeId("claude", String(row.continuedInSessionId)) : id;
       const evidence: JsonValue = type === "continued"
@@ -130,6 +157,17 @@ export function observeClaudeFile(ledger: Ledger, path: string, options: ClaudeO
       append({ ...common, kind: "relation.created", subject: `relation:${relationId}`, source_event_id: `relation:${relationId}`,
         payload: { type, from_id: id, to_id: target, confidence: "confirmed", active: true, evidence } });
     }
+  }
+  // 台帳は不変なので、count は初回の読み取り範囲の件数を保ち、追記分は加算しない。
+  const lastUnsupportedId = [...unsupported.keys()].filter((eventId) => !knownUnsupported.has(eventId)).at(-1);
+  for (const [eventId, input] of unsupported) {
+    if (knownUnsupported.has(eventId)) {
+      result.duplicates += 1;
+      continue;
+    }
+    // 全組の保存前には cursor を進めず、中断時に未保存の行も読み直す。
+    if (eventId === lastUnsupportedId) input.cursor = JSON.stringify(result.cursor);
+    append(input);
   }
   return result;
 }

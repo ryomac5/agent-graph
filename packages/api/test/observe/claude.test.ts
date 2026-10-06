@@ -7,6 +7,7 @@ import type { TestContext } from "node:test";
 import { createNativeId, openLedger, project } from "../../../core/src/ledger/index.ts";
 import type { FactInput, Ledger, LedgerOptions } from "../../../core/src/ledger/index.ts";
 import { observeClaudeFile, observeClaudeProjects } from "../../src/observe/claude/index.ts";
+import type { ClaudeUnsupportedPayload } from "../../src/observe/claude/index.ts";
 
 const TS = "2026-10-06T10:00:00.000Z";
 function createFixture(t: TestContext, options: LedgerOptions = {}): { ledger: Ledger; directory: string } {
@@ -93,35 +94,35 @@ test("ファイルの置き換えを再読込しても既存事実を複製し�
   assert.equal(reset.appended, 0);
   assert.equal(readFacts(ledger).length, 5);
 });
-test("未知の版・構造・JSON を未対応とし、会話を隠さず、再送を数えない", (t) => {
+test("未知の構造・種類・JSON を未対応とし、会話を隠さず、再送を数えない", (t) => {
   const { ledger, directory } = createFixture(t);
   const path = join(directory, "future.jsonl");
   writeFileSync(path, [createMessage("future", "Future body.", "99.0.0"),
     JSON.stringify({ type: "future-record" }), JSON.stringify({ type: "user", uuid: "missing-body" }), "{bad-json}"].join("\n") + "\n");
-  assert.equal(observeClaudeFile(ledger, path, { observedTs: TS }).appended, 5);
+  assert.equal(observeClaudeFile(ledger, path, { observedTs: TS }).appended, 6);
   const projection = project(readFacts(ledger));
   assert.equal(projection.conversations.length, 1);
-  assert.equal(projection.messages.length, 0);
-  assert.equal(projection.unsupported_observations.reduce((sum, row) => sum + row.count, 0), 4);
+  assert.equal(projection.messages.length, 1);
+  assert.equal(projection.unsupported_observations.reduce((sum, row) => sum + row.count, 0), 3);
   assert.equal(observeClaudeFile(ledger, path).appended, 0);
 });
-test("実測された7版の発言を取り込み、それ以外の版を未対応とする", (t) => {
+test("旧い版と新しい版の発言を構造で取り込む", (t) => {
   const { ledger, directory } = createFixture(t);
   const path = join(directory, "versions.jsonl");
-  const versions = ["2.1.285", "2.1.286", "2.1.287", "2.1.288", "2.1.289", "2.1.290", "2.1.291"];
-  writeFileSync(path, [...versions, "2.1.284", "2.1.292", "2.1.9"].map((version) =>
+  const versions = ["2.1.273", "2.1.274", "2.1.275", "2.1.276", "2.1.277", "2.1.278", "2.1.279", "2.1.280", "2.1.281", "2.1.282", "2.1.283", "99.0.0", "2.1.285", "2.1.286", "2.1.287", "2.1.288", "2.1.289", "2.1.290", "2.1.291"];
+  writeFileSync(path, versions.map((version) =>
     createMessage(`version-${version}`, "Versioned message.", version)).join("\n") + "\n");
   const result = observeClaudeFile(ledger, path);
   assert.deepEqual(result.conflicts, []);
   const projection = project(readFacts(ledger));
-  assert.deepEqual(projection.messages.map((row) => row.native_id).sort(), versions.map((version) => `version-${version}`));
-  assert.deepEqual(projection.unsupported_observations.map((row) => row.format_version).sort(), ["2.1.284", "2.1.292", "2.1.9"]);
+  assert.deepEqual(projection.messages.map((row) => row.native_id).sort(), versions.map((version) => `version-${version}`).sort());
+  assert.deepEqual(projection.unsupported_observations, []);
 });
 test("実在する補助記録を無視し、後続の発言を取り込む", (t) => {
   const { ledger, directory } = createFixture(t);
   const path = join(directory, "metadata.jsonl");
-  const types = ["attachment", "ai-title", "permission-mode", "mode", "atis-latch", "cost-state", "file-history-delta", "bridge-session"];
-  writeFileSync(path, [...types.map((type) => JSON.stringify({ type, version: "2.1.291" })),
+  const types = ["file-history-snapshot", "queue-operation", "progress", "summary", "custom-title", "agent-name", "last-prompt", "pr-link", "system", "agent-setting", "relocated", "worktree-state", "attachment", "ai-title", "permission-mode", "mode", "atis-latch", "cost-state", "file-history-delta", "bridge-session"];
+  writeFileSync(path, [...types.map((type) => JSON.stringify({ type, version: "2.1.273", timestamp: "invalid" })),
     createMessage("after-metadata")].join("\n") + "\n");
   assert.equal(observeClaudeFile(ledger, path).appended, 3);
   const projection = project(readFacts(ledger));
@@ -129,32 +130,119 @@ test("実在する補助記録を無視し、後続の発言を取り込む", (t
   assert.deepEqual(projection.messages.map((row) => row.native_id), ["after-metadata"]);
   assert.equal(observeClaudeFile(ledger, path).appended, 0);
 });
-test("未対応はファイル・版・理由ごとに一件で、追記と置き換えでも増殖しない", (t) => {
+test("未対応はファイル・種類・理由ごとに件数を集約し、再送と追記で増殖しない", (t) => {
   const { ledger, directory } = createFixture(t);
   const path = join(directory, "unsupported.jsonl");
-  const row = createMessage("future-first", "Future body.", "99.0.0");
-  writeFileSync(path, `${row}\n${createMessage("future-second", "Other body.", "99.0.0")}\n`);
+  const unknown = JSON.stringify({ type: "future-record", version: "2.1.273" });
+  const otherVersion = JSON.stringify({ type: "future-record", version: "99.0.0" });
+  const subtype = JSON.stringify({ type: "system", subtype: "future-subtype" });
+  writeFileSync(path, [unknown, otherVersion, subtype, subtype,
+    JSON.stringify({ type: "continued-in" }), JSON.stringify({ type: "system", subtype: "compact_boundary" })].join("\n") + "\n");
   const first = observeClaudeFile(ledger, path);
-  assert.equal(first.appended, 2);
+  assert.equal(first.appended, 5);
   assert.deepEqual(first.conflicts, []);
-  appendFileSync(path, `${createMessage("future-third", "Third body.", "99.0.0")}\n`);
+  const unsupported = readFacts(ledger).filter((fact) => fact.kind === "observation.unsupported");
+  const payloads = unsupported.map((fact) => fact.payload as Partial<ClaudeUnsupportedPayload>);
+  assert.deepEqual(payloads.map((payload) => payload.count), [2, 2, 1, 1]);
+  assert.deepEqual(payloads.map((payload) => payload.record_type), ["future-record", "system", "continued-in", "system"]);
+  const replay = observeClaudeFile(ledger, path, { cursor: { ...first.cursor, identity: "replay" } });
+  assert.equal(replay.appended, 0);
+  assert.deepEqual(replay.conflicts, []);
+  appendFileSync(path, unknown + "\n");
   const added = observeClaudeFile(ledger, path);
   assert.equal(added.appended, 0);
   assert.deepEqual(added.conflicts, []);
-  const replacement = `${path}.new`;
-  writeFileSync(replacement, `${row}\n`);
+  const replacement = path + ".new";
+  writeFileSync(replacement, unknown + "\n");
   renameSync(replacement, path);
   const replaced = observeClaudeFile(ledger, path);
   assert.equal(replaced.reset, true);
   assert.equal(replaced.appended, 0);
   assert.deepEqual(replaced.conflicts, []);
-  appendFileSync(path, JSON.stringify({ type: "future-record", version: "2.1.291" }) + "\n"
-    + createMessage("other-version", "Body.", "99.0.1") + "\n");
-  assert.equal(observeClaudeFile(ledger, path).appended, 2);
+  appendFileSync(path, JSON.stringify({ type: "another-future-record" }) + "\n");
+  assert.equal(observeClaudeFile(ledger, path).appended, 1);
   const otherPath = join(directory, "another.jsonl");
-  writeFileSync(otherPath, `${row}\n`);
+  writeFileSync(otherPath, unknown + "\n" + otherVersion + "\n");
   assert.equal(observeClaudeFile(ledger, otherPath).appended, 2);
-  assert.equal(readFacts(ledger).filter((fact) => fact.kind === "observation.unsupported").length, 4);
+  assert.equal(readFacts(ledger).filter((fact) => fact.kind === "observation.unsupported").length, 6);
+});
+for (const includeNewGroup of [false, true]) {
+  test(`保存済みの未対応が再登場しても cursor が進む（新規の組: ${includeNewGroup}）`, (t) => {
+    const { ledger, directory } = createFixture(t);
+    const path = join(directory, "cursor.jsonl");
+    const known = JSON.stringify({ type: "system", subtype: "fictional-unknown" });
+    writeFileSync(path, [known, createMessage("first")].join("\n") + "\n");
+    const first = observeClaudeFile(ledger, path);
+    const initialUnsupported = readFacts(ledger).filter((fact) => fact.kind === "observation.unsupported");
+    const addedLines = [...(includeNewGroup ? [JSON.stringify({ type: "fictional-new" })] : []),
+      known, createMessage("second")];
+    appendFileSync(path, addedLines.join("\n") + "\n");
+    const second = observeClaudeFile(ledger, path);
+    assert.equal(second.lines.length, addedLines.length);
+    assert.equal(second.appended, includeNewGroup ? 3 : 2);
+    assert.deepEqual(second.conflicts, []);
+    assert.ok(second.cursor.offset > first.cursor.offset);
+    const savedCursor = readFacts(ledger).filter((fact) => fact.cursor).at(-1)!.cursor!;
+    assert.deepEqual(JSON.parse(savedCursor), second.cursor);
+    assert.deepEqual(readFacts(ledger).filter((fact) => fact.kind === "observation.unsupported")
+      .slice(0, initialUnsupported.length), initialUnsupported);
+    appendFileSync(path, createMessage("third") + "\n");
+    const third = observeClaudeFile(ledger, path);
+    assert.equal(third.lines.length, 1);
+    assert.equal(third.appended, 2);
+    assert.deepEqual(third.conflicts, []);
+    assert.equal(observeClaudeFile(ledger, path).lines.length, 0);
+    const projection = project(readFacts(ledger));
+    assert.equal(projection.messages.length, 3);
+    assert.equal(readFacts(ledger).filter((fact) => fact.kind === "observation.unsupported").length,
+      includeNewGroup ? 2 : 1);
+  });
+}
+test("既知の system subtype を取り込まず未対応にもせず、compact だけを取り込む", (t) => {
+  const { ledger, directory } = createFixture(t);
+  const path = join(directory, "system.jsonl");
+  const subtypes = ["api_error", "away_summary", "bridge_status", "informational", "local_command",
+    "model_refusal_fallback", "scheduled_task_fire", "stop_hook_summary", "turn_duration"];
+  writeFileSync(path, [...subtypes.map((subtype) => JSON.stringify({ type: "system", subtype })),
+    JSON.stringify({ type: "system", subtype: "compact_boundary", uuid: "fictional-boundary" })].join("\n") + "\n");
+  observeClaudeFile(ledger, path);
+  const projection = project(readFacts(ledger));
+  assert.equal(projection.unsupported_observations.length, 0);
+  assert.equal(projection.relations.length, 1);
+  assert.equal(projection.relations[0].type, "compacted");
+});
+test("未対応の集約保存前に停止しても後続の発言の cursor で未保存の行を飛ばさない", (t) => {
+  const { ledger, directory } = createFixture(t);
+  const path = join(directory, "interrupted.jsonl");
+  writeFileSync(path, [JSON.stringify({ type: "fictional-unknown" }), createMessage("after-unknown"),
+    JSON.stringify({ type: "fictional-other" })].join("\n") + "\n");
+  const failingLedger: Ledger = {
+    ...ledger,
+    append(input) {
+      if (input.kind === "observation.unsupported") throw new Error("Simulated interrupted aggregate");
+      return ledger.append(input);
+    },
+  };
+  assert.throws(() => observeClaudeFile(failingLedger, path), /Simulated interrupted aggregate/);
+  const result = observeClaudeFile(ledger, path);
+  assert.equal(result.appended, 2);
+  assert.deepEqual(result.conflicts, []);
+  assert.equal(project(readFacts(ledger)).messages.length, 1);
+  assert.equal(readFacts(ledger).filter((fact) => fact.kind === "observation.unsupported").length, 2);
+  assert.equal(observeClaudeFile(ledger, path).appended, 0);
+});
+test("取り込む発言は uuid と本文の構造を必要とし、任意の時刻欄は判定に使わない", (t) => {
+  const { ledger, directory } = createFixture(t);
+  const path = join(directory, "required.jsonl");
+  const valid = { ...JSON.parse(createMessage("valid")), timestamp: "fictional-invalid-time" };
+  writeFileSync(path, [JSON.stringify({ type: "user", message: { content: "Fictional body." } }),
+    JSON.stringify({ type: "user", uuid: "missing-content", message: {} }),
+    JSON.stringify(valid)].join("\n") + "\n");
+  observeClaudeFile(ledger, path, { observedTs: TS });
+  const unsupported = readFacts(ledger).filter((fact) => fact.kind === "observation.unsupported");
+  assert.equal(unsupported.length, 1);
+  assert.equal((unsupported[0].payload as Partial<ClaudeUnsupportedPayload>).count, 2);
+  assert.equal(project(readFacts(ledger)).messages.length, 1);
 });
 test("版のない旧記録を構造で確認し、本文の保存範囲と秘匿を台帳へ委ねる", (t) => {
   for (const storageScope of ["metadata", "message_body"] as const) {

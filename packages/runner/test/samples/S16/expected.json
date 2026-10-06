@@ -1,0 +1,6 @@
+{
+  "beforeObservation": { "confidence": "unknown" },
+  "afterObservation": { "type": "delegated", "confidence": "confirmed", "parentNativeId": "terminal-claude" },
+  "delegations": 1,
+  "implementerStarts": 1
+}

@@ -693,8 +693,6 @@ body.detail-expanded #detail { width: 100%; max-width: none; margin: 0; padding-
 .node-head { padding-bottom: 10px; }
 .execution-info { flex: none; border-top: 1px solid #eeeef1; padding: 10px 0; max-height: 45%; overflow-y: auto; }
 .execution-info > summary { font-size: 11px; }
-.bubble-time { opacity: 0; transition: opacity .15s; height: 0; margin-top: 0; overflow: hidden; }
-.bubble:hover .bubble-time, .bubble:focus-within .bubble-time { opacity: 1; height: auto; margin-top: 5px; }
 form.say .say-note:empty { display: none; }
 form.say { padding-top: 12px; padding-bottom: 12px; }
 form.say textarea { min-height: 60px; }

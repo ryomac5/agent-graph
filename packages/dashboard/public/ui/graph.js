@@ -89,7 +89,9 @@ function attachZoom(holder, svg, scope, ctx, full) {
   const remember = () => { ctx.zoom.set(scope.id, { ...state }); };
   const isFit = () => state.w === full.w && state.h === full.h && state.x === full.x && state.y === full.y;
   holder.addEventListener("wheel", (ev) => {
-    if (!ev.ctrlKey && !ev.metaKey && Math.abs(ev.deltaY) < 1) return;
+    // 普通のホイールはページのスクロールに譲る。グラフの下の履歴までホイールで降りられるようにする。
+    // 拡大と縮小は ⌘ か Ctrl を押しながらのホイールだけ。トラックパッドのピンチも Ctrl 付きで届く
+    if (!ev.ctrlKey && !ev.metaKey) return;
     ev.preventDefault();
     const rect = svg.getBoundingClientRect();
     const px = state.x + ((ev.clientX - rect.left) / rect.width) * state.w;
@@ -246,7 +248,7 @@ export function renderGraph(scope, ctx) {
   }
 
   const holder = el("div", undefined, "graph-holder");
-  holder.append(svg, el("span", "wheel: zoom · drag: pan · double-click: fit", "graph-hint"));
+  holder.append(svg, el("span", "⌘/Ctrl + wheel: zoom · drag: pan · double-click: fit", "graph-hint"));
   if (typeof holder.addEventListener === "function" && typeof svg.getBoundingClientRect === "function") {
     attachZoom(holder, svg, scope, ctx, { x: 0, y: 0, w: width, h: height });
   }

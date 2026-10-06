@@ -141,7 +141,7 @@ export class CodexHost implements AgentHost {
         for (const message of deferred) this.receive(message);
       }
     }
-    try { await this.send(req.runId, req.input); }
+    try { if (operation !== "resume" || req.input.text || req.input.attachments?.length) await this.send(req.runId, req.input); }
     catch (error) {
       thread.closed = true;
       this.runs.delete(req.runId);

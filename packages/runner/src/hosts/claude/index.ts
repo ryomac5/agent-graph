@@ -52,15 +52,19 @@ export class ClaudeHost implements AgentHost {
   private epoch = randomUUID();
   private sequence = 0;
   private timestamp = 0;
-  constructor(factory: QueryFactory = query) { this.factory = factory; }
+  private options: { enableFork?: boolean };
+  constructor(factory: QueryFactory = query, options: { enableFork?: boolean } = {}) { this.factory = factory; this.options = options; }
   capabilities(): ClaudeCapabilities {
-    return { start: true, resume: true, fork: false, interrupt: true, approvals: true, setModel: true, delta: true,
+    return { start: true, resume: true, fork: this.options.enableFork ?? false, interrupt: true, approvals: true, setModel: true, delta: true,
       authentication: { ...this.authentication }, degraded: [...this.degraded] };
   }
   start(req: StartRequest): Promise<RunHandle> { return this.open(req, randomUUID()); }
   resume(req: ResumeRequest): Promise<RunHandle> { return this.open(req, req.nativeId, true); }
-  async fork(_req: ForkRequest): Promise<RunHandle> { throw new Error("Claude fork is not supported"); }
-  private async open(req: StartRequest, sessionId: string, resume = false): Promise<RunHandle> {
+  async fork(req: ForkRequest): Promise<RunHandle> {
+    if (!this.options.enableFork) throw new Error("Claude fork is not supported");
+    return this.open(req, randomUUID(), false, req.nativeId);
+  }
+  private async open(req: StartRequest, sessionId: string, resume = false, forkFrom?: string): Promise<RunHandle> {
     if (this.runs.has(req.runId)) throw new Error("Run already exists");
     if ([...this.runs.values()].some((run) => !run.finished && run.request.conversationId === req.conversationId)) throw new Error("Conversation is already open");
     const effort = getEffort(req.model);
@@ -70,7 +74,8 @@ export class ClaudeHost implements AgentHost {
     let run: OpenRun;
     const sdkQuery = this.factory({ prompt: input, options: {
       cwd: req.cwd, model: req.model.model, effort,
-      ...(resume ? { resume: sessionId } : { sessionId }),
+      ...(forkFrom ? { sessionId, resume: forkFrom, forkSession: true } : resume ? { resume: sessionId } : { sessionId }),
+      ...(req.env?.AGENT_GRAPH_STRICT_MCP_CONFIG === "1" ? { strictMcpConfig: true, mcpServers: {} } : {}),
       settingSources: ["user", "project"], permissionMode: "default", includePartialMessages: true, persistSession: true,
       env: { ...process.env, ...req.env, CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1", AGENT_GRAPH_MANAGED: "1",
         AGENT_GRAPH_RUN_ID: req.runId, AGENT_GRAPH_CONVERSATION_ID: req.conversationId, AGENT_GRAPH_GENERATION: String(req.generation) },

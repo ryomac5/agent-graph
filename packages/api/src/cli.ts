@@ -7,8 +7,9 @@ import { migrateLegacyDatabases } from "./migrate/index.ts";
 import { OBSERVATION_POLL_MS, openObservationService } from "./service/index.ts";
 import { DEFAULT_WS_PORT, startWebSocketServer } from "./ws/index.ts";
 import { pollObservation } from "./service/poll.ts";
+import { runWatchCli, WATCH_HELP } from "./watch/index.ts";
 
-const HELP = "Usage: agent-graph-api ingest --once | migrate --from <path> | rebuild | serve [--db <path>] [--port <port>] [--runner-socket <path>] [--no-observe]";
+const HELP = "Usage: agent-graph-api ingest --once | migrate --from <path> | rebuild | serve [--db <path>] [--port <port>] [--runner-socket <path>] [--no-observe]" + "\n" + WATCH_HELP;
 
 function listDatabases(path: string, excludedPaths: Set<string>): string[] {
   if (statSync(path).isFile()) return excludedPaths.has(realpathSync(path)) ? [] : [path];
@@ -23,6 +24,7 @@ function listDatabases(path: string, excludedPaths: Set<string>): string[] {
 export async function runCli(args = process.argv.slice(2)): Promise<void> {
   const [command, ...flags] = args;
   if (command === "--help" || command === "-h") { console.log(HELP); return; }
+  if (command === "watch") { process.exitCode = await runWatchCli(flags); return; }
   if (!["ingest", "migrate", "rebuild", "serve"].includes(command)) throw new TypeError(HELP);
   let dbPath: string | undefined;
   let from: string | undefined;

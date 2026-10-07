@@ -15,6 +15,11 @@ function ExecutionNode({ data }: NodeProps<GraphNode>) {
 const nodeTypes = { execution: ExecutionNode };
 const COLUMN_WIDTH = 360;
 const ROW_HEIGHT = 190;
+// 画面の配色の上書きに合わせ、上書きがなければ OS の設定に従う。
+function readColorMode(): 'light' | 'dark' | 'system' {
+  const theme = typeof document === 'undefined' ? undefined : document.documentElement.dataset.theme;
+  return theme === 'light' || theme === 'dark' ? theme : 'system';
+}
 export function createGraphElements(tree: DelegationTree, selected?: string, language: Language = 'en') {
   const byId = new Map(tree.nodes.map(n => [n.id, n]));
   const positions = new Map<string, { x: number; y: number }>();
@@ -42,7 +47,7 @@ export function DelegationGraph({ tree, selected, onSelect, language = 'en' }: {
   const elements = createGraphElements(tree, selected, language);
   elements.nodes = elements.nodes.map(node => ({ ...node, data: { ...node.data, onSelect } }));
   return <div className="delegation-graph" aria-label={language === 'ja' ? '委譲グラフ' : 'Delegation graph'}>
-    <ReactFlow {...elements} nodeTypes={nodeTypes} onNodeClick={(_event, node) => onSelect(node.id)}
+    <ReactFlow {...elements} colorMode={readColorMode()} nodeTypes={nodeTypes} onNodeClick={(_event, node) => onSelect(node.id)}
       nodesDraggable={false} nodesConnectable={false} fitView minZoom={0.15} maxZoom={2}>
       <Background/><Controls showInteractive={false}/>
     </ReactFlow>

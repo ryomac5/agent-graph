@@ -10,8 +10,50 @@ import { ConversationPage } from '../pages/conversation/ConversationPage.tsx';
 import { Inbox } from '../pages/inbox/Inbox.tsx';
 import { selectTimeline } from '../components/conversation/model.ts';
 import { Notifications } from '../components/notifications/Notifications.tsx';
+import { readBody } from '../lib/message-body.ts';
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+it.each(['approve', 'request_changes', 'reject'])('formats %s review output consistently in Overview, workspace and conversation', verdict => {
+  const label = verdict === 'approve' ? 'Approved' : 'Changes requested';
+  const result = { verdict, comment: 'Check the acceptance results.\nMore detail.' };
+  const raw = JSON.stringify(result);
+  const expected = `${label} · ${result.comment}`;
+  for (const body of [result, raw, JSON.stringify(raw), [{ type: 'text', text: raw }], JSON.stringify([{ type: 'text', text: raw }])]) {
+    expect(readBody(body)).toBe(expected);
+  }
+  expect(readBody({ verdict, comment: '' })).toBe(label);
+  expect(readBody('Ordinary text')).toBe('Ordinary text');
+  expect(readBody('123')).toBe('123');
+  expect(readBody('{"files":2}')).toBe('{"files":2}');
+  expect(readBody('{"verdict":"unrelated","comment":"Example data"}')).toBe('{"verdict":"unrelated","comment":"Example data"}');
+  expect(readBody('Unfinished {"verdict":')).toBe('Unfinished {"verdict":');
+  const target = setup();
+  const review = 'review-conversation';
+  target.setSnapshot({ seq: 2, generation: 1, projection: projection({
+    conversations: [...projection().conversations, { id: review, origin: 'managed', provider: 'codex', history_format: 'jsonl' }],
+    runs: [...projection().runs, { id: 'review-run', conversation_id: review, generation: 1, state: 'ended' }],
+    relations: [{ id: 'review-edge', type: 'review_of', active: 1, confidence: 'confirmed', from_id: review, to_id: CONVERSATION }],
+    messages: [{ id: 'review-message', role: 'assistant', body_state: 'stored', body: JSON.stringify(raw) }],
+    message_memberships: [{ id: 'review-link', message_id: 'review-message', conversation_id: review, active: 1 }],
+  }) });
+  const name = 'Review of Browser fixture task';
+  const overview = render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
+  const row = screen.getByRole('article', { name });
+  expect(row.querySelector('.activity-excerpt')!.textContent).toBe(expected);
+  expect(row.textContent).not.toContain(raw);
+  overview.unmount();
+  const workspace = render(<MemoryRouter><WorkspacePage target={target} client={client} project={REPO}/></MemoryRouter>);
+  const workspaceRow = within(screen.getByRole('region', { name: 'Tasks' })).getByRole('article', { name });
+  expect(workspaceRow.querySelector('.activity-excerpt')!.textContent).toBe(expected);
+  fireEvent.click(within(workspaceRow).getByRole('button', { name }));
+  expect(document.querySelector('.message-main p')!.textContent).toBe(expected);
+  workspace.unmount();
+  render(<MemoryRouter><ConversationPage conversationId={review} target={target} client={client}/></MemoryRouter>);
+  const bubble = document.querySelector('.conversation-markdown')!;
+  expect(bubble.textContent).toBe(expected.replace('\n', ''));
+  expect(bubble.textContent).not.toContain(raw);
+});
 const REPO = '/var/folders/07/abc/T/agent-graph-ui-x/repo';
 const CONVERSATION = '["claude","session-1"]';
 const RUN = `${CONVERSATION}:1`;

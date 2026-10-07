@@ -91,3 +91,14 @@ export function resolveProjectLocation(
   }
   return { ...base, state: "registered" };
 }
+
+// 台帳の公開の口と問い合わせ用接続を結び、接続は close と一緒に解放する。
+const LEDGER_DATABASES = new WeakMap<import("./ledger.ts").Ledger, import("node:sqlite").DatabaseSync>();
+export function registerLedgerDatabase(ledger: import("./ledger.ts").Ledger, database: import("node:sqlite").DatabaseSync): void {
+  LEDGER_DATABASES.set(ledger, database);
+}
+export function readLedgerDatabase(ledger: import("./ledger.ts").Ledger): import("node:sqlite").DatabaseSync {
+  const database = LEDGER_DATABASES.get(ledger);
+  if (!database) throw new Error("Open the runner ledger through ledger/index.ts");
+  return database;
+}

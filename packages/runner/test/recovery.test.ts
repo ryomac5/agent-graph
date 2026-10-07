@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { openLedger } from "../../core/src/ledger/ledger.ts";
+import { openLedger } from "../../core/src/ledger/index.ts";
 import type { FactInput } from "../../core/src/ledger/facts.ts";
 import { projectApprovals } from "../../core/src/ledger/projections/approvals.ts";
 import { projectRuns } from "../../core/src/ledger/projections/runs.ts";

@@ -8,7 +8,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import test, { type TestContext } from "node:test";
 import { loadPolicy } from "../../core/src/assign/policy.ts";
 import type { FactInput, JsonValue } from "../../core/src/ledger/facts.ts";
-import { openLedger } from "../../core/src/ledger/ledger.ts";
+import { openLedger } from "../../core/src/ledger/index.ts";
 import { projectArtifacts } from "../../core/src/ledger/projections/artifacts.ts";
 import { canMergeArtifact, projectApprovals } from "../../core/src/ledger/projections/approvals.ts";
 import { projectFindings } from "../../core/src/ledger/projections/findings.ts";

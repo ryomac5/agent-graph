@@ -1,3 +1,8 @@
+import { DatabaseSync as QueryDatabase } from "node:sqlite";
+import { openLedger as openBaseLedger, type LedgerOptions, type Ledger, BUSY_TIMEOUT_MS, DEFAULT_RETENTION_DAYS } from "./ledger.ts";
+import { initializeSchema } from "./schema.ts";
+import { collectProjectionDependencies } from "./projections/dependencies.ts";
+import { registerLedgerDatabase } from "./repository.ts";
 export * from "./facts.ts";
 export * from "./ledger.ts";
 export * from "./schema.ts";
@@ -8,6 +13,7 @@ export { PROJECTION_TABLES, type ProjectionState } from "./rebuild.ts";
 import type { DatabaseSync } from "node:sqlite";
 import { applyIncremental as applyProjectionDelta, rebuild as rebuildProjection, type ProjectionState } from "./rebuild.ts";
 
+const DAY_MS = 86_400_000;
 const PROJECTION_CACHE_KIB = 64 * 1024;
 const configuredConnections = new WeakSet<DatabaseSync>();
 
@@ -38,3 +44,44 @@ export function applyIncremental(database: DatabaseSync, sinceSeq: number): Proj
 export function rebuild(database: DatabaseSync): ProjectionState {
   return updateDerivedProjection(database, () => rebuildProjection(database));
 }
+
+
+
+/** 問い合わせ用接続を持つ台帳。事実の書き込みと秘匿は従来の口に委ねる。 */
+export function openLedger(path: string, options: LedgerOptions = {}): Ledger {
+  const base = openBaseLedger(path, options);
+  const database = new QueryDatabase(path);
+  database.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}; PRAGMA cache_size = -${PROJECTION_CACHE_KIB}`);
+  if (path === ":memory:") initializeSchema(database);
+  const insertMirror = path === ":memory:" ? database.prepare(`INSERT INTO facts(seq, fact_id, source, source_event_id, kind, subject, payload, payload_hash,
+    source_ts, observed_ts, schema_version, cursor, confidence, supersedes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`) : undefined;
+  const insertMirrorDependency = path === ":memory:" ? database.prepare("INSERT OR IGNORE INTO fact_projection_dependencies VALUES (?, ?, ?, ?, ?)") : undefined;
+  const ledger: Ledger = {
+    ...base,
+    append(input) {
+      const result = base.append(input);
+      // メモリ台帳だけは別接続と共有できないため、秘匿済みの保存内容を同期する。
+      if (path === ":memory:" && result.status === "appended") {
+        const fact = base.readSince(result.seq - 1, 1)[0];
+        insertMirror!.run(fact.seq, fact.fact_id, fact.source, fact.source_event_id, fact.kind, fact.subject,
+            fact.payload === null ? null : JSON.stringify(fact.payload), fact.payload_hash, fact.source_ts, fact.observed_ts, fact.schema_version,
+            fact.cursor ?? null, fact.confidence, fact.supersedes ?? null);
+        for (const dependency of collectProjectionDependencies(fact)) insertMirrorDependency!.run(dependency.projection, fact.subject, dependency.direction, dependency.key, fact.seq);
+      }
+      return result;
+    },
+    purgePayloads(before) {
+      const count = base.purgePayloads(before);
+      if (path === ":memory:") database.prepare("UPDATE facts SET payload = NULL WHERE payload IS NOT NULL AND julianday(observed_ts) < julianday(?)").run(before);
+      return count;
+    },
+    prunePayloads(retentionDays = DEFAULT_RETENTION_DAYS, now = new Date()) {
+      if (!Number.isFinite(retentionDays) || retentionDays < 0) throw new RangeError("保持期間は非負の日数で指定してください");
+      return ledger.purgePayloads(new Date(now.getTime() - retentionDays * DAY_MS).toISOString());
+    },
+    close() { database.close(); base.close(); },
+  };
+  registerLedgerDatabase(ledger, database);
+  return ledger;
+}
+export { readLedgerDatabase } from "./repository.ts";

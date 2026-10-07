@@ -1,19 +1,14 @@
+import { readProjection } from "./projection.ts";
 import { randomUUID } from "node:crypto";
 import { setImmediate } from "node:timers/promises";
-import type { Fact, FactInput, Provider } from "../../core/src/ledger/facts.ts";
+import type { FactInput, Provider } from "../../core/src/ledger/facts.ts";
 import type { Ledger } from "../../core/src/ledger/ledger.ts";
-import { projectApprovals } from "../../core/src/ledger/projections/approvals.ts";
-import { projectDelegations, projectEntityRecords } from "../../core/src/ledger/projections/delegations.ts";
-import { projectRuns } from "../../core/src/ledger/projections/runs.ts";
 import type { ConversationPayload } from "../../core/src/ledger/facts.ts";
 import type { AgentHost, HostEvent, RunHandle, StartRequest, ResumeRequest, ForkRequest } from "./host/contract.ts";
 import type { RunnerEvent } from "./socket.ts";
 import { recordWorktree } from "./worktree.ts";
 import { finalizeArtifactsAsync, type ArtifactOptions } from "./artifacts/index.ts";
 
-const ACTIVE_STATES = new Set(["starting", "running", "waiting_approval", "waiting_input"]);
-const TERMINAL_DELEGATIONS = new Set(["done", "failed", "interrupted", "denied"]);
-const READ_BATCH_SIZE = 1000;
 const CAPTURE_DEBOUNCE_MS = 25;
 const EVENTS_PER_TICK = 2;
 export interface UpdateStatus { activeRuns: number; activeDelegations: number }
@@ -24,7 +19,7 @@ export class Supervisor {
   private captures = new Map<string, Promise<void>>();
   private pendingCaptures = new Set<string>();
   private openRuns = new Set<string>();
-  private facts: Fact[] = [];
+
   private epoch = randomUUID();
   private counter = 0;
   private lastTimestamp = 0;
@@ -43,15 +38,8 @@ export class Supervisor {
     if (this.hosts.has(host.provider)) throw new Error("Host already registered");
     this.hosts.set(host.provider, host);
   }
-  private readFacts(): Fact[] {
-    for (;;) {
-      const batch = this.ledger.readSince(this.facts.at(-1)?.seq ?? 0, READ_BATCH_SIZE);
-      this.facts.push(...batch);
-      if (batch.length < READ_BATCH_SIZE) return this.facts;
-    }
-  }
   private stamp(): { source_event_id: string; source_ts: string } {
-    this.lastTimestamp = Math.max(Date.now(), this.lastTimestamp + 1, ...this.readFacts().slice(-READ_BATCH_SIZE).map((fact) => Date.parse(fact.source_ts) + 1));
+    this.lastTimestamp = Math.max(Date.now(), this.lastTimestamp + 1, readProjection(this.ledger).timestamp() + 1);
     return { source_event_id: `${this.epoch}:${String(++this.counter).padStart(12, "0")}`, source_ts: new Date(this.lastTimestamp).toISOString() };
   }
   private append(fact: FactInput): void {
@@ -60,13 +48,11 @@ export class Supervisor {
     if (result.status === "appended") this.publish({ type: "evt", seq: result.seq });
   }
   private findManagedRuns() {
-    const facts = this.readFacts();
-    const managed = new Map(projectEntityRecords<ConversationPayload>(facts, "conversation")
-      .filter((conversation) => conversation.origin === "managed").map((conversation) => [conversation.id, conversation.provider!]));
-    return projectRuns(facts).filter((run) => managed.has(run.conversation_id)).map((run) => {
-      const creation = facts.findLast((fact) => fact.kind === "run.created"
-        && fact.payload?.conversation_id === run.conversation_id && fact.payload.generation === run.generation);
-      return { ...run, subject: creation!.subject as `run:${string}`, provider: managed.get(run.conversation_id)! };
+    const store = readProjection(this.ledger);
+    return store.rows("runs", "conversation_id IN (SELECT id FROM entity_records WHERE entity = 'conversation' AND json_extract(data, '$.origin') = 'managed')").map((run) => {
+      const record = store.records<ConversationPayload>("conversation", "id = ?", [run.conversation_id])[0];
+      const subject = store.runSubject(run.conversation_id, run.generation);
+      return { ...run, subject: `run:${subject!}` as `run:${string}`, provider: record.provider! };
     });
   }
   private markUnknown(reason: string): void {
@@ -78,14 +64,14 @@ export class Supervisor {
     }
   }
   private recover(): void {
-    const facts = this.readFacts();
-    this.lastTimestamp = Math.max(0, ...facts.slice(-READ_BATCH_SIZE).map((fact) => Date.parse(fact.source_ts)));
-    const approvals = projectApprovals(facts);
+    const store = readProjection(this.ledger);
+    this.lastTimestamp = store.timestamp();
+    const approvals = store.rows("approvals", "state IN ('pending', 'requested', 'waiting', 'waiting_approval')");
     const managedIds = new Set(this.findManagedRuns().map((run) => run.subject.slice(4)));
     this.markUnknown("restart");
     for (const approval of approvals) {
       if (approval.run_id && managedIds.has(approval.run_id) && ["pending", "requested", "waiting", "waiting_approval"].includes(approval.state)) {
-        const source = facts.findLast((fact) => fact.subject === `approval:${approval.id}`)?.source;
+        const source = store.lastFact(`approval:${approval.id}`)?.source;
         if (source !== "host-claude" && source !== "host-codex") continue;
         this.append({ ...this.stamp(), source, kind: "approval.resolved", subject: `approval:${approval.id}`,
           confidence: "confirmed", payload: { state: "expired", reason: "restart" } });
@@ -94,8 +80,8 @@ export class Supervisor {
   }
   status(): UpdateStatus {
     return {
-      activeRuns: this.findManagedRuns().filter((run) => ACTIVE_STATES.has(run.state)).length,
-      activeDelegations: projectDelegations(this.readFacts()).filter((delegation) => !TERMINAL_DELEGATIONS.has(delegation.state)).length,
+      activeRuns: readProjection(this.ledger).count("SELECT count(*) AS count FROM runs r INDEXED BY runs_state JOIN entity_records c ON c.entity = 'conversation' AND c.id = r.conversation_id WHERE r.state IN ('starting', 'running', 'waiting_approval', 'waiting_input') AND json_extract(c.data, '$.origin') = 'managed'"),
+      activeDelegations: readProjection(this.ledger).count("SELECT count(*) AS count FROM delegations WHERE state IN ('received', 'accepted', 'assigned', 'running', 'verifying', 'reviewing')"),
     };
   }
   prepareUpdate(force = false): UpdateStatus {
@@ -113,12 +99,12 @@ export class Supervisor {
     const host = this.hosts.get(provider);
     if (!host) throw new Error(`Host unavailable: ${provider}`);
     if (!host.capabilities()[operation]) throw new Error(`Host does not support ${operation}`);
-    if (this.readFacts().some((fact) => fact.subject === `run:${request.runId}`)) throw new Error("Run already exists");
+    if (readProjection(this.ledger).hasSubject(`run:${request.runId}`)) throw new Error("Run already exists");
     const source = `host-${provider}` as const;
     this.append({ ...this.stamp(), source, kind: "run.created", subject: `run:${request.runId}`, confidence: "confirmed",
       payload: { conversation_id: request.conversationId, generation: request.generation, state: "starting", started_ts: new Date().toISOString() } });
     // 起動を待つ間も、更新判定で管理対象として見えるようにする。
-    if (!this.readFacts().some((fact) => fact.subject === `conversation:${request.conversationId}`)) {
+    if (!readProjection(this.ledger).hasSubject(`conversation:${request.conversationId}`)) {
       this.append({ ...this.stamp(), source, kind: "conversation.created", subject: `conversation:${request.conversationId}`, confidence: "confirmed",
         payload: { provider, native_id: "nativeId" in request ? request.nativeId : request.conversationId,
           origin: "managed", type: "interactive", history_format: "jsonl" } });
@@ -133,7 +119,7 @@ export class Supervisor {
         const tree = recordWorktree(this.ledger, { runId: request.runId, generation: request.generation, provider,
           cwd: request.cwd, isolation: this.options.isolation, sourceEventId: stamp.source_event_id, sourceTs: stamp.source_ts });
         request = { ...request, cwd: tree.cwd };
-        const seq = this.readFacts().at(-1)!.seq;
+        const seq = readProjection(this.ledger).lastSeq();
         this.publish({ type: "evt", seq });
       }
       this.append({ ...this.stamp(), source, kind: "run.updated", subject: `run:${request.runId}`, confidence: "confirmed",
@@ -231,11 +217,9 @@ export class Supervisor {
     this.captures.set(request.runId, task);
   }
   private async captureLatest(provider: Provider, request: StartRequest): Promise<void> {
-    const facts = this.readFacts();
-    if (projectEntityRecords<{ type: string; from_id: string }>(facts, "relation")
-      .some((relation) => relation.type === "review_of" && relation.from_id === request.conversationId)) return;
+    if (readProjection(this.ledger).rows("relations", "type = 'review_of' AND from_id = ?", [readProjection(this.ledger).nativeConversationId(request.conversationId)]).length) return;
     const stamp = this.stamp();
-    const before = this.readFacts().at(-1)?.seq;
+    const before = readProjection(this.ledger).lastSeq();
     try {
       await finalizeArtifactsAsync(this.ledger, { runId: request.runId, provider,
         sourceEventId: stamp.source_event_id, sourceTs: stamp.source_ts }, this.options.artifacts);
@@ -246,7 +230,7 @@ export class Supervisor {
           reason: error instanceof Error ? error.message : String(error) } } } as FactInput);
       return;
     }
-    const after = this.readFacts().at(-1)?.seq;
+    const after = readProjection(this.ledger).lastSeq();
     if (after !== before && after !== undefined) this.publish({ type: "evt", seq: after });
   }
 }

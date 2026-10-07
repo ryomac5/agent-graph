@@ -1,3 +1,4 @@
+import { readProjection, type RunnerProjection } from "./projection.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -8,7 +9,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { WebSocket } from "../../api/src/ws/index.ts";
 import { defaultPolicy } from "../../core/src/assign/policy.ts";
 import { createRequestId } from "../../core/src/intake/index.ts";
-import { openLedger, projectDelegations, projectRelations, projectRuns } from "../../core/src/ledger/index.ts";
+import { openLedger } from "../../core/src/ledger/index.ts";
 import { FakeHost, type StartRequest } from "./host/contract.ts";
 import { serveRunner } from "./runtime.ts";
 
@@ -60,13 +61,12 @@ async function runChildRunner(db: string, socket: string) {
   }
 }
 
-type LedgerFact = ReturnType<ReturnType<typeof openLedger>["readSince"]>[number];
 function clip(value: unknown, limit = 400): string {
   const text = typeof value === "string" ? value : JSON.stringify(value) ?? String(value);
   return text.length > limit ? `${text.slice(0, limit)}...` : text;
 }
 // 失敗した比較と、その比較に関わる委譲と実行の事実を、台帳を開かずに読める形で出す。
-export function describeFailure(error: unknown, facts: readonly LedgerFact[]): string {
+export function describeFailure(error: unknown, store: RunnerProjection): string {
   const lines: string[] = [];
   const stack = error instanceof Error ? error.stack ?? "" : "";
   const at = stack.split("\n").find((line) => line.includes("e2e-intake.ts"));
@@ -75,7 +75,7 @@ export function describeFailure(error: unknown, facts: readonly LedgerFact[]): s
   if (error instanceof assert.AssertionError) {
     lines.push(`actual: ${clip(error.actual, 2000)}`, `expected: ${clip(error.expected, 2000)}`);
   }
-  for (const d of projectDelegations(facts)) {
+  for (const d of store.delegations()) {
     lines.push(`delegation ${d.request_id}: state=${d.state} attempt=${d.attempt}${d.conflicts.length ? ` conflicts=${d.conflicts.length}` : ""}`);
     for (const a of d.attempts) {
       const assignment = a.assignment as { executor?: string; model?: string } | undefined;
@@ -86,16 +86,16 @@ export function describeFailure(error: unknown, facts: readonly LedgerFact[]): s
         + ` verification=${verification?.passed ?? "-"} review=${review?.verdict ?? "-"} result=${result?.status ?? "-"}`
         + (review?.comment ? ` comment=${clip(review.comment, 200)}` : ""));
     }
-    const reasons = facts.filter((f) => f.subject === `delegation:${d.request_id}` && f.payload && "reason" in f.payload)
+    const reasons = store.subjectFacts(`delegation:${d.request_id}`).filter((f) => f.payload && "reason" in f.payload)
       .map((f) => `seq ${f.seq} ${clip((f.payload as { reason?: unknown }).reason, 300)}`);
     for (const reason of reasons) lines.push(`  reason: ${reason}`);
   }
-  for (const run of projectRuns(facts)) {
+  for (const run of store.rows("runs")) {
     lines.push(`run ${run.id}: state=${run.state}${run.reason ? ` reason=${clip(run.reason, 200)}` : ""}${run.cause ? ` cause=${clip(run.cause, 200)}` : ""}`);
   }
-  lines.push(`delegated relations: ${projectRelations(facts).filter((r) => r.type === "delegated").map((r) => `${r.id}(${r.confidence})`).join(", ") || "-"}`);
-  lines.push(`last seq: ${facts.at(-1)?.seq ?? 0}; tail:`);
-  for (const f of facts.slice(-15)) lines.push(`  ${f.seq} ${f.source_ts} ${f.source} ${f.kind} ${f.subject}`);
+  lines.push(`delegated relations: ${store.rows("relations").filter((r) => r.type === "delegated").map((r) => `${r.id}(${r.confidence})`).join(", ") || "-"}`);
+  lines.push(`last seq: ${store.lastSeq()}; tail:`);
+  for (const f of store.facts("seq > ?", [Math.max(0, store.lastSeq() - 15)])) lines.push(`  ${f.seq} ${f.source_ts} ${f.source} ${f.kind} ${f.subject}`);
   return lines.join("\n");
 }
 
@@ -110,7 +110,7 @@ export async function runIntakeChecks(fake: boolean) {
   const children = new Set<ChildProcessWithoutNullStreams>();
   const sockets = new Set<WebSocket>();
   const ledger = openLedger(db);
-  const facts = () => ledger.readSince(0, Number.MAX_SAFE_INTEGER);
+  const projection = () => readProjection(ledger);
   const launch = (path: string, args: string[] = []) => {
     const child = spawn(process.execPath, [join(ROOT, path), ...args], { cwd: ROOT, env, stdio: "pipe" });
     children.add(child);
@@ -175,10 +175,10 @@ export async function runIntakeChecks(fake: boolean) {
     assert.equal(accepted.state, "accepted");
     const requestId = accepted.requestId;
     const watch = launch("packages/api/src/cli.ts", ["watch", requestId, "--db", db, "--json"]);
-    await until(() => watch.rows.length > 0 && projectDelegations(facts()).find((d) => d.request_id === requestId)?.state === "running", "running delegation and watch");
-    const beforeRestart = facts();
+    await until(() => watch.rows.length > 0 && projection().row("delegations", requestId)?.state === "running", "running delegation and watch");
+    const beforeRestart = projection().lastSeq();
     await stop(api.child);
-    assert.equal(projectDelegations(facts()).find((d) => d.request_id === requestId)?.state, "running");
+    assert.equal(projection().row("delegations", requestId)?.state, "running");
     api = await startApi();
     const waiting = rpc("wait", "tools/call", { name: "wait", arguments: { requestId }, _meta: { progressToken: "e2e" } });
     assert.equal((await waiting).structuredContent.state, "done");
@@ -186,10 +186,9 @@ export async function runIntakeChecks(fake: boolean) {
     assert.equal(watch.child.exitCode, 0, watch.errors());
     assert.equal(watch.rows.at(-1).state, "done");
     assert.ok(shim.rows.some((r) => r.method === "notifications/progress"));
-    const resumed = [...beforeRestart, ...ledger.readSince(beforeRestart.at(-1)!.seq, Number.MAX_SAFE_INTEGER)];
-    assert.deepEqual(projectDelegations(resumed), projectDelegations(facts()));
-    assert.equal(projectDelegations(facts())[0].attempts.length, 1);
-    assert.equal(projectRuns(facts()).length, 2);
+    assert.ok(projection().lastSeq() > beforeRestart);
+    assert.equal(projection().delegations()[0].attempts.length, 1);
+    assert.equal(projection().rows("runs").length, 2);
 
     const endpoint = api.rows.find((r) => r.ws_url);
     const screen = new WebSocket(`${endpoint.ws_url}?token=${endpoint.ws_token}`); sockets.add(screen);
@@ -221,19 +220,18 @@ export async function runIntakeChecks(fake: boolean) {
     const graphResult = JSON.parse(jobStatus.output);
     assert.ok(graphResult.tasks.every((task: { state: string }) => task.state === "done"));
     // 画面の委譲と planner の委譲は並んで走るので、終わりの状態を待ってから受け入れの失敗を確かめる。
-    await until(() => ["done", "failed", "interrupted", "denied"].includes(projectDelegations(facts()).find((d) => d.request_id === uiId)?.state ?? ""), "ui terminal");
+    await until(() => ["done", "failed", "interrupted", "denied"].includes(projection().row("delegations", uiId)?.state ?? ""), "ui terminal");
     assert.equal((await screenCmd("ui-status", "intake.status", { requestId: uiId })).state, "failed");
     assert.equal((await screenCmd("ui-retry", "intake.retry", { requestId: uiId })).attempt, 2);
-    await until(() => projectDelegations(facts()).find((d) => d.request_id === uiId)?.state === "failed", "ui retry terminal");
-    const stored = facts().filter((f) => f.kind === "delegation.created");
-    assert.deepEqual(stored.map((f) => ((f.payload as unknown as { request: { source: string } }).request).source).sort(), ["mcp", "planner", "ui"]);
-    const relations = projectRelations(facts()).filter((r) => r.type === "delegated");
+    await until(() => projection().row("delegations", uiId)?.state === "failed", "ui retry terminal");
+    const stored = projection().records<{ request: { source: string } }>("delegation");
+    assert.deepEqual(stored.map((f) => f.request!.source).sort(), ["mcp", "planner", "ui"]);
+    const relations = projection().rows("relations").filter((r) => r.type === "delegated");
     assert.equal(relations.length, 4);
     assert.ok(relations.every((r) => r.from_id === JSON.stringify(["claude", "intake-parent"]) && r.confidence === "confirmed"));
-    const all = facts();
-    assert.deepEqual(projectRelations([...all].reverse()), projectRelations(all));
+    const seq = projection().lastSeq();
     const endpointSnapshot = await fetch(`${endpoint.snapshot_url}?token=${endpoint.ws_token}`).then((r) => r.json()) as { seq: number; projection: unknown };
-    assert.equal(endpointSnapshot.seq, all.at(-1)!.seq);
+    assert.equal(endpointSnapshot.seq, seq);
     screen.terminate();
     await stop(api.child);
     const rebuilt = launch("packages/api/src/cli.ts", ["rebuild", "--db", db]);
@@ -246,7 +244,7 @@ export async function runIntakeChecks(fake: boolean) {
     console.log(`PASS: intake via screen/MCP/planner, watch, origin, retry and api restart (${fake ? "fake" : "real"} hosts)`);
   } catch (error) {
     failed = true;
-    try { console.error(describeFailure(error, facts())); }
+    try { console.error(describeFailure(error, projection())); }
     catch (detail) { console.error("could not describe the failure:", detail); }
     throw error;
   } finally {

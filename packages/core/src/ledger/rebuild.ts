@@ -9,6 +9,8 @@ import { PROJECTION_ENTITIES, readNativeReference } from "./projections/dependen
 import { encodeNameOrder, extractProvisionalName } from "./projections/conversations.ts";
 import type { ProjectedMessage } from "./projections/messages.ts";
 import type { Projection } from "./projections/index.ts";
+import { initializeRunnerProjection, forgetRunnerProjection, RECORD_ENTITIES } from "./projections/storage.ts";
+import { projectEntityRecords } from "./projections/delegations.ts";
 import { refreshSearch } from "./search.ts";
 
 export const PROJECTION_TABLES = [
@@ -145,10 +147,24 @@ function writeRows(
     const values = columns.map((column) => encodeValue(table, column, record[column]));
     const previous = remaining.has(row.id) ? read.get(row.id) : undefined;
     if (!previous || columns.some((column, index) => previous[column] !== values[index])) insert.run(...values);
+    const serialized = JSON.stringify(record);
+    if (!previous || prepare(ledger, "SELECT data FROM projection_records WHERE projection = ? AND entity_id = ?").get(table, row.id)?.data !== serialized) {
+      prepare(ledger, "INSERT OR REPLACE INTO projection_records VALUES (?, ?, ?)").run(table, row.id, serialized);
+    }
     remaining.delete(row.id);
+    if (table === "delegations") {
+      prepare(ledger, "DELETE FROM delegation_runs WHERE delegation_id = ?").run(row.id);
+      for (const attempt of (record.attempts ?? []) as { run_id?: string }[]) {
+        if (attempt.run_id) prepare(ledger, "INSERT OR IGNORE INTO delegation_runs VALUES (?, ?)").run(attempt.run_id, row.id);
+      }
+    }
   }
   const remove = prepare(ledger, `DELETE FROM ${table} WHERE id = ?`);
-  for (const id of remaining) remove.run(id);
+  for (const id of remaining) {
+    remove.run(id);
+    prepare(ledger, "DELETE FROM projection_records WHERE projection = ? AND entity_id = ?").run(table, id);
+    if (table === "delegations") prepare(ledger, "DELETE FROM delegation_runs WHERE delegation_id = ?").run(id);
+  }
 }
 
 // 最古の有効な本文候補は索引で選ぶ。会話の履歴全体を投影の入力に戻さない。
@@ -235,6 +251,19 @@ function applyAffected(ledger: DatabaseSync, added: readonly Fact[], lastSeq: nu
   }
 }
 
+function writeEntityRecords(ledger: DatabaseSync, facts: readonly Fact[], subjects?: Set<string>): void {
+  const insert = prepare(ledger, "INSERT OR REPLACE INTO entity_records(entity, id, data, last_seq) VALUES (?, ?, ?, ?)");
+  for (const entity of RECORD_ENTITIES) {
+    const selected = facts.filter((fact) => fact.subject.startsWith(entity + ":"));
+    const positions = new Map<string, number>();
+    for (const fact of selected) positions.set(fact.subject.slice(entity.length + 1), Math.max(positions.get(fact.subject.slice(entity.length + 1)) ?? 0, fact.seq));
+    if (subjects) for (const subject of subjects) {
+      if (subject.startsWith(entity + ":")) prepare(ledger, "DELETE FROM entity_records WHERE entity = ? AND id = ?").run(entity, subject.slice(entity.length + 1));
+    }
+    for (const row of projectEntityRecords(selected, entity)) insert.run(entity, row.id, JSON.stringify(row), positions.get(row.id)!);
+  }
+}
+
 function updateProjection(ledger: DatabaseSync, sinceSeq?: number): ProjectionState {
   ledger.exec("BEGIN IMMEDIATE");
   try {
@@ -242,10 +271,13 @@ function updateProjection(ledger: DatabaseSync, sinceSeq?: number): ProjectionSt
     if (sinceSeq !== undefined && sinceSeq > state.last_seq) {
       throw new RangeError("未反映の事実を飛ばすことはできません");
     }
+    if (initializeRunnerProjection(ledger) && (state.generation > 0 || state.last_seq > 0)) sinceSeq = undefined;
     const added = readFacts(ledger, sinceSeq === undefined ? 0 : state.last_seq);
     if (sinceSeq === undefined || added.length > 0) {
       if (sinceSeq === undefined) {
         const projection: Projection = project(added);
+        ledger.exec("DELETE FROM projection_records; DELETE FROM entity_records; DELETE FROM delegation_runs; DELETE FROM run_commit_results; DELETE FROM command_receipts; DELETE FROM run_subjects");
+        writeEntityRecords(ledger, added);
         ledger.exec("DELETE FROM message_name_inputs; DELETE FROM conversation_name_candidates");
         for (const table of PROJECTION_TABLES) {
           ledger.exec(`DELETE FROM ${table}`);
@@ -255,6 +287,20 @@ function updateProjection(ledger: DatabaseSync, sinceSeq?: number): ProjectionSt
         refreshNameCandidates(ledger, new Set(projection.message_memberships.map((row) => row.id)), new Set());
       } else {
         applyAffected(ledger, added, state.last_seq);
+        const subjects = new Set(added.map((fact) => fact.subject));
+        writeEntityRecords(ledger, readSubjectFacts(ledger, subjects, added.at(-1)!.seq), subjects);
+      }
+      const commit = prepare(ledger, "INSERT OR REPLACE INTO run_commit_results VALUES (?, ?, ?, ?)");
+      const runSubject = prepare(ledger, "INSERT OR REPLACE INTO run_subjects VALUES (?, ?, ?)");
+      const receipt = prepare(ledger, "INSERT OR IGNORE INTO command_receipts VALUES (?, ?, ?, ?)");
+      for (const fact of added) {
+        const payload = fact.payload as { review_command?: { id: string }; git_commit_result?: JsonValue } | null;
+        if (fact.kind === "run.created" && fact.payload?.conversation_id && fact.payload.generation !== undefined) runSubject.run(fact.payload.conversation_id, fact.payload.generation, fact.subject.slice(4));
+        const command = payload?.review_command;
+        if (command?.id) receipt.run(command.id, JSON.stringify(command), fact.seq, fact.subject);
+        if (fact.kind === "run.updated" && fact.confidence === "confirmed" && (fact.source === "host-claude" || fact.source === "host-codex") && payload?.git_commit_result) {
+          commit.run(fact.fact_id, fact.subject.slice(4), JSON.stringify(payload!.git_commit_result), fact.seq);
+        }
       }
       state.last_seq = added.at(-1)?.seq ?? 0;
       if (sinceSeq === undefined) state.generation += 1;
@@ -266,6 +312,7 @@ function updateProjection(ledger: DatabaseSync, sinceSeq?: number): ProjectionSt
     return state;
   } catch (error) {
     ledger.exec("ROLLBACK");
+    forgetRunnerProjection(ledger);
     throw error;
   }
 }

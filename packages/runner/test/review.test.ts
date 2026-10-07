@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { loadPolicy } from "../../core/src/assign/policy.ts";
 import type { FactInput } from "../../core/src/ledger/facts.ts";
-import { openLedger } from "../../core/src/ledger/ledger.ts";
+import { openLedger } from "../../core/src/ledger/index.ts";
 import { projectConversations } from "../../core/src/ledger/projections/conversations.ts";
 import { FakeHost, type StartRequest } from "../src/host/contract.ts";
 import { RunnerRuntime } from "../src/runtime.ts";

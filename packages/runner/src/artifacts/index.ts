@@ -1,17 +1,16 @@
+import { readProjection } from "../projection.ts";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { ArtifactPayload, Fact, JsonValue, Provider, RunPayload } from "../../../core/src/ledger/facts.ts";
+import type { ArtifactPayload, JsonValue, Provider, RunPayload } from "../../../core/src/ledger/facts.ts";
 import type { Ledger } from "../../../core/src/ledger/ledger.ts";
 import { redact, redactValue, type RedactionRules } from "../../../core/src/ledger/redact.ts";
-import { classifyGitAttribution, projectArtifacts, type GitAttributionEvidence } from "../../../core/src/ledger/projections/artifacts.ts";
-import { projectDelegations, projectEntityRecords } from "../../../core/src/ledger/projections/delegations.ts";
+import { classifyGitAttribution, type GitAttributionEvidence } from "../../../core/src/ledger/projections/artifacts.ts";
 import type { WorktreeRecord } from "../worktree.ts";
 
-const READ_BATCH_SIZE = 1000;
 const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 export interface ArtifactOptions {
   blobDirectory?: string;
@@ -42,25 +41,22 @@ function hashText(value: string): string { return createHash("sha256").update(va
 interface GitCommand { cwd: string; args: string[]; input?: string; allowed?: number[] }
 interface BlobCommand { directory: string; patchHash: string; patch: string }
 interface FileCommand { file: string }
-interface GitResult { status: number; stdout: Buffer }
-type GitSteps<T> = Generator<GitCommand | BlobCommand | FileCommand, T, GitResult>;
+interface GitResult { status: number; stdout: Buffer; results?: GitResult[] }
+interface GitBatch { commands: GitCommand[] }
+type GitSteps<T> = Generator<GitCommand | GitBatch | BlobCommand | FileCommand, T, GitResult>;
 function* runGit(cwd: string, ...args: string[]): GitSteps<string> {
   const result = yield { cwd, args };
   return result.stdout.toString("utf8");
+}
+function* runGitBatch(commands: GitCommand[]): GitSteps<string[]> {
+  const result = yield { commands };
+  return result.results!.map((entry) => entry.stdout.toString("utf8"));
 }
 function* checkAncestor(cwd: string, base: string, head: string): GitSteps<boolean> {
   return (yield { cwd, args: ["merge-base", "--is-ancestor", base, head], allowed: [0, 1] }).status === 0;
 }
 function* hasCommit(cwd: string, sha: string): GitSteps<boolean> {
   return (yield { cwd, args: ["cat-file", "-e", `${sha}^{commit}`], allowed: [0, 1, 128] }).status === 0;
-}
-function readFacts(ledger: Ledger): Fact[] {
-  const facts: Fact[] = [];
-  for (;;) {
-    const batch = ledger.readSince(facts.at(-1)?.seq ?? 0, READ_BATCH_SIZE);
-    facts.push(...batch);
-    if (batch.length < READ_BATCH_SIZE) return facts;
-  }
 }
 function* readBinaryChange(cwd: string, base: string, file: string, rules?: RedactionRules): GitSteps<string> {
   const original = yield { cwd, args: ["cat-file", "blob", `${base}:${file}`], allowed: [0, 128] };
@@ -78,13 +74,18 @@ function* readBinaryChange(cwd: string, base: string, file: string, rules?: Reda
 function* readPatch(cwd: string, base: string, rules?: RedactionRules): GitSteps<{ patch: string; untracked: string[] }> {
   // index を書き換えず、追跡済みの最終状態と未追跡の新規ファイルを固定する。
   const args = ["--no-ext-diff", "--no-textconv", "--no-color", "--src-prefix=a/", "--dst-prefix=b/"];
-  let patch = (yield* runGit(cwd, "diff", ...args, base, "--"));
+  const [tracked, binary, newFiles] = yield* runGitBatch([
+    { cwd, args: ["diff", ...args, base, "--"] },
+    { cwd, args: ["diff", "--numstat", "-z", "--no-renames", base, "--"] },
+    { cwd, args: ["ls-files", "--others", "--exclude-standard", "-z"] },
+  ]);
+  let patch = tracked;
   // -z で改行やタブを含むファイル名も保持する。
-  const binaryEntries = (yield* runGit(cwd, "diff", "--numstat", "-z", "--no-renames", base, "--")).split("\0");
+  const binaryEntries = binary.split("\0");
   for (const entry of binaryEntries) {
     if (entry.startsWith("-\t-\t")) patch += (yield* readBinaryChange(cwd, base, entry.slice(4), rules));
   }
-  const untracked = (yield* runGit(cwd, "ls-files", "--others", "--exclude-standard", "-z")).split("\0").filter(Boolean).sort();
+  const untracked = newFiles.split("\0").filter(Boolean).sort();
   for (const file of untracked) {
     const result = yield { cwd, args: ["diff", "--no-index", ...args, "--", "/dev/null", file], allowed: [0, 1] };
     patch += result.stdout.toString("utf8");
@@ -220,19 +221,18 @@ export function recordCommitResult(ledger: Ledger, request: ArtifactRequest, res
 
 function* captureArtifacts(ledger: Ledger, request: ArtifactRequest, options: ArtifactOptions = {}): GitSteps<FinalizedArtifact | undefined> {
   const rules = ledger.getRedactionRules();
-  const facts = readFacts(ledger);
-  const runs = projectEntityRecords<RunPayload & WorktreeRecord>(facts, "run");
-  const run = runs.find((item) => item.id === request.runId);
+  const store = readProjection(ledger);
+  const run = store.record<RunPayload & WorktreeRecord>("run", request.runId);
   if (!run?.cwd || !run.base_sha || !run.repository_id || !run.worktree_id) return undefined;
-  const delegations = projectDelegations(facts);
-  const delegation = delegations.find((item) => item.attempts?.some((attempt) => attempt.run_id === run.id));
-  const conversations = projectEntityRecords<{ origin: string; task_id?: string }>(facts, "conversation");
-  const taskId = conversations.find((item) => item.id === run.conversation_id)?.task_id;
-  const taskConversations = new Set(conversations.filter((item) => taskId && item.task_id === taskId).map((item) => item.id));
+  const runs = store.records<RunPayload & WorktreeRecord>("run", "worktree_id = ?", [run.worktree_id]);
+  const delegation = store.delegationForRun(run.id);
+  const ownConversation = store.record<{ origin: string; task_id?: string }>("conversation", run.conversation_id!);
+  const conversations = ownConversation?.task_id ? store.records<{ origin: string; task_id?: string }>("conversation", "task_id = ?", [ownConversation.task_id]) : ownConversation ? [ownConversation] : [];
+  const taskConversations = new Set(conversations.map((item) => item.id));
   taskConversations.add(run.conversation_id!);
-  const taskRuns = new Set(runs.filter((item) => taskConversations.has(item.conversation_id!)).map((item) => item.id));
+  const taskRuns = new Set(store.records<RunPayload>("run", "conversation_id IN (SELECT value FROM json_each(?))", [JSON.stringify([...taskConversations])]).map((item) => item.id));
   for (const attempt of delegation?.attempts ?? []) if (attempt.run_id) taskRuns.add(attempt.run_id);
-  const previous = projectArtifacts(facts).filter((item) => taskRuns.has(item.run_id))
+  const previous = store.rows("artifacts", "run_id IN (SELECT value FROM json_each(?))", [JSON.stringify([...taskRuns])])
     .sort((left, right) => left.version - right.version).at(-1) as FinalizedArtifact | undefined;
   // 再開時の HEAD ではなく、作業の最初の基準で差分を比較する。
   const base = previous?.repository_id === run.repository_id ? previous.base_sha : run.base_sha;
@@ -242,9 +242,8 @@ function* captureArtifacts(ledger: Ledger, request: ArtifactRequest, options: Ar
   if ((yield* runGit(run.cwd, "rev-parse", "HEAD")).trim() !== head) throw new Error("HEAD changed during artifact capture");
   const patch = redact(snapshot.patch, rules).text;
   const patchHash = hashText(patch);
-  const resultFacts = facts.filter((fact) => fact.kind === "run.updated" && fact.confidence === "confirmed"
-    && (fact.source === "host-claude" || fact.source === "host-codex"));
-  const isExternal = (conversationId: string | undefined) => conversations.some((item) => item.id === conversationId && item.origin === "observed");
+  const resultFacts = store.commitResults(runs.map((item) => item.id));
+  const isExternal = (conversationId: string | undefined) => conversationId !== undefined && store.record<{ origin: string }>("conversation", conversationId)?.origin === "observed";
   const jointRunIds = run.isolation === "worktree"
     ? runs.filter((item) => item.worktree_id === run.worktree_id && item.repository_id === run.repository_id).map((item) => item.id)
     : run.joint_run_ids ?? [];
@@ -254,8 +253,8 @@ function* captureArtifacts(ledger: Ledger, request: ArtifactRequest, options: Ar
     range_commits: commits, uncommitted_changes: head === run.base_sha || snapshot.patch.length > 0, concurrent_run_ids: jointRunIds, external: isExternal(run.conversation_id) }];
   const relations: CommitRelation[] = previous?.head_sha === head ? [...(previous.commit_relations ?? [])] : [];
   for (const fact of resultFacts) {
-    const owner = runs.find((item) => fact.subject === `run:${item.id}`);
-    const result = (fact.payload as { git_commit_result?: CommitResult } | null)?.git_commit_result;
+    const owner = runs.find((item) => fact.run_id === item.id);
+    const result = fact.result;
     if (!owner || !result || owner.repository_id !== run.repository_id || owner.worktree_id !== run.worktree_id) continue;
     evidence.push({ run_id: owner.id, repository_id: run.repository_id, worktree_id: run.worktree_id,
       base_sha: owner.id === run.id ? base : owner.base_sha!, head_sha: head, dedicated_worktree: owner.isolation === "worktree", commit_result: result,
@@ -328,11 +327,36 @@ function validateGitResult(command: GitCommand, result: GitResult): GitResult {
   if (!(command.allowed ?? [0]).includes(result.status)) throw new Error(`Git ${command.args[0]} failed with code ${result.status}`);
   return result;
 }
+function executeGitSync(command: GitCommand): GitResult {
+  const result = spawnSync("git", command.args, { cwd: command.cwd, input: command.input, maxBuffer: GIT_MAX_BUFFER,
+    env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } });
+  if (result.error) throw result.error;
+  return validateGitResult(command, { status: result.status ?? -1, stdout: result.stdout });
+}
+async function executeGitAsync(command: GitCommand): Promise<GitResult> {
+  const result = await new Promise<GitResult>((resolve, reject) => {
+    const child = spawn("git", command.args, { cwd: command.cwd, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } });
+    const chunks: Buffer[] = [];
+    let size = 0;
+    child.stdout.on("data", (chunk: Buffer) => { size += chunk.length; if (size > GIT_MAX_BUFFER) { child.kill(); reject(new Error("Git output exceeds limit")); } else chunks.push(chunk); });
+    child.stderr.resume();
+    child.on("error", reject);
+    child.on("close", (status) => resolve({ status: status ?? -1, stdout: Buffer.concat(chunks) }));
+    child.stdin.on("error", reject);
+    child.stdin.end(command.input);
+  });
+  return validateGitResult(command, result);
+}
+
 export function finalizeArtifacts(ledger: Ledger, request: ArtifactRequest, options: ArtifactOptions = {}): FinalizedArtifact | undefined {
   const steps = captureArtifacts(ledger, request, options);
   let step = steps.next();
   while (!step.done) {
     const command = step.value;
+    if ("commands" in command) {
+      step = steps.next({ status: 0, stdout: Buffer.alloc(0), results: command.commands.map(executeGitSync) });
+      continue;
+    }
     if ("directory" in command) {
       saveBlob(command.directory, command.patchHash, command.patch);
       step = steps.next({ status: 0, stdout: Buffer.alloc(0) });
@@ -343,10 +367,7 @@ export function finalizeArtifacts(ledger: Ledger, request: ArtifactRequest, opti
         stdout: existsSync(command.file) ? readFileSync(command.file) : Buffer.alloc(0) });
       continue;
     }
-    const result = spawnSync("git", command.args, { cwd: command.cwd, input: command.input, maxBuffer: GIT_MAX_BUFFER,
-      env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } });
-    if (result.error) throw result.error;
-    step = steps.next(validateGitResult(command, { status: result.status ?? -1, stdout: result.stdout }));
+    step = steps.next(executeGitSync(command));
   }
   return step.value;
 }
@@ -355,6 +376,10 @@ async function captureAsync(ledger: Ledger, request: ArtifactRequest, options: A
   let step = steps.next();
   while (!step.done) {
     const command = step.value;
+    if ("commands" in command) {
+      step = steps.next({ status: 0, stdout: Buffer.alloc(0), results: await Promise.all(command.commands.map(executeGitAsync)) });
+      continue;
+    }
     if ("directory" in command) {
       await saveBlobAsync(command.directory, command.patchHash, command.patch);
       step = steps.next({ status: 0, stdout: Buffer.alloc(0) });
@@ -370,18 +395,7 @@ async function captureAsync(ledger: Ledger, request: ArtifactRequest, options: A
       step = steps.next(result);
       continue;
     }
-    const result = await new Promise<GitResult>((resolve, reject) => {
-      const child = spawn("git", command.args, { cwd: command.cwd, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } });
-      const chunks: Buffer[] = [];
-      let size = 0;
-      child.stdout.on("data", (chunk: Buffer) => { size += chunk.length; if (size > GIT_MAX_BUFFER) { child.kill(); reject(new Error("Git output exceeds limit")); } else chunks.push(chunk); });
-      child.stderr.resume();
-      child.on("error", reject);
-      child.on("close", (status) => resolve({ status: status ?? -1, stdout: Buffer.concat(chunks) }));
-      child.stdin.on("error", reject);
-      child.stdin.end(command.input);
-    });
-    step = steps.next(validateGitResult(command, result));
+    step = steps.next(await executeGitAsync(command));
   }
   return step.value;
 }

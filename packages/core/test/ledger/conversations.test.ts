@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Fact, FactInput, RelationKind } from "../../src/ledger/facts.ts";
-import { projectConversations } from "../../src/ledger/projections/conversations.ts";
+import { extractProvisionalName, projectConversations } from "../../src/ledger/projections/conversations.ts";
 import { projectMessages } from "../../src/ledger/projections/messages.ts";
 import { createNativeId, projectRelations, selectConfirmedRelations } from "../../src/ledger/projections/relations.ts";
 
@@ -343,4 +343,13 @@ test("空白だけの発言を仮名にせず、次の先頭文を使う", () =>
   const facts = [createConversation("a"), createMessage("first", " \n "), createMessage("second", "有効な文。続き。"),
     createMembership("first-member", "a", "first"), createMembership("second-member", "a", "second")];
   assert.equal(projectConversations(facts).conversations[0].name, "有効な文。");
+});
+
+test("仮の名前は、ホストが差し込んだ AGENTS.md や skills の本文を飛ばして利用者の最初の文を使う", () => {
+  assert.equal(extractProvisionalName("<skills_instructions>\nUse /eli5 for explanations.\n</skills_instructions>\n/eli5が使えるようにしたい。詳細は後で。"), "/eli5が使えるようにしたい。");
+  assert.equal(extractProvisionalName("# AGENTS.md\n\n## 目的\nこのリポジトリの規約。\n"), "");
+  assert.equal(extractProvisionalName("# タスク X5: 横断検索を作る\n\n## 目的\n横断検索を作る。"), "横断検索を作る");
+  assert.equal(extractProvisionalName("無人実行です。質問せずに作業を完了し、最後に結果を報告してください。\n元の依頼:\nChanges の画面を直す。"), "Changes の画面を直す。");
+  assert.equal(extractProvisionalName("<recommended_plugins>\nnpx がパッケージ確認で待機しています"), "");
+  assert.equal(extractProvisionalName("done"), "done");
 });

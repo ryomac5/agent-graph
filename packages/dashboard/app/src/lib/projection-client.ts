@@ -26,13 +26,15 @@ export async function loadConversationWindow(id: string, signal: AbortSignal, be
   let generation: number | undefined;
   let anchor: Row | undefined;
   let firstRequest: Row | undefined;
+  // ホストが利用者の発言の前に差し込む AGENTS.md や skills の本文は、依頼の抜粋にしない。core の extractProvisionalName と同じ境界。
+  const isInjected = (text: string) => /^(?:<[A-Za-z_][^>]*>|#{1,6}\s*(?:AGENTS|CLAUDE|README)\b|Review a delegated task\.|You are (?:an? |the ))/u.test(text);
   do {
     const page = await fetchPage(`/conversation?id=${encodeURIComponent(id)}&after=${encodeURIComponent(after)}`);
     signal.throwIfAborted();
     if (generation !== undefined && page.generation !== generation) throw new Error('Conversation changed. Please retry.');
     generation = page.generation;
     const incoming = page.projection.messages ?? [];
-    for (const row of incoming) if (row.role === 'user' && readBody(row.body).trim()
+    for (const row of incoming) if (row.role === 'user' && readBody(row.body).trim() && !isInjected(readBody(row.body).trim())
       && (!firstRequest || compareMessages(row, firstRequest) < 0)) firstRequest = row;
     anchor ??= incoming.find(row => row.id === messageId);
     messages = [...new Map([...messages, ...incoming.filter(row => !before || compareMessages(row, before) < 0)].map(row => [String(row.id), row])).values()]

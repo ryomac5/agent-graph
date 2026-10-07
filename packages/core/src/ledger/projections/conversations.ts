@@ -19,8 +19,31 @@ export interface ConversationProjection {
 export function encodeNameOrder(value: string): string {
   return Buffer.from(value, "utf16le").swap16().toString("hex");
 }
+// ホストが利用者の発言の前に差し込む AGENTS.md や skills の本文は、会話の名前にしない。
+const DOCUMENT_INJECTION = /^#{1,6}\s*(?:AGENTS|CLAUDE|README)\b/u;
+const PREAMBLE_LINE = /^(?:無人実行です。|質問せずに|元の依頼[:：]\s*$|Review a delegated task\.|You are (?:an? |the ))/u;
+const TASK_HEADING = /^#{1,6}\s*(?:タスク|Task)\s*[^:：]*[:：]\s*(.+)$/u;
 export function extractProvisionalName(body: Parameters<typeof getMessageText>[0]): string {
-  return getMessageText(body).trim().split(/(?<=[。.!?？！])|\n/u)[0];
+  const lines = getMessageText(body).trim().split("\n");
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index].trim();
+    if (!line) { index += 1; continue; }
+    // 札で囲まれた差し込みは閉じ札まで飛ばす。閉じ札がなければ発言の全体が差し込みである。
+    const open = /^<([A-Za-z_][\w-]*)[^>]*>$/u.exec(line);
+    if (open) {
+      const close = lines.findIndex((candidate, position) => position > index && candidate.trim() === `</${open[1]}>`);
+      if (close < 0) return "";
+      index = close + 1;
+      continue;
+    }
+    if (DOCUMENT_INJECTION.test(line)) return "";
+    const task = TASK_HEADING.exec(line);
+    if (task) return task[1].trim();
+    if (PREAMBLE_LINE.test(line) || /^#{1,6}\s/u.test(line)) { index += 1; continue; }
+    return line.split(/(?<=[。.!?？！])/u)[0];
+  }
+  return "";
 }
 function projectProvisionalNames(facts: readonly Fact[]): Map<string, string> {
   const { messages, message_memberships: memberships } = projectMessages(facts);
@@ -38,6 +61,7 @@ function projectProvisionalNames(facts: readonly Fact[]): Map<string, string> {
     const text = getMessageText(message.body);
     if (!text.trim()) continue;
     const name = extractProvisionalName(message.body);
+    if (!name) continue;
     for (const id of conversationsByMessage.get(message.id) ?? []) {
       if (!provisionalNames.has(id)) provisionalNames.set(id, name);
     }

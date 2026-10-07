@@ -1,0 +1,8 @@
+[
+  { "kind": "artifact.version_created", "run_id": "dedicated", "version": 1 },
+  { "kind": "artifact.version_created", "run_id": "dedicated", "version": 2 },
+  { "kind": "artifact.version_created", "run_id": "shared-a", "version": 1 },
+  { "kind": "artifact.version_created", "run_id": "shared-b", "version": 1 },
+  { "kind": "artifact.version_created", "run_id": "shared-b", "version": 2 },
+  { "kind": "artifact.version_created", "run_id": "shared-a", "version": 2 }
+]

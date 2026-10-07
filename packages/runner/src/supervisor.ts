@@ -8,6 +8,7 @@ import type { ConversationPayload } from "../../core/src/ledger/facts.ts";
 import type { AgentHost, HostEvent, RunHandle, StartRequest, ResumeRequest, ForkRequest } from "./host/contract.ts";
 import type { RunnerEvent } from "./socket.ts";
 import { recordWorktree } from "./worktree.ts";
+import { finalizeArtifacts, type ArtifactOptions } from "./artifacts/index.ts";
 
 const ACTIVE_STATES = new Set(["starting", "running", "waiting_approval", "waiting_input"]);
 const TERMINAL_DELEGATIONS = new Set(["done", "failed", "interrupted", "denied"]);
@@ -26,8 +27,8 @@ export class Supervisor {
   private ledger: Ledger;
   private publish: (event: RunnerEvent) => void;
 
-  private options: { recover?: boolean; isolation?: "shared" | "worktree" };
-  constructor(ledger: Ledger, publish: (event: RunnerEvent) => void = () => {}, options: { recover?: boolean; isolation?: "shared" | "worktree" } = {}) {
+  private options: { recover?: boolean; isolation?: "shared" | "worktree"; artifacts?: ArtifactOptions };
+  constructor(ledger: Ledger, publish: (event: RunnerEvent) => void = () => {}, options: { recover?: boolean; isolation?: "shared" | "worktree"; artifacts?: ArtifactOptions } = {}) {
     this.options = options;
     this.ledger = ledger;
     this.publish = publish;
@@ -184,7 +185,18 @@ export class Supervisor {
       return;
     }
     const source = `host-${provider}` as const;
-    if (event.type === "fact") { this.append({ ...event.fact, source } as FactInput); return; }
+    if (event.type === "fact") {
+      this.append({ ...event.fact, source } as FactInput);
+      const payload = event.fact.payload;
+      const body = "body" in payload ? payload.body : undefined;
+      if ((event.fact.kind === "run.updated" && "git_commit_result" in payload)
+        || (event.fact.kind === "run.state_changed" && ["idle", "ended", "failed"].includes(event.fact.payload.state))
+        || (event.fact.kind === "message.created" && (event.fact.payload.role === "tool" || event.fact.payload.tool_output !== undefined
+          || (Array.isArray(body) && body.some((item) => item !== null && typeof item === "object" && !Array.isArray(item) && item.type === "tool_result"))))) {
+        this.captureArtifacts(provider, request);
+      }
+      return;
+    }
     if (event.type === "exit" && !Number.isInteger(event.exitCode)) throw new TypeError("Invalid exit code");
     const payload = event.type === "state" ? { state: event.state, reason: event.reason }
       : { state: event.exitCode === 0 ? "ended" as const : "failed" as const,
@@ -193,5 +205,25 @@ export class Supervisor {
         ended_ts: new Date().toISOString() };
     this.append({ ...this.stamp(), source, kind: "run.state_changed", subject: `run:${request.runId}`,
       confidence: "confirmed", payload });
+    if (event.type === "exit" || event.state === "idle") this.captureArtifacts(provider, request);
+  }
+  private captureArtifacts(provider: Provider, request: StartRequest): void {
+    const stamp = this.stamp();
+    const before = this.readFacts().at(-1)?.seq;
+    try {
+      const delegation = projectDelegations(this.readFacts()).find((item) => item.attempts.some((attempt) => attempt.run_id === request.runId));
+      const attempt = delegation?.attempts.find((item) => item.run_id === request.runId);
+      finalizeArtifacts(this.ledger, { runId: request.runId, provider,
+        sourceEventId: stamp.source_event_id, sourceTs: stamp.source_ts,
+        ...(delegation && attempt ? { artifactId: `${delegation.request_id}:${attempt.attempt}` } : {}) }, this.options.artifacts);
+    } catch (error) {
+      // 成果物の失敗は host の終了根拠とイベントの読み取りを変えない。
+      this.append({ ...stamp, source: `host-${provider}`, kind: "run.updated", subject: `run:${request.runId}`,
+        confidence: "confirmed", payload: { artifact_capture: { status: "failed",
+          reason: error instanceof Error ? error.message : String(error) } } } as FactInput);
+      return;
+    }
+    const after = this.readFacts().at(-1)?.seq;
+    if (after !== before && after !== undefined) this.publish({ type: "evt", seq: after });
   }
 }

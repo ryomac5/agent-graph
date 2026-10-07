@@ -1,0 +1,22 @@
+[
+  { "type": "start", "run": "dedicated", "isolation": "worktree" },
+  { "type": "write", "run": "dedicated", "file": "tracked.txt", "content": "first edit\n" },
+  { "type": "commit", "run": "dedicated" },
+  { "type": "capture", "run": "dedicated" },
+  { "type": "write", "run": "dedicated", "file": "tracked.txt", "content": "amended edit\n" },
+  { "type": "commit", "run": "dedicated", "amend": true },
+  { "type": "capture", "run": "dedicated" },
+  { "type": "start", "run": "shared-a", "isolation": "shared" },
+  { "type": "start", "run": "shared-b", "isolation": "shared" },
+  { "type": "write", "run": "shared-a", "file": "tracked.txt", "content": "a edit\n" },
+  { "type": "write", "run": "shared-b", "file": "b.txt", "content": "b edit\n" },
+  { "type": "commit", "run": "shared-a" },
+  { "type": "capture", "run": "shared-a" },
+  { "type": "failed-commit", "run": "shared-b" },
+  { "type": "capture", "run": "shared-b" },
+  { "type": "write", "run": "shared-b", "file": "b.txt", "content": "b second edit\n" },
+  { "type": "commit", "run": "shared-b" },
+  { "type": "capture", "run": "shared-b" },
+  { "type": "write", "run": "shared-a", "file": "untracked.txt", "content": "new file\n" },
+  { "type": "capture", "run": "shared-a" }
+]

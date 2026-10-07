@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { createProjectionStorage, PROJECTION_STORAGE_TABLES, PROJECTION_STORAGE_INDEXES } from "./projections/storage.ts";
 import { projectConversations, encodeNameOrder, extractProvisionalName } from "./projections/conversations.ts";
 import { projectMessages } from "./projections/messages.ts";
 import { projectRuns } from "./projections/runs.ts";
@@ -89,6 +90,27 @@ CREATE TABLE message_memberships (
 );
 `;
 
+const NAME_PROJECTION_DDL = `CREATE TABLE message_name_inputs (
+      id TEXT PRIMARY KEY, source_time REAL NOT NULL, source_event_id TEXT NOT NULL, name TEXT NOT NULL, message_order TEXT NOT NULL
+    );
+    CREATE TABLE conversation_name_candidates (
+      id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, message_id TEXT NOT NULL,
+      source_time REAL NOT NULL, source_event_id TEXT NOT NULL, name TEXT NOT NULL, message_order TEXT NOT NULL
+    );
+    CREATE INDEX conversation_name_first ON conversation_name_candidates
+      (conversation_id, source_time, source_event_id, message_order);
+    CREATE INDEX membership_message ON message_memberships (message_id);`;
+
+export const PROJECTION_SCHEMA_TABLES = [
+  ...[...PROJECTION_DDL.matchAll(/CREATE TABLE (\w+)/g)].map((match) => match[1]),
+  ...[...NAME_PROJECTION_DDL.matchAll(/CREATE TABLE (\w+)/g)].map((match) => match[1]),
+  ...PROJECTION_STORAGE_TABLES,
+];
+export const PROJECTION_SCHEMA_INDEXES = [
+  ...[...NAME_PROJECTION_DDL.matchAll(/CREATE INDEX (\w+)/g)].map((match) => match[1]),
+  ...PROJECTION_STORAGE_INDEXES,
+];
+
 function migrateToVersion1(db: DatabaseSync): void {
   db.exec(FACTS_DDL);
   db.exec(PROJECTION_DDL);
@@ -110,17 +132,8 @@ function migrateToVersion2(db: DatabaseSync): void {
     }
   }
   db.exec(`ALTER TABLE conversations ADD COLUMN name TEXT;
-    ALTER TABLE conversations ADD COLUMN name_is_provisional INTEGER NOT NULL DEFAULT 0;
-    CREATE TABLE message_name_inputs (
-      id TEXT PRIMARY KEY, source_time REAL NOT NULL, source_event_id TEXT NOT NULL, name TEXT NOT NULL, message_order TEXT NOT NULL
-    );
-    CREATE TABLE conversation_name_candidates (
-      id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, message_id TEXT NOT NULL,
-      source_time REAL NOT NULL, source_event_id TEXT NOT NULL, name TEXT NOT NULL, message_order TEXT NOT NULL
-    );
-    CREATE INDEX conversation_name_first ON conversation_name_candidates
-      (conversation_id, source_time, source_event_id, message_order);
-    CREATE INDEX membership_message ON message_memberships (message_id);`);
+    ALTER TABLE conversations ADD COLUMN name_is_provisional INTEGER NOT NULL DEFAULT 0;`);
+  db.exec(NAME_PROJECTION_DDL);
   const lastSeq = Number(db.prepare("SELECT last_seq FROM projection_state WHERE id = 1").get()!.last_seq);
   const facts = db.prepare("SELECT * FROM facts WHERE seq <= ?").all(lastSeq).map((row) => ({
     ...row, payload: row.payload === null ? null : JSON.parse(String(row.payload)),
@@ -187,6 +200,7 @@ export function initializeSchema(db: DatabaseSync): void {
       db.prepare("UPDATE schema_version SET version = ? WHERE id = 1").run(index + 1);
     }
     initializeSearch(db);
+    createProjectionStorage(db);
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");

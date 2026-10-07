@@ -11,7 +11,7 @@ export * from "./projections/index.ts";
 export { PROJECTION_TABLES, type ProjectionState } from "./rebuild.ts";
 
 import type { DatabaseSync } from "node:sqlite";
-import { applyIncremental as applyProjectionDelta, rebuild as rebuildProjection, type ProjectionState } from "./rebuild.ts";
+import { applyIncremental as applyProjectionDelta, rebuild as rebuildProjection, rebuildInitialProjection as rebuildInitial, type ProjectionState } from "./rebuild.ts";
 
 const DAY_MS = 86_400_000;
 const PROJECTION_CACHE_KIB = 64 * 1024;
@@ -46,6 +46,9 @@ export function rebuild(database: DatabaseSync): ProjectionState {
 }
 
 
+export function rebuildInitialProjection(database: DatabaseSync): ProjectionState {
+  return updateDerivedProjection(database, () => rebuildInitial(database));
+}
 
 /** 問い合わせ用接続を持つ台帳。事実の書き込みと秘匿は従来の口に委ねる。 */
 export function openLedger(path: string, options: LedgerOptions = {}): Ledger {

@@ -17,6 +17,7 @@ import { providerName } from '../../components/ActivityRow.tsx';
 import { executionStates } from '../../components/activity.ts';
 import { Message } from '../../components/conversation/Message.tsx';
 import { collectToolResults } from '../../components/conversation/ToolCall.tsx';
+import { resolveParticipants, senderOf, type Sender } from '../../components/conversation/participants.ts';
 import { ACTIVE_STATES, PENDING_APPROVALS, readObject, readText, selectTimeline, showValue, type TimelineEntry } from '../../components/conversation/model.ts';
 import { translate, type ConversationText } from '../../components/conversation/text.ts';
 import './conversation.css';
@@ -61,16 +62,23 @@ function ApprovalCard({ entry, t, disabled, answered, onAnswer, screen }: {
   const outcome = approvalOutcome(row, answered);
   const labels: Record<ApprovalOutcome, ConversationText> = { pending: 'pendingState', answered: 'answered', allowed: 'allowed', denied: 'denied', expired: 'expired', stale: 'stale', resolved: 'resolved' };
   const decisions = Array.isArray(row.available_decisions) ? row.available_decisions.filter((value): value is string => typeof value === 'string') : [];
+  // 回答を待つ要求は開いて出す。済んだ要求は 1 行に畳む。
+  const [open, setOpen] = useState(pending);
+  useEffect(() => setOpen(pending), [pending]);
   return <article className={`timeline-approval ${pending ? 'is-pending' : 'is-settled'} outcome-${outcome}`} aria-label={t('approval')} data-outcome={outcome}>
-    <header><OutcomeIcon outcome={outcome}/><strong>{t('approval')}</strong>{!review && <span className="tool-name">{request.tool}</span>}
-      {!review && request.summary && <span className="truncate muted-text">{request.summary}</span>}
-      <span className="spacer"/><OutcomeChip row={row} answered={answered} label={value => t(labels[value])}/>
-      <TimeStamp value={entry.time} fallback={t('timeUnknown')}/></header>
-    {review ? <><p>{row.state === 'stale' ? staleApprovalText(artifact) : 'Review approval for this change.'}</p><AppLink to={`/p/${encodeURIComponent(project)}/changes?${changesQuery}`}>Open Changes</AppLink></> : <><ApprovalRequestView request={row.request} compact/>{approvalReasonText(readText(row.reason)) && <p className="muted-text">{approvalReasonText(readText(row.reason))}</p>}</>}
-    {pending && decisions.length > 0 && <div className="button-row">{decisions.map(value => <button key={value}
-      className={`btn btn-sm btn-secondary${isPositiveDecision(value) ? ' btn-allow' : ''}`}
-      disabled={disabled || answered} onClick={() => onAnswer(value)}>
-      <Icon name={isPositiveDecision(value) ? 'check' : 'x'} size={14}/>{decisionLabel(value)}</button>)}</div>}
+    <details open={open} onToggle={event => setOpen(event.currentTarget.open)}>
+      <summary><Icon name="chevronRight" size={14} className="caret"/><OutcomeIcon outcome={outcome}/><strong>{t('approval')}</strong>{!review && <span className="tool-name">{request.tool}</span>}
+        {!review && request.summary && <span className="truncate muted-text">{request.summary}</span>}
+        <span className="spacer"/><OutcomeChip row={row} answered={answered} label={value => t(labels[value])}/>
+        <TimeStamp value={entry.time} fallback={t('timeUnknown')}/></summary>
+      <div className="approval-body">
+        {review ? <><p>{row.state === 'stale' ? staleApprovalText(artifact) : 'Review approval for this change.'}</p><AppLink to={`/p/${encodeURIComponent(project)}/changes?${changesQuery}`}>Open Changes</AppLink></> : <><ApprovalRequestView request={row.request} compact/>{approvalReasonText(readText(row.reason)) && <p className="muted-text">{approvalReasonText(readText(row.reason))}</p>}</>}
+        {pending && decisions.length > 0 && <div className="button-row">{decisions.map(value => <button key={value}
+          className={`btn btn-sm btn-secondary${isPositiveDecision(value) ? ' btn-allow' : ''}`}
+          disabled={disabled || answered} onClick={() => onAnswer(value)}>
+          <Icon name={isPositiveDecision(value) ? 'check' : 'x'} size={14}/>{decisionLabel(value)}</button>)}</div>}
+      </div>
+    </details>
   </article>;
 }
 
@@ -115,6 +123,10 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const [answered, setAnswered] = useState<Set<unknown>>(new Set());
   const [appliedModel, setAppliedModel] = useState<{ model: string; effort: string }>();
   const [now, setNow] = useState(Date.now());
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  // 入力欄を使おうとするまでは、入力の準備に関わる注意を出さない。
+  const [engaged, setEngaged] = useState(false);
+  const [handoffBlocked, setHandoffBlocked] = useState(false);
   const external = conversation?.origin !== 'managed';
   const active = ACTIVE_STATES.includes(readText(run?.state));
   const codexActive = provider === 'codex' && active && !external;
@@ -123,7 +135,8 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const writable = !external && open && connected && !pending;
   const canSend = writable && !codexActive;
   const supported = SUPPORTED_FORMATS.includes(readText(conversation?.history_format));
-  const canLaunch = connected && !pending && Boolean(model && cwd.trim()) && supported;
+  // 未対応の形式でも押せるようにし、押したときに理由を出す。
+  const canLaunch = connected && !pending && Boolean(model && cwd.trim());
   const rawStatus = readText(run?.state);
   const status = executionStates.find(value => value === rawStatus) ?? 'unknown';
   const local = detail?.id === conversationId ? detail.projection : {};
@@ -174,6 +187,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   useEffect(() => {
     setInput(''); setError(''); setConfirmation(undefined); setNextConversation('');
     setPending(false); setAnswered(new Set()); setAppliedModel(undefined);
+    setDetailsOpen(false); setEngaged(false); setHandoffBlocked(false);
   }, [conversationId]);
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), TICK_MS);
@@ -241,6 +255,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   }
   async function launchConversation(command: 'fork' | 'adopt', confirmStopped?: boolean) {
     if (!canLaunch) return;
+    if (!supported) { setHandoffBlocked(true); return; }
     const payload = confirmStopped === undefined ? { conversationId, cwd: cwd.trim(), model: { model, ...(effort ? { effort } : {}) }, input: { text: input } }
       : { ...confirmation!, confirmStopped };
     const ack = await execute(command, payload);
@@ -261,32 +276,52 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const title = conversationName(state, conversationId, 'conversation') || t('conversation');
   const dirty = Boolean(model) && (model !== currentModel || effort !== currentEffort);
   const hint = provider === 'codex' ? codexActive ? 'activeCodex' : 'nextTurn' : 'claudeEffort';
+  const participants = resolveParticipants(state, conversationId, { user: t('user'), assistant: t('assistant'), parent: t('parentAgent') });
+  const agentSender = senderOf({ role: 'assistant' }, participants);
+  const historyFormat = readText(conversation.history_format);
+  // 続く同じ送り主の発言は名前を 1 回だけ出す。区切り線は流れを切る。承認はエージェントの列に属する。
+  let previous: string | undefined;
+  function nameShown(sender: Sender | undefined): boolean {
+    const shown = sender ? sender.key !== previous : false;
+    previous = sender?.key;
+    return shown;
+  }
   return <section className={`conversation-page${embedded ? ' embedded' : ''}`} aria-label={t('conversation')}>
     <header className="conv-header">
-      <div className="conv-title-row"><Heading className="conv-title truncate" title={title}>{title}</Heading>
-        <StateBadge detailed state={status} language={language} evidenceUrl="#conversation-evidence"
+      <div className="conv-title-row" onClick={event => {
+        if (!(event.target instanceof Element) || !event.target.closest('.state-badge')) return;
+        event.preventDefault(); setDetailsOpen(true);
+      }}>
+        <Heading className="conv-title truncate" title={title}>{title}</Heading>
+        <StateBadge state={status} language={language} evidenceUrl="#conversation-details"
           evidence={evidenceLabel(evidence) || undefined}
-          evidenceTime={run?.last_evidence_ts ? <time dateTime={readText(run.last_evidence_ts)} title={readText(run.last_evidence_ts)}>{formatClock(run.last_evidence_ts) || readText(run.last_evidence_ts)}</time> : undefined}
           reason={readText(run?.cause ?? run?.reason) || undefined} elapsed={elapsed ? `${t(status.startsWith('waiting') ? 'waiting' : 'elapsed')} ${elapsed}` : undefined}/>
+        {provider && <span className="conv-agent" title={[providerName(provider), shownModel].filter(Boolean).join(' · ')}>
+          <span className={`provider-mark provider-${provider}`}>{providerName(provider)}</span>
+          {shownModel && <span className="conv-model mono truncate">{shownModel}</span>}</span>}
+        <span className="spacer"/>
+        <button type="button" className="btn btn-ghost btn-sm conv-details-toggle" aria-expanded={detailsOpen} aria-controls="conversation-details"
+          onClick={() => setDetailsOpen(value => !value)}>{t('details')}<Icon name="chevronDown" size={14} className="caret"/></button>
       </div>
-      <dl className="conv-meta">
-        {provider && <div><dt className="sr-only">Provider</dt><dd><span className={`provider-mark provider-${provider}`}>{providerName(provider)}</span></dd></div>}
-        <div title={t('model')}><dt className="sr-only">{t('model')}</dt><dd className="meta-item"><Icon name="cpu" size={14}/>
-          {shownModel ? <span className="mono">{shownModel}</span> : <span className="muted-text">{t('noModel')}</span>}</dd></div>
-        <div title={t('effort')}><dt className="sr-only">{t('effort')}</dt><dd className="meta-item">{shownEffort ? <span className="chip chip-quiet">{t('effort')} · {shownEffort}</span>
-          : <span className="chip chip-quiet">{t('defaultEffort')}</span>}</dd></div>
-        <div title={worktree?.full || t('worktree')}><dt className="sr-only">{t('worktree')}</dt><dd className="meta-item"><Icon name="branch" size={14}/>
-          {worktree ? <><span className="truncate mono">{worktree.place}</span>{worktree.branch && <span className="branch-name mono">{worktree.branch}</span>}</>
-            : <span className="muted-text">{t('noWorktree')}</span>}</dd></div>
-        <div title={t('coverage')}><dt className="sr-only">{t('coverage')}</dt><dd className="meta-item"><Icon name="link" size={14}/>
-          <span>{readText(conversation.observation_coverage ?? conversation.coverage)
-            || (external ? `${t('observedCoverage')} · ${readText(conversation.history_format) || t('unknown')}` : t('managedCoverage'))}</span></dd></div>
-      </dl>
-      <details className="evidence-panel" id="conversation-evidence"><summary><Icon name="chevronRight" size={12} className="caret"/>{t('evidence')}</summary>
-        <div className="evidence-body">{evidence !== undefined && evidence !== null ? <Fields value={readObject(evidence)} empty={evidenceLabel(evidence) || t('noRun')}/> : <span className="muted-text">{t('noRun')}</span>}
-          {readText(run?.last_evidence_ts) && <TimeStamp value={readText(run?.last_evidence_ts)} fallback=""/>}</div></details>
-      {external && <p className="banner banner-readonly"><Icon name="lock" size={14}/>{t('readOnly')}</p>}
-      {!supported && <p className="banner banner-warning"><Icon name="alert" size={14}/>{t('unsupported')}</p>}
+      {detailsOpen && <section id="conversation-details" className="conv-details" aria-label={t('details')}>
+        <dl className="conv-meta">
+          <div><dt>{t('model')}</dt><dd>{shownModel ? <span className="mono">{shownModel}</span> : <span className="muted-text">{t('noModel')}</span>}</dd></div>
+          <div><dt>{t('effort')}</dt><dd>{shownEffort ? <span className="chip chip-quiet">{t('effort')} · {shownEffort}</span>
+            : <span className="chip chip-quiet">{t('defaultEffort')}</span>}</dd></div>
+          <div title={worktree?.full || t('worktree')}><dt>{t('worktree')}</dt><dd className="meta-item"><Icon name="branch" size={14}/>
+            {worktree ? <><span className="truncate mono">{worktree.place}</span>{worktree.branch && <span className="branch-name mono">{worktree.branch}</span>}</>
+              : <span className="muted-text">{t('noWorktree')}</span>}</dd></div>
+          <div><dt>{t('coverage')}</dt><dd className="meta-item"><Icon name="link" size={14}/>
+            <span>{readText(conversation.observation_coverage ?? conversation.coverage)
+              || (external ? `${t('observedCoverage')} · ${historyFormat || t('unknown')}` : t('managedCoverage'))}</span></dd></div>
+          {external && <div><dt>{t('access')}</dt><dd className="meta-item"><Icon name="lock" size={14}/><span>{t('readOnly')}</span></dd></div>}
+          <div><dt>{t('historyFormat')}</dt><dd className="meta-item"><span className="mono">{historyFormat || t('unknown')}</span>
+            {!supported && <span className="chip chip-quiet">{t('handoffUnsupported')}</span>}</dd></div>
+          <div className="conv-evidence"><dt>{t('evidence')}</dt><dd>
+            {evidence !== undefined && evidence !== null ? <Fields value={readObject(evidence)} empty={evidenceLabel(evidence) || t('noRun')}/> : <span className="muted-text">{t('noRun')}</span>}
+            {readText(run?.last_evidence_ts) && <TimeStamp value={readText(run?.last_evidence_ts)} fallback=""/>}</dd></div>
+        </dl>
+      </section>}
     </header>
     <div className="conv-timeline" ref={timeline} aria-label={t('conversation')} tabIndex={0}
       onScroll={event => { if (nearBottom(event.currentTarget)) following.current = true; }}
@@ -296,22 +331,29 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
       {historyError && <p role="alert" className="status-line danger">{historyError} <button className="btn btn-secondary btn-sm" onClick={() => setHistoryRevision(value => value + 1)}>Retry</button></p>}
       {(detail?.hasOlder || messageEntries.length > shownMessages.size) && <button className="btn btn-secondary btn-sm" disabled={historyLoading} onClick={() => { following.current = false; if (detail?.hasOlder) void loadHistory(true); else setMessageLimit(value => value + MESSAGE_PAGE_SIZE); }}>Load older messages</button>}
       {!historyLoading && !historyError && entries.length === 0 && deltas.length === 0 && <p className="timeline-empty"><Icon name="message" size={16}/>{t('empty')}</p>}
-      {entries.map(entry => entry.kind === 'message' ? <Message key={entry.key} row={entry.row} language={language} agent={providerName(provider)} toolResults={toolResults}/>
-        : entry.kind === 'approval' ? <ApprovalCard screen={historyState} key={entry.key} entry={entry} t={t} disabled={!writable} answered={answered.has(entry.row.id)} onAnswer={decision => void answer(entry.row.id, decision)}/>
-        : <div role="separator" className={`timeline-boundary${entry.kind === 'gap' ? ' gap' : ''}${entry.row.confidence === 'inferred' ? ' inferred' : ''}`} key={entry.key}>
+      {entries.map(entry => {
+        if (entry.kind === 'message') {
+          const sender = senderOf(entry.row, participants);
+          return <Message key={entry.key} row={entry.row} sender={sender} showName={nameShown(sender)} language={language} toolResults={toolResults}/>;
+        }
+        if (entry.kind === 'approval') return <ApprovalCard screen={historyState} key={entry.key} entry={entry} t={t} disabled={!writable} answered={answered.has(entry.row.id)} onAnswer={decision => void answer(entry.row.id, decision)}/>;
+        nameShown(undefined);
+        return <div role="separator" className={`timeline-boundary${entry.kind === 'gap' ? ' gap' : ''}${entry.row.confidence === 'inferred' ? ' inferred' : ''}`} key={entry.key}>
           {entry.kind === 'gap' ? <>{t('missing')}: {showValue(entry.row.from_ts ?? entry.row.from)} – {showValue(entry.row.to_ts ?? entry.row.to)} {readText(entry.row.reason)}</>
             : <>{t(entry.row.type as ConversationText)} · {nameOf(state, entry.row.from_id)} → {nameOf(state, entry.row.to_id)} · {t('confidence')}: {readText(entry.row.confidence) || t('unknown')}</>}
           <TimeStamp value={entry.time} fallback={t('timeUnknown')}/>
-        </div>)}
-      {deltas.map(([key, delta]) => <Message key={key} language={language} streaming agent={providerName(provider)}
+        </div>;
+      })}
+      {deltas.map(([key, delta]) => <Message key={key} language={language} streaming sender={agentSender} showName={nameShown(agentSender)}
         row={{ id: delta.messageId ?? key, role: 'assistant', body: delta.text, body_state: 'stored' } satisfies Row}/>)}
     </div></div>
-    <footer className="composer">
-      {(state.connection !== 'connected' || error || pending || nextConversation || modelsError) && <div className="composer-status">
+    <footer className="composer" onFocusCapture={() => setEngaged(true)} onPointerDownCapture={() => setEngaged(true)}>
+      {(state.connection !== 'connected' || error || pending || nextConversation || modelsError && engaged || handoffBlocked) && <div className="composer-status">
         {state.connection !== 'connected' && <p role="status" className="status-line"><Icon name="unknown" size={14}/>{dictionaries[language][state.connection]}</p>}
         {error && <p role="alert" className="status-line danger"><Icon name="alert" size={14}/>{error}</p>}
         {pending && <p role="status" className="status-line">{t('pending')}</p>}
-        {modelsError && <p role="alert" className="status-line danger">{modelsError}</p>}
+        {modelsError && engaged && <p role="alert" className="status-line danger">{modelsError}</p>}
+        {handoffBlocked && <p role="alert" className="banner banner-warning"><Icon name="alert" size={14}/>{t('unsupported')}</p>}
         {nextConversation && <AppLink className="status-line" to={`/c/${encodeURIComponent(nextConversation)}`}>{conversationName(state, nextConversation) ? `${t('conversation')}: ${conversationName(state, nextConversation)}` : 'Open the new conversation'}</AppLink>}
       </div>}
       {confirmation && <section role="dialog" aria-modal="false" aria-label={t('stopped')} className="confirm-panel"><h3>{t('stopped')}</h3>
@@ -354,7 +396,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
           </div>
         </div>
       </div>
-      <p className="composer-hint"><span>{t(hint)}</span>{!external && <> · <kbd>⌘</kbd><kbd>Enter</kbd></>}{(!model || !cwd.trim()) && <> · <span>{t('launchReady')}</span></>}</p>
+      <p className="composer-hint"><span>{t(hint)}</span>{!external && <> · <kbd>⌘</kbd><kbd>Enter</kbd></>}{engaged && (!model || !cwd.trim()) && <> · <span>{t('launchReady')}</span></>}</p>
     </footer>
   </section>;
 }

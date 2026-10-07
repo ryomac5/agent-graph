@@ -18,6 +18,8 @@ const PATHS = {
   file: <><path d="M14 3.5H7a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8.5Z"/><path d="M14 3.5v5h5"/></>,
   diff: <><path d="M14 3.5H7a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8.5Z"/><path d="M9.5 11h5M12 8.5v5M9.5 16.5h5"/></>,
   check: <path d="m5 12.5 4.5 4.5L19 7.5"/>,
+  copy: <><rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5V6.5a2 2 0 0 0-2-2h-7a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h2"/></>,
+  image: <><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="10" r="1.75"/><path d="m20.5 16-5-5-8.5 8.5"/></>,
   x: <path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>,
   send: <><path d="M12 19V5.5"/><path d="m6 11 6-6 6 6"/></>,
   stop: <rect x="6.5" y="6.5" width="11" height="11" rx="2"/>,

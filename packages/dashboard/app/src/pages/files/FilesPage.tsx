@@ -4,12 +4,14 @@ import { AppLink } from '../../components/AppLink.tsx';
 import { Icon } from '../../components/Icon.tsx';
 import { projectLabel } from '../../lib/format.ts';
 import { store, useScreenStore, type ScreenStore } from '../../lib/store.ts';
+import { Markdown } from '../../components/conversation/Markdown.tsx';
 import { detectLanguage, highlightLines, LANGUAGE_NAMES, type Language } from './highlight.ts';
 import {
   ancestorPaths, formatSize, GIT_MARKS, listFiles, listWorktrees, matchWorktree, parentPath, primaryMark, readFile, resolveProjectId, worktreeName,
   type FileEntry, type FilesClient, type GitMark, type ReadResult, type WorktreesResult,
 } from './model.ts';
 import '../../components/activity.css';
+import './highlight.css';
 import './files.css';
 
 /** これより大きい本文は色分けを省き、表示の重さを抑える。 */
@@ -45,6 +47,21 @@ function CodeView({ path, content }: { path: string; content: string }) {
         <code className="code-text">{tokens.length ? tokens.map((token, part) => token.type ? <span key={part} className={`tok tok-${token.type}`}>{token.text}</span> : token.text) : '\n'}</code>
       </div>)}</div>
     </div>
+  </>;
+}
+
+/** Markdown は既定で整形して出し、Raw に切り替えると元の文字を色分けで出す。 */
+function FileContent({ path, content }: { path: string; content: string }) {
+  const [raw, setRaw] = useState(false);
+  if (detectLanguage(path) !== 'md') return <CodeView path={path} content={content}/>;
+  return <>
+    <div className="viewer-mode" role="group" aria-label="Markdown view">
+      <button type="button" className="viewer-mode-option" aria-pressed={!raw} onClick={() => setRaw(false)}>Preview</button>
+      <button type="button" className="viewer-mode-option" aria-pressed={raw} onClick={() => setRaw(true)}>Raw</button>
+    </div>
+    {raw ? <CodeView path={path} content={content}/>
+      : <div className="markdown-view" role="region" aria-label={`Contents of ${path}`} tabIndex={0}>
+        <Markdown text={content} breaks={false} className="markdown-document"/></div>}
   </>;
 }
 
@@ -341,7 +358,7 @@ export function FilesPage({ client, target = store, project: suppliedProject }: 
                     : shown.result.state === 'too_large' ? <div className="empty-state" role="status"><Icon name="alert" size={22}/><h2>File too large to display</h2><p>Files over 1.0 MiB are not shown.</p>
                       <p className="numeric">Size: {formatSize(shown.result.size)} ({shown.result.size.toLocaleString('en-US')} bytes)</p></div>
                       : shown.result.content === '' ? <p className="tree-status viewer-status">Empty file</p>
-                        : <CodeView key={selectedPath} path={selectedPath} content={shown.result.content}/>}
+                        : <FileContent key={selectedPath} path={selectedPath} content={shown.result.content}/>}
         </>}
       </section>
     </div>

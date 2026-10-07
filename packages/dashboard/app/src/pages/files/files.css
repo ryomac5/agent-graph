@@ -1,23 +1,14 @@
 /* ファイルの木と中身。色は全て変数から取り、明暗の両方で読めるようにする。 */
 :root {
   --git-modified: #a35f00; --git-added: #1d8049; --git-untracked: #2f7d5b; --git-deleted: #c4373d; --git-renamed: #3f6fd1;
-  --tok-comment: #6e7781; --tok-string: #0a7a3e; --tok-number: #0b6bcb; --tok-keyword: #a626a4; --tok-literal: #b35900;
-  --tok-function: #4747bd; --tok-type: #8a5a00; --tok-key: #0b6bcb; --tok-tag: #c4373d; --tok-attr: #8a5a00;
-  --tok-heading: #4747bd; --tok-meta: #6e7781; --tok-variable: #b3446c; --tok-code: #0a7a3e; --tok-link: #0b6bcb;
   --code-gutter: #9a9da6;
 }
 @media (prefers-color-scheme: dark) { :root:not([data-theme='light']) {
   --git-modified: #e7ad4f; --git-added: #4fc38a; --git-untracked: #6fd3a5; --git-deleted: #f17d82; --git-renamed: #86a8ff;
-  --tok-comment: #8b919c; --tok-string: #8fd6a4; --tok-number: #7cc0ff; --tok-keyword: #d39cf0; --tok-literal: #f0b46c;
-  --tok-function: #a9a9fb; --tok-type: #e8c47c; --tok-key: #7cc0ff; --tok-tag: #ff9196; --tok-attr: #e8c47c;
-  --tok-heading: #a9a9fb; --tok-meta: #8b919c; --tok-variable: #f29bc0; --tok-code: #8fd6a4; --tok-link: #7cc0ff;
   --code-gutter: #5f636d;
 } }
 :root[data-theme='dark'] {
   --git-modified: #e7ad4f; --git-added: #4fc38a; --git-untracked: #6fd3a5; --git-deleted: #f17d82; --git-renamed: #86a8ff;
-  --tok-comment: #8b919c; --tok-string: #8fd6a4; --tok-number: #7cc0ff; --tok-keyword: #d39cf0; --tok-literal: #f0b46c;
-  --tok-function: #a9a9fb; --tok-type: #e8c47c; --tok-key: #7cc0ff; --tok-tag: #ff9196; --tok-attr: #e8c47c;
-  --tok-heading: #a9a9fb; --tok-meta: #8b919c; --tok-variable: #f29bc0; --tok-code: #8fd6a4; --tok-link: #7cc0ff;
   --code-gutter: #5f636d;
 }
 
@@ -79,22 +70,15 @@
 .code-row .code-line-number { background: var(--surface); }
 .code-row:hover .code-line-number { background: var(--surface-2); }
 .code-text { display: table-cell; padding: 0 var(--space-4) 0 var(--space-2); white-space: pre; font: inherit; border-left: 1px solid var(--border); }
-.tok-comment { color: var(--tok-comment); font-style: italic; }
-.tok-string { color: var(--tok-string); }
-.tok-number { color: var(--tok-number); }
-.tok-keyword { color: var(--tok-keyword); }
-.tok-literal { color: var(--tok-literal); }
-.tok-function { color: var(--tok-function); }
-.tok-type { color: var(--tok-type); }
-.tok-key { color: var(--tok-key); }
-.tok-tag { color: var(--tok-tag); }
-.tok-attr { color: var(--tok-attr); }
-.tok-heading { color: var(--tok-heading); font-weight: 600; }
-.tok-meta { color: var(--tok-meta); }
-.tok-variable { color: var(--tok-variable); }
-.tok-code { color: var(--tok-code); }
-.tok-emphasis { font-weight: 600; }
-.tok-link { color: var(--tok-link); text-decoration: underline; text-underline-offset: 2px; }
+
+/* Markdown の整形と Raw の切り替え。整形は文書として読める幅に収める。 */
+.viewer-mode { flex: none; display: flex; justify-content: flex-end; gap: 2px; padding: var(--space-2) var(--space-4) 0; }
+.viewer-mode-option { height: 24px; padding: 0 var(--space-2); border-radius: var(--radius-xs); color: var(--text-3); font-size: var(--text-sm); font-weight: 500; }
+.viewer-mode-option:hover { color: var(--text); background: var(--surface-hover); }
+.viewer-mode-option[aria-pressed='true'] { color: var(--text); background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--border); }
+.markdown-view { flex: 1; min-height: 0; overflow: auto; padding: var(--space-4) var(--space-6) var(--space-10); }
+.markdown-view:focus-visible { outline-offset: -2px; }
+.markdown-view .markdown-document { max-width: 760px; margin: 0 auto; }
 
 @media (max-width: 1279px) {
   .explorer-columns { grid-template-columns: 248px minmax(0, 1fr); }

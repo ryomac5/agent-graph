@@ -51,7 +51,8 @@ it.each(['approve', 'request_changes', 'reject'])('formats %s review output cons
   workspace.unmount();
   render(<MemoryRouter><ConversationPage conversationId={review} target={target} client={client}/></MemoryRouter>);
   const bubble = document.querySelector('.conversation-markdown')!;
-  expect(bubble.textContent).toBe(expected.replace('\n', ''));
+  expect(bubble.textContent).toBe(expected);
+  expect(bubble.querySelectorAll('br')).toHaveLength(1);
   expect(bubble.textContent).not.toContain(raw);
 });
 const REPO = '/var/folders/07/abc/T/agent-graph-ui-x/repo';
@@ -107,6 +108,8 @@ it('shows the conversation header with model, effort, worktree place and branch,
   render(<MemoryRouter><ConversationPage conversationId={CONVERSATION} target={setup()} client={client}/></MemoryRouter>);
   const header = document.querySelector<HTMLElement>('.conv-header')!;
   expect(within(header).getByText('claude-sonnet')).toBeTruthy();
+  expect(within(header).queryByText('Effort · high')).toBeNull();
+  fireEvent.click(within(header).getByRole('button', { name: 'Details' }));
   expect(within(header).getByText('Effort · high')).toBeTruthy();
   expect(within(header).getByText('repo')).toBeTruthy();
   expect(within(header).getByText('main')).toBeTruthy();
@@ -182,7 +185,7 @@ it('marks conversation approval cards with a check, a cross, a clock or an alert
   const expected = [['allowed', 'Allowed'], ['denied', 'Denied'], ['denied', 'Denied'], ['expired', 'Expired'], ['pending', 'Pending']] as const;
   cards.forEach((card, index) => {
     const [outcome, label] = expected[index]!;
-    const icon = card.querySelector('header > svg')!;
+    const icon = card.querySelector('summary > svg[class*="outcome-"]')!;
     expect(icon.getAttribute('class')).toContain(`outcome-${outcome}`);
     expect(iconPath(icon)).toContain(OUTCOME_PATHS[outcome]);
     const chip = card.querySelector('.outcome-chip')!;

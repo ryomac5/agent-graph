@@ -1,0 +1,32 @@
+/* 字句の色分け。Files の中身と Markdown の囲いのコードで共有する。明暗の両方で読める色にする。 */
+:root {
+  --tok-comment: #6e7781; --tok-string: #0a7a3e; --tok-number: #0b6bcb; --tok-keyword: #a626a4; --tok-literal: #b35900;
+  --tok-function: #4747bd; --tok-type: #8a5a00; --tok-key: #0b6bcb; --tok-tag: #c4373d; --tok-attr: #8a5a00;
+  --tok-heading: #4747bd; --tok-meta: #6e7781; --tok-variable: #b3446c; --tok-code: #0a7a3e; --tok-link: #0b6bcb;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme='light']) {
+  --tok-comment: #8b919c; --tok-string: #8fd6a4; --tok-number: #7cc0ff; --tok-keyword: #d39cf0; --tok-literal: #f0b46c;
+  --tok-function: #a9a9fb; --tok-type: #e8c47c; --tok-key: #7cc0ff; --tok-tag: #ff9196; --tok-attr: #e8c47c;
+  --tok-heading: #a9a9fb; --tok-meta: #8b919c; --tok-variable: #f29bc0; --tok-code: #8fd6a4; --tok-link: #7cc0ff;
+} }
+:root[data-theme='dark'] {
+  --tok-comment: #8b919c; --tok-string: #8fd6a4; --tok-number: #7cc0ff; --tok-keyword: #d39cf0; --tok-literal: #f0b46c;
+  --tok-function: #a9a9fb; --tok-type: #e8c47c; --tok-key: #7cc0ff; --tok-tag: #ff9196; --tok-attr: #e8c47c;
+  --tok-heading: #a9a9fb; --tok-meta: #8b919c; --tok-variable: #f29bc0; --tok-code: #8fd6a4; --tok-link: #7cc0ff;
+}
+.tok-comment { color: var(--tok-comment); font-style: italic; }
+.tok-string { color: var(--tok-string); }
+.tok-number { color: var(--tok-number); }
+.tok-keyword { color: var(--tok-keyword); }
+.tok-literal { color: var(--tok-literal); }
+.tok-function { color: var(--tok-function); }
+.tok-type { color: var(--tok-type); }
+.tok-key { color: var(--tok-key); }
+.tok-tag { color: var(--tok-tag); }
+.tok-attr { color: var(--tok-attr); }
+.tok-heading { color: var(--tok-heading); font-weight: 600; }
+.tok-meta { color: var(--tok-meta); }
+.tok-variable { color: var(--tok-variable); }
+.tok-code { color: var(--tok-code); }
+.tok-emphasis { font-weight: 600; }
+.tok-link { color: var(--tok-link); text-decoration: underline; text-underline-offset: 2px; }

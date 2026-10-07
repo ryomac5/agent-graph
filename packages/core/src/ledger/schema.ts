@@ -11,7 +11,7 @@ import type { Fact, JsonValue } from "./facts.ts";
 import { collectProjectionDependencies } from "./projections/dependencies.ts";
 import { initializeSearch, refreshSearch } from "./search.ts";
 
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 export const FACT_SCHEMA_VERSION = 1;
 export const FACTS_DDL = `CREATE TABLE facts (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -251,7 +251,17 @@ function migrateToVersion7(db: DatabaseSync): void {
     delegation.run(row.repository_id ?? null, serializeValue(row.parent), row.provider ?? null, row.model ?? null, row.id);
   }
 }
-const MIGRATIONS = [migrateToVersion1, migrateToVersion2, migrateToVersion3, migrateToVersion4, migrateToVersion5, migrateToVersion6, migrateToVersion7] as const;
+function migrateToVersion8(db: DatabaseSync): void {
+  db.exec("ALTER TABLE conversations ADD COLUMN kit_name TEXT; ALTER TABLE conversations ADD COLUMN created_ts TEXT; ALTER TABLE delegations ADD COLUMN kit TEXT");
+  const facts = db.prepare("SELECT * FROM facts WHERE kind LIKE 'conversation.%'").all().map(row => ({
+    ...row, payload: row.payload === null ? null : JSON.parse(String(row.payload)),
+  } as Fact));
+  const update = db.prepare("UPDATE conversations SET kit_name = ?, created_ts = ? WHERE id = ?");
+  for (const row of projectConversations(facts, new Map()).conversations) update.run(row.kit_name ?? null, row.created_ts, row.id);
+  db.exec(`UPDATE delegations SET kit = (SELECT json_extract(payload, '$.kit') FROM facts
+    WHERE kind = 'delegation.created' AND json_extract(payload, '$.request_id') = delegations.request_id ORDER BY seq LIMIT 1)`);
+}
+const MIGRATIONS = [migrateToVersion1, migrateToVersion2, migrateToVersion3, migrateToVersion4, migrateToVersion5, migrateToVersion6, migrateToVersion7, migrateToVersion8] as const;
 
 export function initializeSchema(db: DatabaseSync): void {
   db.exec("BEGIN IMMEDIATE");

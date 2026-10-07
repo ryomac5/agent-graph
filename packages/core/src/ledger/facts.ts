@@ -42,6 +42,7 @@ export interface ConversationPayload {
   type: "interactive" | "unattended" | "subagent";
   history_format: "jsonl" | "legacy" | "paginated" | (string & {});
   task_id?: string;
+  kit_name?: string;
   // 観測した会話の開始の場所と、git の共通ディレクトリから決めたリポジトリ。
   cwd?: string;
   repository_id?: string;

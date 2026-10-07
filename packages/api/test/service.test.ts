@@ -16,6 +16,7 @@ import { migrations } from "../../core/src/store/migrations.ts";
 import { openObservationService } from "../src/service/index.ts";
 import { pollObservation } from "../src/service/poll.ts";
 import { rebuildInitialProjection } from "../src/service/initial-projection.ts";
+import { ProjectionFeed } from "../src/service/projection-feed.ts";
 import { openReadLedger } from "../src/service/read-ledger.ts";
 
 import { acquirePerformanceLock } from "./observe/perf-lock.ts";
@@ -282,7 +283,7 @@ test("登録されたプロジェクトの別名と hook 送信待ちを取り�
     event_id: "start", hook_event_name: "SessionStart", source_ts: TS, input: {}, managed: false }));
   const service = openObservationService({ env: f.env });
   t.after(() => service.close());
-  assert.equal(service.ingestOnce().appended, 3);
+  assert.equal(service.ingestOnce().appended, 4);
   assert.equal(service.ingestOnce().appended, 0);
   assert.equal(readFileSync(join(state, "counter"), "utf8"), "999");
   const external = openLedger(f.dbPath);
@@ -290,7 +291,7 @@ test("登録されたプロジェクトの別名と hook 送信待ちを取り�
     payload: { generation: 1, state: "running" }, source_ts: "2026-10-06T11:00:00.000Z", confidence: "confirmed" });
   external.close();
   const stateAfter = service.catchUp();
-  assert.equal(stateAfter.last_seq, 5);
+  assert.equal(stateAfter.last_seq, 6);
 });
 
 test("同じ取り込みで届いたキットの別名を委譲の親の照合に使う", (t) => {
@@ -761,4 +762,50 @@ test("準備台帳の再利用後も所属・訂正の依存と再送の結果�
   assert.deepEqual(buffered.ledger.readSince(0, Number.MAX_SAFE_INTEGER), reference.readSince(0, Number.MAX_SAFE_INTEGER));
   const sql = "SELECT * FROM fact_projection_dependencies ORDER BY projection, subject, direction, key, seq";
   assert.deepEqual(actualDb.prepare(sql).all(), referenceDb.prepare(sql).all());
+});
+
+test("既存の Claude の子の親を補い、根の snapshot にキットの系列を載せる", (t) => {
+  const f = createFixture(t);
+  const root = join(f.home, "repository");
+  const kitState = join(root, ".agents", "state");
+  const histories = join(f.env.CLAUDE_CONFIG_DIR, "projects", "repo");
+  const children = join(histories, "first", "subagents");
+  mkdirSync(kitState, { recursive: true });
+  mkdirSync(children, { recursive: true });
+  writeFileSync(join(histories, "first.jsonl"), createClaudeMessage("first"));
+  writeFileSync(join(histories, "second.jsonl"), createClaudeMessage("second"));
+  writeFileSync(join(children, "agent-child.jsonl"), createClaudeMessage("child"));
+  writeFileSync(join(children, "agent-child.meta.json"), JSON.stringify({ toolUseId: "tool", description: "Inspect implementation", agentType: "Explore" }));
+  const existing = openLedger(f.dbPath);
+  existing.append({ source: "legacy", source_event_id: "existing-child", kind: "conversation.created",
+    subject: `conversation:${createNativeId("claude", "agent-child")}`, source_ts: TS, confidence: "confirmed",
+    payload: { provider: "claude", native_id: "agent-child", origin: "observed", type: "subagent", history_format: "jsonl" } });
+  existing.close();
+  const service = openObservationService({ env: f.env });
+  t.after(() => service.close());
+  service.ingestOnce();
+  service.ledger.append({ source: "ui", source_event_id: "registered-root", kind: "project.created", subject: "project:registered",
+    payload: { repository_id: "registered", root_path: root, display_name: "Example", name_prefix: "example", state: "registered" },
+    source_ts: TS, confidence: "confirmed" });
+  writeFileSync(join(kitState, "sessions.json"), JSON.stringify({ first: "agent-graph-001", second: "agent-graph-001" }));
+  service.ingestOnce();
+  const projected = project(service.ledger.readSince(0, Number.MAX_SAFE_INTEGER));
+  const relation = projected.relations.find(row => row.type === "delegated")!;
+  assert.equal(relation.from_id, createNativeId("claude", "first"));
+  assert.equal(relation.to_id, createNativeId("claude", "agent-child"));
+  assert.deepEqual(relation.evidence, { toolUseId: "tool", description: "Inspect implementation", agentType: "Explore" });
+  assert.equal(relation.confidence, "confirmed");
+  assert.equal(projected.conversations.filter(row => row.kit_name === "agent-graph-001").length, 2);
+  service.ledger.append({ source: "kit", source_event_id: "kit-root-request", kind: "delegation.created", subject: "delegation:kit-root-request",
+    payload: { request_id: "kit-root-request", title: "Inspect", role: "implement", attempt: 1, state: "received", kit: { session: "agent-graph-001", file: join(kitState, "events.jsonl") } },
+    source_ts: TS, confidence: "confirmed" } as FactInput);
+  const feed = new ProjectionFeed(f.dbPath, () => service.catchUp());
+  t.after(() => feed.close());
+  const rows = feed.snapshot().projection.roots;
+  assert.equal(feed.snapshot().projection.delegations[0].root_id, rows[0].id);
+  assert.equal(rows.length, 1);
+  assert.deepEqual(rows[0].conversation_ids, [createNativeId("claude", "first"), createNativeId("claude", "second")]);
+  assert.equal(rows[0].name, "agent-graph-001");
+  assert.equal(rows[0].total_children, 1);
+  assert.deepEqual(Object.keys(rows[0]).sort(), ["id", "name", "project", "state", "last_activity_ts", "conversation_ids", "running_children", "total_children"].sort());
 });

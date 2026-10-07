@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { PROJECTION_TABLES, type ProjectionState } from "../../../core/src/ledger/rebuild.ts";
 import type { Fact } from "../../../core/src/ledger/facts.ts";
 import { createScreenIdentities, type ScreenIdentities } from './screen-identities.ts';
+import type { ObservationProgress } from "./index.ts";
 
 export type ProjectionRows = Record<string, Record<string, unknown>[]>;
 export interface ProjectionPatch {
@@ -20,9 +21,11 @@ export class ProjectionFeed {
   private limit: number;
   private requiresGeneration: boolean;
   private identities: ScreenIdentities = { conversations: {}, runs: {} };
+  private observation?: ObservationProgress;
   constructor(path: string, catchUp: () => ProjectionState, limit = PATCH_RETENTION) {
     if (!Number.isSafeInteger(limit) || limit < 1) throw new RangeError("Invalid patch retention");
     this.state = catchUp();
+    this.observation = (this.state as ProjectionState & { observation?: ObservationProgress }).observation;
     this.requiresGeneration = this.state.generation > 0;
     this.db = new DatabaseSync(path);
     this.db.exec("PRAGMA busy_timeout = 5000");
@@ -39,6 +42,7 @@ export class ProjectionFeed {
   }
   refresh(): ProjectionPatch | "resync" | undefined {
     const state = this.catchUp();
+    this.observation = (state as ProjectionState & { observation?: ObservationProgress }).observation;
     if (state.generation === this.state.generation && state.last_seq === this.state.last_seq) return;
     const rows = this.readRows();
     if (state.generation !== this.state.generation || state.last_seq < this.state.last_seq) {
@@ -71,6 +75,7 @@ export class ProjectionFeed {
     // バッチ途中からの再送は冪等な upsert/remove で最終状態へ収束する。
     return this.history.filter((patch) => patch.seq > seq);
   }
-  snapshot() { return { seq: this.state.last_seq, generation: this.state.generation, projection: this.rows, identities: this.identities }; }
+  snapshot() { return { seq: this.state.last_seq, generation: this.state.generation, projection: this.rows, identities: this.identities,
+    ...(this.observation ? { observation: this.observation } : {}) }; }
   close(): void { this.db.close(); }
 }

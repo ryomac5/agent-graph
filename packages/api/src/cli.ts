@@ -2,11 +2,10 @@
 import { mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { startHookServer } from "./hook/index.ts";
+import { startObservationWorker } from "./service/worker-client.ts";
 import { migrateLegacyDatabases } from "./migrate/index.ts";
-import { OBSERVATION_POLL_MS, openObservationService } from "./service/index.ts";
+import { openObservationService } from "./service/index.ts";
 import { DEFAULT_WS_PORT, startWebSocketServer } from "./ws/index.ts";
-import { pollObservation } from "./service/poll.ts";
 import { runWatchCli, WATCH_HELP } from "./watch/index.ts";
 
 import { DEFAULT_DASHBOARD_PORT, startStaticServer } from "./static/index.ts";
@@ -57,7 +56,7 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
   }
   if (command === "ingest" && !once) throw new TypeError("ingest requires --once");
   if (command === "migrate" && !from) throw new TypeError("migrate requires --from <path>");
-  const service = openObservationService({ dbPath, live: command === "serve" });
+  const service = openObservationService({ dbPath, live: command === "serve", readerOnly: command === "serve" });
   try {
     if (command === "ingest") console.log(JSON.stringify(service.ingestOnce()));
     else if (command === "rebuild") console.log(JSON.stringify(service.rebuild()));
@@ -71,10 +70,10 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
       });
       console.log(JSON.stringify(report));
     } else {
-      const report = observe ? pollObservation(() => service.ingestOnce()) : { appended: 0 };
-      const hook = await startHookServer(service.ledger, 0);
+      const observation = await startObservationWorker(service, { observe });
+      const hook = observation.hook;
+      const report = { appended: 0 };
       const endpoint = join(service.outbox, ".endpoint");
-      let observationTimer: ReturnType<typeof setInterval> | undefined;
       let websocket: Awaited<ReturnType<typeof startWebSocketServer>> | undefined;
       let dashboard: Awaited<ReturnType<typeof startStaticServer>> | undefined;
       let stop: () => void = () => {};
@@ -88,22 +87,18 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
         renameSync(temporary, endpoint);
         console.log(JSON.stringify({ ...report, hook_url: hook.url, hook_endpoint_file: endpoint, ws_url: websocket.wsUrl, snapshot_url: `${websocket.url}/snapshot`,
           dashboard_url: dashboard.url, ws_token: websocket.token, db: service.dbPath }));
-        await new Promise<void>((resolveStop, reject) => {
+        observation.start();
+        await Promise.race([observation.failure, new Promise<void>((resolveStop) => {
           stop = resolveStop;
           process.once("SIGINT", stop);
           process.once("SIGTERM", stop);
-          const poll = (action: () => unknown) => {
-            try { pollObservation(action); } catch (error) { reject(error); }
-          };
-          if (observe) observationTimer = setInterval(() => poll(() => service.ingestOnce()), OBSERVATION_POLL_MS);
-        });
+        })]);
       } finally {
-        clearInterval(observationTimer);
+        await observation.close();
         await dashboard?.close();
         await websocket?.close();
         process.removeListener("SIGINT", stop);
         process.removeListener("SIGTERM", stop);
-        await hook.close();
         try {
           if (JSON.parse(readFileSync(endpoint, "utf8")).token === hook.token) unlinkSync(endpoint);
         } catch (error) {

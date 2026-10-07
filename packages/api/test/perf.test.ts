@@ -3,11 +3,17 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import test from "node:test";
+import test, { before, after } from "node:test";
 import type { TestContext } from "node:test";
 import { migrations } from "../../core/src/store/migrations.ts";
 import { migrateLegacyDatabases } from "../src/migrate/index.ts";
 import { openObservationService } from "../src/service/index.ts";
+
+import { acquirePerformanceLock } from "./observe/perf-lock.ts";
+
+let releasePerformanceLock: (() => Promise<void>) | undefined;
+before(async () => { releasePerformanceLock = await acquirePerformanceLock(); });
+after(async () => { await releasePerformanceLock?.(); });
 
 const LEGACY_ROW_COUNT = 20_000;
 const DELEGATION_COUNT = 500;
@@ -50,7 +56,12 @@ test("2 万 turns・2 万 events・500 委譲の移行を 30 秒以内に反映�
     assert.equal(old.prepare("SELECT count(*) AS count FROM events").get()!.count, LEGACY_ROW_COUNT);
   } finally { old.close(); }
   let projections = 0;
-  const options = { batch: service.batch, afterDatabase() { projections += 1; service.catchUp(); } };
+  const options = { batch: service.batch, afterDatabase() {
+    projections += 1;
+    const projectionStart = performance.now();
+    service.catchUp();
+    t.diagnostic(`projection: ${(performance.now() - projectionStart).toFixed(1)} ms`);
+  } };
   const start = performance.now();
   const report = await migrateLegacyDatabases([path], service.ledger, options);
   const elapsed = performance.now() - start;

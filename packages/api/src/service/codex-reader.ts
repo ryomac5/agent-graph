@@ -3,14 +3,35 @@ import { basename } from "node:path";
 import type { FactInput, Ledger } from "../../../core/src/ledger/index.ts";
 import { readAppendOnlyFile } from "../observe/files.ts";
 import type { FileCursor } from "../observe/files.ts";
-import { rolloutReader } from "../observe/codex/files.ts";
 import type { RolloutLine, RolloutReader } from "../observe/codex/files.ts";
+import { createDirectoryReader } from "../observe/directories.ts";
+
+export interface RolloutCheckpoint { cursor: FileCursor; context: RolloutLine[] }
+
+// 再開に必要な構造だけを保存し、会話本文やツール出力を cursor の保管庫へ複製しない。
+export function createRolloutContext(lines: RolloutLine[]): RolloutLine[] {
+  return lines.map((line) => {
+    const row = readObject(line.value);
+    if (row.type === "session_meta" || !row.type && typeof row.id === "string") {
+      const meta = row.type === "session_meta" ? readObject(row.payload) : row;
+      const payload = Object.fromEntries(["id", "timestamp", "source", "history_mode", "cli_version", "parent_thread_id"]
+        .filter((key) => meta[key] !== undefined).map((key) => [key, meta[key]]));
+      return { ...line, value: row.type === "session_meta" ? { type: row.type, timestamp: row.timestamp, payload } : payload };
+    }
+    const params = readObject(row.params);
+    const item = row.method === "item/completed" ? readObject(params.item) : readObject(row.payload);
+    const payload = { type: item.type, thread_id: item.thread_id, threadId: item.threadId,
+      ...(item.content !== undefined ? { content: "" } : {}), ...(item.text !== undefined ? { text: "" } : {}) };
+    return { ...line, value: { timestamp: row.timestamp, type: row.type, method: row.method, threadId: row.threadId,
+      ...(row.method === "item/completed" ? { params: { threadId: params.threadId, item: payload } } : { payload }) } };
+  });
+}
 
 function readObject(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
-export function createIncrementalRolloutReader(ledger: Ledger) {
+export function createIncrementalRolloutReader(ledger: Ledger, cache = new Map<string, RolloutCheckpoint>()) {
   const saved = new Map<string, { offset: number; fileCursor?: FileCursor }>();
   for (const fact of ledger.readSince(0, Number.MAX_SAFE_INTEGER)) {
     if (fact.source !== "rollout-codex" || !fact.cursor) continue;
@@ -19,12 +40,12 @@ export function createIncrementalRolloutReader(ledger: Ledger) {
       saved.set(cursor.file_id, { offset: cursor.offset, fileCursor: cursor.file_cursor });
     }
   }
-  const cache = new Map<string, { cursor: FileCursor; context: RolloutLine[] }>();
+  const list = createDirectoryReader();
   let staged = new Map<string, { cursor: FileCursor; context: RolloutLine[] }>();
   let cursors = new Map<number, FileCursor>();
   let current: FileCursor | undefined;
   const reader: RolloutReader = {
-    list: (directory) => rolloutReader.list(directory),
+    list: (directory) => list(directory, (name) => /^rollout-.*\.jsonl$/.test(name)),
     read(path) {
       const previous = cache.get(path);
       const persisted = saved.get(basename(path));
@@ -49,8 +70,10 @@ export function createIncrementalRolloutReader(ledger: Ledger) {
       }
       const context = file.reset ? [] : previous?.context ?? [];
       const all = [...context, ...lines];
-      const meta = all.find((line) => readObject(line.value).type === "session_meta");
-      const nativeId = readObject(readObject(meta?.value).payload).id;
+      const meta = all.find((line) => readObject(line.value).type === "session_meta"
+        || !readObject(line.value).type && typeof readObject(line.value).id === "string");
+      const metaRow = readObject(meta?.value);
+      const nativeId = (metaRow.type === "session_meta" ? readObject(metaRow.payload) : metaRow).id;
       const message = all.find((line) => {
         const row = readObject(line.value);
         const params = readObject(row.params);
@@ -61,10 +84,10 @@ export function createIncrementalRolloutReader(ledger: Ledger) {
           && (item.content !== undefined || item.text !== undefined);
       });
       const retained = [...new Set([meta, message, all.at(-1)].filter((line): line is RolloutLine => !!line))];
-      staged.set(path, { cursor: file.cursor, context: retained });
+      staged.set(path, { cursor: file.cursor, context: createRolloutContext(retained) });
       // 最後の行は再読し、途中で止まった複数の事実の追記を補う。
-      const resumeOffset = previous || file.reset || reset ? 0 : persisted?.fileCursor?.offset ?? persisted?.offset ?? 0;
-      return { lines: [...new Map([...retained, ...lines.filter((line) => line.offset >= resumeOffset)]
+      const resumeOffset = previous || file.reset || reset ? 0 : persisted?.fileCursor?.offset ?? 0;
+      return { lines: [...new Map([...retained.map((line) => ({ ...line, contextOnly: true })), ...lines.filter((line) => line.offset >= resumeOffset)]
         .map((line) => [line.offset, line])).values()].sort((a, b) => a.offset - b.offset), completeBytes: file.cursor.offset };
     },
   };

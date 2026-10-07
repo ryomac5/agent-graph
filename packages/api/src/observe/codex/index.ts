@@ -10,6 +10,7 @@ export interface CodexObservationOptions {
   reader?: RolloutReader;
   observedTs?: string;
   batch?: <T>(operation: () => T) => T;
+  paths?: Set<string>;
 }
 type ObjectValue = { [key: string]: JsonValue };
 function readObject(value: unknown): ObjectValue {
@@ -104,6 +105,7 @@ export function observeCodex(ledger: Ledger, options: CodexObservationOptions = 
   const archivedPaths = reader.list(join(home, "archived_sessions"));
   const archivedFileIds = new Set(archivedPaths.map((path) => basename(path)));
   return [...reader.list(join(home, "sessions")), ...archivedPaths]
+    .filter((path) => !options.paths || options.paths.has(path))
     .flatMap((path) => (options.batch ?? ((operation) => operation()))(
       () => observeFile(ledger, path, { ...options, reader }, index, archivedFileIds)));
 }
@@ -119,11 +121,15 @@ function observeFile(ledger: Ledger, path: string, options: CodexObservationOpti
   archivedFileIds: Set<string>): AppendResult[] {
   const reader = options.reader ?? rolloutReader;
   const fileId = basename(path);
-  let file = reader.read(path);
-  // 増分の読み手が落とす legacy メタと、旧い cursor より前の未取り込み行を補う。
-  // offset を持たない旧い集約も、一度全行を数えて続きから数えられる形にする。
-  if (reader !== rolloutReader && (!file.lines.some((line) => readObject(line.value).type === "session_meta")
-    || [...index.unsupported.values()].some((group) => group.fileId === fileId && group.offset === undefined))) {
+  let file: ReturnType<RolloutReader["read"]>;
+  try { file = reader.read(path); }
+  catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return [];
+    throw error;
+  }
+  // offset を持たない旧い集約だけ、一度全行を数えて増分へ移す。
+  if (reader !== rolloutReader
+    && [...index.unsupported.values()].some((group) => group.fileId === fileId && group.offset === undefined)) {
     file = rolloutReader.read(path);
   }
   const archived = normalize(path).split(sep).includes("archived_sessions");
@@ -263,6 +269,7 @@ function observeFile(ledger: Ledger, path: string, options: CodexObservationOpti
       payload: { last_evidence: { kind: "metadata_parent_hint", parent_thread_id: parent } }, confidence: "inferred" });
   }
   for (const line of file.lines) {
+    if (line.contextOnly) continue;
     const row = readObject(line.value);
     const payload = readObject(row.payload);
     const params = readObject(row.params);

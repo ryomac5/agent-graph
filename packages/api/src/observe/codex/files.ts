@@ -7,6 +7,7 @@ export interface RolloutLine {
   end: number;
   hash: string;
   value: unknown;
+  contextOnly?: boolean;
 }
 export interface RolloutFile {
   lines: RolloutLine[];

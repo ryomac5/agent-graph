@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
-import { EventEmitter } from "node:events";
 import http from "node:http";
 import { appendFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,13 +9,19 @@ import { performance } from "node:perf_hooks";
 import { DatabaseSync } from "node:sqlite";
 import { syncBuiltinESMExports } from "node:module";
 import { setTimeout as delay } from "node:timers/promises";
-import test from "node:test";
+import test, { before, after } from "node:test";
 import type { TestContext } from "node:test";
-import { createNativeId, openLedger, project } from "../../core/src/ledger/index.ts";
+import { createNativeId, openLedger, project, rebuild, PROJECTION_TABLES, type FactInput } from "../../core/src/ledger/index.ts";
 import { migrations } from "../../core/src/store/migrations.ts";
 import { openObservationService } from "../src/service/index.ts";
 import { pollObservation } from "../src/service/poll.ts";
-import { runCli } from "../src/cli.ts";
+import { rebuildInitialProjection } from "../src/service/initial-projection.ts";
+
+import { acquirePerformanceLock } from "./observe/perf-lock.ts";
+
+let releasePerformanceLock: (() => Promise<void>) | undefined;
+before(async () => { releasePerformanceLock = await acquirePerformanceLock(); });
+after(async () => { await releasePerformanceLock?.(); });
 
 const TS = "2026-10-06T10:00:00.000Z";
 const CLI = new URL("../src/cli.ts", import.meta.url);
@@ -28,6 +33,46 @@ const BULK_FILE_COUNT = 300;
 const MESSAGES_PER_FILE = 10;
 const INITIAL_INGEST_LIMIT_MS = 8000;
 const IDLE_SCAN_LIMIT_MS = 2000;
+
+for (const sample of ["S17", "S14"]) {
+  test(`初回の一括投影は core の再構築と表・検索・索引が一致する (${sample})`, (t) => {
+    const f = createFixture(t);
+    const service = openObservationService({ env: f.env, writerOnly: true });
+    const db = new DatabaseSync(f.dbPath);
+    t.after(() => { db.close(); service.close(); });
+    const source = sample === "S17" ? new URL("./samples/S17/input.json", import.meta.url)
+      : new URL("../../core/test/samples/S14/input.json", import.meta.url);
+    const facts = JSON.parse(readFileSync(source, "utf8")) as FactInput[];
+    const extras = [
+      { kind: "task.created", subject: "task:extra", payload: { name: "Extra", project: "fixture" } },
+      { kind: "alias.created", subject: "alias:extra", payload: { entity_id: "task:extra", kind: "kit", name: "fixture-001" } },
+      { kind: "conversation.created", subject: "conversation:named", payload: { provider: "claude", native_id: "named", origin: "observed", type: "interactive", history_format: "jsonl" } },
+      { kind: "message.created", subject: "message:prompt", payload: { provider: "claude", native_id: "prompt", role: "user", body: [{ text: "First. More" }], body_state: "stored" } },
+      { kind: "message_membership.created", subject: "message_membership:prompt", payload: { message_id: "prompt", conversation_id: "named", active: true } },
+      { kind: "run.created", subject: "run:duplicate", payload: { conversation_id: "child", generation: 1, state: "unknown" } },
+      { kind: "connection.created", subject: "connection:extra", payload: { run_id: "child", type: "mcp", fingerprint: "extra", state: "connected" } },
+      { kind: "artifact.created", subject: "artifact:extra", payload: { run_id: "child", version: 1, patch_hash: "fixed", attribution: "unknown" } },
+      { kind: "approval.created", subject: "approval:extra", payload: { artifact_id: "extra", patch_hash: "fixed", state: "approved", request: { text: "Review" } } },
+      { kind: "finding.created", subject: "finding:extra", payload: { artifact_id: "extra", body: "Finding", state: "open" } },
+    ];
+    service.batch(() => {
+      for (const fact of facts) service.ledger.append(fact);
+      for (const extra of extras) service.ledger.append({ ...extra, source: "ui", source_event_id: extra.subject,
+        source_ts: TS, confidence: "confirmed" } as FactInput);
+    });
+    const readIndexes = () => db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name").all();
+    const indexes = readIndexes();
+    const tables = [...PROJECTION_TABLES, "message_name_inputs", "conversation_name_candidates", "search_documents", "search_sources", "search_references", "search_body_sources"];
+    const readTables = () => Object.fromEntries(tables.map((table) => [table,
+      db.prepare(`SELECT * FROM ${table}`).all().map((row) => JSON.stringify(row)).sort()]));
+    const state = rebuildInitialProjection(db);
+    const actual = readTables();
+    assert.deepEqual(readIndexes(), indexes);
+    assert.equal(rebuild(db).last_seq, state.last_seq);
+    assert.deepEqual(readTables(), actual);
+    assert.deepEqual(readIndexes(), indexes);
+  });
+}
 
 function createFixture(t: TestContext, useXdg = true) {
   const home = mkdtempSync(join(tmpdir(), "agent-graph-service-"));
@@ -206,6 +251,31 @@ test("登録されたプロジェクトの別名と hook 送信待ちを取り�
   external.close();
   const stateAfter = service.catchUp();
   assert.equal(stateAfter.last_seq, 5);
+});
+
+test("同じ取り込みで届いたキットの別名を委譲の親の照合に使う", (t) => {
+  const f = createFixture(t);
+  const root = join(f.home, "repository");
+  const state = join(root, ".agents", "state");
+  mkdirSync(state, { recursive: true });
+  writeFileSync(join(state, "sessions.json"), JSON.stringify({ session: "example-001" }));
+  writeFileSync(join(state, "events.jsonl"), JSON.stringify({ ts: TS, event: "codex_start",
+    session: "example-001", node_id: "child", description: "Fixture task" }) + "\n");
+  const ledger = openLedger(f.dbPath);
+  ledger.append({ source: "ui", source_event_id: "project", kind: "project.created", subject: "project:registered",
+    payload: { repository_id: "registered", root_path: root, display_name: "Example", name_prefix: "example", state: "registered" },
+    source_ts: TS, confidence: "confirmed" });
+  ledger.close();
+  const outbox = join(f.state, "agent-graph", "outbox");
+  mkdirSync(outbox);
+  writeFileSync(join(outbox, "event.json"), JSON.stringify(HOOK_EVENT));
+  const service = openObservationService({ env: f.env });
+  t.after(() => service.close());
+  service.ingestOnce();
+  const parent = service.ledger.readSince(0, 100).find((fact) => fact.kind === "relation.created")!;
+  assert.equal(parent.payload!.from_id, createNativeId("claude", "session"));
+  assert.equal(parent.confidence, "inferred");
+  assert.equal(service.ingestOnce().appended, 0);
 });
 
 test("migrate は場所以下の全旧 DB を変換し、二度の実行で台帳と元 DB を保つ", (t) => {
@@ -432,7 +502,7 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
     }
     assert.ok(stdout.includes("hook_url"), stderr);
     const ready = JSON.parse(stdout.trim());
-    assert.ok(stderr.includes("Conflicting hook event"));
+    await waitUntil(() => stderr.includes("Conflicting hook event"));
     assert.equal(child.exitCode, null);
     rmSync(conflict);
     writeFileSync(join(outbox, "recovered.json"), JSON.stringify({ ...HOOK_EVENT, event_id: "recovered", hook_event_name: "Stop" }));
@@ -451,6 +521,7 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
     await waitUntil(() => f.read().some((fact) => fact.source_event_id.includes("later")));
     const facts = f.read();
     assert.equal(facts.filter((fact) => fact.kind === "observation.unsupported").length, 1);
+    await waitUntil(() => readProjection(f.dbPath).state!.last_seq === facts.at(-1)!.seq);
     assert.equal(readProjection(f.dbPath).state!.last_seq, facts.at(-1)!.seq);
     child.kill(signal);
     assert.deepEqual(await exited, { code: 0, signal: null });
@@ -459,62 +530,26 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
   });
 }
 
-test("待ち受けを代替しても serve の初回失敗・定期再試行・停止と後始末を検証する", async (t) => {
+test("worker は初回の取り込み失敗後も再試行し、回復した事実を通知して停止する", async (t) => {
   const f = createFixture(t);
-  const previousEnv = { ...process.env };
-  Object.assign(process.env, f.env);
-  t.after(() => { process.env = previousEnv; });
-  t.mock.timers.enable({ apis: ["setInterval"] });
   const outbox = join(f.state, "agent-graph", "outbox");
   mkdirSync(outbox);
   const conflict = join(outbox, "conflict.json");
   writeFileSync(conflict, JSON.stringify(HOOK_EVENT));
   f.run("ingest", "--once");
   writeFileSync(conflict, JSON.stringify({ ...HOOK_EVENT, input: { changed: true } }));
-  writeFileSync(join(outbox, "00-invalid.json"), "{");
-  let closed = false;
-  const server = Object.assign(new EventEmitter(), {
-    listen: (_port: number, _host: string, callback: () => void) => { queueMicrotask(callback); },
-    address: () => ({ port: 12345, address: "127.0.0.1", family: "IPv4" }),
-    close: (callback: () => void) => { closed = true; callback(); },
-    closeIdleConnections: () => {},
-  });
-  t.mock.method(http, "createServer", () => server);
-  syncBuiltinESMExports();
-  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
-  const errors: string[] = [];
-  t.mock.method(console, "error", (message: string) => errors.push(message));
-  let ready: Record<string, string> = {};
-  let resolveReady = () => {};
-  const started = new Promise<void>((resolve) => { resolveReady = resolve; });
-  t.mock.method(console, "log", (message: string) => { ready = JSON.parse(message); resolveReady(); });
-  const serving = runCli(["serve"]);
-  await Promise.race([started, serving.then(() => assert.fail("serve exited before starting"))]);
-  try {
-    assert.equal(errors.length, 1);
-    assert.ok(errors[0].includes("Conflicting hook event"));
-    assert.equal(fs.existsSync(ready.hook_endpoint_file), true);
-    rmSync(conflict);
-    writeFileSync(join(outbox, "recovered.json"), JSON.stringify({ ...HOOK_EVENT, event_id: "recovered", hook_event_name: "Stop" }));
-    t.mock.timers.tick(1000);
-    assert.ok(f.read().some((fact) => fact.source_event_id.includes("recovered")));
-    writeFileSync(conflict, JSON.stringify({ ...HOOK_EVENT, input: { changed: true } }));
-    t.mock.timers.tick(1000);
-    assert.equal(errors.length, 2);
-    assert.equal(closed, false);
-    rmSync(conflict);
-    writeFileSync(join(outbox, "later.json"), JSON.stringify({ ...HOOK_EVENT, event_id: "later", hook_event_name: "Stop" }));
-    t.mock.timers.tick(1000);
-    const facts = f.read();
-    assert.ok(facts.some((fact) => fact.source_event_id.includes("later")));
-    assert.equal(facts.filter((fact) => fact.kind === "observation.unsupported").length, 1);
-    assert.equal(readProjection(f.dbPath).state!.last_seq, facts.at(-1)!.seq);
-  } finally {
-    process.emit("SIGTERM");
-    await serving;
-  }
-  assert.equal(closed, true);
-  assert.equal(fs.existsSync(ready.hook_endpoint_file), false);
+  const service = openObservationService({ env: f.env, readerOnly: true });
+  const { startObservationWorker } = await import("../src/service/worker-client.ts");
+  const worker = await startObservationWorker(service, { env: f.env, hook: false });
+  t.after(async () => { await worker.close(); service.close(); });
+  worker.start();
+  await waitUntil(() => service.getObservation().state === "failed");
+  rmSync(conflict);
+  writeFileSync(join(outbox, "recovered.json"), JSON.stringify({ ...HOOK_EVENT, event_id: "recovered", hook_event_name: "Stop" }));
+  await waitUntil(() => service.getObservation().state === "idle");
+  assert.ok(service.ledger.readSince(0, 100).some((fact) => fact.source_event_id.includes("recovered")));
+  assert.equal(service.getObservation().report!.appended, 1);
+  await worker.close();
 });
 
 test("hook は応答前に追記を確定し、投影を後続の周期まで保留する", async (t) => {
@@ -550,7 +585,7 @@ test("hook は応答前に追記を確定し、投影を後続の周期まで保
 });
 
 for (const live of [false, true]) {
-  test(`取り込みの投影は ${live ? "常駐で 500 ms ごと" : "一回の走査の終了時"} にまとめる`, (t) => {
+  test(`取り込みの投影は ${live ? "常駐でも一回の走査の終了時" : "一回の走査の終了時"} にまとめる`, (t) => {
     const f = createFixture(t);
     let clock = 0;
     t.mock.method(performance, "now", () => clock);
@@ -570,7 +605,7 @@ for (const live of [false, true]) {
       return result;
     };
     assert.equal(service.ingestOnce().appended, 7);
-    assert.deepEqual(positions, live ? [0, 2, 2, 4, 4, 6, 6] : [0, 0, 0, 0, 0, 0, 0]);
+    assert.deepEqual(positions, [0, 0, 0, 0, 0, 0, 0]);
     assert.equal(reader.prepare("SELECT last_seq FROM projection_state").get()!.last_seq, 7);
     assert.equal(service.ingestOnce().appended, 0);
   });
@@ -628,6 +663,27 @@ test("一括追記の依存保存が失敗しても、その事実だけを戻�
   db.exec("DROP TRIGGER fail_dependency");
   assert.equal(buffered.ledger.append(failed).status, "appended");
   assert.equal(buffered.ledger.readSince(0, 100).length, 2);
+});
+
+test("束ねの途中の readSince は未保存の事実を読み、保存も投影も起こさない", async (t) => {
+  const f = createFixture(t);
+  const { openBatchLedger } = await import("../src/service/batch-ledger.ts");
+  const buffered = openBatchLedger(f.dbPath);
+  const db = new DatabaseSync(f.dbPath);
+  t.after(() => { db.close(); buffered.ledger.close(); });
+  const input = { source: "hook" as const, source_event_id: "buffered", kind: "message.created" as const,
+    subject: "message:buffered" as const, source_ts: TS, confidence: "confirmed" as const,
+    payload: { provider: "claude" as const, native_id: "buffered", version: 1, role: "user", body: "Request", body_state: "stored" as const } };
+  buffered.batch(() => {
+    const first = buffered.ledger.append(input);
+    assert.deepEqual(buffered.ledger.readSince(0, 1).map((fact) => fact.seq), [first.seq]);
+    const second = buffered.ledger.append({ ...input, source_event_id: "next", subject: "message:next" });
+    assert.deepEqual(buffered.ledger.readSince(first.seq, 1).map((fact) => fact.seq), [second.seq]);
+    assert.equal(buffered.ledger.append(input).status, "duplicate");
+    assert.equal(db.prepare("SELECT count(*) AS count FROM facts").get()!.count, 0);
+    assert.equal(db.prepare("SELECT last_seq FROM projection_state").get()!.last_seq, 0);
+  });
+  assert.equal(db.prepare("SELECT count(*) AS count FROM facts").get()!.count, 2);
 });
 
 test("準備台帳の再利用後も所属・訂正の依存と再送の結果が core と一致する", async (t) => {

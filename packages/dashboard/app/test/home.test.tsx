@@ -36,9 +36,15 @@ it('groups managed tasks by project and keeps external, unattended and unsupport
   expect(within(screen.getByRole('region', { name: 'Unattended runs' })).getAllByRole('article')).toHaveLength(1);
   expect(within(screen.getByRole('region', { name: 'Unsupported conversations' })).getAllByRole('article')).toHaveLength(1);
   expect(screen.getByRole('link', { name: 'Take over' }).getAttribute('href')).toBe('/c/external?adopt=1');
-  expect(screen.getByText('codex · test-model')).toBeTruthy();
-  expect(screen.getByText('Added the endpoint')).toBeTruthy();
-  expect(screen.getByText('Changes: 1 files · +2 −1')).toBeTruthy();
+  const implement = screen.getByRole('article', { name: 'Implement API' });
+  expect(within(implement).getByText('Codex')).toBeTruthy();
+  expect(within(implement).getByText('test-model')).toBeTruthy();
+  expect(within(implement).getByText('Added the endpoint')).toBeTruthy();
+  expect(within(implement).getByText('1 file · +2 −1')).toBeTruthy();
+  // 記録のないモデルと成果物は Unknown と書かず、記録なしと示す。
+  const review = screen.getByRole('article', { name: 'Review UI' });
+  expect(within(review).getByText('No model recorded')).toBeTruthy();
+  expect(within(review).queryByText('Unknown')).toBeNull();
   expect(screen.queryByRole('link', { name: 'Build the API.' })).toBeNull();
 });
 it('combines state, provider and project filters and can clear them', () => {
@@ -92,6 +98,6 @@ it('decodes SQLite JSON bodies, evidence and assignment attempts from the actual
   render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
   expect(screen.getByText('Added the endpoint')).toBeTruthy();
   expect(screen.getByRole('article', { name: 'Investigate latency.' })).toBeTruthy();
-  expect(screen.getByText('codex · test-model')).toBeTruthy();
+  expect(screen.getByText('test-model')).toBeTruthy();
   expect(screen.getByText('disconnect')).toBeTruthy();
 });

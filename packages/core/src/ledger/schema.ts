@@ -1,10 +1,13 @@
 import type { DatabaseSync } from "node:sqlite";
 import { projectConversations, encodeNameOrder, extractProvisionalName } from "./projections/conversations.ts";
 import { projectMessages } from "./projections/messages.ts";
+import { projectRuns } from "./projections/runs.ts";
+import { projectApprovals } from "./projections/approvals.ts";
+import { serializeValue } from "./projections/relations.ts";
 import type { Fact } from "./facts.ts";
 import { collectProjectionDependencies } from "./projections/dependencies.ts";
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 export const FACT_SCHEMA_VERSION = 1;
 export const FACTS_DDL = `CREATE TABLE facts (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -135,7 +138,32 @@ function migrateToVersion2(db: DatabaseSync): void {
     FROM message_memberships m JOIN message_name_inputs n ON n.id = m.message_id
     WHERE m.active = 1 AND m.conversation_id IS NOT NULL AND n.name <> '';`);
 }
-const MIGRATIONS = [migrateToVersion1, migrateToVersion2] as const;
+// 画面が読む発言の時刻と出所、実行の起動設定と作業ツリー、承認の要求時刻を列に足す。
+function migrateToVersion3(db: DatabaseSync): void {
+  db.exec(`ALTER TABLE messages ADD COLUMN source_ts TEXT;
+    ALTER TABLE messages ADD COLUMN source_event_id TEXT;
+    ALTER TABLE messages ADD COLUMN source TEXT;
+    ALTER TABLE messages ADD COLUMN confidence TEXT;
+    ALTER TABLE runs ADD COLUMN launch TEXT;
+    ALTER TABLE runs ADD COLUMN cwd TEXT;
+    ALTER TABLE runs ADD COLUMN branch TEXT;
+    ALTER TABLE approvals ADD COLUMN requested_ts TEXT;`);
+  const lastSeq = Number(db.prepare("SELECT last_seq FROM projection_state WHERE id = 1").get()!.last_seq);
+  const facts = db.prepare("SELECT * FROM facts WHERE seq <= ?").all(lastSeq).map((row) => ({
+    ...row, payload: row.payload === null ? null : JSON.parse(String(row.payload)),
+  } as Fact));
+  const message = db.prepare("UPDATE messages SET source_ts = ?, source_event_id = ?, source = ?, confidence = ? WHERE id = ?");
+  for (const row of projectMessages(facts).messages) {
+    message.run(row.source_ts, row.source_event_id, row.source, row.confidence, row.id);
+  }
+  const run = db.prepare("UPDATE runs SET launch = ?, cwd = ?, branch = ? WHERE id = ?");
+  for (const row of projectRuns(facts)) {
+    run.run(row.launch === undefined ? null : serializeValue(row.launch), row.cwd ?? null, row.branch ?? null, row.id);
+  }
+  const approval = db.prepare("UPDATE approvals SET requested_ts = ? WHERE id = ?");
+  for (const row of projectApprovals(facts)) approval.run(row.requested_ts ?? null, row.id);
+}
+const MIGRATIONS = [migrateToVersion1, migrateToVersion2, migrateToVersion3] as const;
 
 export function initializeSchema(db: DatabaseSync): void {
   db.exec("BEGIN IMMEDIATE");

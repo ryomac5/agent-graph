@@ -5,6 +5,8 @@ import { compareProjectionFacts, prepareProjectionFacts, projectEntityRecords } 
 export interface ApprovalProjection extends Partial<ApprovalPayload> {
   id: string;
   state: string;
+  // 要求の事実の時刻。受け箱の待ち時間の起点になる。
+  requested_ts?: string;
 }
 export function projectApprovals(facts: readonly Fact[]): ApprovalProjection[] {
   const active = prepareProjectionFacts(facts);
@@ -34,6 +36,7 @@ export function projectApprovals(facts: readonly Fact[]): ApprovalProjection[] {
       }
     }
     const requested = active.find((fact) => fact.subject === `approval:${record.id}` && (fact.kind === "approval.created" || fact.kind === "approval.corrected"));
+    if (requested) approval.requested_ts = requested.source_ts;
     const resolved = active.some((fact) => fact.subject === `approval:${record.id}` && (fact.kind === "approval.resolved" || fact.kind === "approval.answered"));
     if (requested && !resolved && ["pending", "requested", "waiting", "waiting_approval"].includes(approval.state)) {
       const expired = active.some((fact) => fact.subject === `run:${approval.run_id}` && compareProjectionFacts(fact, requested) > 0

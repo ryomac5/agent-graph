@@ -34,7 +34,7 @@ it('uses the OS theme, reacts to changes, allows explicit overrides and Japanese
   expect(screen.getByRole('heading', { name: '設定' })).toBeTruthy();
   expect(document.documentElement.lang).toBe('ja');
 });
-it.each([['/p/demo', 'Project workspace'], ['/c/demo', 'Conversation'], ['/inbox', 'Approval inbox'],
+it.each([['/p/demo', 'demo'], ['/c/demo', 'Conversation'], ['/inbox', 'Approval inbox'],
   ['/p/demo/tree', 'Delegation tree'], ['/p/demo/changes', 'Changes'], ['/search', 'Search']])('renders route %s', (path, heading) => {
   render(<MemoryRouter initialEntries={[path]}><App/></MemoryRouter>);
   expect(screen.getByRole('heading', { name: heading })).toBeTruthy();
@@ -63,7 +63,8 @@ it('shares live activity, approval counts, commands and notices across all stage
   fireEvent.click(screen.getByRole('button', { name: 'Notifications' }));
   expect(screen.getByRole('heading', { name: 'Approval pending' })).toBeTruthy();
   fireEvent.click(within(screen.getByRole('complementary')).getByRole('link', { name: '/repo/demo' }));
-  expect(screen.getByRole('heading', { name: 'Project workspace' })).toBeTruthy();
+  expect(screen.getByRole('heading', { name: 'demo' })).toBeTruthy();
+  expect(screen.getByText('Project workspace')).toBeTruthy();
   expect(screen.getByRole('textbox', { name: 'Message' })).toBeTruthy();
   fireEvent.click(within(screen.getByRole('region', { name: 'Tasks' })).getByRole('link', { name: 'Running · Evidence' }));
   expect(screen.getByRole('heading', { name: 'Console conversation' })).toBeTruthy();

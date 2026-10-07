@@ -66,7 +66,7 @@ it('suppresses silent kinds and renders unknown evidence with a dashed border', 
     conversation_id: 'conversation', last_evidence: 'Last event', last_evidence_ts: '2026-10-07', reason: 'Lost connection' }] }, 2)));
   expect(screen.queryByRole('heading', { name: 'Run failed' })).toBeNull();
   const unknown = screen.getByRole('heading', { name: 'Run unknown' }).closest('li')!;
-  expect(unknown.style.border).toContain('dashed');
+  expect(unknown.className).toContain('notice-unknown');
   expect(unknown.textContent).toContain('Last event'); expect(unknown.textContent).toContain('2026-10-07');
   expect(screen.getByRole('link', { name: 'Evidence' }).getAttribute('href')).toBe('/c/conversation');
 });

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { Language } from '../lib/i18n.ts';
 
 const MINUTE_MS = 60_000;
+const TICK_MS = 1_000;
 export function formatDuration(start: unknown, end: unknown, now: number): string {
   const beginning = typeof start === 'string' ? Date.parse(start) : NaN;
   const finish = typeof end === 'string' ? Date.parse(end) : now;
@@ -11,7 +12,7 @@ export function formatDuration(start: unknown, end: unknown, now: number): strin
 }
 export function useNow() {
   const [now, setNow] = useState(Date.now);
-  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), MINUTE_MS); return () => clearInterval(timer); }, []);
+  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), TICK_MS); return () => clearInterval(timer); }, []);
   return now;
 }
 export function RelativeTime({ value, language = 'en', now }: { value?: string; language?: Language; now: number }) {

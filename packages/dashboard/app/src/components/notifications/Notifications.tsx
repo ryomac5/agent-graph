@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { AppLink } from '../AppLink.tsx';
+import { Icon, type IconName } from '../Icon.tsx';
+import { formatClock } from '../../lib/format.ts';
 import { dictionaries, type Language } from '../../lib/i18n.ts';
 import { store, useScreenStore, type ScreenStore, type ScreenState } from '../../lib/store.ts';
 import { ApprovalActions, ApprovalDetails } from '../../pages/inbox/Inbox.tsx';
@@ -56,29 +58,33 @@ export function Notifications({ client, target = store, initiallyOpen = true, co
       } catch { setError('Browser notification permission could not be requested.'); }
     }
   }
-  return <div className="notifications">
-    <button className={compact ? 'bell' : undefined} aria-label={dictionaries[language].notifications} aria-expanded={open} onClick={() => setOpen(value => !value)}>
-      {compact && <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>}
-      {compact ? notices.length : `${dictionaries[language].notifications} (${notices.length})`}</button>
-    {!compact && <AppLink to="/inbox">Pending approvals: {getInbox(state).pending.length}</AppLink>}
-    {open && <section className={compact ? 'notification-panel' : undefined} ref={panel} tabIndex={-1} aria-label={dictionaries[language].notifications} aria-live="polite">
-      <h2>{dictionaries[language].notifications}</h2>
-      <details><summary>Notification settings</summary>{NOTIFICATION_KINDS.map(kind => <label key={kind} style={{ display: 'block' }}>
-        {NOTIFICATION_LABELS[kind]}<select value={preferences[kind]} onChange={event => void changePreference(kind, event.target.value as NotificationMode)}>
+  const KIND_ICONS: Record<string, IconName> = { approval: 'alert', input: 'message', failed: 'alert', completed: 'check', review_invalidated: 'diff', daemon_fault: 'alert', unknown: 'unknown' };
+  return <div className={compact ? 'notifications compact' : 'notifications'}>
+    <button className={compact ? 'bell btn btn-ghost btn-sm' : 'btn btn-secondary btn-sm'} aria-label={dictionaries[language].notifications} aria-expanded={open} onClick={() => setOpen(value => !value)}>
+      <Icon name="bell" size={16}/>
+      {compact ? notices.length > 0 && <span className="bell-count numeric">{notices.length}</span> : `${dictionaries[language].notifications} (${notices.length})`}</button>
+    {!compact && <AppLink className="btn btn-ghost btn-sm" to="/inbox">Pending approvals: {getInbox(state).pending.length}</AppLink>}
+    {open && <section className={compact ? 'notification-panel popover' : 'notification-panel'} ref={panel} tabIndex={-1} aria-label={dictionaries[language].notifications} aria-live="polite">
+      <header className="panel-header"><h2>{dictionaries[language].notifications}</h2>
+        {notices.length > 0 && <button className="btn btn-link btn-sm" onClick={() => setNotices([])}>Clear all</button>}</header>
+      <details className="disclosure settings-disclosure"><summary><Icon name="chevronRight" size={12} className="caret"/>Notification settings</summary>
+        <div className="settings-grid">{NOTIFICATION_KINDS.map(kind => <label key={kind}>
+        <span>{NOTIFICATION_LABELS[kind]}</span><select className="select-sm" value={preferences[kind]} onChange={event => void changePreference(kind, event.target.value as NotificationMode)}>
           <option value="in_app">In app</option><option value="browser">Browser</option><option value="silent">Silent</option>
-        </select></label>)}</details>
-      {error && <p role="alert">{error}</p>}
-      {notices.length === 0 && <p>No notifications yet</p>}
-      <ol>{notices.map(notice => {
+        </select></label>)}</div></details>
+      {error && <p role="alert" className="status-line danger">{error}</p>}
+      {notices.length === 0 && <p className="panel-empty"><Icon name="bell" size={16}/>No notifications yet</p>}
+      <ol className="notice-list">{notices.map(notice => {
         const approval = state.projection.approvals?.find(row => row.id === notice.approvalId);
-        return <li key={notice.id} data-kind={notice.kind} style={notice.kind === 'unknown' ? { border: '1px dashed gray' } : undefined}>
-          <h3>{notice.title}</h3><pre style={{ whiteSpace: 'pre-wrap' }}>{notice.detail}</pre>
-          {notice.time && <time dateTime={notice.time}>{notice.time}</time>}
-          {notice.conversationId && <AppLink to={`/c/${encodeURIComponent(notice.conversationId)}`}>Evidence</AppLink>}
-          {approval && <><ApprovalDetails row={approval} state={state}/>
+        return <li key={notice.id} data-kind={notice.kind} className={`notice notice-${notice.kind}`}>
+          <div className="notice-head"><Icon name={KIND_ICONS[notice.kind] ?? 'bell'} size={14} className="notice-icon"/><h3>{notice.title}</h3>
+            {notice.time && <time dateTime={notice.time} title={notice.time}>{formatClock(notice.time) || notice.time}</time>}
+            <button className="icon-button" aria-label={`Dismiss ${notice.title}`} title="Dismiss" onClick={() => setNotices(items => items.filter(item => item.id !== notice.id))}><Icon name="x" size={14}/></button></div>
+          {!approval && notice.detail && <p className="notice-detail">{notice.detail}</p>}
+          {notice.conversationId && !approval && <AppLink className="btn btn-link btn-sm" to={`/c/${encodeURIComponent(notice.conversationId)}`}>Evidence</AppLink>}
+          {approval && <><ApprovalDetails row={approval} state={state} compact/>
             {isPending(approval) ? <ApprovalActions row={approval} client={client}/>
-              : <p>Approval {String(approval.state)}</p>}</>}
-          <button aria-label={`Dismiss ${notice.title}`} onClick={() => setNotices(items => items.filter(item => item.id !== notice.id))}>Dismiss</button>
+              : <p className="status-line">Approval {String(approval.state)}</p>}</>}
         </li>;
       })}</ol>
     </section>}

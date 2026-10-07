@@ -13,6 +13,8 @@ const TIMEOUT_MS = 15_000;
 const RUN = 'ui-run';
 const CONVERSATION = 'ui-conversation';
 const TITLE = 'Browser fixture task';
+// Claude のホストと同じく、承認の ID は実行と要求の組から作る。
+const approvalId = name => `${RUN}:${name}`;
 
 async function waitUntil(check, label) {
   const deadline = Date.now() + TIMEOUT_MS;
@@ -38,7 +40,7 @@ async function worker(kind, options) {
       const runner = await serveRunner(ledger, options.socket, { hosts: [host], isolation: 'shared' });
       close = async () => { await runner.close(); ledger.close(); };
       await runner.runtime.command({ type: 'req', cmd_id: 'fixture-start', command: 'start', payload: { runId: RUN, conversationId: CONVERSATION, provider: 'claude',
-        cwd: options.repo, model: { model: 'fake' }, input: { text: 'Test the UI' } } });
+        cwd: options.repo, model: { model: 'fake', effort: 'high' }, input: { text: 'Test the UI' } } });
       let counter = 0;
       function fact(kind, subject, payload) {
         return { kind, subject, payload, confidence: 'confirmed', source_event_id: `ui-${++counter}`,
@@ -46,22 +48,30 @@ async function worker(kind, options) {
       }
       ledger.append({ ...fact('task.created', 'task:ui-task', { name: TITLE, project: options.repo }), source: 'ui' });
       ledger.append({ ...fact('conversation.updated', `conversation:${CONVERSATION}`, { task_id: 'ui-task', name: 'UI conversation' }), source: 'ui' });
+      // 偽のホストは、Claude のホストと同じ形の事実を出す。hosts/claude/index.ts の assistant と承認の扱いに合わせる。
+      const nativeId = host.starts[0].runId;
       handle = async request => {
         if (request.action === 'inspect') return { starts: host.starts.length, inputs: host.inputs, decisions: host.decisions,
           open: runner.runtime.supervisor.isOpen(RUN), seq: ledger.readSince(0, 10_000).at(-1)?.seq };
         if (request.action === 'state') host.emit(RUN, { type: 'state', state: request.state, reason: request.reason });
-        else if (request.action === 'delta') host.emit(RUN, { type: 'delta', text: request.text });
+        else if (request.action === 'delta') host.emit(RUN, { type: 'delta', text: request.text, conversationId: CONVERSATION });
         else if (request.action === 'message') {
-          host.emit(RUN, { type: 'fact', fact: fact('message.created', `message:${request.id}`, {
-            role: 'assistant', body: request.text, body_state: 'stored', version: 1 }) });
-          host.emit(RUN, { type: 'fact', fact: fact('message_membership.created', `message_membership:${request.id}`, {
-            conversation_id: CONVERSATION, message_id: request.id, active: true }) });
+          const id = `${nativeId}:${request.id}`;
+          host.emit(RUN, { type: 'fact', fact: fact('message.created', `message:${id}`, { provider: 'claude', native_id: request.id,
+            version: 1, role: 'assistant', body: [{ type: 'text', text: request.text }, ...request.tools ?? []], body_state: 'stored' }) });
+          host.emit(RUN, { type: 'fact', fact: fact('message_membership.created', `message_membership:${id}`, {
+            message_id: id, conversation_id: CONVERSATION, active: true }) });
         } else if (request.action === 'approval') {
-          host.emit(RUN, { type: 'fact', fact: fact('approval.created', `approval:${request.id}`, {
-            run_id: RUN, conversation_id: CONVERSATION, request_id: request.id, state: 'pending',
-            available_decisions: ['allow', 'deny'], request: { command: `echo ${request.id}`, diff: '-old\n+new' } }) });
-        } else if (request.action === 'resolve') host.emit(RUN, { type: 'fact', fact: fact('approval.resolved',
-          `approval:${request.id}`, { state: 'resolved' }) });
+          const input = request.edit ? { file_path: join(options.repo, 'README.md'), old_string: 'Old line', new_string: `New line from ${request.id}` }
+            : { command: `echo ${request.id}`, description: 'Print the fixture marker' };
+          host.emit(RUN, { type: 'fact', fact: fact('approval.created', `approval:${approvalId(request.id)}`, {
+            run_id: RUN, conversation_id: CONVERSATION, request_id: request.id, state: 'pending', available_decisions: ['allow', 'deny'],
+            request: { name: request.edit ? 'Edit' : 'Bash', input, tool_use_id: `toolu_${request.id}` } }) });
+        } else if (request.action === 'resolve') {
+          const answer = host.decisions.findLast(row => row.approval === approvalId(request.id));
+          if (answer) host.emit(RUN, { type: 'fact', fact: fact('approval.answered', `approval:${approvalId(request.id)}`, { decision: answer.decision }) });
+          host.emit(RUN, { type: 'fact', fact: fact('approval.resolved', `approval:${approvalId(request.id)}`, { state: 'resolved' }) });
+        }
         return true;
       };
       process.send({ ready: true });
@@ -217,8 +227,19 @@ async function main() {
       for (const view of views) await waitUntil(async () => await view.page.locator('.approval-count strong').textContent() === String(count), `${view.name} inbox count`);
     }
     async function text(page, value) { await page.getByText(value, { exact: true }).first().waitFor(); }
+    // 各画面を明るい配色と暗い配色、幅 1440 と 1024 で撮る。最後に元の幅と配色へ戻す。
     async function screenshots(suffix) {
-      for (const view of views) await view.page.screenshot({ path: join(directory, `${view.name}-${suffix}.png`), fullPage: true });
+      for (const view of views) {
+        for (const scheme of ['light', 'dark']) for (const width of [1440, 1024]) {
+          await view.page.emulateMedia({ colorScheme: scheme });
+          await view.page.setViewportSize({ width, height: 900 });
+          // 配色の切り替えの遷移が終わってから撮る。
+          await view.page.waitForTimeout(300);
+          await view.page.screenshot({ path: join(directory, `${view.name}-${suffix}-${scheme}-${width}.png`), fullPage: true });
+        }
+        await view.page.emulateMedia({ colorScheme: 'light' });
+        await view.page.setViewportSize({ width: 1440, height: 1000 });
+      }
     }
     async function consistent() {
       const rebuilt = await api.request();
@@ -227,6 +248,9 @@ async function main() {
       assert.deepEqual(errors, [], 'no browser exceptions');
     }
     await runner.request({ action: 'state', state: 'running' });
+    await runner.request({ action: 'message', id: 'plan', text: 'I will inspect the repository first.\n\n- Read `README.md`\n- Run the **tests**',
+      tools: [{ type: 'tool_use', id: 'toolu_plan', name: 'Bash', input: { command: 'git status --short', description: 'Show working tree status' } }] });
+    await text(conversationView, 'I will inspect the repository first.');
     await runner.request({ action: 'delta', text: 'Live streaming reply' });
     await text(conversationView, 'Live streaming reply'); await text(workspace, 'Live streaming reply');
     await runner.request({ action: 'message', id: 'reply', text: 'Completed browser reply' });
@@ -237,13 +261,15 @@ async function main() {
     await counts(1);
     await text(inbox, 'echo approval-one');
     await inbox.getByRole('button', { name: 'Allow', exact: true }).click();
-    await waitUntil(async () => (await runner.request({ action: 'inspect' })).decisions.some(row => row.approval === 'approval-one' && row.decision === 'allow'), 'inbox answer delivered to host');
+    await waitUntil(async () => (await runner.request({ action: 'inspect' })).decisions.some(row => row.approval === approvalId('approval-one') && row.decision === 'allow'), 'inbox answer delivered to host');
     await runner.request({ action: 'resolve', id: 'approval-one' }); await counts(0);
-    await runner.request({ action: 'approval', id: 'approval-two' }); await counts(1);
+    await runner.request({ action: 'approval', id: 'approval-two', edit: true }); await counts(1);
     await home.getByRole('button', { name: 'Notifications', exact: true }).click();
     const notifications = home.getByRole('region', { name: 'Notifications', exact: true });
+    await notifications.getByRole('button', { name: 'Deny', exact: true }).waitFor();
+    await home.screenshot({ path: join(directory, 'home-notifications-light-1440.png') });
     await notifications.getByRole('button', { name: 'Deny', exact: true }).click();
-    await waitUntil(async () => (await runner.request({ action: 'inspect' })).decisions.some(row => row.approval === 'approval-two' && row.decision === 'deny'), 'notification answer delivered to host');
+    await waitUntil(async () => (await runner.request({ action: 'inspect' })).decisions.some(row => row.approval === approvalId('approval-two') && row.decision === 'deny'), 'notification answer delivered to host');
     await runner.request({ action: 'resolve', id: 'approval-two' }); await counts(0);
     await home.getByRole('button', { name: 'Notifications', exact: true }).click();
     await runner.request({ action: 'state', state: 'unknown', reason: 'Fixture observation interrupted' });
@@ -270,7 +296,7 @@ async function main() {
     await consistent(); await counts(1);
     await text(inbox, 'echo approval-restart');
     await inbox.getByRole('button', { name: 'Deny', exact: true }).click();
-    await waitUntil(async () => (await runner.request({ action: 'inspect' })).decisions.some(row => row.approval === 'approval-restart' && row.decision === 'deny'), 'pending approval survives restart');
+    await waitUntil(async () => (await runner.request({ action: 'inspect' })).decisions.some(row => row.approval === approvalId('approval-restart') && row.decision === 'deny'), 'pending approval survives restart');
     await runner.request({ action: 'resolve', id: 'approval-restart' }); await counts(0);
     await runner.request({ action: 'state', state: 'waiting_input' });
     const after = await runner.request({ action: 'inspect' });

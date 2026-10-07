@@ -5,7 +5,7 @@ export const executionStates: ExecutionState[] = ['starting', 'running', 'waitin
 export type ActivitySection = 'managed' | 'external' | 'unattended' | 'unsupported';
 export interface Activity {
   id: string; taskId?: string; conversationId?: string; project: string; name: string;
-  provisional: boolean; provider: string; model: string; state: ExecutionState;
+  provisional: boolean; provider: string; model: string; effort: string; state: ExecutionState;
   section: ActivitySection; managed: boolean; run?: Row; messages: Row[]; artifacts: Row[];
 }
 export function readText(value: unknown): string {
@@ -78,8 +78,10 @@ export function selectActivities(state: ScreenState, parallel = false): Activity
         project: readText(task?.project) || readText(conversation.project),
         name: readText(task?.name) || readText(conversation.name) || first || 'Untitled conversation',
         provisional: !readText(task?.name) && (!readText(conversation.name) || conversation.name_is_provisional === true || conversation.name_is_provisional === 1),
-        provider: readText(conversation.provider) || 'Unknown',
-        model: readText(assignment?.model) || readText(readObject(launch.model).model) || readText(conversation.model) || 'Unknown',
+        provider: readText(conversation.provider),
+        // 起動の記録がない実行は、モデルを空にして画面に「記録なし」と出す。
+        model: readText(assignment?.model) || readText(readObject(launch.model).model) || readText(conversation.model),
+        effort: readText(assignment?.effort) || readText(readObject(launch.model).effort),
         state: executionStates.includes(rawState as ExecutionState) ? rawState as ExecutionState : 'unknown',
         section, managed: conversation.origin === 'managed', run, messages: history, artifacts: artifacts.get(readText(run?.id)) ?? [],
       });
@@ -88,14 +90,15 @@ export function selectActivities(state: ScreenState, parallel = false): Activity
   for (const [id, task] of tasks) {
     if (seenTasks.has(id)) continue;
     result.push({ id, taskId: id, project: readText(task.project), name: readText(task.name) || readText(task.purpose) || 'Untitled task',
-      provisional: !task.name, provider: 'Unknown', model: 'Unknown',
+      provisional: !task.name, provider: '', model: '', effort: '',
       state: executionStates.includes(task.state as ExecutionState) ? task.state as ExecutionState : 'unknown',
       section: 'managed', managed: true, messages: [], artifacts: [] });
   }
   return result;
 }
-export function summarizeChanges(artifacts: Row[]): string {
-  if (!artifacts.length) return 'Unknown';
+/** 成果物がないときは undefined を返す。画面は「成果物なし」と出す。 */
+export function summarizeChanges(artifacts: Row[]): string | undefined {
+  if (!artifacts.length) return;
   let files = 0; let added = 0; let removed = 0;
   const latest = new Map<string, Row>();
   for (const artifact of artifacts) {
@@ -108,6 +111,6 @@ export function summarizeChanges(artifacts: Row[]): string {
     added += diff.split('\n').filter(line => line.startsWith('+') && !line.startsWith('+++')).length;
     removed += diff.split('\n').filter(line => line.startsWith('-') && !line.startsWith('---')).length;
   }
-  if (![...latest.values()].some(row => typeof row.diff === 'string')) return 'Unknown';
-  return `${files} files · +${added} −${removed}`;
+  if (![...latest.values()].some(row => typeof row.diff === 'string')) return;
+  return `${files} ${files === 1 ? 'file' : 'files'} · +${added} −${removed}`;
 }

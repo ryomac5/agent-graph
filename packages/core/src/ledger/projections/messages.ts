@@ -2,7 +2,10 @@ import type { Fact, JsonValue } from "../facts.ts";
 import { compareFacts, compareText, createNativeId, projectConversationIds, projectEntities, serializeValue } from "./relations.ts";
 import type { ProjectedEntity } from "./relations.ts";
 
-export type ProjectedMessage = ProjectedEntity<"message"> & { source_ts: string; source_event_id: string };
+// 出所と確度は、本文を決めた事実から取る。本文がなければ最初の事実から取る。
+export type ProjectedMessage = ProjectedEntity<"message"> & {
+  source_ts: string; source_event_id: string; source: string; confidence: string;
+};
 export type ProjectedMembership = ProjectedEntity<"message_membership">;
 export interface MessageProjection {
   messages: ProjectedMessage[];
@@ -63,11 +66,26 @@ export function projectMessages(facts: readonly Fact[]): MessageProjection {
     }) : [];
     return differing.length ? [{ message_id: message.id, fact_ids: differing.map((fact) => fact.fact_id).sort(compareText) }] : [];
   });
+  const rank = (fact: Fact) => prioritize(fact, (fact.payload ?? {}) as { version?: number });
+  function selectOrigin(id: string): Fact {
+    let selected: Fact | undefined;
+    for (const fact of bodyFacts.get(id) ?? []) {
+      if (!selected) { selected = fact; continue; }
+      const [left, right] = [rank(fact), rank(selected)];
+      const difference = left[0] - right[0] || left[1] - right[1] || compareFacts(fact, selected);
+      if (difference > 0) selected = fact;
+    }
+    return selected ?? firstFacts.get(id)!;
+  }
   return {
-    messages: messages.map((message) => ({ ...message,
-      source_ts: firstFacts.get(message.id)!.source_ts,
-      source_event_id: firstFacts.get(message.id)!.source_event_id,
-    })),
+    messages: messages.map((message) => {
+      const origin = selectOrigin(message.id);
+      return { ...message,
+        source_ts: firstFacts.get(message.id)!.source_ts,
+        source_event_id: firstFacts.get(message.id)!.source_event_id,
+        source: origin.source, confidence: origin.confidence,
+      };
+    }),
     message_memberships: memberships,
     discrepancies,
   };

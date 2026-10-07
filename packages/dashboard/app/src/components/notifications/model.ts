@@ -1,5 +1,6 @@
 import type { ScreenState, Row } from '../../lib/store.ts';
 import { getConversation, isPending, readText } from '../../pages/inbox/model.ts';
+import { evidenceLabel, summarizeApproval } from '../../lib/format.ts';
 
 export const NOTIFICATION_KINDS = ['approval', 'input', 'failed', 'completed', 'review_invalidated', 'daemon_fault', 'unknown'] as const;
 export type NotificationKind = typeof NOTIFICATION_KINDS[number];
@@ -28,22 +29,22 @@ export function collectNotifications(previous: ScreenState | undefined, next: Sc
   function add(kind: NotificationKind, row: Row, detail: string, approvalId?: string) {
     notices.push({ id: JSON.stringify([kind, row.id, next.generation, next.seq]), kind,
       title: NOTIFICATION_LABELS[kind], detail, approvalId, conversationId: getConversation(row, next),
-      time: readText(row.last_evidence_ts ?? row.source_ts ?? row.created_ts) });
+      time: readText(row.last_evidence_ts ?? row.requested_ts ?? row.source_ts ?? row.created_ts) });
   }
   for (const row of next.projection.approvals ?? []) {
     const before = previous?.projection.approvals?.find(entry => entry.id === row.id);
-    if (isPending(row) && (!before || !isPending(before))) add('approval', row, readText(row.request), String(row.id));
+    if (isPending(row) && (!before || !isPending(before))) add('approval', row, summarizeApproval(row.request), String(row.id));
     if (row.state === 'stale' && before?.state !== 'stale') add('review_invalidated', row, readText(row.reason));
   }
   for (const row of next.projection.runs ?? []) {
     const before = previous?.projection.runs?.find(entry => entry.id === row.id);
     if (before?.state === row.state) continue;
     if (row.state === 'waiting_input') add('input', row, readText(row.reason) || 'Waiting for your input.');
-    if (row.state === 'unknown') add('unknown', row, `${readText(row.last_evidence)} · ${readText(row.last_evidence_ts)} · ${readText(row.reason)}`);
+    if (row.state === 'unknown') add('unknown', row, [evidenceLabel(row.last_evidence), readText(row.last_evidence_ts), readText(row.reason)].filter(Boolean).join(' · '));
     // 初回の履歴取得を、新しく終了した実行として通知しない。
     const hasHistory = previous && Object.keys(previous.projection).length > 0;
     if (hasHistory && row.state === 'failed') add('failed', row, readText(row.cause));
-    if (hasHistory && row.state === 'ended') add('completed', row, readText(row.end_evidence));
+    if (hasHistory && row.state === 'ended') add('completed', row, evidenceLabel(row.end_evidence));
   }
   if ((next.connection === 'runner_unavailable' || next.connection === 'reconnecting') && previous?.connection !== next.connection) {
     add('daemon_fault', { id: next.connection }, next.connection === 'runner_unavailable' ? 'Runner unavailable' : 'API connection lost; reconnecting');

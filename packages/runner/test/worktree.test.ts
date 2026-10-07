@@ -45,6 +45,7 @@ test("records canonical repository and worktree identities, HEAD and dirty listi
   assert.equal(clean.repository_id, createHash("sha256").update(realpathSync(join(repo, ".git"))).digest("hex"));
   assert.equal(clean.base_sha, runGit(repo, "rev-parse", "HEAD"));
   assert.equal(clean.dirty_state, createHash("sha256").update("").digest("hex"));
+  assert.equal(clean.branch, runGit(repo, "rev-parse", "--abbrev-ref", "HEAD"));
   const alias = join(directory, "alias"); symlinkSync(repo, alias);
   mkdirSync(join(repo, "sub"));
   assert.deepEqual(inspectWorktree(alias), clean);
@@ -57,7 +58,7 @@ test("records canonical repository and worktree identities, HEAD and dirty listi
     ["status", "--porcelain=v1", "-z", "--untracked-files=all"], { cwd: repo })).digest("hex"));
   assert.deepEqual(inspectWorktree(repo).dirty_state, record.dirty_state);
   const saved = projectEntityRecords<WorktreeRecord>(ledger.readSince(0, 100), "run")[0];
-  for (const field of ["repository_id", "worktree_id", "base_sha", "dirty_state"] as const) assert.equal(saved[field], record[field]);
+  for (const field of ["repository_id", "worktree_id", "branch", "base_sha", "dirty_state"] as const) assert.equal(saved[field], record[field]);
   const before = ledger.readSince(0, 100).length;
   writeFileSync(join(repo, "other.txt"), "later");
   assert.deepEqual(recordWorktree(ledger, { runId: "first", generation: 1, provider: "codex", cwd: repo,
@@ -75,6 +76,7 @@ test("worktree identity stays stable across commits and changes with HEAD refere
   assert.notEqual(after.base_sha, before.base_sha);
   runGit(repo, "checkout", "--detach");
   assert.notEqual(inspectWorktree(repo).worktree_id, after.worktree_id);
+  assert.equal(inspectWorktree(repo).branch, undefined);
 });
 
 test("shared simultaneous runs mark all peers joint and ignore terminal peers", (t) => {

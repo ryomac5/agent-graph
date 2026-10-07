@@ -74,9 +74,13 @@ it('renders chronological messages, tool calls, provenance, approval requests, b
   expect(articles[0]!.textContent).toContain('Plan');
   expect(articles[1]!.textContent).toContain('Approval request');
   expect(articles[2]!.textContent).toContain('Second');
-  expect(screen.getByText('Source: host-claude')).toBeTruthy();
+  expect(within(articles[0]!).getByText('Claude host')).toBeTruthy();
+  expect(within(articles[0]!).getByText('confirmed')).toBeTruthy();
+  expect(within(articles[0]!).getByTitle('Source: host-claude · Confidence: confirmed')).toBeTruthy();
   expect(screen.getByText('const value = 1;').tagName).toBe('CODE');
-  expect(screen.getByText('Bash tool1')).toBeTruthy();
+  const tool = screen.getByText('Bash').closest('details')!;
+  expect(tool.open).toBe(false);
+  expect(within(tool).getByText('pwd', { selector: '.tool-summary' })).toBeTruthy();
   expect(document.querySelector('script')).toBeNull();
   expect(document.querySelector('a[href^="javascript:"]')).toBeNull();
   expect(screen.getAllByRole('separator')).toHaveLength(4);
@@ -90,9 +94,9 @@ it('answers with the exact approval ID and offered decision; expired requests ha
     { id: 'expired', run_id: 'r', state: 'expired', available_decisions: ['old-decision'] },
   ] } });
   await waitModels();
-  fireEvent.click(screen.getByRole('button', { name: 'deny' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Deny' }));
   await waitFor(() => expect(command).toHaveBeenCalledWith('answer', { approvalId: 'approval-id', decision: 'deny' }));
-  expect(screen.queryByRole('button', { name: 'old-decision' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Old decision' })).toBeNull();
 });
 
 it('interrupts the current run and never chooses an older generation', async () => {
@@ -178,7 +182,7 @@ it('shows unknown reason, last evidence, timestamp and a dashed state with evide
   expect(status.className).toContain('status-unknown');
   expect(status.textContent).toContain('Process check denied');
   expect(status.textContent).toContain('disconnect');
-  expect(status.textContent).toContain('2026-10-07T01:23:00Z');
+  expect(status.querySelector('time')?.getAttribute('datetime')).toBe('2026-10-07T01:23:00Z');
   expect(status.getAttribute('href')).toBe('#conversation-evidence');
 });
 
@@ -219,11 +223,11 @@ it('decodes SQLite JSON columns from real snapshot rows for tool content and app
   } });
   await waitModels();
   expect(screen.getByText('Decoded message')).toBeTruthy();
-  expect(screen.getByText('Write tool')).toBeTruthy();
-  expect(screen.getByRole('separator').textContent).toContain('2026-10-07T00:00:01Z');
-  fireEvent.click(screen.getByRole('button', { name: 'allow' }));
+  expect(within(screen.getByText('Write', { selector: '.tool-call .tool-name' }).closest('details')!).getByText('demo.ts', { selector: '.tool-summary' })).toBeTruthy();
+  expect(screen.getByRole('separator').querySelector('time')?.getAttribute('datetime')).toBe('2026-10-07T00:00:01Z');
+  fireEvent.click(screen.getByRole('button', { name: 'Allow' }));
   await waitFor(() => expect(command).toHaveBeenCalledWith('answer', { approvalId: 'a', decision: 'allow' }));
-  await waitFor(() => expect((screen.getByRole('button', { name: 'allow' }) as HTMLButtonElement).disabled).toBe(true));
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Allow' }) as HTMLButtonElement).disabled).toBe(true));
 });
 
 it('takes over an external conversation without a confirmation dialog when runner has stop evidence', async () => {

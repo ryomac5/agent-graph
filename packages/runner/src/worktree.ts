@@ -12,6 +12,8 @@ export interface WorktreeRecord {
   cwd: string;
   repository_id: string;
   worktree_id: string;
+  // HEAD が指す枝の名前。HEAD が枝から外れているときは持たない。
+  branch?: string;
   base_sha: string;
   dirty_state: string;
   isolation: "worktree" | "shared";
@@ -41,6 +43,7 @@ export function inspectWorktree(cwd: string): Omit<WorktreeRecord, "isolation" |
   const status = runGit(root, "status", "--porcelain=v1", "-z", "--untracked-files=all");
   return {
     cwd: root, repository_id: hashText(common), worktree_id: hashText(JSON.stringify([root, headRef])),
+    ...(headRef.startsWith("refs/heads/") ? { branch: headRef.slice("refs/heads/".length) } : {}),
     base_sha: runGit(root, "rev-parse", "HEAD").trim(), dirty_state: hashText(status),
   };
 }
@@ -58,7 +61,7 @@ export function recordWorktree(ledger: Ledger, request: WorktreeRequest): Worktr
   if (existing.dirty_state !== undefined) {
     const record = existing as RunPayload & WorktreeRecord;
     return { cwd: record.cwd, repository_id: record.repository_id, worktree_id: record.worktree_id,
-      base_sha: record.base_sha, dirty_state: record.dirty_state, isolation: record.isolation,
+      ...(record.branch === undefined ? {} : { branch: record.branch }), base_sha: record.base_sha, dirty_state: record.dirty_state, isolation: record.isolation,
       attribution: record.attribution, joint_run_ids: record.joint_run_ids };
   }
   let cwd = request.cwd;

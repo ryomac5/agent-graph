@@ -10,6 +10,7 @@ export const dictionaries = {
     approvals: 'Pending approvals', theme: 'Appearance', system: 'System', light: 'Light', dark: 'Dark', language: 'Language',
     running: 'Running', waiting_approval: 'Waiting for approval', waiting_input: 'Waiting for input', idle: 'Idle',
     ended: 'Ended', failed: 'Failed', unknown: 'Unknown', evidence: 'Evidence', notFound: 'Page not found',
+    themeHint: 'Follows the operating system unless you choose one.', languageHint: 'Interface language for this browser.',
   },
   ja: {
     english: 'English', japanese: '日本語', brand: 'agent-graph', workspace: '作業場', overview: '一覧', projects: 'プロジェクト',
@@ -22,6 +23,7 @@ export const dictionaries = {
     approvals: '承認待ち', theme: '配色', system: 'OS に従う', light: '明るい', dark: '暗い', language: '言語',
     running: '実行中', waiting_approval: '承認待ち', waiting_input: '入力待ち', idle: '待機',
     ended: '終了', failed: '失敗', unknown: '不明', evidence: '根拠', notFound: '画面が見つかりません',
+    themeHint: '選ばなければ OS の設定に従います。', languageHint: 'このブラウザでの画面の言語です。',
   },
 } as const;
 export type Language = keyof typeof dictionaries;

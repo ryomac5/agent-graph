@@ -15,6 +15,11 @@ const text = {
     cwd: 'Working directory', empty: 'No messages observed yet', pending: 'Waiting for command acknowledgement',
     failed: 'Command failed', noModels: 'No models available', chooseModel: 'Choose a model', noConversation: 'Conversation not found',
     elapsed: 'Elapsed', waiting: 'Waiting', noCoverage: 'Coverage not provided', launchReady: 'Choose a model and working directory to branch or take over.',
+    user: 'User', assistant: 'Assistant', defaultEffort: 'Default effort', applyShort: 'Apply', branchShort: 'Branch', takeOverShort: 'Take over',
+    noModel: 'No model recorded', managedCoverage: 'Live from runner', observedCoverage: 'Observed history', toolInput: 'Input', toolResult: 'Output',
+    noOutput: 'No output recorded', placeholder: 'Message the agent…', readOnlyPlaceholder: 'Read-only. Take over to continue here.', sendHint: '⌘ Enter to send',
+    noWorktree: 'No worktree recorded', thinking: 'Thinking', resolved: 'Resolved', expired: 'Expired', stale: 'Stale', pendingState: 'Pending',
+    answered: 'Answered', allowed: 'Allowed', denied: 'Denied',
   },
   ja: {
     conversation: '会話', unknown: '不明', source: '出所', confidence: '確度', streaming: '出力中', toolOutput: '道具の出力',
@@ -30,6 +35,11 @@ const text = {
     cwd: '作業ディレクトリ', empty: 'まだ発言が観測されていません', pending: '操作の受理を確認中',
     failed: '操作に失敗しました', noModels: '利用できるモデルがありません', chooseModel: 'モデルを選択', noConversation: '会話が見つかりません',
     elapsed: '経過', waiting: '待ち時間', noCoverage: '観測範囲が未提供です', launchReady: '分岐・引き継ぎにはモデルと作業ディレクトリを指定してください。',
+    user: '利用者', assistant: 'エージェント', defaultEffort: '既定のeffort', applyShort: '適用', branchShort: '分岐', takeOverShort: '引き継ぐ',
+    noModel: 'モデル未記録', managedCoverage: 'runner から直接', observedCoverage: '観測した履歴', toolInput: '入力', toolResult: '出力',
+    noOutput: '出力の記録はありません', placeholder: 'エージェントへの指示…', readOnlyPlaceholder: '読み取り専用です。続けるには引き継いでください。', sendHint: '⌘ Enter で送信',
+    noWorktree: '作業ツリーの記録なし', thinking: '思考', resolved: '解決済み', expired: '期限切れ', stale: '無効', pendingState: '待ち',
+    answered: '回答済み', allowed: '許可', denied: '拒否',
   },
 };
 export type ConversationText = keyof typeof text.en;

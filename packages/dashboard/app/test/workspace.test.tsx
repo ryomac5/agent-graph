@@ -66,8 +66,8 @@ it('places parallel runs in the task column and selects their conversation and C
   expect(within(tasks).queryByRole('article', { name: 'Review UI' })).toBeNull();
   fireEvent.click(within(tasks).getAllByRole('button', { name: 'Implement API' })[1]);
   expect(within(screen.getByRole('region', { name: 'Conversation' })).getByText('Parallel response')).toBeTruthy();
-  expect(screen.getByText('Quota: Unknown')).toBeTruthy();
-  expect(within(screen.getByRole('complementary', { name: 'Changes' })).getByText('Unknown')).toBeTruthy();
+  expect(screen.getByText('Not reported')).toBeTruthy();
+  expect(within(screen.getByRole('complementary', { name: 'Changes' })).getByText('No artifact yet')).toBeTruthy();
 });
 it('disables commands without the runner and reports rejected stop commands', async () => {
   const target = createActivityStore(); const client = createCommandClient();

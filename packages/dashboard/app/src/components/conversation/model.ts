@@ -38,7 +38,7 @@ export function selectTimeline(state: ScreenState, conversationId: string): Time
     for (const field of ['body', 'tool_output', 'request', 'available_decisions']) {
       if (field in decoded) decoded[field] = decodeStoredValue(decoded[field]);
     }
-    entries.push({ kind, row: decoded, key: `${kind}:${row.id}`, time: readText(row.source_ts ?? row.created_ts ?? evidence.source_ts ?? evidence.timestamp) });
+    entries.push({ kind, row: decoded, key: `${kind}:${row.id}`, time: readText(row.source_ts ?? row.requested_ts ?? row.created_ts ?? evidence.source_ts ?? evidence.timestamp) });
   }
   for (const row of p.messages ?? []) if (ids.has(row.id)) {
     append('message', row);

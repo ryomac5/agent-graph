@@ -1,0 +1,106 @@
+/* ファイルの木と中身。色は全て変数から取り、明暗の両方で読めるようにする。 */
+:root {
+  --git-modified: #a35f00; --git-added: #1d8049; --git-untracked: #2f7d5b; --git-deleted: #c4373d; --git-renamed: #3f6fd1;
+  --tok-comment: #6e7781; --tok-string: #0a7a3e; --tok-number: #0b6bcb; --tok-keyword: #a626a4; --tok-literal: #b35900;
+  --tok-function: #4747bd; --tok-type: #8a5a00; --tok-key: #0b6bcb; --tok-tag: #c4373d; --tok-attr: #8a5a00;
+  --tok-heading: #4747bd; --tok-meta: #6e7781; --tok-variable: #b3446c; --tok-code: #0a7a3e; --tok-link: #0b6bcb;
+  --code-gutter: #9a9da6;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme='light']) {
+  --git-modified: #e7ad4f; --git-added: #4fc38a; --git-untracked: #6fd3a5; --git-deleted: #f17d82; --git-renamed: #86a8ff;
+  --tok-comment: #8b919c; --tok-string: #8fd6a4; --tok-number: #7cc0ff; --tok-keyword: #d39cf0; --tok-literal: #f0b46c;
+  --tok-function: #a9a9fb; --tok-type: #e8c47c; --tok-key: #7cc0ff; --tok-tag: #ff9196; --tok-attr: #e8c47c;
+  --tok-heading: #a9a9fb; --tok-meta: #8b919c; --tok-variable: #f29bc0; --tok-code: #8fd6a4; --tok-link: #7cc0ff;
+  --code-gutter: #5f636d;
+} }
+:root[data-theme='dark'] {
+  --git-modified: #e7ad4f; --git-added: #4fc38a; --git-untracked: #6fd3a5; --git-deleted: #f17d82; --git-renamed: #86a8ff;
+  --tok-comment: #8b919c; --tok-string: #8fd6a4; --tok-number: #7cc0ff; --tok-keyword: #d39cf0; --tok-literal: #f0b46c;
+  --tok-function: #a9a9fb; --tok-type: #e8c47c; --tok-key: #7cc0ff; --tok-tag: #ff9196; --tok-attr: #e8c47c;
+  --tok-heading: #a9a9fb; --tok-meta: #8b919c; --tok-variable: #f29bc0; --tok-code: #8fd6a4; --tok-link: #7cc0ff;
+  --code-gutter: #5f636d;
+}
+
+.explorer > .tabs { flex: none; margin: 0; padding: 0 var(--space-6); background: var(--surface); }
+.explorer-worktree { max-width: 280px; }
+.explorer-columns { flex: 1; min-height: 0; display: grid; grid-template-columns: 300px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
+.explorer-tree { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg-sidebar); border-right: 1px solid var(--border); }
+.explorer-filter { flex: none; display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); color: var(--text-3); border-bottom: 1px solid var(--border); }
+.explorer-filter input { flex: 1; width: 100%; }
+.explorer-hint { padding: var(--space-1) var(--space-3) 0; font-size: var(--text-xs); }
+.explorer-scroll { flex: 1; min-height: 0; overflow: auto; padding: var(--space-1) 0 var(--space-4); }
+.explorer-inline { margin: var(--space-3); }
+.explorer-note { padding: var(--space-2) var(--space-4); font-size: var(--text-xs); }
+
+.file-tree, .file-tree ul { list-style: none; margin: 0; padding: 0; }
+.file-tree li[role='treeitem'] { outline: none; }
+.tree-row { display: flex; align-items: center; gap: 6px; min-width: 0; height: 26px; padding-right: var(--space-3); color: var(--text-2); font-size: var(--text-sm); cursor: pointer; user-select: none; border-left: 2px solid transparent; }
+.tree-row:hover { background: var(--surface-hover); color: var(--text); }
+.tree-row.is-selected { background: var(--accent-soft); color: var(--text); }
+.file-tree li[role='treeitem']:focus-visible > .tree-row { border-left-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.tree-chevron { flex: none; width: 12px; color: var(--text-3); }
+.tree-icon { color: var(--text-3); }
+.tree-row[class*='git-'] .tree-icon { color: currentColor; }
+.tree-name { flex: 1; }
+.tree-name mark { background: var(--attention-soft); color: inherit; border-radius: 2px; box-shadow: 0 0 0 1px var(--attention-border); }
+.tree-previous { flex: 0 1 auto; max-width: 40%; color: var(--text-3); font-size: var(--text-xs); }
+.tree-changed { flex: none; width: 7px; height: 7px; margin-right: 3px; border-radius: 50%; background: var(--git-modified); }
+.tree-status { padding: var(--space-1) var(--space-3); color: var(--text-3); font-size: var(--text-sm); }
+.tree-error { color: var(--danger); overflow-wrap: anywhere; }
+.git-marks { display: inline-flex; gap: 2px; flex: none; }
+.git-letter { min-width: 12px; font: 600 var(--text-xs)/1 var(--mono); text-align: center; }
+.tree-row.git-modified, .git-letter.git-modified { color: var(--git-modified); }
+.tree-row.git-added, .git-letter.git-added { color: var(--git-added); }
+.tree-row.git-untracked, .git-letter.git-untracked { color: var(--git-untracked); }
+.tree-row.git-renamed, .git-letter.git-renamed { color: var(--git-renamed); }
+.tree-row.git-deleted, .git-letter.git-deleted { color: var(--git-deleted); }
+.tree-row.git-deleted .tree-name { text-decoration: line-through; }
+.git-chip.git-modified { color: var(--git-modified); border-color: currentColor; background: transparent; }
+.git-chip.git-added { color: var(--git-added); border-color: currentColor; background: transparent; }
+.git-chip.git-untracked { color: var(--git-untracked); border-color: currentColor; background: transparent; border-style: dashed; }
+.git-chip.git-renamed { color: var(--git-renamed); border-color: currentColor; background: transparent; }
+.git-chip.git-deleted { color: var(--git-deleted); border-color: currentColor; background: transparent; }
+
+.explorer-viewer { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--surface); }
+.explorer-viewer > .empty-state { margin: var(--space-10) auto; width: calc(100% - 2 * var(--space-6)); }
+.viewer-header { flex: none; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-2) var(--space-4); min-height: 40px; padding: var(--space-2) var(--space-4); border-bottom: 1px solid var(--border); }
+.viewer-path { display: flex; flex-wrap: wrap; align-items: center; min-width: 0; font: var(--text-sm)/1.4 var(--mono); color: var(--text-3); overflow-wrap: anywhere; }
+.viewer-path span + span::before { content: '/'; margin: 0 4px; color: var(--text-3); }
+.viewer-path-current { color: var(--text); font-weight: 600; }
+.viewer-meta { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+.viewer-status { padding: var(--space-4); }
+
+.code-view { flex: 1; min-height: 0; overflow: auto; font: 12px/1.6 var(--mono); color: var(--text); background: var(--surface); tab-size: 4; }
+.code-view:focus-visible { outline-offset: -2px; }
+.code-lines { display: table; min-width: 100%; padding: var(--space-2) 0; }
+.code-row { display: table-row; }
+.code-row:hover { background: var(--surface-2); }
+.code-line-number { display: table-cell; position: sticky; left: 0; min-width: 3ch; padding: 0 var(--space-3) 0 var(--space-4); text-align: right; color: var(--code-gutter); background: inherit; user-select: none; font-variant-numeric: tabular-nums; }
+.code-row .code-line-number { background: var(--surface); }
+.code-row:hover .code-line-number { background: var(--surface-2); }
+.code-text { display: table-cell; padding: 0 var(--space-4) 0 var(--space-2); white-space: pre; font: inherit; border-left: 1px solid var(--border); }
+.tok-comment { color: var(--tok-comment); font-style: italic; }
+.tok-string { color: var(--tok-string); }
+.tok-number { color: var(--tok-number); }
+.tok-keyword { color: var(--tok-keyword); }
+.tok-literal { color: var(--tok-literal); }
+.tok-function { color: var(--tok-function); }
+.tok-type { color: var(--tok-type); }
+.tok-key { color: var(--tok-key); }
+.tok-tag { color: var(--tok-tag); }
+.tok-attr { color: var(--tok-attr); }
+.tok-heading { color: var(--tok-heading); font-weight: 600; }
+.tok-meta { color: var(--tok-meta); }
+.tok-variable { color: var(--tok-variable); }
+.tok-code { color: var(--tok-code); }
+.tok-emphasis { font-weight: 600; }
+.tok-link { color: var(--tok-link); text-decoration: underline; text-underline-offset: 2px; }
+
+@media (max-width: 1279px) {
+  .explorer-columns { grid-template-columns: 248px minmax(0, 1fr); }
+  .explorer-worktree { max-width: 200px; }
+}
+@media (max-width: 760px) {
+  .explorer-columns { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 40%) minmax(0, 1fr); }
+  .explorer-tree { border-right: 0; border-bottom: 1px solid var(--border); }
+}

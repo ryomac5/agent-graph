@@ -50,6 +50,7 @@ export function TreePage({ project, target = store, client, language = 'en' }: {
       <AppLink to={prefix}>{ja ? 'プロジェクト' : 'Project'}</AppLink>
       <AppLink to={`${prefix}/tree`} aria-current="page">{ja ? '委譲' : 'Tree'}</AppLink>
       <AppLink to={`${prefix}/changes`}>Changes</AppLink>
+      <AppLink to={`${prefix}/files`}>Files</AppLink>
     </nav>}
     {tree.nodes.length === 0 ? <div className="empty-state">{ja ? '委譲はまだありません' : 'No delegations yet'}</div> : <>
       <div className="delegation-layout">

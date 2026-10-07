@@ -11,7 +11,7 @@ import { openLedger } from "../../core/src/ledger/ledger.ts";
 import { projectDelegations, projectEntityRecords } from "../../core/src/ledger/projections/delegations.ts";
 import { projectRelations } from "../../core/src/ledger/projections/relations.ts";
 import { FakeHost } from "../src/host/contract.ts";
-import { buildReviewPrompt, parseReviewResult } from "../src/intake/review.ts";
+import { buildReviewPrompt, parseReviewResult, REVIEW_OUTPUT_SCHEMA } from "../src/intake/review.ts";
 import { Intake } from "../src/intake/index.ts";
 import { serveIntakeRunner } from "../src/intake/socket.ts";
 import { RunnerRuntime } from "../src/runtime.ts";
@@ -125,8 +125,18 @@ test("reviewer receives the original request and implementer reply so an empty d
   assert.match(prompt, /Implementer reply:\nINTAKE-OK\n/);
   assert.match(prompt, /empty diff is correct when the task asks for no file changes/);
   assert.ok(prompt.includes('"patch_hash":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"'), "artifact is the empty diff");
+  assert.deepEqual(claude.starts[0].outputSchema, REVIEW_OUTPUT_SCHEMA, "reviewer output is constrained by the host");
+  assert.equal(codex.starts[0].outputSchema, undefined, "implementer output stays free text");
   emitReview(claude);
   assert.equal((await intake.wait(request.requestId)).state, "done");
+});
+
+test("free-text review JSON with unescaped quotes is unreadable, so the verdict must come from the constrained output", () => {
+  // 実機の試験で haiku が返した本文。承認でも引用符の書き損じで JSON として読めない。
+  const observed = '```json\n{\n  "verdict": "approve",\n  "comment": "ファイル変更なし（diff=""）、検証コマンド成功。"\n}\n```';
+  assert.throws(() => parseReviewResult(observed), /Invalid review result/);
+  assert.deepEqual(parseReviewResult(JSON.stringify({ verdict: "approve", comment: 'ファイル変更なし（diff=""）' })),
+    { verdict: "approve", comment: 'ファイル変更なし（diff=""）' });
 });
 
 test("review prompt keeps the request, reply and artifact in fixed sections", () => {

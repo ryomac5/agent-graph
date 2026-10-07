@@ -28,6 +28,8 @@ export interface StartRequest {
   model: ModelChoice;
   env?: Record<string, string>;
   integrationMode?: IntegrationMode;
+  /** 実行の各ターンの最終の返答を縛る JSON Schema。ホストが形式を保証し、最終の返答を final_answer の発言として出す。 */
+  outputSchema?: { [key: string]: JsonValue };
 }
 export interface ResumeRequest extends StartRequest { nativeId: string }
 export interface ForkRequest extends ResumeRequest { model: ModelChoice }

@@ -120,6 +120,35 @@ test("Claude maps text deltas and completed messages including integration autho
   await done;
 });
 
+test("Claude output schema constrains the query and the validated output becomes the final answer", async () => {
+  const schema = { type: "object", required: ["verdict"], properties: { verdict: { type: "string" } } };
+  const { host, queries } = createFixture();
+  const plain = await host.start(makeRequest("plain", "conversation-plain"));
+  assert.equal(queries[0].options.outputFormat, undefined);
+  await host.close(plain.runId);
+  const handle = await host.start({ ...makeRequest(), outputSchema: schema });
+  const { events, done } = collect(handle);
+  const query = queries[1];
+  assert.deepEqual(query.options.outputFormat, { type: "json_schema", schema });
+  // StructuredOutput の道具の呼び出しは本文の発言を残さず、値は result にだけ載る。
+  query.emit({ type: "assistant", uuid: "assistant-1", session_id: handle.nativeId, message: { content: [
+    { type: "tool_use", id: "tool-1", name: "StructuredOutput", input: { verdict: 'say "x"' } }] } });
+  query.emit({ type: "result", subtype: "success", is_error: false, session_id: handle.nativeId, uuid: "result-1",
+    result: '{"verdict":"say \\"x\\""}', structured_output: { verdict: 'say "x"' }, usage: { input_tokens: 1, output_tokens: 1 }, modelUsage: {}, total_cost_usd: 0 });
+  await flush();
+  const facts = getFacts(events);
+  const final = facts.find((fact) => fact.kind === "message.created" && fact.payload.phase === "final_answer");
+  assert.ok(final && final.kind === "message.created");
+  assert.deepEqual(JSON.parse(String(final.payload.body)), { verdict: 'say "x"' });
+  assert.equal(final.payload.role, "assistant");
+  assert.ok(facts.some((fact) => fact.kind === "message_membership.created" && fact.payload.message_id === final.subject.slice("message:".length)
+    && fact.payload.conversation_id === "conversation-1"));
+  const evidence = facts.findIndex((fact) => fact.kind === "run.updated" && JSON.stringify(fact.payload).includes('"kind":"result"'));
+  assert.ok(facts.indexOf(final) < evidence, "final answer is stored before the turn completion evidence");
+  await host.close("run-1");
+  await done;
+});
+
 test("Claude approval waits for answer, returns updated input and forwards deny text", async () => {
   const { host, queries } = createFixture();
   const handle = await host.start(makeRequest());

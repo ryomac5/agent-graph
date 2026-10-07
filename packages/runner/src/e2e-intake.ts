@@ -60,6 +60,45 @@ async function runChildRunner(db: string, socket: string) {
   }
 }
 
+type LedgerFact = ReturnType<ReturnType<typeof openLedger>["readSince"]>[number];
+function clip(value: unknown, limit = 400): string {
+  const text = typeof value === "string" ? value : JSON.stringify(value) ?? String(value);
+  return text.length > limit ? `${text.slice(0, limit)}...` : text;
+}
+// 失敗した比較と、その比較に関わる委譲と実行の事実を、台帳を開かずに読める形で出す。
+export function describeFailure(error: unknown, facts: readonly LedgerFact[]): string {
+  const lines: string[] = [];
+  const stack = error instanceof Error ? error.stack ?? "" : "";
+  const at = stack.split("\n").find((line) => line.includes("e2e-intake.ts"));
+  lines.push(`failed check: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+  if (at) lines.push(`at: ${at.trim()}`);
+  if (error instanceof assert.AssertionError) {
+    lines.push(`actual: ${clip(error.actual, 2000)}`, `expected: ${clip(error.expected, 2000)}`);
+  }
+  for (const d of projectDelegations(facts)) {
+    lines.push(`delegation ${d.request_id}: state=${d.state} attempt=${d.attempt}${d.conflicts.length ? ` conflicts=${d.conflicts.length}` : ""}`);
+    for (const a of d.attempts) {
+      const assignment = a.assignment as { executor?: string; model?: string } | undefined;
+      const verification = a.verification as { passed?: boolean } | undefined;
+      const review = a.review as { verdict?: string; comment?: string } | undefined;
+      const result = a.result as { status?: string } | undefined;
+      lines.push(`  attempt ${a.attempt}: state=${a.state} run=${a.run_id ?? "-"} assignment=${assignment ? `${assignment.executor}/${assignment.model}` : "-"}`
+        + ` verification=${verification?.passed ?? "-"} review=${review?.verdict ?? "-"} result=${result?.status ?? "-"}`
+        + (review?.comment ? ` comment=${clip(review.comment, 200)}` : ""));
+    }
+    const reasons = facts.filter((f) => f.subject === `delegation:${d.request_id}` && f.payload && "reason" in f.payload)
+      .map((f) => `seq ${f.seq} ${clip((f.payload as { reason?: unknown }).reason, 300)}`);
+    for (const reason of reasons) lines.push(`  reason: ${reason}`);
+  }
+  for (const run of projectRuns(facts)) {
+    lines.push(`run ${run.id}: state=${run.state}${run.reason ? ` reason=${clip(run.reason, 200)}` : ""}${run.cause ? ` cause=${clip(run.cause, 200)}` : ""}`);
+  }
+  lines.push(`delegated relations: ${projectRelations(facts).filter((r) => r.type === "delegated").map((r) => `${r.id}(${r.confidence})`).join(", ") || "-"}`);
+  lines.push(`last seq: ${facts.at(-1)?.seq ?? 0}; tail:`);
+  for (const f of facts.slice(-15)) lines.push(`  ${f.seq} ${f.source_ts} ${f.source} ${f.kind} ${f.subject}`);
+  return lines.join("\n");
+}
+
 export async function runIntakeChecks(fake: boolean) {
   const directory = mkdtempSync(join(tmpdir(), "intake-e2e-"));
   const cwd = join(directory, "repo"); mkdirSync(cwd);
@@ -87,7 +126,10 @@ export async function runIntakeChecks(fake: boolean) {
     });
     child.stderr.on("data", (chunk) => { errors += chunk; });
     child.on("error", (error) => { errors += error.message; });
-    return { child, rows, errors: () => errors };
+    // 終了コードは標準出力を読み切る前に決まることがあるので、行を読むときは close を待つ。
+    let closed = false;
+    child.once("close", () => { closed = true; });
+    return { child, rows, errors: () => errors, closed: () => closed };
   };
   async function until(check: () => boolean, label: string, child?: ReturnType<typeof launch>) {
     const deadline = Date.now() + TIMEOUT_MS;
@@ -106,6 +148,7 @@ export async function runIntakeChecks(fake: boolean) {
   }
   const onSignal = () => { for (const child of children) child.kill("SIGTERM"); };
   process.once("SIGINT", onSignal); process.once("SIGTERM", onSignal);
+  let failed = false;
   try {
     const git = (...args: string[]) => execFileSync("git", args, { cwd, stdio: "pipe" });
     git("init", "-b", "main"); git("config", "user.email", "test@example.invalid"); git("config", "user.name", "Test");
@@ -139,7 +182,7 @@ export async function runIntakeChecks(fake: boolean) {
     api = await startApi();
     const waiting = rpc("wait", "tools/call", { name: "wait", arguments: { requestId }, _meta: { progressToken: "e2e" } });
     assert.equal((await waiting).structuredContent.state, "done");
-    await until(() => watch.child.exitCode !== null, "watch terminal", watch);
+    await until(watch.closed, "watch terminal", watch);
     assert.equal(watch.child.exitCode, 0, watch.errors());
     assert.equal(watch.rows.at(-1).state, "done");
     assert.ok(shim.rows.some((r) => r.method === "notifications/progress"));
@@ -177,6 +220,8 @@ export async function runIntakeChecks(fake: boolean) {
     assert.equal(jobStatus.state, "done", jobStatus.error);
     const graphResult = JSON.parse(jobStatus.output);
     assert.ok(graphResult.tasks.every((task: { state: string }) => task.state === "done"));
+    // 画面の委譲と planner の委譲は並んで走るので、終わりの状態を待ってから受け入れの失敗を確かめる。
+    await until(() => ["done", "failed", "interrupted", "denied"].includes(projectDelegations(facts()).find((d) => d.request_id === uiId)?.state ?? ""), "ui terminal");
     assert.equal((await screenCmd("ui-status", "intake.status", { requestId: uiId })).state, "failed");
     assert.equal((await screenCmd("ui-retry", "intake.retry", { requestId: uiId })).attempt, 2);
     await until(() => projectDelegations(facts()).find((d) => d.request_id === uiId)?.state === "failed", "ui retry terminal");
@@ -192,20 +237,25 @@ export async function runIntakeChecks(fake: boolean) {
     screen.terminate();
     await stop(api.child);
     const rebuilt = launch("packages/api/src/cli.ts", ["rebuild", "--db", db]);
-    await until(() => rebuilt.child.exitCode !== null, "projection rebuild", rebuilt);
+    await until(rebuilt.closed, "projection rebuild", rebuilt);
     assert.equal(rebuilt.child.exitCode, 0, rebuilt.errors());
     api = await startApi();
     const fresh = api.rows.find((r) => r.ws_url);
     const snapshotAfterRebuild = await fetch(`${fresh.snapshot_url}?token=${fresh.ws_token}`).then((r) => r.json()) as { projection: unknown };
     assert.deepEqual(snapshotAfterRebuild.projection, endpointSnapshot.projection);
     console.log(`PASS: intake via screen/MCP/planner, watch, origin, retry and api restart (${fake ? "fake" : "real"} hosts)`);
+  } catch (error) {
+    failed = true;
+    try { console.error(describeFailure(error, facts())); }
+    catch (detail) { console.error("could not describe the failure:", detail); }
+    throw error;
   } finally {
     process.removeListener("SIGINT", onSignal); process.removeListener("SIGTERM", onSignal);
     for (const screen of sockets) screen.terminate();
     await Promise.allSettled([...children].reverse().map(stop));
     ledger.close();
-    // 実機の失敗を台帳で調べられるよう、指定があれば一時の場所を残す。
-    if (process.env.AGENT_GRAPH_E2E_KEEP === "1") console.error(`KEPT: ${directory}`);
+    // 実機の失敗は再現しにくいので、失敗したときは指定がなくても台帳を残す。
+    if (failed || process.env.AGENT_GRAPH_E2E_KEEP === "1") console.error(`KEPT: ${directory} (ledger: ${db})`);
     else rmSync(directory, { recursive: true, force: true });
   }
 }

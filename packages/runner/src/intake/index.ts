@@ -11,7 +11,8 @@ import { projectDelegations, projectEntityRecords } from "../../../core/src/ledg
 import type { RunnerRuntime } from "../runtime.ts";
 import type { RunnerEvent, SocketRequest } from "../socket.ts";
 import type { WorktreeRecord } from "../worktree.ts";
-import { buildReviewPrompt, parseReviewResult } from "./review.ts";
+import type { StartRequest } from "../host/contract.ts";
+import { buildReviewPrompt, parseReviewResult, REVIEW_OUTPUT_SCHEMA } from "./review.ts";
 
 function json(value: unknown): JsonValue { return JSON.parse(JSON.stringify(value)) as JsonValue; }
 function git(cwd: string, ...args: string[]): string { return execFileSync("git", args, { cwd, encoding: "utf8" }); }
@@ -169,10 +170,11 @@ export class Intake {
     return (final.length ? final : messages.slice(-1)).flatMap((m) => typeof m.body === "string" ? [m.body]
       : Array.isArray(m.body) ? m.body.flatMap((block) => block && typeof block === "object" && !Array.isArray(block) && typeof block.text === "string" ? [block.text] : []) : []).join("\n");
   }
-  private async launch(runId: string, conversationId: string, assignment: Assignment, cwd: string, text: string): Promise<void> {
+  private async launch(runId: string, conversationId: string, assignment: Assignment, cwd: string, text: string,
+    outputSchema?: StartRequest["outputSchema"]): Promise<void> {
     if (this.closing) throw new Error("interrupted");
     const launch = this.runtime.supervisor.start(assignment.executor, { runId, conversationId, generation: 1, cwd,
-      input: { text }, model: { model: assignment.model }, env: { AGENT_GRAPH_MANAGED: runId } });
+      input: { text }, model: { model: assignment.model }, env: { AGENT_GRAPH_MANAGED: runId }, ...(outputSchema ? { outputSchema } : {}) });
     this.launches.add(launch);
     try { await launch; } finally { this.launches.delete(launch); }
     this.reconcileOrigins();
@@ -274,7 +276,7 @@ export class Intake {
         this.write("delegation.attempt_created", `delegation:${requestId}`, { attempt,
           review: { run_id: reviewRunId, artifact_id: artifactId, patch_hash: artifact.patch_hash, assignment: reviewer.assignment } });
         await this.launch(reviewRunId, reviewConversationId, reviewer.assignment, tree.cwd!,
-          buildReviewPrompt({ request, reply: result.output, artifact }));
+          buildReviewPrompt({ request, reply: result.output, artifact }), json(REVIEW_OUTPUT_SCHEMA) as StartRequest["outputSchema"]);
         this.write("relation.created", `relation:${reviewRunId}`, { type: "review_of", from_id: reviewConversationId,
           to_id: conversationId, active: true, confidence: "confirmed", evidence: { artifact_id: artifactId, patch_hash: artifact.patch_hash } });
       } else {

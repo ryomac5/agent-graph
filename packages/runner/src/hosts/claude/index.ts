@@ -80,6 +80,7 @@ export class ClaudeHost implements AgentHost {
       cwd: req.cwd, model: req.model.model, effort,
       ...(forkFrom ? { sessionId, resume: forkFrom, forkSession: true } : resume ? { resume: sessionId } : { sessionId }),
       ...(integrationMode === "strict" ? { strictMcpConfig: true, mcpServers: {} } : {}),
+      ...(req.outputSchema ? { outputFormat: { type: "json_schema" as const, schema: req.outputSchema } } : {}),
       settingSources: ["user", "project"], permissionMode: "default", includePartialMessages: true, persistSession: true,
       env: { ...process.env, ...req.env, ...(integrationMode === "enabled" ? {} : { ENABLE_CLAUDEAI_MCP_SERVERS: "false" }),
         CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1", AGENT_GRAPH_MANAGED: "1",
@@ -238,6 +239,13 @@ export class ClaudeHost implements AgentHost {
       if (/Not logged in/i.test(body)) this.degraded.add("authentication_required");
       if (run.firstResult) this.authentication.verified = !message.is_error && !/Not logged in/i.test(body);
       run.firstResult = false;
+      // 形式を縛ったターンの返答は StructuredOutput の道具の入力に入り、本文の発言に残らない。検証済みの値を最終の返答として出す。
+      if (!message.is_error && "structured_output" in message && message.structured_output !== undefined) {
+        const id = `${run.sessionId}:${message.uuid}`;
+        this.emitFact(run, { kind: "message.created", subject: `message:${id}`, payload: { provider: "claude", native_id: message.uuid, version: 1,
+          role: "assistant", phase: "final_answer", body: JSON.stringify(message.structured_output), body_state: "stored" } });
+        this.emitFact(run, { kind: "message_membership.created", subject: `message_membership:${id}`, payload: { message_id: id, conversation_id: run.request.conversationId, active: true } });
+      }
       this.emitFact(run, { kind: "run.updated", subject: runSubject, payload: { last_evidence: toJson({ kind: "result", turn_id: turnId,
         outcome: interrupted ? "interrupted" : message.is_error ? "failed" : "completed", usage: message.usage, model_usage: message.modelUsage,
         total_cost_usd: message.total_cost_usd, cost_is_estimate: true }) } });

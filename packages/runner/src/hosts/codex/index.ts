@@ -27,6 +27,7 @@ interface Thread {
   runId: string;
   generation: number;
   model: ModelChoice;
+  outputSchema?: StartRequest["outputSchema"];
   queue: EventQueue;
   turnId?: string;
   startingTurn?: boolean;
@@ -115,7 +116,7 @@ export class CodexHost implements AgentHost {
     if (this.runs.has(req.runId)) throw new Error("Run already exists");
     const queue = new EventQueue();
     const thread: Thread = { nativeId: "", conversationId: req.conversationId, runId: req.runId,
-      generation: req.generation, model: { ...req.model }, queue, state: "starting" };
+      generation: req.generation, model: { ...req.model }, ...(req.outputSchema ? { outputSchema: req.outputSchema } : {}), queue, state: "starting" };
     this.runs.set(req.runId, thread);
     this.launching++;
     try {
@@ -162,7 +163,8 @@ export class CodexHost implements AgentHost {
     thread.startingTurn = true;
     try {
       const result = await this.server!.request("turn/start", { threadId: thread.nativeId,
-        model: thread.model.model, effort: thread.model.effort ?? null, input: [{ type: "text", text: input.text }] });
+        model: thread.model.model, effort: thread.model.effort ?? null, input: [{ type: "text", text: input.text }],
+        ...(thread.outputSchema ? { outputSchema: thread.outputSchema } : {}) });
       const key = this.turnKey(thread.nativeId, result.turn.id);
       this.turns.set(key, thread);
       if (result.turn.status === "inProgress" && !this.completedTurns.has(key)) thread.turnId = result.turn.id;

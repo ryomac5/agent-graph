@@ -42,6 +42,17 @@ export function parseReviewResult(output: string): ReviewResult {
   return { verdict: review.verdict as ReviewResult["verdict"], comment: review.comment };
 }
 
+// レビューの返答の形式はホストに縛らせる。自由文の JSON は引用符の書き損じで読めなくなる。
+export const REVIEW_OUTPUT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["verdict", "comment"],
+  properties: {
+    verdict: { type: "string", enum: ["approve", "request_changes"] },
+    comment: { type: "string" },
+  },
+} as const;
+
 export interface ReviewSubject {
   request: { title: string; task: string; accept: string[]; scope?: string[] };
   reply: string;

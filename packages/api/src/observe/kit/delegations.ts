@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { createRequestId, fingerprintRequest, validateRequest, type IntakeRequest } from "../../../../core/src/intake/index.ts";
 import type { AppendResult, Confidence, Fact, FactInput, JsonValue, Ledger } from "../../../../core/src/ledger/index.ts";
@@ -30,12 +31,23 @@ export function kitEventsPath(rootPath: string): string {
 }
 
 /** 終了済みの記録を観測として受け付ける。実行の受付 submit は呼ばない。 */
-export function observeKitDelegationsFile(ledger: Ledger, path: string): AppendResult[] {
+export function observeKitDelegationsFile(ledger: Ledger, path: string, checkpoints?: Map<string, FileCursor>): AppendResult[] {
   path = resolve(path);
+  const checkpoint = checkpoints?.get(path);
+  if (checkpoint) {
+    try {
+      const stat = statSync(path);
+      if (checkpoint.identity === `${stat.dev}:${stat.ino}` && checkpoint.size === stat.size
+        && checkpoint.mtimeMs === stat.mtimeMs && checkpoint.ctimeMs === stat.ctimeMs) return [];
+    } catch (error) {
+      if (error instanceof Error && "code" in error && ["ENOENT", "EACCES", "EPERM"].includes(String(error.code))) return [];
+      throw error;
+    }
+  }
   const facts = ledger.readSince(0, Number.MAX_SAFE_INTEGER);
   const cursors = facts.filter((fact) => fact.source === "kit" && fact.cursor)
     .map((fact) => JSON.parse(fact.cursor!) as FileCursor).filter((cursor) => cursor.path === path);
-  const previous = cursors.at(-1);
+  const previous = checkpoints?.get(path) ?? cursors.at(-1);
   const starts = new Map<string, Start>();
   const records = new Map<string, { eventId: string; position: number }>();
   const occupied = new Set(facts.filter((fact) => fact.source === "kit").map((fact) => fact.source_event_id));
@@ -144,6 +156,7 @@ export function observeKitDelegationsFile(ledger: Ledger, path: string): AppendR
     append({ ...base, source_event_id: `kit:cursor:${checkpointId}`, kind: "delegation.updated", subject: `delegation:${starts.get(key)?.requestId ?? eventId}`,
       cursor: JSON.stringify(line.cursor), payload: {} });
   }
+  checkpoints?.set(path, file.cursor);
   return results;
 }
 

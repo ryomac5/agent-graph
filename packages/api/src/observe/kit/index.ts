@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { projectConversations, projectProjects } from "../../../../core/src/ledger/index.ts";
 import type { Ledger } from "../../../../core/src/ledger/index.ts";
 import { kitEventsPath, observeKitDelegationsFile } from "./delegations.ts";
+import type { FileCursor } from "../files.ts";
 
 export interface KitSnapshot {
   names: ReadonlyMap<string, string>;
@@ -17,18 +18,23 @@ export function kitNamesPath(rootPath: string): string {
 
 export function createKitReader() {
   const snapshots = new Map<string, KitSnapshot>();
+  const stamps = new Map<string, string>();
   return {
     readNames(rootPath: string): KitSnapshot {
       const path = kitNamesPath(rootPath);
       let snapshot: KitSnapshot;
       try {
-        const sourceTs = statSync(path).mtime.toISOString();
+        const stat = statSync(path);
+        const stamp = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+        if (stamps.get(path) === stamp) return snapshots.get(path)!;
+        const sourceTs = stat.mtime.toISOString();
         const data: unknown = JSON.parse(readFileSync(path, "utf8"));
         if (!data || typeof data !== "object" || Array.isArray(data)
           || Object.entries(data).some(([id, name]) => !id || typeof name !== "string" || !name)) {
           throw new SyntaxError("キットの会話 ID と名前の辞書が未完成です");
         }
         snapshot = { names: new Map(Object.entries(data) as [string, string][]), source_ts: sourceTs, deferred: false };
+        stamps.set(path, stamp);
       } catch (error) {
         if (!(error instanceof SyntaxError)
           && !(error instanceof Error && "code" in error
@@ -50,31 +56,44 @@ export interface KitObservationResult {
 }
 
 /** 登録済みプロジェクトを一巡する。呼び出し側が再読み取りの周期を決める。 */
-export function createKitObserver(ledger: Ledger) {
+export function createKitObserver(ledger: Ledger, checkpoints?: Map<string, FileCursor>, afterAliases?: () => void) {
   const reader = createKitReader();
   // hook より先に届いた番号は、ファイルの次の更新でも捨てない。
   const pending = new Map<string, { repository_id: string; native_id: string; name: string; source_ts: string }>();
+  const resolved = new Set<string>();
+  let contextSeq = -1;
+  let projects: ReturnType<typeof projectProjects> = [];
+  let registered = new Set<string>();
+  const conversations = new Map<string, string[]>();
   return {
     observe(): KitObservationResult {
       const facts = ledger.readSince(0, Number.MAX_SAFE_INTEGER);
-      const projects = projectProjects(facts).filter((entry) => entry.state === "registered" && entry.root_path);
+      const seq = facts.at(-1)?.seq ?? 0;
+      // 履歴に変化がない周期は、登録と会話の対応表も組み直さない。
+      if (seq !== contextSeq) {
+        projects = projectProjects(facts.filter((fact) => fact.kind.startsWith("project.")))
+          .filter((entry) => entry.state === "registered" && entry.root_path);
+        registered = new Set(projects.map((entry) => entry.id));
+        conversations.clear();
+        if (projects.length) {
+          for (const conversation of projectConversations(facts.filter((fact) => fact.kind.startsWith("conversation."))).conversations) {
+            if (!conversation.native_id) continue;
+            const matches = conversations.get(conversation.native_id) ?? [];
+            matches.push(conversation.id);
+            conversations.set(conversation.native_id, matches);
+          }
+        }
+        contextSeq = seq;
+      }
       const result: KitObservationResult = { appended: 0, duplicates: 0, pending: 0, deferred: 0 };
       if (projects.length === 0) return result;
-      const registered = new Set(projects.map((entry) => entry.id));
-      const conversations = new Map<string, string[]>();
-      for (const conversation of projectConversations(facts.filter((fact) => fact.kind.startsWith("conversation."))).conversations) {
-        if (!conversation.native_id) continue;
-        const matches = conversations.get(conversation.native_id) ?? [];
-        matches.push(conversation.id);
-        conversations.set(conversation.native_id, matches);
-      }
       for (const project of projects) {
         const snapshot = reader.readNames(project.root_path!);
         if (snapshot.deferred) result.deferred += 1;
         if (!snapshot.source_ts) continue;
         for (const [nativeId, name] of snapshot.names) {
           const key = JSON.stringify([project.id, nativeId, name]);
-          if (!pending.has(key)) pending.set(key, {
+          if (!pending.has(key) && !resolved.has(key)) pending.set(key, {
             repository_id: project.id, native_id: nativeId, name, source_ts: snapshot.source_ts,
           });
         }
@@ -99,9 +118,11 @@ export function createKitObserver(ledger: Ledger) {
         if (appended.status === "appended") result.appended += 1;
         else result.duplicates += 1;
         pending.delete(key);
+        resolved.add(key);
       }
+      if (result.appended) afterAliases?.();
       for (const project of projects) {
-        for (const fact of observeKitDelegationsFile(ledger, kitEventsPath(project.root_path!))) {
+        for (const fact of observeKitDelegationsFile(ledger, kitEventsPath(project.root_path!), checkpoints)) {
           if (fact.status === "appended") result.appended += 1;
           else if (fact.status === "duplicate") result.duplicates += 1;
         }

@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { DatabaseSync } from "node:sqlite";
 import { WebSocket, WebSocketServer } from "ws";
 import { PROJECTION_TABLES } from "../../../core/src/ledger/rebuild.ts";
 import { forwardScreenCommand } from "./commands.ts";
@@ -8,6 +9,7 @@ import { PROJECTION_POLL_MS } from "../service/index.ts";
 import { ProjectionFeed, type ProjectionPatch } from "../service/projection-feed.ts";
 import { RunnerClient, runnerSocketPath } from "../runner-client.ts";
 import { authorize, createToken, readRequestUrl } from "./security.ts";
+import { createSearchHandler } from "../search/index.ts";
 
 export const DEFAULT_WS_PORT = 7421;
 const MAX_FRAME_BYTES = 1024 * 1024;
@@ -44,10 +46,15 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
     else for (const socket of clients.keys()) send(socket, { type: "delta", ...event.delta });
   });
   let port = options.port ?? DEFAULT_WS_PORT;
+  const searchDb = new DatabaseSync(service.dbPath, { readOnly: true });
+  searchDb.exec("PRAGMA busy_timeout = 5000");
+  const searchOptions = { port, token };
+  const search = createSearchHandler(searchDb, searchOptions);
   const server = createServer((request, response) => {
     response.setHeader("Cache-Control", "no-store");
     if (!authorize(request, port, token)) { response.writeHead(403).end(); return; }
     const path = readRequestUrl(request)?.pathname;
+    if (path === "/api/search") { refresh(); search(request, response); return; }
     if (request.method !== "GET" || path !== "/snapshot") { response.writeHead(404).end(); return; }
     refresh();
     response.writeHead(200, { "Content-Type": "application/json" });
@@ -99,8 +106,9 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
       server.once("error", reject);
       server.listen(port, "127.0.0.1", () => { server.off("error", reject); resolve(); });
     });
-  } catch (error) { runner.close(); feed.close(); wss.close(); throw error; }
+  } catch (error) { runner.close(); feed.close(); searchDb.close(); wss.close(); throw error; }
   port = (server.address() as { port: number }).port;
+  searchOptions.port = port;
   const timer = setInterval(() => pollObservation(refresh), PROJECTION_POLL_MS);
   return {
     url: `http://127.0.0.1:${port}`, wsUrl: `ws://127.0.0.1:${port}/ws`, token, runner,
@@ -111,6 +119,7 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
       await new Promise<void>((resolve) => wss.close(() => resolve()));
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
       feed.close();
+      searchDb.close();
     },
   };
 }

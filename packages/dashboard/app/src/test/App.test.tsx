@@ -35,7 +35,7 @@ it('uses the OS theme, reacts to changes, allows explicit overrides and Japanese
   expect(document.documentElement.lang).toBe('ja');
 });
 it.each([['/p/demo', 'demo'], ['/c/demo', 'Conversation'], ['/inbox', 'Approval inbox'],
-  ['/p/demo/tree', 'Delegation tree'], ['/p/demo/changes', 'Changes'], ['/search', 'Search']])('renders route %s', (path, heading) => {
+  ['/p/demo/tree', 'Delegation tree and graph'], ['/p/demo/changes', 'Changes'], ['/search', 'Search']])('renders route %s', (path, heading) => {
   render(<MemoryRouter initialEntries={[path]}><App/></MemoryRouter>);
   expect(screen.getByRole('heading', { name: heading })).toBeTruthy();
 });
@@ -78,4 +78,34 @@ it('shares live activity, approval counts, commands and notices across all stage
     approvals: { remove: [], upsert: [{ id: 'a', run_id: 'r', state: 'resolved' }] },
   } }));
   expect(screen.getByRole('link', { name: 'Pending approvals0' })).toBeTruthy();
+});
+
+it('opens the selected run from the workspace Changes summary and sends review commands', async () => {
+  const target = createStore();
+  target.setSnapshot({ seq: 1, generation: 0, projection: {
+    tasks: [{ id: 'task', name: 'Review task', project: '/repo' }],
+    conversations: [{ id: 'c', task_id: 'task', origin: 'managed', provider: 'codex' }],
+    runs: [{ id: 'r', conversation_id: 'c', state: 'ended', generation: 1 }],
+    artifacts: [{ id: 'a', run_id: 'r', version: 1, patch_hash: 'hash', diff: 'diff --git a/code.txt b/code.txt\n--- a/code.txt\n+++ b/code.txt\n@@ -1 +1 @@\n-old\n+new\n' }],
+  } });
+  target.setConnection('connected');
+  const client = { command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'approve', ok: true })) };
+  render(<MemoryRouter initialEntries={['/p/%2Frepo']}><App target={target} client={client}/></MemoryRouter>);
+  const link = screen.getByRole('link', { name: 'Open Changes' });
+  expect(link.getAttribute('href')).toBe('/p/%2Frepo/changes?run=r');
+  fireEvent.click(link);
+  expect(screen.getByRole('button', { name: 'Comment on code.txt new line 1' })).toBeTruthy();
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Approve' })));
+  expect(client.command).toHaveBeenCalledWith('review.approve', { artifactId: 'a' });
+  expect(screen.getByRole('navigation', { name: 'Project' }).textContent).toContain('Tree');
+});
+
+it('connects sidebar search to the authenticated search client', async () => {
+  const search = vi.fn(async (_query: unknown) => ({ mode: 'fts5' as const, total: 0, results: [], unsupported: [] }));
+  render(<MemoryRouter><App searchClient={{ search }}/></MemoryRouter>);
+  fireEvent.click(screen.getByRole('link', { name: 'Search' }));
+  fireEvent.change(screen.getByLabelText('Search all conversations'), { target: { value: 'review marker' } });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Search' })));
+  expect(search.mock.calls[0][0]).toMatchObject({ query: 'review marker' });
+  expect(screen.getByText('No results')).toBeTruthy();
 });

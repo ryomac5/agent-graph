@@ -12,12 +12,12 @@ const NEXT = PATCH.replace('+new', '+fixed');
 const artifact = { id: 'a1', run_id: 'implementation', version: 1, repository_id: 'repo', worktree_id: 'tree',
   base_sha: 'base', head_sha: 'head', patch_hash: 'hash1', attribution: 'confirmed', diff: PATCH,
   verification: JSON.stringify({ passed: true, results: [{ command: 'test -f code.txt', exitCode: 0, output: 'OK' }] }) };
-function setup(extra: Record<string, Row[]> = {}, artifactId?: string) {
+function setup(extra: Record<string, Row[]> = {}, artifactId?: string, route = '/') {
   const target = createStore();
   target.setSnapshot({ seq: 1, generation: 1, projection: { artifacts: [artifact], runs: [{ id: 'implementation', conversation_id: 'conversation' }], ...extra } });
   target.setConnection('connected');
   const client = { command: vi.fn(async (_name: string, _payload?: unknown) => ({ type: 'ack' as const, cmd_id: 'cmd', ok: true })) };
-  render(<MemoryRouter><ChangesPage target={target} client={client} project="repo" artifactId={artifactId}/></MemoryRouter>);
+  render(<MemoryRouter initialEntries={[route]}><ChangesPage target={target} client={client} project="repo" artifactId={artifactId}/></MemoryRouter>);
   return { target, client };
 }
 const finding = (id: string, state = 'open'): Row => ({ id, artifact_id: 'a1', version: 1, file: 'code.txt', side: 'new', start_line: 2, end_line: 2, context_hash: 'context', body: `Fix ${id}`, severity: 'high', state });
@@ -195,4 +195,16 @@ it('shows failed acceptance output, scope violations, real reviewer assignment a
   expect(screen.getByText('Acceptance failed')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Verify finding' }));
   await waitFor(() => expect(client.command).toHaveBeenCalledWith('review.finding_state', { findingId: 'fixed', state: 'verified' }));
+});
+
+
+it('keeps resumed successors in a run deep link while excluding other executions', () => {
+  setup({ artifacts: [artifact,
+    { ...artifact, id: 'successor', run_id: 'resumed', previous_artifact_id: 'a1', patch_hash: 'hash2', diff: NEXT },
+    { ...artifact, id: 'unrelated', run_id: 'other', version: 9 },
+  ] }, undefined, '/p/repo/changes?run=implementation');
+  const versions = screen.getByLabelText('Version') as HTMLSelectElement;
+  expect([...versions.options].map(option => option.value)).toEqual(['a1', 'successor']);
+  expect(versions.value).toBe('successor');
+  expect(screen.getByRole('button', { name: 'Comment on code.txt new line 2' }).textContent).toBe('fixed');
 });

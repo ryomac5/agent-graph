@@ -163,7 +163,8 @@ export function observeKitDelegationsFile(ledger: Ledger, path: string, checkpoi
 function appendParent(append: (fact: Omit<FactInput, "payload"> & { payload: object }) => void, facts: Fact[], row: Row, requestId: string,
   base: { source: "kit"; source_ts: string; confidence: "confirmed" }): void {
   if (facts.some((fact) => fact.source === "kit" && fact.source_event_id === `${requestId}:parent`)) return;
-  const conversations = projectConversations(facts).conversations;
+  // 親の会話の識別だけを読むため、名前の候補のために本文を投影しない。
+  const conversations = projectConversations(facts, new Map()).conversations;
   const nativeId = readText(row.parent_native_id);
   const provider = readText(row.parent_provider);
   const matches = nativeId ? conversations.filter((conversation) => conversation.native_id === nativeId

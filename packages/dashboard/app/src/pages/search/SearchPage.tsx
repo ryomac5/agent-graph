@@ -70,7 +70,7 @@ export function SearchPage({ client, target = store, language = 'en' }: { client
           const id = state.identities?.conversations[row.conversation_id ?? ''] ?? row.conversation_id ?? '';
           const conversation = state.projection.conversations?.find(item => item.id === id);
           const task = state.projection.tasks?.find(item => item.id === conversation?.task_id || `task:${item.id}` === row.subject);
-          const name = conversationName(state, id, 'conversation') || String(task?.name || 'Conversation');
+          const name = conversationName(state, id) || String(task?.name || 'Conversation');
           const taskName = String(task?.name || conversationName(state, id) || 'Task');
           const projectName = getProjectName(state, String(conversation?.project ?? task?.project ?? row.project ?? ''));
           const title = row.kind === 'diff' ? `Changes · ${taskName}` : row.kind === 'finding' ? `Finding · ${taskName}` : name;

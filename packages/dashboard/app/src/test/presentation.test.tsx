@@ -227,7 +227,8 @@ it('groups reviewer conversation beneath its original task using review_of facts
   const target = setup();
   const review = 'review-conversation';
   target.setSnapshot({ seq: 2, generation: 1, projection: projection({
-    conversations: [{ ...projection().conversations[0], name: 'Implementation conversation' }, { id: review, origin: 'managed', provider: 'codex', name: '{"verdict":"approve"}' }],
+    // core は作業の名前を会話の名前に投影する。画面は投影の名前をそのまま出し、レビューは review_of から名付ける。
+    conversations: [projection().conversations[0], { id: review, origin: 'managed', provider: 'codex', name: '{"verdict":"approve"}' }],
     runs: [...projection().runs, { id: 'review-run', conversation_id: review, generation: 1, state: 'ended' }],
     relations: [{ id: 'review-edge', type: 'review_of', active: 1, confidence: 'confirmed', from_id: review, to_id: CONVERSATION }],
   }) });

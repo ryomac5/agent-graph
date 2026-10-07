@@ -407,3 +407,18 @@ it('shows the model listing error only once the composer is used', async () => {
   fireEvent.focus(screen.getByRole('textbox', { name: 'Message' }));
   expect(screen.getByRole('alert').textContent).toBe('An open Claude query is required to list models');
 });
+
+it('titles the conversation with the projected name and never derives it from message bodies', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ generation: 0, next: null, projection: {
+    conversations: [{ id: 'c', name: null, name_is_provisional: false, first_request_excerpt: 'Fix the product.', provider: 'codex' }],
+    messages: [{ id: 'm', role: 'user', body: '<multi_agent_role>You are `/root`.</multi_agent_role>\n# タスク D1: 画面への配信を作る', source_ts: '2026-10-07T00:00:00Z' }],
+    message_memberships: [{ id: 'l', message_id: 'm', conversation_id: 'c', active: 1 }] } }) })));
+  const { store } = setup({ projection: { conversations: [{ id: 'c', name: null, name_is_provisional: false, provider: 'codex', origin: 'managed', history_format: 'legacy' }],
+    runs: [{ id: 'r', conversation_id: 'c', generation: 1, state: 'idle', started_ts: new Date(2026, 0, 5, 10, 46).toISOString() }] } });
+  expect(await screen.findByRole('heading', { name: 'Codex · Jan 5 10:46' })).toBeTruthy();
+  await waitFor(() => expect(screen.getByText(/画面への配信を作る/)).toBeTruthy());
+  // 本文の Markdown の見出しは本文の中に出る。会話の見出しは本文から導かない。
+  expect(document.querySelector('.conv-title')?.textContent).toBe('Codex · Jan 5 10:46');
+  expect(screen.queryByRole('heading', { name: /multi_agent_role/ })).toBeNull();
+  expect(store.getSnapshot().projection.conversations.map(row => row.name)).toEqual([null]);
+});

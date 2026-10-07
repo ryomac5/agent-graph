@@ -22,8 +22,9 @@ function fixture(extra: Record<string, Row[]> = {}) {
     tasks: [{ id: 'task', project: PROJECT, name: 'Terminal task graph' }],
     conversations: [
       { id: 'origin', provider: 'claude', native_id: 'terminal', origin: 'observed', task_id: 'task', name: 'Terminal' },
-      { id: 'codex', provider: 'codex', task_id: 'task', origin: 'managed' },
-      { id: 'claude', provider: 'claude', task_id: 'task', origin: 'managed' },
+      // api は core が作業の名前から投影した会話の名前を載せる。
+      { id: 'codex', provider: 'codex', task_id: 'task', origin: 'managed', name: 'Terminal task graph', name_is_provisional: false },
+      { id: 'claude', provider: 'claude', task_id: 'task', origin: 'managed', name: 'Terminal task graph', name_is_provisional: false },
     ],
     runs: [
       { id: 'codex:1', conversation_id: 'codex', generation: 1, state: 'failed', cause: 'Acceptance failed', cost: 0.25 },

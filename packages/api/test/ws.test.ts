@@ -407,3 +407,39 @@ test("runner wire handshake, fragmented frames and lost-response reconnect prese
     syncBuiltinESMExports();
   }
 });
+
+test("snapshot と /conversation と patch の会話の行に、core の投影の名前と依頼の抜粋を必ず載せる", (t) => {
+  const { service, dbPath } = createFixture(t);
+  const feed = new ProjectionFeed(dbPath, service.catchUp);
+  t.after(() => feed.close());
+  const base = { source: "rollout-codex", source_ts: "2026-10-07T01:46:00.000Z", confidence: "confirmed" } as const;
+  const conversation = (id: string, type: string): FactInput => ({ ...base, source_event_id: `c-${id}`, kind: "conversation.created",
+    subject: `conversation:${id}`, payload: { provider: "codex", native_id: id, origin: "observed", type, history_format: "paginated" } } as FactInput);
+  const message = (id: string, role: string, body: string, second: number): FactInput => ({ ...base,
+    source_ts: new Date(Date.parse(base.source_ts) + second * 1000).toISOString(), source_event_id: `m-${id}`, kind: "message.created",
+    subject: `message:${id}`, payload: { provider: "codex", native_id: id, version: 1, role, body, body_state: "stored" } } as FactInput);
+  const member = (conversationId: string, messageId: string): FactInput => ({ ...base, source_event_id: `${conversationId}-${messageId}`,
+    kind: "message_membership.created", subject: `message_membership:${conversationId}-${messageId}`,
+    payload: { message_id: messageId, conversation_id: conversationId, active: true } } as FactInput);
+  for (const fact of [conversation("named", "interactive"), conversation("exec", "unattended"), conversation("empty", "interactive"),
+    message("role", "developer", "<multi_agent_role>You are `/root`, the primary agent.\n</multi_agent_role>", 0),
+    message("agents", "user", "# AGENTS.md instructions for /repo\n\n<INSTRUCTIONS>\n規約\n</INSTRUCTIONS>", 1),
+    message("request", "user", "# タスク D1: 画面への配信を作る\n本文", 2),
+    ...["role", "agents", "request"].flatMap(id => [member("named", id), member("exec", id)])]) service.ledger.append(fact);
+  const patch = feed.refresh();
+  const rows = (list: Record<string, unknown>[]) => Object.fromEntries(list.map(row => [JSON.parse(String(row.id))[1],
+    { name: row.name, name_is_provisional: row.name_is_provisional, first_request_excerpt: row.first_request_excerpt }]));
+  const expected = {
+    named: { name: "画面への配信を作る", name_is_provisional: true, first_request_excerpt: "画面への配信を作る" },
+    exec: { name: null, name_is_provisional: false, first_request_excerpt: "画面への配信を作る" },
+    empty: { name: null, name_is_provisional: false, first_request_excerpt: null },
+  };
+  assert.deepEqual(rows(feed.snapshot().projection.conversations), expected);
+  assert.deepEqual(rows(feed.list("conversations").rows), expected);
+  assert.ok(patch && patch !== "resync");
+  assert.deepEqual(rows(patch.changes.conversations.upsert), expected);
+  for (const [id, values] of Object.entries(expected)) {
+    const detail = feed.conversation(JSON.stringify(["codex", id]));
+    assert.deepEqual(rows(detail.projection.conversations), { [id]: values });
+  }
+});

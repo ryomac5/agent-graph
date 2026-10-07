@@ -21,12 +21,6 @@ export function createStore() {
     setConnection: (connection: ConnectionState) => update({ ...state, connection }),
     setSnapshot: (snapshot: Snapshot) => update({ ...state, ...snapshot, pages: snapshot.pages, projection: resolveProjection(snapshot.projection, snapshot.identities), deltas: {} }),
     clearDeltas: () => update({ ...state, deltas: {} }),
-    recordFirstRequest(id: string, excerpt: string) {
-      if (!excerpt) return;
-      update({ ...state, projection: { ...state.projection,
-        conversations: (state.projection.conversations ?? []).map(row => row.id === id ? { ...row, first_request_excerpt: excerpt } : row),
-      } });
-    },
     mergeProjection(projection: Record<string, Row[]>, generation: number, identities = state.identities) {
       if (generation !== state.generation) return;
       const next = { ...state.projection };
@@ -48,8 +42,7 @@ export function createStore() {
         for (const id of change.remove) rows.delete(String(resolveRow(table, { id }, state.identities).id));
         for (const source of change.upsert) {
           const row = resolveRow(table, source, identities);
-          const firstRequest = table === 'conversations' ? rows.get(String(row.id))?.first_request_excerpt : undefined;
-          rows.set(String(row.id), firstRequest ? { ...row, first_request_excerpt: firstRequest } : row);
+          rows.set(String(row.id), row);
         }
         projection[table] = [...rows.values()];
 

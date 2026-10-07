@@ -1,6 +1,6 @@
 import { decodeStoredValue, readObject, readText } from '../../components/activity.ts';
 import type { ExecutionState } from '../../components/StateBadge.tsx';
-import { conversationName, readModel, runLabel, untitledLabel } from '../../lib/format.ts';
+import { conversationName, readModel, runLabel } from '../../lib/format.ts';
 import { createProjectMatcher } from '../../lib/projects.ts';
 import type { Row, ScreenState } from '../../lib/store.ts';
 
@@ -53,14 +53,14 @@ export function buildDelegationTree(state: ScreenState, project?: string): Deleg
     const id = readText(c.id);
     const latest = latestRuns.get(id);
     nodes.set(`conversation:${id}`, { id: `conversation:${id}`, kind: 'conversation',
-      label: conversationName(state, id) || untitledLabel(c.provider, latest?.started_ts ?? c.last_message_ts), conversationId: id,
+      label: '', conversationId: id,
       // 根は作業である。外の端末から起こした作業は、その会話を根にする。
       role: readText(c.task_id) ? 'Task' : c.origin === 'observed' ? 'Terminal conversation' : 'Conversation', provider: readText(c.provider), model: readText(c.model) || readModel(latest).model || readText(latest?.model),
       state: readText(latest?.state) || 'unknown', attempts: [], children: [] });
   }
   for (const run of runs) {
     const id = `run:${readText(run.id)}`;
-    nodes.set(id, { id, kind: 'run', label: runLabel(state, run.id), run,
+    nodes.set(id, { id, kind: 'run', label: '', run,
       conversationId: readText(run.conversation_id), role: 'Execution',
       provider: readText(conversationsById.get(readText(run.conversation_id))?.provider), model: readModel(run).model || readText(run.model),
       state: readText(run.state) || 'unknown', attempts: [], children: [],
@@ -118,7 +118,7 @@ export function buildDelegationTree(state: ScreenState, project?: string): Deleg
     const existing = nodes.get(id);
     const assignment = readObject(latest?.assignment);
     const resumed = latest && !recordedRuns.has(runId(readText(latest.run_id)));
-    const node: TreeNode = { id, kind: existing?.kind ?? 'delegation', label: readText(d.title) || existing?.label || 'Untitled delegation',
+    const node: TreeNode = { id, kind: existing?.kind ?? 'delegation', label: readText(d.title) || existing?.label || '',
       run: existing?.run, conversationId: existing?.conversationId, delegation: d, attempts,
       role: readText(d.role) || 'Delegation',
       provider: readText(assignment.executor) || readText(assignment.provider) || readText(d.provider) || existing?.provider || '',
@@ -270,6 +270,12 @@ export function buildDelegationTree(state: ScreenState, project?: string): Deleg
     for (const id of drop) visible.delete(id);
   }
   const ordered = [...nodes.values()].filter(n => visible.has(n.id)).sort((a, b) => a.id.localeCompare(b.id));
+  // 名前は表示する節だけで引く。会話の名前は全実行を見るので、全会話の分を作ると件数の二乗になる。
+  for (const node of ordered) {
+    if (node.label) continue;
+    node.label = node.kind === 'conversation' ? conversationName(state, node.conversationId ?? '')
+      : node.run ? runLabel(state, node.run.id) : 'Untitled delegation';
+  }
   for (const node of ordered) node.children = node.children.filter(id => visible.has(id)).sort();
   return { nodes: ordered, edges: edges.filter(e => visible.has(e.source) && visible.has(e.target)),
     roots: ordered.filter(n => !parents.has(n.id) && !unresolved.has(n.id)).map(n => n.id),

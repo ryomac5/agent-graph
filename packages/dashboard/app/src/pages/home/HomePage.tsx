@@ -1,4 +1,3 @@
-import { useProvisionalNames } from '../../lib/provisional-names.ts';
 import type { ConversationClient } from '../conversation/ConversationPage.tsx';
 import { useId, useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
@@ -138,8 +137,6 @@ export function HomePage({ target = store, client, language = 'en' }: { target?:
     initial.set(group.id, count);
     budget -= count;
   }
-  const visible = [...overview.projects.flatMap(group => group.items.slice(0, initial.get(group.id))), ...overview.external.slice(0, FOLD_PAGE_SIZE)].map(item => item.activity);
-  useProvisionalNames(state, target, visible, client);
   const ja = language === 'ja';
   const filtered = Boolean(status || provider || project);
   const count = (states: string[]) => activities.filter(item => states.includes(item.state)).length;

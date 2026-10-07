@@ -1,26 +1,11 @@
 import type { Fact } from "../facts.ts";
 import { project, projectNames, projectConversations, projectMessages, projectRuns, projectConnections,
-  projectDelegations, projectArtifacts, projectApprovals, projectFindings, extractProvisionalName, compareText,
+  projectDelegations, projectArtifacts, projectApprovals, projectFindings, collectProvisionalNames,
   type MessageProjection } from "./index.ts";
 
 function projectInitialConversations(facts: Fact[], projection: MessageProjection) {
-  const conversationsByMessage = new Map<string, Set<string>>();
-  for (const membership of projection.message_memberships) {
-    if (!membership.active || !membership.message_id || !membership.conversation_id) continue;
-    const conversations = conversationsByMessage.get(membership.message_id) ?? new Set<string>();
-    conversations.add(membership.conversation_id);
-    conversationsByMessage.set(membership.message_id, conversations);
-  }
-  const names = new Map<string, string>();
-  const messages = [...projection.messages].sort((left, right) => Date.parse(left.source_ts) - Date.parse(right.source_ts)
-    || compareText(left.source_event_id, right.source_event_id) || compareText(left.id, right.id));
-  for (const message of messages) {
-    const name = extractProvisionalName(message.body);
-    if (!name) continue;
-    for (const id of conversationsByMessage.get(message.id) ?? []) if (!names.has(id)) names.set(id, name);
-  }
   // 発言の投影を再利用し、会話の仮名のために同じ本文を再投影しない。
-  return projectConversations(facts, names);
+  return projectConversations(facts, collectProvisionalNames(projection));
 }
 
 /** 初回は実体別に入力を分け、訂正の依存は全体投影で解決する。 */

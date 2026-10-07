@@ -11,7 +11,7 @@ import { ChangesPage } from '../pages/changes/ChangesPage.tsx';
 import { selectActivities } from '../components/activity.ts';
 import { buildOverview } from '../components/overview.ts';
 import { summarizeDelegation } from '../components/DelegationLines.tsx';
-import { untitledLabel } from '../lib/format.ts';
+import { conversationTitle } from '../lib/format.ts';
 
 vi.mock('@xyflow/react', () => ({
   ReactFlow: ({ nodes }: { nodes: { id: string; data: { node: { label: string } } }[] }) => <div>{nodes.map(node => <span key={node.id}>{node.data.node.label}</span>)}</div>,
@@ -175,8 +175,11 @@ it('roots the tree only at tasks that delegated, names untitled conversations an
   // 実行が 2 つ以上の作業だけ、自身の実行を試行として並べる。
   const root = tree.nodes.find(node => node.id === 'conversation:root')!;
   expect(root.children.map(id => tree.nodes.find(node => node.id === id)!.label).sort()).toEqual(['Attempt 1', 'Attempt 2', 'Implement the overview']);
-  expect(untitledLabel('claude', '2020-01-02T10:46:00')).toMatch(/^Claude · Jan 2, 10:46$/);
-  expect(untitledLabel('codex', undefined)).toBe('Codex');
+  // 名前のない会話は、画面の全てで同じ conversationTitle の規則で provider と時刻で呼ぶ。
+  const solo = tree.nodes.find(node => node.conversationId === 'solo');
+  expect(solo).toBeUndefined();
+  expect(conversationTitle({ provider: 'claude', name: null }, '2020-01-02T10:46:00')).toBe('Claude · Jan 2 10:46');
+  expect(conversationTitle({ provider: 'codex' }, undefined)).toBe('Codex');
 });
 
 it('shows one task subtree in the graph, defaults to the active one and switches on selection', () => {

@@ -6,7 +6,7 @@ export interface ScreenHello {
   seq: number;
   // HTTP snapshot の世代を返す。再構築後は seq だけでは整合を判定できない。
   generation?: number;
-  scope?: { tables?: (typeof PROJECTION_TABLES)[number][] };
+  scope?: { tables?: ((typeof PROJECTION_TABLES)[number] | "projects")[]; conversations?: string[] };
 }
 export interface ScreenCommand {
   type: "cmd";

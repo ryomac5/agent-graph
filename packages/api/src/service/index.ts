@@ -19,7 +19,8 @@ import { openBatchLedger } from "./batch-ledger.ts";
 import { openReadLedger } from "./read-ledger.ts";
 import { rebuildInitialProjection } from "./initial-projection.ts";
 
-const PROJECTION_CACHE_KIB = 128 * 1024;
+const PROJECTION_CACHE_KIB = 64 * 1024;
+const OBSERVATION_CONTEXT_CACHE_KIB = 8 * 1024;
 const PROJECTION_BATCH_FACTS = 8;
 const SNAPSHOT_READ_FACTS = 1024;
 const INITIAL_PROJECTION_FACTS = 4096;
@@ -100,7 +101,9 @@ export function openObservationService(options: ObservationOptions = {}) {
   const buffered = options.readerOnly ? openReadLedger(dbPath) : openBatchLedger(dbPath);
   const ledger = buffered.ledger;
   const projectionDb = new DatabaseSync(dbPath);
-  projectionDb.exec(`PRAGMA busy_timeout = ${options.readerOnly ? 0 : 5000}; PRAGMA cache_size = -${PROJECTION_CACHE_KIB}`);
+  // worker の接続は文脈の逐次読み出しだけに使い、投影用のキャッシュを持たせない。
+  projectionDb.exec(`PRAGMA busy_timeout = ${options.readerOnly ? 0 : 5000};
+    PRAGMA cache_size = -${options.writerOnly ? OBSERVATION_CONTEXT_CACHE_KIB : PROJECTION_CACHE_KIB}`);
   // 再構築できる投影は WAL にまとめ、耐久台帳の fsync と checkpoint は書き手が担う。
   projectionDb.exec("PRAGMA synchronous = NORMAL; PRAGMA wal_autocheckpoint = 0; PRAGMA temp_store = MEMORY");
   const readLastSeq = projectionDb.prepare("SELECT max(seq) AS seq FROM facts");
@@ -149,14 +152,20 @@ export function openObservationService(options: ObservationOptions = {}) {
     }
     projectedSeq = state.last_seq;
     generation = state.generation;
-    // 投影の小分けごとに画面の全表を読むのを避け、一巡の完了だけを公開する。
-    if (!options.readerOnly || projectedSeq === Number(readLastSeq.get()!.seq ?? 0)) publishedSeq = projectedSeq;
+    // 配信は変更した行だけを読むため、各取引の反映位置をそのまま公開する。
+    publishedSeq = projectedSeq;
     if (options.readerOnly && projectedSeq < Number(readLastSeq.get()!.seq ?? 0)) scheduleProjection();
     return { ...state, observation };
   }
   function catchUp() {
     // HTTP と WebSocket は確定済みの投影を読む。反映は要求の外で進める。
     if (options.readerOnly) {
+      const stored = readProjectionState.get()!;
+      if (Number(stored.generation) !== generation) {
+        generation = Number(stored.generation);
+        projectedSeq = Number(stored.last_seq);
+        publishedSeq = projectedSeq;
+      }
       scheduleProjection();
       return { last_seq: publishedSeq, generation, observation };
     }
@@ -189,7 +198,11 @@ export function openObservationService(options: ObservationOptions = {}) {
       // 観測の文脈に不要な本文を SQLite で除き、読み出してから捨てる処理を避ける。
       const added = readSnapshot.all(snapshotSeq, throughSeq, SNAPSHOT_READ_FACTS);
       for (const row of added) {
-        snapshot.push({ ...row, payload: row.payload === null ? null : JSON.parse(String(row.payload)) } as Fact);
+        snapshot.push({ seq: Number(row.seq), fact_id: String(row.fact_id), source: row.source,
+          source_event_id: String(row.source_event_id), kind: row.kind, subject: row.subject,
+          payload: row.payload === null ? null : JSON.parse(String(row.payload)), payload_hash: String(row.payload_hash),
+          source_ts: String(row.source_ts), observed_ts: String(row.observed_ts), schema_version: Number(row.schema_version),
+          cursor: row.cursor, confidence: row.confidence, supersedes: row.supersedes } as Fact);
       }
       snapshotSeq = Number(added.at(-1)?.seq ?? snapshotSeq);
       if (added.length < SNAPSHOT_READ_FACTS) { snapshotSeq = throughSeq; break; }

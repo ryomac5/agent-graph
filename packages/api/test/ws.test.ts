@@ -127,6 +127,8 @@ testSocket("patch replay, subscription, evt delta and 500ms ledger tracking with
   runner.publish({ type: "evt", seq: 3 });
   const scopedPatch = await scoped.next("patch");
   assert.deepEqual(Object.keys(scopedPatch.changes), ["runs"]);
+  resumed.send({ type: "hello", seq: 3, scope: { conversations: [scopedPatch.changes.runs.upsert[0].conversation_id] } });
+  await new Promise<void>(resolve => { resumed.socket.once("pong", resolve); resumed.socket.ping(); });
   runner.publish({ type: "evt", delta: { runId: "child", text: "hello" } });
   assert.deepEqual(await resumed.next("delta"), { type: "delta", runId: "child", text: "hello" });
   const current = await snapshot(api);
@@ -234,8 +236,9 @@ testSocket("S17: api restart keeps delegation running, starts once and rebuilds 
   const expected = JSON.parse(readFileSync(new URL("./samples/S17/expected-projection.json", import.meta.url), "utf8"));
   for (const [key, value] of Object.entries(expected.delegation)) assert.deepEqual(result.projection.delegations[0][key], value);
   for (const [key, value] of Object.entries(expected.run)) assert.deepEqual(result.projection.runs[0][key], value);
-  assert.equal(result.projection.messages[0].id, expected.message.id);
-  assert.equal(JSON.parse(result.projection.messages[0].body), expected.message.body);
+  const detail = await (await fetch(`${api.url}/conversation?id=${encodeURIComponent(result.projection.runs[0].conversation_id)}`, { headers: { "x-agent-graph-token": api.token } })).json() as any;
+  assert.equal(result.projection.messages, undefined);
+  assert.deepEqual(detail.projection.messages, []);
   restarted.rebuild();
   assert.deepEqual((await snapshot(api)).projection, result.projection);
   const reversePath = join(dirname(dbPath), "reverse.db");
@@ -290,8 +293,9 @@ test("S17 durable recovery, replay and rebuild are verifiable without sockets", 
   const expected = JSON.parse(readFileSync(new URL("./samples/S17/expected-projection.json", import.meta.url), "utf8"));
   for (const [key, value] of Object.entries(expected.delegation)) assert.deepEqual(result.delegations[0][key], value);
   for (const [key, value] of Object.entries(expected.run)) assert.deepEqual(result.runs[0][key], value);
-  assert.equal(result.messages[0].id, expected.message.id);
-  assert.equal(JSON.parse(String(result.messages[0].body)), expected.message.body);
+  const detail = feed.conversation(String(result.runs[0].conversation_id));
+  assert.equal(result.messages, undefined);
+  assert.deepEqual(detail.projection.messages, []);
   restarted.rebuild();
   assert.equal(feed.refresh(), "resync");
   assert.equal(feed.replay(7), undefined);

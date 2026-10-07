@@ -8,7 +8,8 @@ export type EndEvidence =
   | { kind: "session_end"; generation: number }
   | { kind: "archived"; location: "archived_sessions" }
   | { kind: "process_check"; succeeded: boolean; matches: boolean; pid: number; start_fingerprint: string }
-  | { kind: "user_correction" };
+  | { kind: "user_correction" }
+  | { kind: "legacy_delegation"; table: "delegations"; id: string; status: "done" | "failed" };
 
 // launch は runner が記録する起動の設定で、cwd と model と effort を持つ。
 export interface RunProjection extends RunPayload { id: string; launch?: JsonValue }
@@ -28,6 +29,10 @@ function confirmEnd(fact: Fact, run: RunProjection, evidence: { [key: string]: J
     case "process_check": return evidence.succeeded === true && evidence.matches === false
       && run.pid !== undefined && run.start_fingerprint !== undefined
       && evidence.pid === run.pid && evidence.start_fingerprint === run.start_fingerprint;
+    case "legacy_delegation": return fact.source === "legacy" && evidence.table === "delegations"
+      && typeof evidence.id === "string" && evidence.id.length > 0
+      && (evidence.status === "done" && (fact.payload as Partial<RunPayload>)?.state === "ended"
+        || evidence.status === "failed" && (fact.payload as Partial<RunPayload>)?.state === "failed");
     case "user_correction": return fact.source === "ui";
     default: return false;
   }

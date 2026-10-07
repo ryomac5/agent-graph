@@ -6,7 +6,7 @@ export function createScreenIdentities(facts: readonly Fact[]): ScreenIdentities
   const conversations = Object.fromEntries(projectConversationIds(facts));
   const runs: Record<string, string> = {};
   for (const fact of facts) {
-    if (fact.kind !== 'run.created' || !fact.payload?.conversation_id || !fact.payload.generation) continue;
+    if (fact.kind !== 'run.created' || !fact.payload?.conversation_id || fact.payload.generation === undefined) continue;
     const original = `${fact.payload.conversation_id}:${fact.payload.generation}`;
     const canonical = `${conversations[fact.payload.conversation_id] ?? fact.payload.conversation_id}:${fact.payload.generation}`;
     runs[fact.subject.slice('run:'.length)] = canonical;

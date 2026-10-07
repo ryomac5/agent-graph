@@ -79,6 +79,7 @@ test("Claude opens one streaming query with managed environment, auth and state 
   assert.deepEqual(query.options.settingSources, ["user", "project"]);
   assert.equal(query.options.permissionMode, "default");
   assert.equal(query.options.includePartialMessages, true);
+  assert.equal(query.options.persistSession, true);
   assert.equal(query.options.env?.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS, "1");
   assert.equal(query.options.env?.AGENT_GRAPH_MANAGED, "1");
   assert.equal(query.options.env?.AGENT_GRAPH_RUN_ID, req.runId);
@@ -102,6 +103,23 @@ test("Claude opens one streaming query with managed environment, auth and state 
   await assert.rejects(host.start(makeRequest("run-2")), /already open/);
   await host.close(req.runId);
   await done;
+});
+
+test("Claude non-persistent launch disables SDK disk history and rejects resume before query creation", async () => {
+  const queries: FakeQuery[] = [];
+  const host = new ClaudeHost((args) => {
+    const query = new FakeQuery(args); queries.push(query); return query;
+  }, { persistSession: false, enableFork: true });
+  const request = makeRequest();
+  const handle = await host.start(request);
+  assert.equal(queries[0].options.persistSession, false);
+  assert.equal(queries[0].options.env?.CLAUDE_CONFIG_DIR, process.env.CLAUDE_CONFIG_DIR);
+  assert.equal(host.capabilities().resume, false);
+  assert.equal(host.capabilities().fork, false);
+  await host.close(request.runId);
+  await assert.rejects(host.resume({ ...request, nativeId: handle.nativeId }), /cannot be resumed/);
+  await assert.rejects(host.fork({ ...request, nativeId: handle.nativeId }), /cannot be resumed/);
+  assert.equal(queries.length, 1);
 });
 
 test("Claude maps text deltas and completed messages including integration authorization text", async () => {

@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { setTimeout as delay } from "node:timers/promises";
 import { test, type TestContext } from "node:test";
 import { CodexHost } from "../src/hosts/codex/index.ts";
 import type { HostEvent, HostFact, RunHandle, StartRequest } from "../src/host/contract.ts";
@@ -13,10 +14,25 @@ import { createNativeId } from "../../core/src/ledger/projections/relations.ts";
 import { Supervisor } from "../src/supervisor.ts";
 
 const TEST_TIMEOUT_MS = 10_000;
-function createFixture(t: TestContext, descendant = false) {
+const PROCESS_EXIT_TIMEOUT_MS = 1000;
+
+async function waitForProcessExit(pid: number): Promise<void> {
+  const deadline = Date.now() + PROCESS_EXIT_TIMEOUT_MS;
+  // シグナルの送信と子孫の終了は同時ではないため、終了を期限付きで確かめる。
+  while (true) {
+    try { process.kill(pid, 0); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
+      throw error;
+    }
+    assert.ok(Date.now() < deadline, `Process ${pid} survived host shutdown`);
+    await delay(10);
+  }
+}
+function createFixture(t: TestContext, descendant = false, persistSession?: boolean) {
   const directory = mkdtempSync(join(tmpdir(), "codex-host-"));
   const log = join(directory, "rpc.jsonl");
-  const host = new CodexHost({ executable: process.execPath,
+  const host = new CodexHost({ persistSession, executable: process.execPath,
     executableArgs: [fileURLToPath(new URL("./fixtures/fake-app-server.mjs", import.meta.url))],
     env: { FAKE_APP_SERVER_LOG: log, ...(descendant ? { FAKE_APP_SERVER_DESCENDANT: "1" } : {}) } });
   t.after(async () => { await host.dispose(); rmSync(directory, { force: true, recursive: true }); });
@@ -83,6 +99,31 @@ test("one stdio server multiplexes two threads and approval IDs including zero",
   assert.deepEqual(await host.listModels(), [{ model: "fake", displayName: "Fake", effort: "low" }]);
   await host.close("b");
   await Promise.all([first.finished, second.finished]);
+});
+
+test("Codex non-persistent hosts start and fork ephemeral threads and only resume live owned threads", { timeout: TEST_TIMEOUT_MS }, async (t) => {
+  const { host, directory, readLog } = createFixture(t, false, false);
+  const request = createRequest("ephemeral", "OK");
+  await assert.rejects(host.resume({ ...request, nativeId: "user-thread" }), /own live threads/);
+  await assert.rejects(host.fork({ ...request, nativeId: "user-thread" }), /own live threads/);
+  assert.equal(existsSync(join(directory, "rpc.jsonl")), false);
+  const handle = await host.start(request);
+  const stream = collect(handle);
+  await stream.wait((events) => hasState(events, "idle"));
+  await host.close(request.runId);
+  await stream.finished;
+  const resumed = await host.resume({ ...request, runId: "resume-ephemeral", nativeId: handle.nativeId, input: { text: "" } });
+  await host.close(resumed.runId);
+  const forked = await host.fork({ ...request, runId: "fork-ephemeral", nativeId: handle.nativeId });
+  const forkStream = collect(forked);
+  await forkStream.wait((events) => hasState(events, "idle"));
+  const log = readLog();
+  for (const method of ["thread/start", "thread/fork"]) {
+    assert.equal(log.find((message) => message.method === method).params.ephemeral, true);
+  }
+  assert.equal(Object.hasOwn(log.find((message) => message.method === "thread/resume").params, "ephemeral"), false);
+  await host.close(forked.runId);
+  await forkStream.finished;
 });
 
 test("interrupt records the turn; idle model changes apply to the next turn", { timeout: TEST_TIMEOUT_MS }, async (t) => {
@@ -340,6 +381,6 @@ test("shutdown closes stdin and kills the dedicated process group including desc
   await host.dispose();
   await stream.finished;
   const descendant = readLog().find((message) => message.descendantPid).descendantPid;
-  for (const pid of [handle.pid!, descendant]) assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
+  for (const pid of [handle.pid!, descendant]) await waitForProcessExit(pid);
   await assert.rejects(host.listModels(), /closed/);
 });

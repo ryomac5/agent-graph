@@ -12,6 +12,7 @@ import { createRequestId } from "../../core/src/intake/index.ts";
 import { openLedger } from "../../core/src/ledger/index.ts";
 import { FakeHost, type StartRequest } from "./host/contract.ts";
 import { serveRunner } from "./runtime.ts";
+import { createE2eHosts } from "./e2e-isolation.ts";
 
 const TIMEOUT_MS = 180_000;
 const FAKE_TURN_MS = 1200;
@@ -42,12 +43,14 @@ export class CompletingHost extends FakeHost {
 }
 
 async function runChildRunner(db: string, socket: string) {
+  const hosts = process.env.AGENT_GRAPH_FAKE_HOSTS === "1"
+    ? [new CompletingHost("codex"), new CompletingHost("claude")] : createE2eHosts();
   const ledger = openLedger(db);
   const policy = defaultPolicy();
   policy.roles.implement = [{ executor: "codex", model: "gpt-5.6-luna", family: "openai", tier: "high" }];
   policy.roles.review = [{ executor: "claude", model: "haiku", family: "anthropic", tier: "high" }];
   const runner = await serveRunner(ledger, socket, {
-    hosts: process.env.AGENT_GRAPH_FAKE_HOSTS === "1" ? [new CompletingHost("codex"), new CompletingHost("claude")] : undefined,
+    hosts,
     decision: { policy, quota: () => undefined, performance: () => undefined },
   });
   const stop = () => controller.abort();

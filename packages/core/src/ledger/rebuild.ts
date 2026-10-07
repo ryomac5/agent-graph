@@ -11,6 +11,7 @@ import type { ProjectedMessage } from "./projections/messages.ts";
 import type { Projection } from "./projections/index.ts";
 import { initializeRunnerProjection, forgetRunnerProjection, RECORD_ENTITIES } from "./projections/storage.ts";
 import { projectEntityRecords } from "./projections/delegations.ts";
+import { projectInitial } from "./projections/initial.ts";
 import { refreshSearch } from "./search.ts";
 
 export const PROJECTION_TABLES = [
@@ -264,7 +265,7 @@ function writeEntityRecords(ledger: DatabaseSync, facts: readonly Fact[], subjec
   }
 }
 
-function updateProjection(ledger: DatabaseSync, sinceSeq?: number): ProjectionState {
+function updateProjection(ledger: DatabaseSync, sinceSeq?: number, initial = false): ProjectionState {
   ledger.exec("BEGIN IMMEDIATE");
   try {
     const state = readState(ledger);
@@ -272,10 +273,14 @@ function updateProjection(ledger: DatabaseSync, sinceSeq?: number): ProjectionSt
       throw new RangeError("未反映の事実を飛ばすことはできません");
     }
     if (initializeRunnerProjection(ledger) && (state.generation > 0 || state.last_seq > 0)) sinceSeq = undefined;
+    // 初回の二次索引は、共通スキーマを用意してから同じ取引内で一括構築する。
+    const indexes = initial ? ledger.prepare(`SELECT name, sql FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL
+      AND tbl_name IN ('message_memberships', 'conversation_name_candidates', 'search_documents', 'search_body_sources')`).all() : [];
+    for (const index of indexes) ledger.exec(`DROP INDEX "${String(index.name).replaceAll('"', '""')}"`);
     const added = readFacts(ledger, sinceSeq === undefined ? 0 : state.last_seq);
     if (sinceSeq === undefined || added.length > 0) {
       if (sinceSeq === undefined) {
-        const projection: Projection = project(added);
+        const projection = initial ? projectInitial(added) : project(added);
         ledger.exec("DELETE FROM projection_records; DELETE FROM entity_records; DELETE FROM delegation_runs; DELETE FROM run_commit_results; DELETE FROM command_receipts; DELETE FROM run_subjects");
         writeEntityRecords(ledger, added);
         ledger.exec("DELETE FROM message_name_inputs; DELETE FROM conversation_name_candidates");
@@ -308,6 +313,7 @@ function updateProjection(ledger: DatabaseSync, sinceSeq?: number): ProjectionSt
         .run(state.generation, state.last_seq);
     }
     refreshSearch(ledger, sinceSeq === undefined ? undefined : added, sinceSeq === undefined ? added : undefined);
+    for (const index of indexes) ledger.exec(String(index.sql));
     ledger.exec("COMMIT");
     return state;
   } catch (error) {
@@ -331,4 +337,9 @@ export function applyIncremental(ledger: DatabaseSync, sinceSeq: number): Projec
     throw new RangeError("sinceSeq は非負の安全な整数で指定してください");
   }
   return updateProjection(ledger, sinceSeq);
+}
+
+/** 初回の一括投影も、再構築と同じ表と補助記録へ保存する。 */
+export function rebuildInitialProjection(ledger: DatabaseSync): ProjectionState {
+  return updateProjection(ledger, undefined, true);
 }

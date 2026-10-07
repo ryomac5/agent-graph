@@ -6,6 +6,33 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { openLedger, readLedgerDatabase, applyIncremental, rebuild, projectEntityRecords } from "../../src/ledger/index.ts";
 import type { FactInput } from "../../src/ledger/index.ts";
+import { createProjectionStorage, initializeRunnerProjection } from "../../src/ledger/projections/storage.ts";
+
+test("共通スキーマは旧い時刻索引だけを移行し、初回投影で式索引を作り直さない", (t) => {
+  const ledger = openLedger(":memory:");
+  t.after(() => ledger.close());
+  const db = readLedgerDatabase(ledger);
+  for (const [event, sourceTs] of [["local", "2026-01-01T00:00:00+09:00"], ["utc", "2025-12-31T23:00:00Z"]]) {
+    ledger.append({ source: "host-codex", source_event_id: event, source_ts: sourceTs,
+      kind: "run.created", subject: `run:${event}`, confidence: "confirmed",
+      payload: { conversation_id: event, generation: 1, state: "idle" } });
+  }
+  const statements: string[] = [];
+  const exec = db.exec.bind(db);
+  t.mock.method(db, "exec", (sql: string) => { statements.push(sql); exec(sql); });
+  initializeRunnerProjection(db);
+  assert.ok(!statements.some((sql) => /DROP INDEX.*facts_timestamp/.test(sql)));
+  db.exec("DROP INDEX facts_timestamp; CREATE INDEX facts_timestamp ON facts(source_ts)");
+  statements.length = 0;
+  createProjectionStorage(db);
+  assert.ok(statements.includes("DROP INDEX facts_timestamp"));
+  statements.length = 0;
+  createProjectionStorage(db);
+  assert.ok(!statements.some((sql) => /DROP INDEX.*facts_timestamp/.test(sql)));
+  assert.ok(db.prepare("EXPLAIN QUERY PLAN SELECT source_ts FROM facts ORDER BY julianday(source_ts) DESC LIMIT 1")
+    .all().some((row) => String(row.detail).includes("facts_timestamp")));
+  assert.equal(db.prepare("SELECT source_event_id FROM facts ORDER BY julianday(source_ts) DESC LIMIT 1").get()!.source_event_id, "utc");
+});
 
 test("runner records preserve corrections and incremental updates; old projection versions rebuild atomically", (t) => {
   const directory = mkdtempSync(join(tmpdir(), "runner-projection-"));

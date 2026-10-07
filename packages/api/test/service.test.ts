@@ -11,11 +11,12 @@ import { syncBuiltinESMExports } from "node:module";
 import { setTimeout as delay } from "node:timers/promises";
 import test, { before, after } from "node:test";
 import type { TestContext } from "node:test";
-import { createNativeId, openLedger, project, rebuild, PROJECTION_TABLES, type FactInput } from "../../core/src/ledger/index.ts";
+import { createNativeId, openLedger, project, rebuild, applyIncremental, PROJECTION_SCHEMA_TABLES, PROJECTION_SCHEMA_INDEXES, type FactInput } from "../../core/src/ledger/index.ts";
 import { migrations } from "../../core/src/store/migrations.ts";
 import { openObservationService } from "../src/service/index.ts";
 import { pollObservation } from "../src/service/poll.ts";
 import { rebuildInitialProjection } from "../src/service/initial-projection.ts";
+import { openReadLedger } from "../src/service/read-ledger.ts";
 
 import { acquirePerformanceLock } from "./observe/perf-lock.ts";
 
@@ -59,20 +60,57 @@ for (const sample of ["S17", "S14"]) {
       for (const fact of facts) service.ledger.append(fact);
       for (const extra of extras) service.ledger.append({ ...extra, source: "ui", source_event_id: extra.subject,
         source_ts: TS, confidence: "confirmed" } as FactInput);
+      service.ledger.append({ source: "host-codex", source_event_id: "initial-commit", kind: "run.updated", subject: "run:duplicate",
+        payload: { git_commit_result: { success: true, sha: "initial" }, review_command: { id: "review-initial" } },
+        source_ts: TS, confidence: "confirmed" } as FactInput);
     });
     const readIndexes = () => db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name").all();
     const indexes = readIndexes();
-    const tables = [...PROJECTION_TABLES, "message_name_inputs", "conversation_name_candidates", "search_documents", "search_sources", "search_references", "search_body_sources"];
+    const tables = [...PROJECTION_SCHEMA_TABLES.filter((table) => table !== "projection_state"),
+      "search_documents", "search_sources", "search_references", "search_body_sources"];
+    const readSchema = () => db.prepare("SELECT type, name, tbl_name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name").all();
     const readTables = () => Object.fromEntries(tables.map((table) => [table,
       db.prepare(`SELECT * FROM ${table}`).all().map((row) => JSON.stringify(row)).sort()]));
     const state = rebuildInitialProjection(db);
     const actual = readTables();
+    const schema = readSchema();
+    for (const table of PROJECTION_SCHEMA_TABLES) assert.ok(schema.some((entry) => entry.type === "table" && entry.name === table), table);
+    for (const index of PROJECTION_SCHEMA_INDEXES) assert.ok(schema.some((entry) => entry.type === "index" && entry.name === index), index);
     assert.deepEqual(readIndexes(), indexes);
     assert.equal(rebuild(db).last_seq, state.last_seq);
     assert.deepEqual(readTables(), actual);
     assert.deepEqual(readIndexes(), indexes);
+    assert.deepEqual(readSchema(), schema);
+    service.ledger.append({ source: "host-codex", source_event_id: "after-bulk", kind: "run.updated", subject: "run:duplicate",
+      payload: { state: "running", git_commit_result: { success: true, sha: "commit" }, review_command: { id: "review-after-bulk" } },
+      source_ts: "2026-10-07T10:00:00.000Z", confidence: "confirmed" } as FactInput);
+    const updated = applyIncremental(db, state.last_seq);
+    const incremental = readTables();
+    assert.equal(rebuild(db).last_seq, updated.last_seq);
+    assert.deepEqual(readTables(), incremental);
+    assert.deepEqual(readSchema(), schema);
   });
 }
+
+test("読み取り専用の台帳も core の秘匿規則と事実を返し、書き込みを拒む", (t) => {
+  const f = createFixture(t);
+  const writer = openLedger(f.dbPath);
+  const reader = openReadLedger(f.dbPath);
+  t.after(() => { reader.ledger.close(); writer.close(); });
+  assert.deepEqual(reader.ledger.getRedactionRules(), writer.getRedactionRules());
+  const rules = reader.ledger.getRedactionRules();
+  rules.defaults = false;
+  assert.deepEqual(reader.ledger.getRedactionRules(), writer.getRedactionRules());
+  const input: FactInput = { source: "ui", source_event_id: "read-only", kind: "task.created",
+    subject: "task:read-only", payload: { purpose: "Read only", project: "fixture", state: "active" }, source_ts: TS, confidence: "confirmed" };
+  writer.append(input);
+  assert.deepEqual(reader.ledger.readSince(0, 10), writer.readSince(0, 10));
+  assert.throws(() => reader.ledger.append(input), /Ledger writes/);
+  assert.throws(() => reader.ledger.purgePayloads(TS), /Ledger writes/);
+  assert.throws(() => reader.ledger.prunePayloads(), /Ledger writes/);
+  assert.throws(() => reader.batch(() => undefined), /Ledger writes/);
+  assert.throws(() => reader.checkpoint(), /Ledger writes/);
+});
 
 function createFixture(t: TestContext, useXdg = true) {
   const home = mkdtempSync(join(tmpdir(), "agent-graph-service-"));

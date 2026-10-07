@@ -1,7 +1,15 @@
 import { useEffect, useState } from 'react';
-import { BrowserRouter, Link, NavLink, Route, Routes, useParams } from 'react-router';
+import { BrowserRouter, Link, NavLink, Route, Routes, useNavigate, useParams } from 'react-router';
 import { dictionaries, type Language, type TextKey } from './lib/i18n.ts';
 import { store, useScreenStore, type ScreenStore } from './lib/store.ts';
+import type { ConversationClient } from './pages/conversation/ConversationPage.tsx';
+import { ConversationPage } from './pages/conversation/ConversationPage.tsx';
+import { HomePage } from './pages/home/HomePage.tsx';
+import { WorkspacePage } from './pages/workspace/WorkspacePage.tsx';
+import { Inbox } from './pages/inbox/Inbox.tsx';
+import { getInbox } from './pages/inbox/model.ts';
+import { Notifications } from './components/notifications/Notifications.tsx';
+import { selectActivities } from './components/activity.ts';
 import './styles.css';
 
 export type Theme = 'system' | 'light' | 'dark';
@@ -15,14 +23,15 @@ function EmptyView({ title, future, t }: { title: TextKey; future?: boolean; t: 
   </div><div className="empty-state"><span className="empty-symbol" aria-hidden="true">◇</span>
     <h2>{t(future ? 'futureTitle' : 'emptyTitle')}</h2><p>{t(future ? 'futureBody' : 'emptyBody')}</p></div></section>;
 }
-export function App({ target = store }: { target?: ScreenStore }) {
+const unavailableClient: ConversationClient = { command: async (_command, _payload, cmdId = '') => ({ type: 'ack', cmd_id: cmdId, ok: false, error: 'Runner unavailable' }) };
+export function App({ target = store, client = unavailableClient }: { target?: ScreenStore; client?: ConversationClient }) {
+  const navigate = useNavigate();
   const state = useScreenStore(target);
   const [language, setLanguage] = useState<Language>(() => localStorage.getItem('agent-graph-language') === 'ja' ? 'ja' : 'en');
   const [theme, setTheme] = useState<Theme>(() => {
     const saved = localStorage.getItem('agent-graph-theme');
     return saved === 'dark' || saved === 'light' ? saved : 'system';
   });
-  const [notifications, setNotifications] = useState(false);
   const t = (key: TextKey) => dictionaries[language][key];
   useEffect(() => {
     const media = matchMedia('(prefers-color-scheme: dark)');
@@ -32,8 +41,10 @@ export function App({ target = store }: { target?: ScreenStore }) {
     return () => media.removeEventListener('change', update);
   }, [theme]);
   useEffect(() => { document.documentElement.lang = language; localStorage.setItem('agent-graph-language', language); }, [language]);
-  const projects = [...new Set((state.projection.tasks ?? []).flatMap(row => typeof row.project === 'string' && row.project ? [row.project] : []))].map(id => ({ id, name: id }));
-  const approvals = (state.projection.approvals ?? []).filter(row => row.state === 'pending').length;
+  const projects = [...new Set(selectActivities(state).map(row => row.project).filter(Boolean))].sort().map(id => ({ id, name: id }));
+  const approvals = getInbox(state).pending.length;
+  const conversation = (conversationId?: string) => <ConversationPage key={conversationId} conversationId={conversationId} target={target} client={client} language={language}
+    onConversation={id => navigate(`/c/${encodeURIComponent(id)}`)}/>;
   return <div className="app-shell"><aside className="sidebar"><Link className="brand" to="/"><span aria-hidden="true">⌘</span>{t('brand')}</Link>
     <p className="eyebrow">{t('workspace')}</p><nav aria-label={t('workspace')}>
       {(['overview', 'inbox', 'search'] as const).map(key => <NavLink key={key} end to={key === 'overview' ? '/' : `/${key}`}><span aria-hidden="true">{key === 'overview' ? '▦' : key === 'inbox' ? '▤' : '⌕'}</span>{t(key)}</NavLink>)}
@@ -42,13 +53,12 @@ export function App({ target = store }: { target?: ScreenStore }) {
     </div><NavLink className="settings-link" to="/settings"><span aria-hidden="true">⚙</span>{t('settings')}</NavLink></aside>
     <div className="main-column"><header className="topbar"><span className={`connection ${state.connection}`} role="status"><span aria-hidden="true">●</span>{t(state.connection)}</span>
       <div className="topbar-actions"><Link className="approval-count" to="/inbox">{t('approvals')}<strong>{approvals}</strong></Link>
-      <button className="bell" aria-label={t('notifications')} aria-expanded={notifications} onClick={() => setNotifications(!notifications)}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg></button></div>
-      {notifications && <section className="notification-panel" aria-label={t('notifications')}><h2>{t('notifications')}</h2><p>{t('noNotifications')}</p></section>}
+      <Notifications target={target} client={client} initiallyOpen={false} compact language={language}/></div>
     </header><main><Routes>
-      <Route path="/" element={<EmptyView title="overview" t={t}/>}/>
-      <Route path="/p/:project" element={<EmptyView title="project" t={t}/>}/>
-      <Route path="/c/:conversation" element={<EmptyView title="conversation" t={t}/>}/>
-      <Route path="/inbox" element={<EmptyView title="inbox" t={t}/>}/>
+      <Route path="/" element={<HomePage target={target} language={language}/>}/>
+      <Route path="/p/:project" element={<WorkspacePage target={target} client={client} language={language} renderConversation={conversation}/>}/>
+      <Route path="/c/:conversation" element={conversation()}/>
+      <Route path="/inbox" element={<Inbox target={target} client={client}/>}/>
       <Route path="/p/:project/tree" element={<EmptyView title="tree" future t={t}/>}/>
       <Route path="/p/:project/changes" element={<EmptyView title="changes" future t={t}/>}/>
       <Route path="/search" element={<EmptyView title="search" future t={t}/>}/>
@@ -59,4 +69,4 @@ export function App({ target = store }: { target?: ScreenStore }) {
       <Route path="*" element={<EmptyView title="notFound" t={t}/>}/>
     </Routes></main></div></div>;
 }
-export function Dashboard() { return <BrowserRouter><App/></BrowserRouter>; }
+export function Dashboard({ client }: { client: ConversationClient }) { return <BrowserRouter><App client={client}/></BrowserRouter>; }

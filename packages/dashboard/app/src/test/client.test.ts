@@ -113,3 +113,34 @@ it('replaces Claude deltas without message ids when the assistant message and me
   } });
   expect(target.getSnapshot().deltas).toEqual({});
 });
+it('joins real ledger identities and resolves run-only streaming when membership arrives in a later patch', async () => {
+  const { createScreenIdentities } = await import('../../../../api/src/service/screen-identities.ts');
+  const metadata = { payload_hash: 'fixture', schema_version: 1, cursor: null, supersedes: null };
+  const identities = createScreenIdentities([
+    { ...metadata, seq: 1, fact_id: 'c', observed_ts: '2026-10-07', source: 'host-claude', source_event_id: 'c', source_ts: '2026-10-07', confidence: 'confirmed',
+      kind: 'conversation.created', subject: 'conversation:local', payload: { provider: 'claude', native_id: 'native', origin: 'managed' } },
+    { ...metadata, seq: 2, fact_id: 'r', observed_ts: '2026-10-07', source: 'host-claude', source_event_id: 'r', source_ts: '2026-10-07', confidence: 'confirmed',
+      kind: 'run.created', subject: 'run:host-run', payload: { conversation_id: 'local', generation: 1, state: 'running' } },
+  ]);
+  const canonical = '["claude","native"]';
+  const runId = `${canonical}:1`;
+  const target = createStore();
+  target.setSnapshot({ seq: 2, generation: 0, identities, projection: {
+    conversations: [{ id: canonical }], runs: [{ id: 'local:1', conversation_id: 'local', state: 'running' }],
+    approvals: [{ id: 'approval', run_id: 'host-run', conversation_id: 'local' }],
+    messages: [{ id: 'old', role: 'assistant' }],
+    message_memberships: [{ id: 'old-link', conversation_id: canonical, message_id: 'old', active: 1 }],
+  } });
+  expect(target.getSnapshot().projection.runs[0]).toMatchObject({ id: runId, conversation_id: canonical });
+  expect(target.getSnapshot().projection.approvals[0]).toMatchObject({ run_id: runId, conversation_id: canonical });
+  target.appendDelta({ runId: 'host-run', text: 'new streaming reply' });
+  expect(Object.values(target.getSnapshot().deltas)[0].runId).toBe(runId);
+  target.applyPatch({ type: 'patch', from_seq: 2, seq: 3, generation: 0, identities, changes: {
+    messages: { remove: [], upsert: [{ id: 'new', role: 'assistant', body: 'complete' }] },
+  } });
+  expect(Object.values(target.getSnapshot().deltas)).toHaveLength(1);
+  target.applyPatch({ type: 'patch', from_seq: 3, seq: 4, generation: 0, identities, changes: {
+    message_memberships: { remove: [], upsert: [{ id: 'new-link', conversation_id: canonical, message_id: 'new', active: 1 }] },
+  } });
+  expect(target.getSnapshot().deltas).toEqual({});
+});

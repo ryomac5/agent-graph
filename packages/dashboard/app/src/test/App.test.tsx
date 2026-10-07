@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { App } from '../App.tsx';
 import { createStore } from '../lib/store.ts';
@@ -17,11 +17,11 @@ it('renders navigation, projects, pending approvals, connection state and bell',
   store.setConnection('runner_unavailable');
   render(<MemoryRouter><App target={store}/></MemoryRouter>);
   expect(screen.getByRole('heading', { name: 'Overview' })).toBeTruthy();
-  expect(screen.getByRole('link', { name: 'demo' }).getAttribute('href')).toBe('/p/demo');
+  expect(within(screen.getByRole('complementary')).getByRole('link', { name: 'demo' }).getAttribute('href')).toBe('/p/demo');
   expect(screen.getByRole('status').textContent).toContain('Runner unavailable');
   expect(screen.getByRole('link', { name: 'Pending approvals1' })).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Notifications' }));
-  expect(screen.getByText('No notifications yet')).toBeTruthy();
+  expect(screen.getByRole('heading', { name: 'Approval pending' })).toBeTruthy();
 });
 it('uses the OS theme, reacts to changes, allows explicit overrides and Japanese', () => {
   render(<MemoryRouter initialEntries={['/settings']}><App/></MemoryRouter>);
@@ -46,4 +46,35 @@ it('shows unknown with evidence, time, reason and a link instead of relying on c
   expect(link.className).toContain('status-unknown');
   expect(link.textContent).toContain('Disconnect'); expect(link.textContent).toContain('2026-10-07');
   expect(link.textContent).toContain('Observation interrupted'); expect(link.getAttribute('href')).toBe('/c/demo');
+});
+it('shares live activity, approval counts, commands and notices across all stage 5 routes', async () => {
+  const target = createStore();
+  const client = { command: vi.fn(async (_command: string, _payload?: unknown) => ({ type: 'ack' as const, cmd_id: 'cmd', ok: true, result: [] })) };
+  target.setSnapshot({ seq: 1, generation: 0, projection: {
+    tasks: [{ id: 't', name: 'Build console', project: '/repo/demo' }],
+    conversations: [{ id: 'c', task_id: 't', name: 'Console conversation', origin: 'managed', provider: 'claude' }],
+    runs: [{ id: 'r', conversation_id: 'c', state: 'running', generation: 1 }],
+  } });
+  target.setConnection('connected');
+  render(<MemoryRouter><App target={target} client={client}/></MemoryRouter>);
+  act(() => target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: {
+    approvals: { remove: [], upsert: [{ id: 'a', run_id: 'r', state: 'requested', request: '{"command":"echo approval"}', available_decisions: '["allow","deny"]' }] },
+  } }));
+  fireEvent.click(screen.getByRole('button', { name: 'Notifications' }));
+  expect(screen.getByRole('heading', { name: 'Approval pending' })).toBeTruthy();
+  fireEvent.click(within(screen.getByRole('complementary')).getByRole('link', { name: '/repo/demo' }));
+  expect(screen.getByRole('heading', { name: 'Project workspace' })).toBeTruthy();
+  expect(screen.getByRole('textbox', { name: 'Message' })).toBeTruthy();
+  fireEvent.click(within(screen.getByRole('region', { name: 'Tasks' })).getByRole('link', { name: 'Running · Evidence' }));
+  expect(screen.getByRole('heading', { name: 'Console conversation' })).toBeTruthy();
+  fireEvent.click(screen.getByRole('link', { name: 'Pending approvals1' }));
+  expect(screen.getByRole('heading', { name: 'Approval inbox' })).toBeTruthy();
+  expect(screen.getByRole('heading', { name: 'Approval pending' })).toBeTruthy();
+  const inbox = screen.getByRole('region', { name: 'Approval inbox' });
+  await act(async () => fireEvent.click(within(inbox).getByRole('button', { name: 'Allow' })));
+  expect(client.command).toHaveBeenCalledWith('answer', { approvalId: 'a', decision: 'allow' });
+  act(() => target.applyPatch({ type: 'patch', from_seq: 2, seq: 3, generation: 0, changes: {
+    approvals: { remove: [], upsert: [{ id: 'a', run_id: 'r', state: 'resolved' }] },
+  } }));
+  expect(screen.getByRole('link', { name: 'Pending approvals0' })).toBeTruthy();
 });

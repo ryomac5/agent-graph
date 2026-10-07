@@ -15,6 +15,7 @@ export interface ClientOptions {
   url: string; token: string; store?: ScreenStore;
   createSocket?: (url: string) => Socket;
   fetchSnapshot?: () => Promise<Snapshot>;
+  refreshToken?: () => Promise<string>;
 }
 const RECONNECT_MIN_MS = 500;
 const RECONNECT_MAX_MS = 30_000;
@@ -26,7 +27,7 @@ export function createClient(options: ClientOptions) {
   snapshotUrl.protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
   snapshotUrl.pathname = '/snapshot';
   const loadSnapshot = options.fetchSnapshot ?? (async () => {
-    const response = await fetch(snapshotUrl, { headers: { 'x-agent-graph-token': options.token } });
+    const response = await fetch(snapshotUrl, { headers: { 'x-agent-graph-token': url.searchParams.get('token') ?? '' } });
     if (!response.ok) throw new Error(`Snapshot: ${response.status}`);
     return response.json() as Promise<Snapshot>;
   });
@@ -60,10 +61,24 @@ export function createClient(options: ClientOptions) {
       if (!stopped && current === epoch) socket?.close();
     } finally { if (current === epoch) syncing = false; }
   }
-  function connect() {
+  async function connect() {
     if (stopped) return;
     const current = ++epoch;
     syncing = false;
+    if (current > 1 && options.refreshToken) {
+      try {
+        const token = await options.refreshToken();
+        if (stopped || current !== epoch) return;
+        url.searchParams.set('token', token);
+        snapshotUrl.searchParams.set('token', token);
+      } catch {
+        if (!stopped && current === epoch) {
+          timer = setTimeout(connect, retry);
+          retry = Math.min(retry * 2, RECONNECT_MAX_MS);
+        }
+        return;
+      }
+    }
     const ws = (options.createSocket ?? (address => new WebSocket(address)))(url.href);
     socket = ws;
     ws.onopen = () => {

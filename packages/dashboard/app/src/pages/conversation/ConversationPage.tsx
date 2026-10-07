@@ -4,6 +4,9 @@ import type { Ack, createClient } from '../../lib/client.ts';
 import { store, useScreenStore, type ScreenStore } from '../../lib/store.ts';
 import type { Language } from '../../lib/i18n.ts';
 import { dictionaries } from '../../lib/i18n.ts';
+import { AppLink } from '../../components/AppLink.tsx';
+import { StateBadge } from '../../components/StateBadge.tsx';
+import { executionStates } from '../../components/activity.ts';
 import { Message } from '../../components/conversation/Message.tsx';
 import { ACTIVE_STATES, PENDING_APPROVALS, readObject, readText, selectTimeline, showValue } from '../../components/conversation/model.ts';
 import { translate, type ConversationText } from '../../components/conversation/text.ts';
@@ -59,7 +62,8 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const writable = !external && open && connected && !pending;
   const canSend = writable && !codexActive;
   const canLaunch = connected && !pending && Boolean(model && cwd.trim()) && SUPPORTED_FORMATS.includes(readText(conversation?.history_format));
-  const status = readText(run?.state) || 'unknown';
+  const rawStatus = readText(run?.state);
+  const status = executionStates.find(value => value === rawStatus) ?? 'unknown';
   const entries = selectTimeline(state, conversationId);
 
   useEffect(() => {
@@ -131,13 +135,10 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const elapsed = Number.isFinite(started) ? `${Math.max(0, Math.floor((now - started) / TICK_MS))}s` : t('unknown');
   return <section className="conversation-page" aria-label={t('conversation')}>
     <header className="conversation-heading"><p className="eyebrow">{provider}</p><h1>{readText(conversation.name) || t('conversation')}</h1>
-      <a className={`state-badge status-${status}`} href="#conversation-evidence" aria-label={`${status in dictionaries[language] ? dictionaries[language][status as keyof typeof dictionaries.en] : status} · ${t('evidence')}`}>
-        <span>{status in dictionaries[language] ? dictionaries[language][status as keyof typeof dictionaries.en] : status}</span>
-        {active && <span>{t(status.startsWith('waiting') ? 'waiting' : 'elapsed')}: {elapsed}</span>}
-        {status === 'unknown' && <><span>{readText(run?.reason) || t('noRun')}</span><span>{showValue(run?.last_evidence) || t('unknown')}</span><time>{readText(run?.last_evidence_ts) || t('unknown')}</time></>}
-        {status === 'ended' && <span>{showValue(run?.end_evidence) || t('unknown')}</span>}
-        {status === 'failed' && <span>{readText(run?.cause) || t('unknown')}</span>}
-      </a>
+      <StateBadge state={status} language={language} evidenceUrl="#conversation-evidence"
+        evidence={showValue(status === 'ended' ? run?.end_evidence : run?.last_evidence) || undefined}
+        evidenceTime={run?.last_evidence_ts ? <time dateTime={readText(run.last_evidence_ts)}>{readText(run.last_evidence_ts)}</time> : undefined}
+        reason={readText(run?.cause ?? run?.reason) || undefined} elapsed={`${t(status.startsWith('waiting') ? 'waiting' : 'elapsed')}: ${elapsed}`}/>
       <dl className="conversation-metadata"><div><dt>{t('model')}</dt><dd>{appliedModel?.model || currentModel || t('unknown')}</dd></div>
         <div><dt>{t('effort')}</dt><dd>{appliedModel?.effort || currentEffort || t('unknown')}</dd></div>
         <div><dt>{t('worktree')}</dt><dd>{savedCwd || readText(run?.worktree_id) || t('unknown')}</dd></div>
@@ -165,7 +166,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     <footer className="conversation-composer">
       {state.connection !== 'connected' && <p role="status">{dictionaries[language][state.connection]}</p>}
       {error && <p role="alert">{error}</p>}{pending && <p role="status">{t('pending')}</p>}
-      {nextConversation && <a href={`/c/${encodeURIComponent(nextConversation)}`}>{t('conversation')}: {nextConversation}</a>}
+      {nextConversation && <AppLink to={`/c/${encodeURIComponent(nextConversation)}`}>{t('conversation')}: {nextConversation}</AppLink>}
       {!codexActive && <div className="conversation-controls"><label>{t('model')}<select aria-label={t('model')} disabled={!connected || pending || confirmation !== undefined} value={model} onChange={event => {
         setModel(event.target.value);
         if (provider === 'codex') setEffort(models.find(item => item.model === event.target.value)?.effort ?? '');

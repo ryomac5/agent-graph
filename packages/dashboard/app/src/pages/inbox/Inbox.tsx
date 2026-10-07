@@ -1,4 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
+import { AppLink } from '../../components/AppLink.tsx';
+import { StateBadge, type ExecutionState } from '../../components/StateBadge.tsx';
+import { executionStates, readBody, readObject } from '../../components/activity.ts';
 import { store, useScreenStore, type Row, type ScreenState, type ScreenStore } from '../../lib/store.ts';
 import { answerApproval, APPROVAL_KEYS, getConversation, getDecision, getInbox, getRequestedTime, isPending, readText,
   type ApprovalAction, type CommandClient } from './model.ts';
@@ -39,22 +42,23 @@ function ConversationTail({ row, state }: { row: Row; state: ScreenState }) {
   return <details><summary>Conversation tail</summary>
     {messages.length === 0 && deltas.length === 0 && <p>No conversation content available.</p>}
     {messages.map(message => <div key={String(message.id)}><strong>{readText(message.role)}</strong>
-      <pre style={{ whiteSpace: 'pre-wrap' }}>{message.body_state === 'stored' ? readText(message.body) : `Content unavailable: ${readText(message.body_state)}`}</pre></div>)}
+      <pre style={{ whiteSpace: 'pre-wrap' }}>{message.body_state === 'stored' ? readBody(message.body) : `Content unavailable: ${readText(message.body_state)}`}</pre></div>)}
     {deltas.map((delta, index) => <pre key={index} style={{ whiteSpace: 'pre-wrap' }}>{delta.text}</pre>)}
   </details>;
 }
 export function ApprovalDetails({ row, state }: { row: Row; state: ScreenState }) {
   const run = state.projection.runs?.find(run => run.id === row.run_id);
-  const request = row.request && typeof row.request === 'object' ? row.request as Row : {};
+  const request = readObject(row.request);
   const input = request.input && typeof request.input === 'object' ? request.input as Row : request;
   const command = input.command;
   const diff = input.diff ?? input.patch ?? request.changes ?? request.fileChanges;
-  return <><p>Run: <a href={`/c/${encodeURIComponent(getConversation(row, state))}`}>{readText(row.run_id) || 'Unknown run'} · Evidence</a></p>
-    {run && <a href={`/c/${encodeURIComponent(getConversation(row, state))}`} style={run.state === 'unknown' ? { display: 'block', border: '1px dashed gray' } : undefined}>
-      {run.state === 'unknown' ? `Unknown · ${readText(run.last_evidence) || 'Evidence unavailable'} · ${readText(run.last_evidence_ts) || 'Time unavailable'} · ${readText(run.reason) || 'Reason unavailable'}`
-        : run.state === 'failed' ? `Failed · ${readText(run.cause)}`
-          : run.state === 'ended' ? `Ended · ${readText(run.end_evidence)}` : readText(run.state)}
-    </a>}
+  const status = executionStates.includes(run?.state as ExecutionState) ? run!.state as ExecutionState : 'unknown';
+  const evidence = readObject(status === 'ended' ? run?.end_evidence : run?.last_evidence);
+  return <><p>Run: <AppLink to={`/c/${encodeURIComponent(getConversation(row, state))}`}>{readText(row.run_id) || 'Unknown run'} · Evidence</AppLink></p>
+    <StateBadge state={status} evidenceUrl={`/c/${encodeURIComponent(getConversation(row, state))}`}
+      evidence={readText(evidence.kind ?? evidence.fact_id) || undefined}
+      evidenceTime={run?.last_evidence_ts ? <time dateTime={readText(run.last_evidence_ts)}>{readText(run.last_evidence_ts)}</time> : undefined}
+      reason={readText(run?.cause ?? run?.reason) || undefined}/>
     {command !== undefined && <pre aria-label="Full command" style={{ whiteSpace: 'pre-wrap' }}>{readText(command)}</pre>}
     {diff !== undefined && <pre aria-label="Expanded file diff" style={{ whiteSpace: 'pre-wrap' }}>{readText(diff)}</pre>}
     {(input.old_string !== undefined || input.new_string !== undefined) && <pre aria-label="Expanded file diff" style={{ whiteSpace: 'pre-wrap' }}>

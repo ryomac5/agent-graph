@@ -31,6 +31,7 @@ export type AppendResult = {
   incoming_payload_hash: string;
 };
 export interface Ledger {
+  getRedactionRules(): RedactionRules;
   append(input: FactInput): AppendResult;
   readSince(seq: number, limit: number): Fact[];
   purgePayloads(before: string): number;
@@ -149,6 +150,9 @@ export function openLedger(path: string, options: LedgerOptions = {}): Ledger {
     }
   }
   return {
+    getRedactionRules() {
+      return { ...rules, patterns: rules.patterns?.map((pattern) => typeof pattern === "string" ? pattern : new RegExp(pattern.source, pattern.flags)) };
+    },
     append(input) {
       assertInput(input);
       // JSON 化で toJSON 等を解決してから秘匿する。生の本文は SQLite に渡さない。

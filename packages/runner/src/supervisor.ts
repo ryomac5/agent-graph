@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { setImmediate } from "node:timers/promises";
 import type { Fact, FactInput, Provider } from "../../core/src/ledger/facts.ts";
 import type { Ledger } from "../../core/src/ledger/ledger.ts";
 import { projectApprovals } from "../../core/src/ledger/projections/approvals.ts";
@@ -8,16 +9,20 @@ import type { ConversationPayload } from "../../core/src/ledger/facts.ts";
 import type { AgentHost, HostEvent, RunHandle, StartRequest, ResumeRequest, ForkRequest } from "./host/contract.ts";
 import type { RunnerEvent } from "./socket.ts";
 import { recordWorktree } from "./worktree.ts";
-import { finalizeArtifacts, type ArtifactOptions } from "./artifacts/index.ts";
+import { finalizeArtifactsAsync, type ArtifactOptions } from "./artifacts/index.ts";
 
 const ACTIVE_STATES = new Set(["starting", "running", "waiting_approval", "waiting_input"]);
 const TERMINAL_DELEGATIONS = new Set(["done", "failed", "interrupted", "denied"]);
 const READ_BATCH_SIZE = 1000;
+const CAPTURE_DEBOUNCE_MS = 25;
+const EVENTS_PER_TICK = 2;
 export interface UpdateStatus { activeRuns: number; activeDelegations: number }
 
 export class Supervisor {
   private hosts = new Map<Provider, AgentHost>();
   private tasks = new Map<string, Promise<void>>();
+  private captures = new Map<string, Promise<void>>();
+  private pendingCaptures = new Set<string>();
   private openRuns = new Set<string>();
   private facts: Fact[] = [];
   private epoch = randomUUID();
@@ -167,16 +172,25 @@ export class Supervisor {
   }
   private async consume(provider: Provider, request: StartRequest, handle: RunHandle): Promise<void> {
     let exited = false;
+    let eventsSinceYield = 0;
     try {
       for await (const event of handle.events) {
         this.recordEvent(provider, request, event);
         if (event.type === "exit") { exited = true; break; }
+        // 溜まった通知でも台帳への連続書き込みでタイマーを止めない。
+        if (++eventsSinceYield === EVENTS_PER_TICK) {
+          await setImmediate();
+          eventsSinceYield = 0;
+        }
       }
       if (!exited) this.recordEvent(provider, request, { type: "state", state: "unknown", reason: "host_stream_closed_without_exit" });
     } catch (error) {
       this.recordEvent(provider, request, { type: "state", state: "unknown", reason: error instanceof Error ? error.message : String(error) });
       throw error;
-    } finally { this.openRuns.delete(request.runId); }
+    } finally {
+      this.openRuns.delete(request.runId);
+      await this.captures.get(request.runId);
+    }
   }
   private recordEvent(provider: Provider, request: StartRequest, event: HostEvent): void {
     if (event.type === "delta") {
@@ -208,14 +222,23 @@ export class Supervisor {
     if (event.type === "exit" || event.state === "idle") this.captureArtifacts(provider, request);
   }
   private captureArtifacts(provider: Provider, request: StartRequest): void {
+    this.pendingCaptures.add(request.runId);
+    if (this.captures.has(request.runId)) return;
+    const task = (async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, CAPTURE_DEBOUNCE_MS));
+      while (this.pendingCaptures.delete(request.runId)) await this.captureLatest(provider, request);
+    })().finally(() => this.captures.delete(request.runId));
+    this.captures.set(request.runId, task);
+  }
+  private async captureLatest(provider: Provider, request: StartRequest): Promise<void> {
+    const facts = this.readFacts();
+    if (projectEntityRecords<{ type: string; from_id: string }>(facts, "relation")
+      .some((relation) => relation.type === "review_of" && relation.from_id === request.conversationId)) return;
     const stamp = this.stamp();
     const before = this.readFacts().at(-1)?.seq;
     try {
-      const delegation = projectDelegations(this.readFacts()).find((item) => item.attempts.some((attempt) => attempt.run_id === request.runId));
-      const attempt = delegation?.attempts.find((item) => item.run_id === request.runId);
-      finalizeArtifacts(this.ledger, { runId: request.runId, provider,
-        sourceEventId: stamp.source_event_id, sourceTs: stamp.source_ts,
-        ...(delegation && attempt ? { artifactId: `${delegation.request_id}:${attempt.attempt}` } : {}) }, this.options.artifacts);
+      await finalizeArtifactsAsync(this.ledger, { runId: request.runId, provider,
+        sourceEventId: stamp.source_event_id, sourceTs: stamp.source_ts }, this.options.artifacts);
     } catch (error) {
       // 成果物の失敗は host の終了根拠とイベントの読み取りを変えない。
       this.append({ ...stamp, source: `host-${provider}`, kind: "run.updated", subject: `run:${request.runId}`,

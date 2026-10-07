@@ -1,22 +1,21 @@
-import { execFileSync, spawnSync } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { decide, type DecisionInput } from "../../../core/src/assign/assign.ts";
 import { loadPolicy } from "../../../core/src/assign/policy.ts";
 import { runAcceptance } from "../../../core/src/accept/run.ts";
 import type { Assignment, DelegateResult } from "../../../core/src/delegate/types.ts";
 import { fingerprintRequest, retryStatus, transitionStatus, validateRequest, type IntakeRequest, type IntakeStatus } from "../../../core/src/intake/index.ts";
-import type { ArtifactPayload, ConversationPayload, Fact, FactInput, FindingPayload, JsonValue, RunPayload } from "../../../core/src/ledger/facts.ts";
+import type { ConversationPayload, Fact, FactInput, FindingPayload, JsonValue, RunPayload } from "../../../core/src/ledger/facts.ts";
 import type { Ledger } from "../../../core/src/ledger/ledger.ts";
 import { projectDelegations, projectEntityRecords } from "../../../core/src/ledger/projections/delegations.ts";
 import type { RunnerRuntime } from "../runtime.ts";
 import type { RunnerEvent, SocketRequest } from "../socket.ts";
 import type { WorktreeRecord } from "../worktree.ts";
 import type { StartRequest } from "../host/contract.ts";
+import { finalizeArtifactsAsync } from "../artifacts/index.ts";
 import { ReviewFlow } from "../review/index.ts";
 import { buildReviewPrompt, parseReviewResult, REVIEW_OUTPUT_SCHEMA } from "./review.ts";
 
 function json(value: unknown): JsonValue { return JSON.parse(JSON.stringify(value)) as JsonValue; }
-function git(cwd: string, ...args: string[]): string { return execFileSync("git", args, { cwd, encoding: "utf8" }); }
 const READ_BATCH_SIZE = 1000;
 const TURN_CHECK_INTERVAL_MS = 500;
 interface StoredRequest { request?: IntakeRequest; request_hash?: string }
@@ -228,22 +227,12 @@ export class Intake {
       && (evidence.outcome === "interrupted" || evidence.status === "interrupted")) throw new Error("interrupted");
     if (run?.state !== "ended") throw new Error(run?.state === "unknown" || run?.reason === "interrupted" ? "interrupted" : run?.cause ?? "Run failed");
   }
-  private captureArtifact(runId: string, verification: unknown): ArtifactPayload {
+  private async captureArtifact(runId: string) {
     const run = this.readRun(runId);
-    const cwd = run.cwd!;
-    const base = run.base_sha!;
-    const untracked = git(cwd, "ls-files", "--others", "--exclude-standard", "-z").split("\0").filter(Boolean);
-    let diff = git(cwd, "diff", "--binary", base, "--");
-    for (const file of untracked) {
-      const result = spawnSync("git", ["diff", "--no-index", "--binary", "--", "/dev/null", file], { cwd, encoding: "utf8" });
-      if (result.error) throw result.error;
-      if (result.status !== 0 && result.status !== 1) throw new Error(result.stderr);
-      diff += result.stdout;
-    }
-    return { run_id: runId, version: 1, repository_id: run.repository_id!, worktree_id: run.worktree_id!,
-      base_sha: base, head_sha: git(cwd, "rev-parse", "HEAD").trim(), patch_hash: createHash("sha256").update(diff).digest("hex"),
-      untracked, commits: git(cwd, "rev-list", `${base}..HEAD`).trim().split("\n").filter(Boolean),
-      attribution: run.attribution, verification: json(verification), diff };
+    const provider = this.records<ConversationPayload>("conversation").find((item) => item.id === run.conversation_id)!.provider!;
+    const artifact = await finalizeArtifactsAsync(this.ledger, { runId, provider, sourceEventId: randomUUID(), sourceTs: new Date().toISOString() }, { blobDirectory: this.options.reviewBlobDirectory });
+    if (!artifact) throw new Error("Artifact unavailable");
+    return artifact;
   }
   private async execute(requestId: string, recovering = false): Promise<void> {
     let result: DelegateResult | undefined;
@@ -268,13 +257,14 @@ export class Intake {
         this.change(requestId, "verifying");
       }
       const tree = this.readRun(runId);
-      const acceptance = await runAcceptance({ commands: request.accept, cwd: tree.cwd!, scope: request.scope, baseRef: tree.base_sha,
+      const fixedArtifact = await this.captureArtifact(runId);
+      const acceptance = await runAcceptance({ commands: request.accept, cwd: tree.cwd!, scope: request.scope, baseRef: fixedArtifact.base_sha,
         timeoutMs: request.timeoutSec === undefined ? undefined : request.timeoutSec * 1000 });
-      const artifactId = `${requestId}:${attempt}`;
-      const existingArtifact = this.records<ArtifactPayload>("artifact").find((a) => a.id === artifactId);
-      const artifact = existingArtifact ? existingArtifact as ArtifactPayload : this.captureArtifact(runId, acceptance);
-      if (!existingArtifact) this.write("artifact.version_created", `artifact:${artifactId}`, artifact);
-      if (this.captureArtifact(runId, acceptance).patch_hash !== artifact.patch_hash) throw new Error("Artifact changed after verification");
+      const captured = await this.captureArtifact(runId);
+      if (captured.patch_hash !== fixedArtifact.patch_hash) throw new Error("Artifact changed after verification");
+      const artifact = { ...captured, verification: json(acceptance) };
+      const artifactId = artifact.id;
+      this.write("artifact.updated", `artifact:${artifactId}`, { verification: acceptance });
       result = { delegationId: requestId, traceId: requestId, spanId: runId, status: "failed", assignment: selected.assignment,
         output: this.readOutput(runId), acceptance, usage: { inputTokens: 0, outputTokens: 0 }, roundTrips: 0 };
       this.write("delegation.attempt_created", `delegation:${requestId}`, { attempt, verification: acceptance });
@@ -301,7 +291,7 @@ export class Intake {
       const output = this.readOutput(reviewRunId);
       const review = parseReviewResult(output);
       // 検証後の変更を承認に使わない。
-      if (this.captureArtifact(runId, acceptance).patch_hash !== artifact.patch_hash) throw new Error("Artifact changed during review");
+      if ((await this.captureArtifact(runId)).patch_hash !== artifact.patch_hash) throw new Error("Artifact changed during review");
       result.review = { verdict: review.verdict as "approve" | "request_changes", comment: review.comment, reviewer: savedReview?.assignment ?? reviewer.assignment };
       result.status = review.verdict === "approve" ? "done" : "failed";
       this.write("delegation.attempt_created", `delegation:${requestId}`, { attempt,

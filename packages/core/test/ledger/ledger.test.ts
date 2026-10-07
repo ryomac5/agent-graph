@@ -6,11 +6,55 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import type { TestContext } from "node:test";
-import { createFactId, openLedger, SCHEMA_VERSION, STORAGE_SCOPES } from "../../src/ledger/index.ts";
+import { applyIncremental, createFactId, openLedger, rebuild, SCHEMA_VERSION, STORAGE_SCOPES } from "../../src/ledger/index.ts";
 import type { FactInput, Ledger, LedgerOptions } from "../../src/ledger/index.ts";
 
 const SOURCE_TS = "2026-01-01T00:00:00.000Z";
 const SECRET = `sk-proj-${"FakeOnlyNeverIssued".repeat(5)}`;
+
+test("投影の確定は同期とチェックポイントを繰り返さず、成功と失敗の後に接続設定を戻す", (t) => {
+  const { path, ledger } = createFixture(t);
+  const database = new DatabaseSync(path);
+  t.after(() => database.close());
+  database.exec("PRAGMA synchronous = FULL; PRAGMA wal_autocheckpoint = 37");
+  const exec = database.exec.bind(database);
+  let commits = 0;
+  database.exec = (sql: string) => {
+    if (sql === "COMMIT") {
+      assert.equal(database.prepare("PRAGMA synchronous").get()!.synchronous, 1);
+      assert.equal(database.prepare("PRAGMA wal_autocheckpoint").get()!.wal_autocheckpoint, 0);
+      commits++;
+    }
+    return exec(sql);
+  };
+  function assertRestored(): void {
+    assert.equal(database.prepare("PRAGMA synchronous").get()!.synchronous, 2);
+    assert.equal(database.prepare("PRAGMA wal_autocheckpoint").get()!.wal_autocheckpoint, 37);
+  }
+  ledger.append(createInput());
+  const state = applyIncremental(database, 0);
+  assertRestored();
+  assert.equal(database.prepare("PRAGMA cache_size").get()!.cache_size, -64 * 1024);
+  rebuild(database);
+  assertRestored();
+  assert.equal(commits, 2);
+  assert.throws(() => applyIncremental(database, state.last_seq + 1), RangeError);
+  assertRestored();
+  ledger.append(createInput("after-failure"));
+  applyIncremental(database, state.last_seq);
+  assertRestored();
+  assert.equal(database.prepare("SELECT count(*) AS count FROM messages").get()!.count, 2);
+});
+
+test("投影用キャッシュは接続ごとに設定し、既に大きいキャッシュを縮めない", (t) => {
+  const { path, ledger } = createFixture(t);
+  const database = new DatabaseSync(path);
+  t.after(() => database.close());
+  database.exec("PRAGMA cache_size = -131072");
+  ledger.append(createInput());
+  applyIncremental(database, 0);
+  assert.equal(database.prepare("PRAGMA cache_size").get()!.cache_size, -131072);
+});
 
 function createFixture(t: TestContext, options: LedgerOptions = {}): { path: string; dir: string; ledger: Ledger } {
   const dir = mkdtempSync(join(tmpdir(), "agent-graph-ledger-"));
@@ -337,4 +381,15 @@ test("追加の秘匿規則が本文のキー名を変えても保存範囲を�
   });
   ledger.append(createInput("renamed-key", "OmittedBodyUnique"));
   assertAbsentOnDisk(dir, ["OmittedBodyUnique"]);
+});
+
+test("取得した秘匿規則の変更は台帳の保存規則を変えない", (t) => {
+  const { ledger } = createFixture(t, { redactionRules: { defaults: false, patterns: [/private-value/i] } });
+  const rules = ledger.getRedactionRules();
+  rules.defaults = true;
+  rules.patterns = [];
+  ledger.append(createInput("custom", "PRIVATE-VALUE"));
+  assert.ok(!JSON.stringify(ledger.readSince(0, 100)).includes("PRIVATE-VALUE"));
+  assert.equal(ledger.getRedactionRules().defaults, false);
+  assert.equal((ledger.getRedactionRules().patterns![0] as RegExp).source, "private-value");
 });

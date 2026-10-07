@@ -10,6 +10,7 @@ export interface GitAttributionEvidence {
   head_sha: string;
   dedicated_worktree?: boolean;
   range_commits?: string[];
+  uncommitted_changes?: boolean;
   commit_result?: { success: boolean; head_sha?: string; help?: boolean };
   shared_command?: { success: boolean; matched_run_id: string; head_sha?: string; help?: boolean };
   concurrent_run_ids?: string[];
@@ -27,7 +28,7 @@ export function classifyGitAttribution(artifact: Partial<ArtifactPayload>, evide
     && item.repository_id === artifact.repository_id && item.worktree_id === artifact.worktree_id
     && item.base_sha === artifact.base_sha && item.head_sha === artifact.head_sha);
   if (matching.some((item) => new Set(item.concurrent_run_ids).size > 1 && item.concurrent_run_ids?.includes(item.run_id))) return "joint";
-  if (matching.some((item) => (item.dedicated_worktree && item.range_commits?.includes(item.head_sha))
+  if (matching.some((item) => (item.dedicated_worktree && (item.range_commits?.includes(item.head_sha) || item.uncommitted_changes))
     || (item.dedicated_worktree !== false && item.commit_result?.success && !item.commit_result.help && item.commit_result.head_sha === artifact.head_sha))) return "confirmed";
   const hasSharedResult = (item: GitAttributionEvidence) => (item.shared_command?.success && !item.shared_command.help
     && item.shared_command.matched_run_id === item.run_id && item.shared_command.head_sha === artifact.head_sha)

@@ -1,9 +1,12 @@
+import { compareEventOrder } from '../../../../core/src/ledger/event-order.ts';
 import type { Row } from './store.ts';
 
 export const MESSAGE_PAGE_SIZE = 200;
 export interface ConversationPageData { generation: number; projection: Record<string, Row[]>; next: string | null }
 export function compareMessages(a: Row, b: Row): number {
-  return String(a.source_ts ?? '').localeCompare(String(b.source_ts ?? '')) || String(a.id).localeCompare(String(b.id));
+  // 同じ時刻の発言は core と同じ順序で並べる。旧い Codex の行の位置は数として比べる。
+  return String(a.source_ts ?? '').localeCompare(String(b.source_ts ?? ''))
+    || compareEventOrder(String(a.source_event_id ?? ''), String(b.source_event_id ?? '')) || compareEventOrder(String(a.id), String(b.id));
 }
 export async function fetchProjection<T>(path: string, signal?: AbortSignal, base = window.location.origin, token?: string): Promise<T> {
   const response = await fetch(new URL(path, base), { signal, headers: {

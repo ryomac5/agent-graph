@@ -1,4 +1,5 @@
 import type { Fact } from "../facts.ts";
+import { compareEventOrder } from "../event-order.ts";
 import { getMessageText, projectMessages } from "./messages.ts";
 import type { MessageProjection } from "./messages.ts";
 import { projectNames } from "./names.ts";
@@ -135,7 +136,7 @@ export function collectProvisionalNames(projection: Pick<MessageProjection, "mes
   }
   const provisionalNames = new Map<string, string>();
   const orderedMessages = [...messages].sort((left, right) => Date.parse(left.source_ts) - Date.parse(right.source_ts)
-    || compareText(left.source_event_id, right.source_event_id) || compareText(left.id, right.id));
+    || compareEventOrder(left.source_event_id, right.source_event_id) || compareText(left.id, right.id));
   for (const message of orderedMessages) {
     const ids = conversationsByMessage.get(message.id);
     if (!ids || [...ids].every(id => provisionalNames.has(id))) continue;
@@ -160,9 +161,11 @@ export function projectConversations(
     const task = conversation.task_id ? tasksById.get(conversation.task_id) : undefined;
     const provisionalName = provisionalNames.get(conversation.id) || null;
     const explicitName = (conversation as ProjectedConversation).name;
-    const name = conversation.type === "unattended" ? null
+    // 無人実行は確定した名前を持たず、依頼の抜粋を仮の名前にする。
+    const unattended = conversation.type === "unattended";
+    const name = unattended ? provisionalName
       : conversation.type === "subagent" ? explicitName ?? task?.name ?? null : task?.name ?? explicitName ?? provisionalName;
-    return { ...conversation, name, name_is_provisional: name !== null && !explicitName && !task?.name,
+    return { ...conversation, name, name_is_provisional: name !== null && (unattended || !explicitName && !task?.name),
       first_request_excerpt: provisionalName };
   });
   const relations = projectRelations(facts);

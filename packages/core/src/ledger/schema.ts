@@ -1,3 +1,4 @@
+import { encodeEventOrder } from "./event-order.ts";
 import type { DatabaseSync } from "node:sqlite";
 import { createProjectionStorage, PROJECTION_STORAGE_TABLES, PROJECTION_STORAGE_INDEXES } from "./projections/storage.ts";
 import { projectConversations, encodeNameOrder, extractMessageName } from "./projections/conversations.ts";
@@ -9,7 +10,7 @@ import type { Fact, JsonValue } from "./facts.ts";
 import { collectProjectionDependencies } from "./projections/dependencies.ts";
 import { initializeSearch, refreshSearch } from "./search.ts";
 
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 export const FACT_SCHEMA_VERSION = 1;
 export const FACTS_DDL = `CREATE TABLE facts (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -144,7 +145,7 @@ function migrateToVersion2(db: DatabaseSync): void {
   }
   const insert = db.prepare("INSERT INTO message_name_inputs VALUES (?, ?, ?, ?, ?)");
   for (const message of projectMessages(facts).messages) {
-    insert.run(message.id, Date.parse(message.source_ts), encodeNameOrder(message.source_event_id),
+    insert.run(message.id, Date.parse(message.source_ts), encodeNameOrder(encodeEventOrder(message.source_event_id)),
       extractMessageName(message), encodeNameOrder(message.id));
   }
   db.exec(`INSERT INTO conversation_name_candidates
@@ -181,11 +182,16 @@ function migrateToVersion4(db: DatabaseSync): void { initializeSearch(db); refre
 // 会話に依頼の抜粋の列を足し、名前の規則の変更を既存の発言に当て直す。発言の全体は再投影しない。
 function migrateToVersion5(db: DatabaseSync): void {
   db.exec("ALTER TABLE conversations ADD COLUMN first_request_excerpt TEXT");
+  refreshConversationNames(db);
+}
+// 無人実行にも依頼の抜粋を仮の名前として付ける。版 5 で当て直した台帳にも同じ規則を当てる。
+function migrateToVersion6(db: DatabaseSync): void { refreshConversationNames(db); }
+function refreshConversationNames(db: DatabaseSync): void {
   db.exec("DELETE FROM message_name_inputs; DELETE FROM conversation_name_candidates");
   const insert = db.prepare("INSERT INTO message_name_inputs VALUES (?, ?, ?, ?, ?)");
   for (const row of db.prepare("SELECT id, role, body, source_ts, source_event_id FROM messages").iterate()) {
     const body = row.body === null ? undefined : JSON.parse(String(row.body)) as JsonValue;
-    insert.run(String(row.id), Date.parse(String(row.source_ts)), encodeNameOrder(String(row.source_event_id)),
+    insert.run(String(row.id), Date.parse(String(row.source_ts)), encodeNameOrder(encodeEventOrder(String(row.source_event_id))),
       extractMessageName({ role: row.role === null ? null : String(row.role), body }), encodeNameOrder(String(row.id)));
   }
   db.exec(`INSERT INTO conversation_name_candidates
@@ -212,7 +218,7 @@ function migrateToVersion5(db: DatabaseSync): void {
     records?.run(JSON.stringify(conversation), conversation.id);
   }
 }
-const MIGRATIONS = [migrateToVersion1, migrateToVersion2, migrateToVersion3, migrateToVersion4, migrateToVersion5] as const;
+const MIGRATIONS = [migrateToVersion1, migrateToVersion2, migrateToVersion3, migrateToVersion4, migrateToVersion5, migrateToVersion6] as const;
 
 export function initializeSchema(db: DatabaseSync): void {
   db.exec("BEGIN IMMEDIATE");

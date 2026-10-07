@@ -1,3 +1,4 @@
+import { compareMessages } from '../lib/projection-client.ts';
 import { conversationTitle, isProvisionalName, readTitle } from '../lib/format.ts';
 import { getRegisteredProjects, isTemporaryPath, OTHER_PROJECT } from '../lib/projects.ts';
 import type { Row, ScreenState } from '../lib/store.ts';
@@ -68,7 +69,7 @@ export function selectActivities(state: ScreenState, parallel = false): Activity
     const history = (memberships.get(conversationId) ?? []).flatMap(link => {
       const message = messages.get(readText(link.message_id));
       return message ? [message] : [];
-    }).sort((a, b) => readText(a.source_ts).localeCompare(readText(b.source_ts)) || readText(a.id).localeCompare(readText(b.id)));
+    }).sort(compareMessages);
     const orderedRuns = [...(runs.get(conversationId) ?? [])].sort((a, b) => Number(b.generation ?? 0) - Number(a.generation ?? 0) || readText(b.started_ts).localeCompare(readText(a.started_ts)));
     const displayedRuns = parallel ? orderedRuns.filter(run => Number(run.generation ?? 0) === Number(orderedRuns[0]?.generation ?? 0)) : orderedRuns.slice(0, 1);
     // 名前は core の投影の値をそのまま出す。名前がなければ provider と始まりの時刻で呼ぶ。

@@ -437,7 +437,8 @@ CREATE TABLE facts (
 | 種別 | `interactive`、`unattended`、`subagent` |
 | 履歴形式 | Claude は `jsonl`。Codex は `legacy` と `paginated` |
 
-- 種別が `unattended` の会話には名前を付けない。Codex の `source=exec` と Claude の `sdk-cli` がこれに当たる
+- 無人実行は、依頼の抜粋を仮の名前にする。確定した名前は持たない
+- 種別が `unattended` の会話が無人実行である。Codex の `source=exec` と Claude の `sdk-cli` がこれに当たる
 - 履歴形式が未対応の会話は、本文がないことを理由に隠さない。形式の名前と一緒に一覧に出す
 
 #### 関係
@@ -786,7 +787,7 @@ ChatGPT アプリが動かす app-server は、専用の接続であり、外か
 ### 無人実行の扱い
 
 - Codex の `source=exec` と、Claude の `sdk-cli` による起動は、種別を `unattended` にする
-- 無人実行は、名前を付けず作業を作らない
+- 無人実行は、確定した名前を付けず作業を作らない
 - 受付の依頼 ID で子と結べるものは、委譲として親につなぐ
 - 結べないものは、独立した会話として一覧の別の区画に置く
 
@@ -1507,7 +1508,7 @@ planner の子は、外部と通信できず、キーチェーンも読めない
 | S4 | Claude の独立 fork、同時 fork、compact、共有の発言 UUID | 共有の発言は 1 件で、所属が複数になる。compact は新しい会話を作らない |
 | S5 | agc、MCP、native の子で同じ親子を作る | 3 つの入口が同じ受付を通り、同じ形の `delegated` の関係になる |
 | S6 | Codex のホスト共有、長時間のターン、承認待ち、archive と復帰 | 承認待ちが状態に出る。archive は終了の根拠になる。復帰で新しい世代ができる |
-| S7 | 無人実行の依頼文の観測 | `source=exec` は `unattended` になり、名前が付かない |
+| S7 | 無人実行の依頼文の観測 | `source=exec` は `unattended` になり、確定した名前が付かない |
 | S8 | 同時コミット、失敗した commit、amend、共有作業ツリー、未追跡の差分 | 失敗した commit は根拠にならない。同時の変更は共同になる。未追跡は成果物に載る |
 | S9 | Codex の `legacy` と `paginated`、メタの時刻と作成時刻の不一致 | 作成時刻は内側の時刻になる。`paginated` の本文は、取得不能として示す |
 | S10 | 旧名の枝番号、並行の採番、遅延 hook、counter の更新中の障害 | 全番号が別名で読める。採番が衝突しない。旧 counter に書き込まない |

@@ -1,8 +1,9 @@
-import { DatabaseSync, type StatementSync } from "node:sqlite";
+import { DatabaseSync, type SQLOutputValue, type StatementSync } from "node:sqlite";
 import type { Fact } from "../../../core/src/ledger/facts.ts";
 import { PROJECTION_TABLES, type ProjectionState } from "../../../core/src/ledger/rebuild.ts";
 import { projectProjects } from "../../../core/src/ledger/projections/projects.ts";
 import { getMessageText } from "../../../core/src/ledger/projections/messages.ts";
+import { compareEventOrder } from "../../../core/src/ledger/event-order.ts";
 import { resolveProjectLocation } from "../../../core/src/ledger/repository.ts";
 import { createScreenIdentities, type ScreenIdentities } from './screen-identities.ts';
 import type { ObservationProgress } from "./index.ts";
@@ -188,8 +189,14 @@ export class ProjectionFeed {
   }
   private updateSummary(id: string): void {
     const count = Number(this.prepare(`SELECT count(*) AS count FROM message_memberships WHERE conversation_id = ? AND active = 1`).get(id)!.count);
-    const last = this.prepare(`SELECT m.source_ts, m.body FROM message_memberships mm JOIN messages m ON m.id = mm.message_id
-      WHERE mm.conversation_id = ? AND mm.active = 1 ORDER BY julianday(m.source_ts) DESC, m.source_event_id DESC, m.id DESC LIMIT 1`).get(id);
+    // 同じ時刻の発言は core の順序で最後を選ぶ。旧い Codex の行の位置は数として比べる。
+    const latest = this.prepare(`SELECT m.id, m.source_ts, m.source_event_id FROM message_memberships mm JOIN messages m ON m.id = mm.message_id
+      WHERE mm.conversation_id = ? AND mm.active = 1 AND julianday(m.source_ts) = (SELECT max(julianday(m2.source_ts))
+        FROM message_memberships mm2 JOIN messages m2 ON m2.id = mm2.message_id WHERE mm2.conversation_id = ? AND mm2.active = 1)`)
+      .all(id, id).reduce<Record<string, SQLOutputValue> | undefined>((best, row) => !best
+        || (compareEventOrder(String(row.source_event_id ?? ""), String(best.source_event_id ?? "")) || compareEventOrder(String(row.id), String(best.id))) > 0
+        ? row : best, undefined);
+    const last = latest && { source_ts: latest.source_ts, body: this.prepare("SELECT body FROM messages WHERE id = ?").get(latest.id!)?.body };
     const excerpt = last?.body ? getMessageText(JSON.parse(String(last.body))).slice(0, EXCERPT_LENGTH) : "";
     this.prepare("INSERT OR REPLACE INTO api_conversation_summaries VALUES (?, ?, ?, ?)").run(id, count, last?.source_ts ?? null, excerpt);
   }

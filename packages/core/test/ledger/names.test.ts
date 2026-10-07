@@ -40,7 +40,7 @@ test("割り当てを作成の事実に保存すれば、後続の作業でも�
   assert.deepEqual(allocateTaskNames([...persisted, createTask("c")]), [{ task_id: "c", name: "agent-graph-3" }]);
   assert.equal(allocateTaskNames(persisted).length, 0);
 });
-test("unattended の会話とその作業に名前を付けない", () => {
+test("unattended の会話は確定した名前を持たず、その作業も採番しない", () => {
   const facts = [createTask("task", "agent-graph", undefined, "intake"), createFact({ source: "host-codex", source_event_id: "exec", kind: "conversation.created", subject: "conversation:exec",
     payload: { provider: "codex", native_id: "exec", origin: "managed", type: "unattended", history_format: "paginated", task_id: "task" },
     source_ts: TS, confidence: "confirmed" })];

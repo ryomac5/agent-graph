@@ -440,7 +440,7 @@ test("版 4 の台帳を開くと、名前の規則を既存の発言に当て�
   assert.deepEqual(projection.prepare("SELECT id, name, name_is_provisional, first_request_excerpt FROM conversations ORDER BY id").all()
     .map((row) => ({ ...row })), [
     { id: '["codex","c"]', name: "会話の名前を直す。", name_is_provisional: 1, first_request_excerpt: "会話の名前を直す。" },
-    { id: '["codex","u"]', name: null, name_is_provisional: 0, first_request_excerpt: "会話の名前を直す。" },
+    { id: '["codex","u"]', name: "会話の名前を直す。", name_is_provisional: 1, first_request_excerpt: "会話の名前を直す。" },
   ]);
   assert.deepEqual(readTables(projection), expected);
 });
@@ -554,6 +554,24 @@ test("仮名候補の同時刻の Unicode 識別子も純粋な投影と同じ�
     assert.equal(database.prepare("SELECT name FROM conversations").get()!.name,
       project(writer.readSince(0, Number.MAX_SAFE_INTEGER)).conversations[0].name);
   }
+  const incremental = readTables(database);
+  rebuild(database);
+  assert.deepEqual(readTables(database), incremental);
+});
+
+test("仮名候補の索引も、同じ時刻の旧い rollout の行の位置を桁数によらず数として比べる", (t) => {
+  const { writer, database } = openTestLedger(t);
+  writer.append({ ...BASE, source_event_id: "rollout-c", kind: "conversation.created", subject: "conversation:c",
+    payload: { provider: "codex", native_id: "c", origin: "observed", type: "interactive", history_format: "legacy" } });
+  let cursor = applyIncremental(database, 0).last_seq;
+  for (const [offset, body] of [[104048, "後の依頼。"], [9999, "最初の依頼。"]] as const) {
+    writer.append({ ...BASE, source_event_id: `message:rollout-c.jsonl:${offset}:h:1`, kind: "message.created", subject: `message:m${offset}`,
+      payload: { provider: "codex", native_id: `m${offset}`, version: 1, role: "user", body, body_state: "stored" } });
+    writer.append({ ...BASE, source_event_id: `member-${offset}`, kind: "message_membership.created",
+      subject: `message_membership:${offset}`, payload: { message_id: `m${offset}`, conversation_id: "c", active: true } });
+    cursor = applyIncremental(database, cursor).last_seq;
+  }
+  assert.equal(database.prepare("SELECT name FROM conversations").get()!.name, "最初の依頼。");
   const incremental = readTables(database);
   rebuild(database);
   assert.deepEqual(readTables(database), incremental);

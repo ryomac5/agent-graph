@@ -1,3 +1,4 @@
+import { compareMessages } from '../../lib/projection-client.ts';
 import { useEffect, useRef, useState } from 'react';
 import { AppLink } from '../../components/AppLink.tsx';
 import { StateBadge, type ExecutionState } from '../../components/StateBadge.tsx';
@@ -46,7 +47,7 @@ function ConversationTail({ row, state }: { row: Row; state: ScreenState }) {
   const memberships = new Set((state.projection.message_memberships ?? [])
     .filter(link => link.conversation_id === conversation && link.active === 1).map(link => link.message_id));
   const messages = (state.projection.messages ?? []).filter(message => memberships.has(message.id))
-    .sort((a, b) => readText(a.source_ts).localeCompare(readText(b.source_ts)) || readText(a.id).localeCompare(readText(b.id)))
+    .sort(compareMessages)
     .slice(-TAIL_LIMIT);
   const deltas = Object.values(state.deltas).filter(delta => delta.runId === row.run_id);
   return <details className="disclosure"><summary><Icon name="chevronRight" size={12} className="caret"/>Conversation tail</summary>

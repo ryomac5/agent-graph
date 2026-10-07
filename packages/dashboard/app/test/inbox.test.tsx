@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, expect, it, onTestFinished, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { Inbox } from '../src/pages/inbox/Inbox.tsx';
 import { answerApproval } from '../src/pages/inbox/model.ts';
@@ -21,12 +21,16 @@ function approval(id: string, overrides: Row = {}): Row {
     available_decisions: ['accept', 'decline', 'acceptForSession'], request: { command: 'printf "full command"\necho next', diff: '-old\n+new' }, ...overrides };
 }
 it('orders all projects oldest first, displays commands, expanded diffs, wait and conversation tail', () => {
+  // 待ち時間は今の時刻に依存するため、時計を固定する。
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date(Date.parse(NOW) + 42_000));
+  onTestFinished(() => { vi.useRealTimers(); });
   setup([approval('new', { project: 'p2', requested_ts: '2026-10-07T11:00:00Z' }), approval('old', { project: 'p1' })]);
   const list = screen.getByRole('list', { name: 'Pending approvals' });
   expect(within(list).getAllByRole('listitem').map(item => item.dataset.approvalId)).toEqual(['old', 'new']);
   expect(screen.getAllByLabelText('Full command')[0].textContent).toBe('printf "full command"\necho next');
   expect(screen.getAllByLabelText('Expanded file diff')[0].textContent).toBe('-old\n+new');
-  expect(screen.getAllByText(/Waiting:/)[0].textContent).toMatch(/\d+s/);
+  expect(screen.getAllByText(/Waiting:/)[0].textContent).toBe('Waiting: 42s');
   fireEvent.click(screen.getAllByText('Conversation tail')[0]);
   expect(screen.getAllByText('Please review this change.')).toHaveLength(2);
 });

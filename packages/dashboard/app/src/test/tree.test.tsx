@@ -123,19 +123,22 @@ it('synchronizes selections, shows navigation and attempt history, and sends the
   fireEvent.click(within(graph).getByRole('button', { name: 'Review code' }));
   expect(within(left).getByRole('button', { name: 'Review code' }).getAttribute('aria-pressed')).toBe('true');
 });
-it('shows all attempts after retry, uses attempt-specific relation endpoints and reports retry errors', async () => {
+it('groups retry executions in one delegation node and reports retry errors', async () => {
   const target = fixture();
   const state = target.getSnapshot();
-  state.projection.runs!.push({ id: 'codex:2', conversation_id: 'codex', generation: 2, state: 'failed' });
+  state.projection.conversations!.push({ id: 'codex-retry', provider: 'codex', task_id: 'task', origin: 'managed' });
+  state.projection.runs!.push({ id: 'codex:2', conversation_id: 'codex-retry', generation: 1, state: 'failed' });
   state.projection.delegations![0]!.attempt = 2;
   state.projection.delegations![0]!.attempts = [
     { attempt: 1, run_id: 'codex:1', state: 'failed' }, { attempt: 2, run_id: 'codex:2', state: 'failed' },
   ];
-  state.projection.relations!.push({ id: 'retry', type: 'delegated', active: 1, from_id: 'origin', to_id: 'codex',
+  state.projection.relations!.push({ id: 'retry', type: 'delegated', active: 1, from_id: 'origin', to_id: 'codex-retry',
     confidence: 'confirmed', evidence: { request_id: 'implementation', attempt: 2 } });
   const tree = buildDelegationTree(state);
-  expect(tree.nodes.find(n => n.id === 'conversation:origin')!.children).toEqual(['run:codex:1', 'run:codex:2']);
-  expect(tree.nodes.find(n => n.id === 'run:codex:1')).toMatchObject({ role: 'implement', state: 'failed', label: 'Implement code · Attempt 1' });
+  expect(tree.roots).toEqual(['conversation:origin']);
+  expect(tree.nodes.find(n => n.id === 'conversation:origin')!.children).toEqual(['run:codex:2']);
+  expect(tree.nodes.find(n => n.id === 'run:codex:1')).toBeUndefined();
+  expect(tree.nodes.find(n => n.id === 'run:codex:2')!.attempts.map(attempt => attempt.run_id)).toEqual(['codex:1', 'codex:2']);
   const command = vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'retry', ok: false, error: 'Runner unavailable' }));
   render(<MemoryRouter><TreePage project={PROJECT} target={target} client={{ command }}/></MemoryRouter>);
   fireEvent.click(within(screen.getByRole('region', { name: 'Delegation tree' })).getByRole('button', { name: 'Implement code' }));
@@ -143,6 +146,84 @@ it('shows all attempts after retry, uses attempt-specific relation endpoints and
   expect(within(detail).getByText('Attempt 2 · failed')).toBeTruthy();
   fireEvent.click(within(detail).getByRole('button', { name: 'Retry delegation' }));
   await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('Runner unavailable'));
+});
+
+it('keeps a resumed delegated conversation under its origin with two attempts and its reviewer as a child', () => {
+  const target = fixture();
+  const state = target.getSnapshot();
+  state.projection.runs!.push({ id: 'codex:2', conversation_id: 'codex', generation: 2, state: 'ended' });
+  state.projection.delegations = [state.projection.delegations[0]!];
+  state.projection.relations = [state.projection.relations[0]!, { id: 'review-of', type: 'review_of', active: 1,
+    from_id: 'claude', to_id: 'codex', confidence: 'confirmed' }];
+  const tree = buildDelegationTree(state, PROJECT);
+  expect(tree.roots).toEqual(['conversation:origin']);
+  expect(tree.unresolved).toEqual([]);
+  expect(tree.nodes.find(node => node.id === 'conversation:origin')!.children).toEqual(['run:codex:2']);
+  const implementation = tree.nodes.find(node => node.delegation?.id === 'implementation')!;
+  expect(implementation).toMatchObject({ label: 'Implement code', state: 'ended', children: ['run:claude:1'] });
+  expect(implementation.attempts).toMatchObject([
+    { attempt: 1, run_id: 'codex:1', state: 'failed' }, { attempt: 2, run_id: 'codex:2', state: 'ended' },
+  ]);
+  expect(tree.nodes.filter(node => node.conversationId === 'codex')).toHaveLength(1);
+  const graph = createGraphElements(tree);
+  expect(graph.nodes.map(node => node.id).sort()).toEqual(['conversation:origin', 'run:claude:1', 'run:codex:2']);
+  expect(graph.edges.map(edge => [edge.source, edge.target])).toEqual([
+    ['conversation:origin', 'run:codex:2'], ['run:codex:2', 'run:claude:1'],
+  ]);
+  render(<MemoryRouter><TreePage project={PROJECT} target={target}/></MemoryRouter>);
+  const left = screen.getByRole('region', { name: 'Delegation tree' });
+  expect(within(left).getAllByRole('button', { name: 'Implement code' })).toHaveLength(1);
+  fireEvent.click(within(left).getByRole('button', { name: 'Implement code' }));
+  const detail = screen.getByRole('region', { name: 'Selected node' });
+  fireEvent.click(within(detail).getByText('Attempt history'));
+  expect(within(detail).getByText('Attempt 1 · failed')).toBeTruthy();
+  expect(within(detail).getByText('Attempt 2 · ended')).toBeTruthy();
+});
+
+it.each(['running', 'ended', 'failed', 'unknown'])('uses the resumed run state %s and resolves original run aliases independently of row order', status => {
+  const state = fixture().getSnapshot();
+  state.identities = { conversations: { 'managed-thread': 'codex' }, runs: { 'original-run': 'codex:1', 'resumed-run': 'codex:2' } };
+  state.projection.delegations = [{ ...state.projection.delegations[0], state: 'done', attempts: JSON.stringify([
+    { attempt: 1, run_id: 'original-run', state: 'done', assignment: { model: 'original-model' } },
+  ]) }];
+  state.projection.runs = [
+    { id: 'codex:2', conversation_id: 'codex', generation: 2, state: status, launch: { model: { model: 'resumed-model' } } },
+    { ...state.projection.runs[0], state: 'ended' }, state.projection.runs[1],
+  ];
+  state.projection.relations = [state.projection.relations[0], { id: 'review-of', type: 'review_of', active: true,
+    from_id: 'claude', to_id: 'managed-thread', confidence: 'confirmed' }];
+  const tree = buildDelegationTree(state, PROJECT);
+  expect(tree.roots).toEqual(['conversation:origin']);
+  expect(tree.nodes.filter(node => node.conversationId === 'codex')).toHaveLength(1);
+  expect(tree.nodes.find(node => node.delegation?.id === 'implementation')).toMatchObject({
+    state: status, model: 'resumed-model', children: ['run:claude:1'],
+    attempts: [{ attempt: 1, run_id: 'codex:1', state: 'done' }, { attempt: 2, run_id: 'codex:2', state: status }],
+  });
+  for (const endpoint of ['original-run', 'resumed-run']) {
+    state.projection.relations![1]!.to_id = endpoint;
+    expect(buildDelegationTree(state, PROJECT)).toEqual(tree);
+  }
+});
+
+it('combines resume generations and intake retries without repeating recorded executions', () => {
+  const state = fixture().getSnapshot();
+  state.projection.conversations!.push({ id: 'retry', provider: 'codex', task_id: 'task', origin: 'managed' });
+  state.projection.runs!.push(
+    { id: 'codex:2', conversation_id: 'codex', generation: 2, state: 'failed' },
+    { id: 'retry:1', conversation_id: 'retry', generation: 1, state: 'ended' },
+    { id: 'retry:2', conversation_id: 'retry', generation: 2, state: 'running' },
+  );
+  state.projection.delegations![0]!.attempts = [
+    { attempt: 1, run_id: 'codex:1', state: 'failed' },
+    { attempt: 2, run_id: 'codex:2', state: 'failed' },
+    { attempt: 3, run_id: 'retry:1', state: 'done' },
+  ];
+  const tree = buildDelegationTree(state, PROJECT);
+  expect(tree.roots).toEqual(['conversation:origin']);
+  const node = tree.nodes.find(node => node.delegation?.id === 'implementation')!;
+  expect(node.attempts.map(attempt => attempt.run_id)).toEqual(['codex:1', 'codex:2', 'retry:1', 'retry:2']);
+  expect(node.children).toEqual(['run:claude:1']);
+  expect(tree.nodes.some(node => node.id === 'conversation:codex' || node.id === 'conversation:retry')).toBe(false);
 });
 it('filters other projects, renders unresolved branches and disables retry while disconnected', () => {
   const target = fixture({ relations: [] });

@@ -18,7 +18,7 @@ export function NodeSummary({ node, language = 'en' }: { node: TreeNode; languag
       evidence={evidenceLabel(run?.end_evidence ?? run?.last_evidence) || undefined}
       evidenceTime={typeof run?.last_evidence_ts === 'string' ? run.last_evidence_ts : undefined}
       reason={typeof (run?.cause ?? run?.reason) === 'string' ? String(run?.cause ?? run?.reason) : undefined} elapsed={elapsed}/>
-    <span>{ja ? '試行' : 'Attempts'} · {node.delegation ? Number(node.delegation.attempt ?? node.attempts.length) : node.kind === 'run' ? 1 : '—'}
+    <span>{ja ? '試行' : 'Attempts'} · {node.delegation ? (node.attempts.length || Number(node.delegation.attempt ?? 0)) : node.kind === 'run' ? 1 : '—'}
       {' · '}{ja ? '費用' : 'Cost'} · {node.cost === undefined ? (ja ? '不明' : 'Unknown') : `$${node.cost.toFixed(2)}`}</span>
   </div>;
 }

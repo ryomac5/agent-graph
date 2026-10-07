@@ -1,5 +1,7 @@
 import type { Row, ScreenState } from '../lib/store.ts';
 import type { ExecutionState } from './StateBadge.tsx';
+import { readBody } from '../lib/message-body.ts';
+export { readBody } from '../lib/message-body.ts';
 
 export const executionStates: ExecutionState[] = ['starting', 'running', 'waiting_approval', 'waiting_input', 'idle', 'ended', 'failed', 'unknown'];
 export type ActivitySection = 'managed' | 'external' | 'unattended' | 'unsupported';
@@ -26,7 +28,6 @@ export function decodeStoredValue(value: unknown): unknown {
   // api の snapshot は SQLite の JSON 列を文字列のまま返す。
   try { return JSON.parse(value); } catch { return value; }
 }
-export function readBody(value: unknown): string { return readText(decodeStoredValue(value)); }
 function groupRows(rows: Row[], field: string): Map<string, Row[]> {
   const groups = new Map<string, Row[]>();
   for (const row of rows) {

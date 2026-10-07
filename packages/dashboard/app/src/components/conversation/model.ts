@@ -1,4 +1,5 @@
 import type { Row, ScreenState } from '../../lib/store.ts';
+export { readBody } from '../../lib/message-body.ts';
 
 export function decodeStoredValue(value: unknown): unknown {
   if (typeof value !== 'string') return value;
@@ -11,12 +12,6 @@ export function readObject(value: unknown): Row {
 }
 export function readText(value: unknown): string {
   return typeof value === 'string' ? value : '';
-}
-export function readBody(value: unknown): string {
-  if (typeof value === 'string') return value;
-  if (Array.isArray(value)) return value.map(readBody).filter(Boolean).join('\n');
-  const body = readObject(value);
-  return readBody(body.text ?? body.content ?? '');
 }
 export function showValue(value: unknown): string {
   return typeof value === 'string' ? value : value === undefined || value === null ? '' : JSON.stringify(value, null, 2);

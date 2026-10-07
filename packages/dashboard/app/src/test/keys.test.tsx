@@ -200,3 +200,18 @@ it('skips unavailable commands and clamps selection when live commands change', 
   press('Enter', input);
   expect(run).toHaveBeenCalledOnce(); expect(onClose).toHaveBeenCalledOnce();
 });
+
+it('finds an active external terminal by its displayed name and opens it with Cmd+K', async () => {
+  const { target } = mount();
+  act(() => target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: {
+    conversations: { remove: [], upsert: [{ id: 'terminal', origin: 'observed', type: 'interactive', provider: 'claude', name: 'Fix the merge', repository_id: 'demo' }] },
+    runs: { remove: [], upsert: [{ id: 'terminal:1', conversation_id: 'terminal', state: 'running', generation: 1 }] },
+  } }));
+  await act(async () => {});
+  press('k', document, { metaKey: true });
+  const input = screen.getByRole('combobox', { name: 'Search commands' });
+  fireEvent.change(input, { target: { value: 'fix merge' } });
+  expect(screen.getByRole('button', { name: 'Open active conversation: Fix the merge' })).toBeTruthy();
+  press('Enter', input);
+  expect(screen.getByTestId('location').textContent).toBe('/c/terminal');
+});

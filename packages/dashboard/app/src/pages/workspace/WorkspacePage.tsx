@@ -4,7 +4,7 @@ import { store, useScreenStore, type ScreenStore } from '../../lib/store.ts';
 import type { Language } from '../../lib/i18n.ts';
 import { getProjectName, resolveProjectId } from '../../lib/projects.ts';
 import { ActivityRow, providerName } from '../../components/ActivityRow.tsx';
-import { readBody, readText, selectActivities, orderActivities, summarizeChanges } from '../../components/activity.ts';
+import { isCurrentTerminal, readBody, readText, selectActivities, orderActivities, summarizeChanges } from '../../components/activity.ts';
 import { CreateTaskForm, type CommandClient } from '../../components/CreateTaskForm.tsx';
 import { useNow } from '../../components/RelativeTime.tsx';
 import { Icon } from '../../components/Icon.tsx';
@@ -39,7 +39,7 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
   // 左の列には Files の木を常に置く。狭い画面では既定で畳み、ファイルを指す経路では開いて出す。
   const [filesOpen, setFilesOpen] = useState(() => search.has('path') || readWideScreen());
   const explorer = useFileExplorer({ client, target, project: route, enabled: filesOpen || search.has('path') });
-  const allItems = selectActivities(state, true).filter(item => item.project === project && (showTemporary || !item.temporary)).sort((a, b) =>
+  const allItems = selectActivities(state, true).filter(item => item.project === project && (item.section !== 'external' || Boolean(item.taskId || item.parentConversationId) || isCurrentTerminal(item, now)) && (showTemporary || !item.temporary)).sort((a, b) =>
     order === 'state' ? a.state.localeCompare(b.state) || a.name.localeCompare(b.name) : a.name.localeCompare(b.name));
   const items = allItems.slice(0, limit);
   const selected = items.find(item => item.id === selectedId) ?? items[0];

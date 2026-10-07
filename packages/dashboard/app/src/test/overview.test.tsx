@@ -8,7 +8,7 @@ import { TreePage } from '../pages/tree/TreePage.tsx';
 import { buildDelegationTree } from '../pages/tree/model.ts';
 import { WorkspacePage } from '../pages/workspace/WorkspacePage.tsx';
 import { ChangesPage } from '../pages/changes/ChangesPage.tsx';
-import { selectActivities } from '../components/activity.ts';
+import { RECENT_TERMINAL_WINDOW_MS, selectActivities } from '../components/activity.ts';
 import { buildOverview } from '../components/overview.ts';
 import { summarizeDelegation } from '../components/DelegationLines.tsx';
 import { conversationTitle } from '../lib/format.ts';
@@ -17,7 +17,7 @@ vi.mock('@xyflow/react', () => ({
   ReactFlow: ({ nodes }: { nodes: { id: string; data: { node: { label: string } } }[] }) => <div>{nodes.map(node => <span key={node.id}>{node.data.node.label}</span>)}</div>,
   Handle: () => null, Background: () => null, Controls: () => null, Position: { Left: 'left', Right: 'right' },
 }));
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 const HASH = '1e1eb3a5a3733554ff2741dd9174456e26a1b887216b1157d29d6903611c886b';
 const NOW = new Date().toISOString();
@@ -31,6 +31,7 @@ function projection(extra: Record<string, Row[]> = {}): Record<string, Row[]> {
       { id: 'root', provider: 'claude', origin: 'observed', type: 'interactive', name: 'Terminal root', project: HASH, last_message_ts: NOW },
       { id: 'child', provider: 'codex', origin: 'managed', type: 'interactive', name: 'Codex child' },
       { id: 'grandchild', provider: 'claude', origin: 'managed', type: 'interactive', name: 'Claude reviewer' },
+      { id: 'old-terminal', provider: 'claude', origin: 'observed', type: 'interactive', name: 'Old terminal', project: HASH },
       { id: 'lonely', provider: 'claude', origin: 'observed', type: 'interactive', name: 'Unrelated terminal', project: HASH },
       { id: 'probe', provider: 'claude', origin: 'observed', type: 'unattended', name: null },
     ],
@@ -39,6 +40,7 @@ function projection(extra: Record<string, Row[]> = {}): Record<string, Row[]> {
       { id: 'child:1', conversation_id: 'child', generation: 1, state: 'running', last_evidence_ts: EARLIER, repository_id: HASH },
       { id: 'child:2', conversation_id: 'child', generation: 2, state: 'running', last_evidence_ts: NOW, repository_id: HASH },
       { id: 'grandchild:1', conversation_id: 'grandchild', generation: 1, state: 'ended', ended_ts: NOW, started_ts: EARLIER },
+      { id: 'old-terminal:1', conversation_id: 'old-terminal', generation: 1, state: 'idle', last_evidence_ts: EARLIER },
       { id: 'lonely:1', conversation_id: 'lonely', generation: 1, state: 'running', last_evidence_ts: NOW },
       { id: 'probe:1', conversation_id: 'probe', generation: 1, state: 'ended', ended_ts: NOW, started_ts: EARLIER },
     ],
@@ -81,19 +83,20 @@ it('builds the Overview per project with the delegation tree under the task that
   const overview = buildOverview(state, selectActivities(state), buildDelegationTree(state));
   const project = overview.projects.find(group => group.id === HASH)!;
   // 外の端末から起こした作業はその会話を根にし、委譲で起きた会話は行にしない。
-  expect(project.items.map(item => item.activity.name)).toEqual(['Terminal root']);
-  const [implement] = project.items[0].delegations;
+  expect(project.items.map(item => item.activity.name)).toEqual(['Unrelated terminal', 'Terminal root']);
+  const root = project.items.find(item => item.activity.name === 'Terminal root')!;
+  const [implement] = root.delegations;
   expect(summarizeDelegation(implement)).toBe('Codex gpt-6.1-sol · implement · running · 2 attempts');
   expect(implement.children.map(line => summarizeDelegation(line))).toEqual(['Claude claude-opus · review · done · 1 attempt']);
-  expect(project.items[0].active).toBe(true);
-  expect(project.running).toBe(1);
+  expect(root.active).toBe(true);
+  expect(project.running).toBe(2);
   // 親が確定しない委譲は、その委譲のプロジェクトの別の枝に置く。
   expect(overview.projects.find(group => group.id === 'other-hash')!.unlinked.map(line => line.node.label)).toEqual(['Old kit task']);
-  expect(overview.external.map(item => item.activity.name)).toEqual(['Unrelated terminal']);
+  expect(overview.external.map(item => item.activity.name)).toEqual(['Old terminal']);
   expect(overview.unattended).toHaveLength(1);
 });
 
-it('shows each delegation as one readable line, opens active trees and keeps terminal conversations folded with counts', () => {
+it('shows active terminals above tasks and keeps older terminals folded', () => {
   render(<MemoryRouter><HomePage target={setup()}/></MemoryRouter>);
   const section = screen.getByRole('region', { name: 'agent-graph' });
   const row = within(section).getByRole('article', { name: 'Terminal root' });
@@ -104,11 +107,16 @@ it('shows each delegation as one readable line, opens active trees and keeps ter
   expect(within(row).getByText('Implement the overview')).toBeTruthy();
   expect(within(row).getByText('Review the overview').closest('li')!.classList.contains('is-stopped')).toBe(true);
   expect(within(section).queryByRole('article', { name: 'Codex child' })).toBeNull();
-  expect(section.querySelector('.section-count')!.textContent).toBe('1 running');
-  // 外の端末の会話は畳み、件数と動いている数だけを見せる。
+  expect(section.querySelector('.section-count')!.textContent).toBe('2 running');
+  // 動いている外の会話はプロジェクトの先頭に出し、古い外の会話は畳んで残す。
   const external = screen.getByRole('region', { name: 'External conversations' });
   expect(within(external).queryByRole('article')).toBeNull();
-  expect(within(external).getByText('running').closest('.section-count')!.textContent).toBe('1 running');
+  expect(within(external).queryByText('running')).toBeNull();
+  const current = within(section).getByRole('article', { name: 'Unrelated terminal' });
+  expect(within(current).getByText('Terminal')).toBeTruthy();
+  expect(section.querySelector('article')).toBe(current);
+  fireEvent.click(within(external).getByRole('button', { name: 'External conversations' }));
+  expect(within(external).getByRole('article', { name: 'Old terminal' })).toBeTruthy();
   const other = screen.getByRole('region', { name: 'dotfiles' });
   expect(other.querySelector('.delegation-fold summary')!.textContent).toBe('1 delegation without a confirmed parent');
   expect(within(other).getByText('Codex gpt-kit · implement · failed · 1 attempt')).toBeTruthy();
@@ -209,4 +217,29 @@ it('lists workspace tasks as single short lines and keeps the unknown evidence o
   const tasks = screen.getByRole('region', { name: 'Tasks' });
   expect(tasks.querySelectorAll('.activity-line').length).toBe(within(tasks).getAllByRole('article').length);
   expect(screen.queryByText(/Unknown — Last evidence/)).toBeNull();
+});
+
+it('places terminals active or within one hour in the project and workspace, keeping older terminals folded', () => {
+  const now = Date.now();
+  const target = setup({ conversations: [
+    { id: 'active', name: 'Active terminal', origin: 'observed', type: 'interactive', provider: 'claude', project: HASH },
+    { id: 'recent', name: 'Recent terminal', origin: 'observed', type: 'interactive', provider: 'claude', project: HASH },
+    { id: 'old', name: 'Older terminal', origin: 'observed', type: 'interactive', provider: 'claude', project: HASH },
+  ], runs: [
+    { id: 'active:1', conversation_id: 'active', state: 'running', last_evidence_ts: EARLIER },
+    { id: 'recent:1', conversation_id: 'recent', state: 'idle', last_evidence_ts: new Date(now - RECENT_TERMINAL_WINDOW_MS).toISOString() },
+    { id: 'old:1', conversation_id: 'old', state: 'idle', last_evidence_ts: new Date(now - RECENT_TERMINAL_WINDOW_MS - 1).toISOString() },
+  ], delegations: [] });
+  const state = target.getSnapshot();
+  const overview = buildOverview(state, selectActivities(state), buildDelegationTree(state), now);
+  expect(overview.projects.find(group => group.id === HASH)!.items.map(item => item.activity.name)).toEqual(['Active terminal', 'Recent terminal']);
+  expect(overview.external.map(item => item.activity.name)).toEqual(['Older terminal']);
+  // 作業場でも同じ境界を使う。描画にかかった時間で境界を跨がないよう時計を固定する。
+  vi.spyOn(Date, 'now').mockReturnValue(now);
+  render(<MemoryRouter><WorkspacePage project="agent-graph" target={target} client={{ command: async () => ({ type: 'ack', cmd_id: 'test', ok: true }) }}/></MemoryRouter>);
+  const tasks = screen.getByRole('region', { name: 'Tasks' });
+  expect(within(tasks).getByRole('article', { name: 'Active terminal' })).toBeTruthy();
+  expect(within(tasks).getByRole('article', { name: 'Recent terminal' })).toBeTruthy();
+  expect(within(tasks).queryByRole('article', { name: 'Older terminal' })).toBeNull();
+  expect(within(tasks).getAllByText('Terminal')).toHaveLength(2);
 });

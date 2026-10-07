@@ -121,8 +121,8 @@ for (const sample of readdirSync(SAMPLES, { withFileTypes: true }).filter((entry
 const TS = "2026-01-01T00:00:00Z";
 const BASE = { source: "host-codex", source_ts: TS, confidence: "confirmed" } as const;
 
-// 版 6 で足した列。版 5 以前の台帳を再現するときに落とす。
-const VERSION_6_COLUMNS = [["conversations", "cwd"], ["conversations", "repository_id"], ["runs", "model"], ["runs", "effort"],
+// 版 7 で足した列。版 6 以前の台帳を再現するときに落とす。
+const VERSION_7_COLUMNS = [["conversations", "cwd"], ["conversations", "repository_id"], ["runs", "model"], ["runs", "effort"],
   ["delegations", "repository_id"], ["delegations", "parent"], ["delegations", "provider"], ["delegations", "model"]] as const;
 
 test("同じ subject の成果物の版付き ID への承認も到着順と区切りによらず stale になる", (t) => {
@@ -388,7 +388,7 @@ test("版 1 の台帳に索引を移行し、既存事実と続きの投影を�
   legacy.exec("DROP TABLE conversation_name_candidates; DROP TABLE message_name_inputs; DROP INDEX membership_message; ALTER TABLE conversations DROP COLUMN name; ALTER TABLE conversations DROP COLUMN name_is_provisional; ALTER TABLE conversations DROP COLUMN first_request_excerpt");
   for (const [table, column] of [["messages", "source_ts"], ["messages", "source_event_id"], ["messages", "source"], ["messages", "confidence"],
     ["runs", "launch"], ["runs", "cwd"], ["runs", "branch"], ["approvals", "requested_ts"],
-    ...VERSION_6_COLUMNS]) legacy.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
+    ...VERSION_7_COLUMNS]) legacy.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
   legacy.prepare("UPDATE schema_version SET version = ?").run(1);
   legacy.close();
   const migrated = openLedger(path, { storageScope: "full_diff" });
@@ -437,8 +437,8 @@ test("版 4 の台帳を開くと、名前の規則を既存の発言に当て�
       FROM message_memberships m JOIN message_name_inputs n ON n.id = m.message_id WHERE n.id = '["codex","m0"]';
     UPDATE conversations SET name = '<permissions instructions>' WHERE id = '["codex","c"]';
     ALTER TABLE conversations DROP COLUMN first_request_excerpt; UPDATE schema_version SET version = 4;`);
-  // 版 6 の列も落とし、版 4 から 5 と 6 を順に通す。版の更新を記録して順序も確かめる。
-  for (const [table, column] of VERSION_6_COLUMNS) legacy.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
+  // 版 7 の列も落とし、版 4 から 5、6、7 を順に通す。版の更新を記録して順序も確かめる。
+  for (const [table, column] of VERSION_7_COLUMNS) legacy.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
   legacy.exec(`CREATE TABLE migration_steps (version INTEGER NOT NULL);
     CREATE TRIGGER record_migration AFTER UPDATE OF version ON schema_version
     BEGIN INSERT INTO migration_steps VALUES (NEW.version); END;`);
@@ -447,16 +447,16 @@ test("版 4 の台帳を開くと、名前の規則を既存の発言に当て�
   const projection = new DatabaseSync(path);
   t.after(() => { projection.close(); migrated.close(); rmSync(directory, { recursive: true }); });
   assert.equal(projection.prepare("SELECT version FROM schema_version WHERE id = 1").get()!.version, SCHEMA_VERSION);
-  assert.deepEqual(projection.prepare("SELECT version FROM migration_steps ORDER BY rowid").all().map(row => row.version), [5, 6]);
+  assert.deepEqual(projection.prepare("SELECT version FROM migration_steps ORDER BY rowid").all().map(row => row.version), [5, 6, 7]);
   assert.deepEqual(projection.prepare("SELECT id, name, name_is_provisional, first_request_excerpt FROM conversations ORDER BY id").all()
     .map((row) => ({ ...row })), [
     { id: '["codex","c"]', name: "会話の名前を直す。", name_is_provisional: 1, first_request_excerpt: "会話の名前を直す。" },
-    { id: '["codex","u"]', name: null, name_is_provisional: 0, first_request_excerpt: "会話の名前を直す。" },
+    { id: '["codex","u"]', name: "会話の名前を直す。", name_is_provisional: 1, first_request_excerpt: "会話の名前を直す。" },
   ]);
   assert.deepEqual(readTables(projection), expected);
 });
 
-test("版 5 の台帳は版 6 の移行だけを通し、版 5 の名前の当て直しを繰り返さない", (t) => {
+test("版 6 の台帳は版 7 の移行だけを通し、会話の名前の当て直しを繰り返さない", (t) => {
   const { writer, database } = openTestLedger(t);
   for (const input of ALL_ENTITIES) writer.append(input);
   writer.append({ ...BASE, source_event_id: "v5-location", kind: "conversation.updated", subject: "conversation:c",
@@ -471,16 +471,20 @@ test("版 5 の台帳は版 6 の移行だけを通し、版 5 の名前の当�
   const path = join(directory, "ledger.sqlite");
   database.prepare("VACUUM INTO ?").run(path);
   const legacy = new DatabaseSync(path);
-  // 版 5 の移行は名前の索引を作り直す。走れば消える印を索引に置き、版 6 の列だけを落とす。
+  // 版 6 までの移行は名前の索引を作り直す。走れば消える印を索引に置き、版 7 の列だけを落とす。
   legacy.exec(`INSERT INTO message_name_inputs VALUES ('sentinel', 0, '00', 'sentinel', '00');
-    UPDATE schema_version SET version = 5;`);
-  for (const [table, column] of VERSION_6_COLUMNS) legacy.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
+    UPDATE schema_version SET version = 6;`);
+  for (const [table, column] of VERSION_7_COLUMNS) legacy.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
+  legacy.exec(`CREATE TABLE migration_steps (version INTEGER NOT NULL);
+    CREATE TRIGGER record_migration AFTER UPDATE OF version ON schema_version
+    BEGIN INSERT INTO migration_steps VALUES (NEW.version); END;`);
   legacy.close();
   const migrated = openLedger(path, { storageScope: "full_diff" });
   const projection = new DatabaseSync(path);
   t.after(() => { projection.close(); migrated.close(); rmSync(directory, { recursive: true }); });
-  assert.equal(SCHEMA_VERSION, 6);
-  assert.equal(projection.prepare("SELECT version FROM schema_version WHERE id = 1").get()!.version, 6);
+  assert.equal(SCHEMA_VERSION, 7);
+  assert.deepEqual(projection.prepare("SELECT version FROM migration_steps ORDER BY rowid").all().map(row => row.version), [7]);
+  assert.equal(projection.prepare("SELECT version FROM schema_version WHERE id = 1").get()!.version, 7);
   assert.equal(projection.prepare("SELECT count(*) AS count FROM message_name_inputs WHERE id = 'sentinel'").get()!.count, 1);
   assert.deepEqual({ ...projection.prepare("SELECT cwd, repository_id FROM conversations").get() },
     { cwd: "/repo", repository_id: "repo" });
@@ -489,7 +493,7 @@ test("版 5 の台帳は版 6 の移行だけを通し、版 5 の名前の当�
   assert.deepEqual({ ...projection.prepare("SELECT repository_id, provider, model FROM delegations").get() },
     { repository_id: "repo", provider: "codex", model: "model-a" });
   projection.exec("DELETE FROM message_name_inputs WHERE id = 'sentinel'");
-  // 版 6 は列を足し、反映済みの行にも同じ規則の値を入れる。
+  // 版 7 は列を足し、反映済みの行にも同じ規則の値を入れる。
   assert.deepEqual(readTables(projection), expected);
 });
 
@@ -602,6 +606,24 @@ test("仮名候補の同時刻の Unicode 識別子も純粋な投影と同じ�
     assert.equal(database.prepare("SELECT name FROM conversations").get()!.name,
       project(writer.readSince(0, Number.MAX_SAFE_INTEGER)).conversations[0].name);
   }
+  const incremental = readTables(database);
+  rebuild(database);
+  assert.deepEqual(readTables(database), incremental);
+});
+
+test("仮名候補の索引も、同じ時刻の旧い rollout の行の位置を桁数によらず数として比べる", (t) => {
+  const { writer, database } = openTestLedger(t);
+  writer.append({ ...BASE, source_event_id: "rollout-c", kind: "conversation.created", subject: "conversation:c",
+    payload: { provider: "codex", native_id: "c", origin: "observed", type: "interactive", history_format: "legacy" } });
+  let cursor = applyIncremental(database, 0).last_seq;
+  for (const [offset, body] of [[104048, "後の依頼。"], [9999, "最初の依頼。"]] as const) {
+    writer.append({ ...BASE, source_event_id: `message:rollout-c.jsonl:${offset}:h:1`, kind: "message.created", subject: `message:m${offset}`,
+      payload: { provider: "codex", native_id: `m${offset}`, version: 1, role: "user", body, body_state: "stored" } });
+    writer.append({ ...BASE, source_event_id: `member-${offset}`, kind: "message_membership.created",
+      subject: `message_membership:${offset}`, payload: { message_id: `m${offset}`, conversation_id: "c", active: true } });
+    cursor = applyIncremental(database, cursor).last_seq;
+  }
+  assert.equal(database.prepare("SELECT name FROM conversations").get()!.name, "最初の依頼。");
   const incremental = readTables(database);
   rebuild(database);
   assert.deepEqual(readTables(database), incremental);

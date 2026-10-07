@@ -1,3 +1,4 @@
+import { encodeEventOrder } from "./event-order.ts";
 import type { DatabaseSync, SQLInputValue, StatementSync } from "node:sqlite";
 import type { Fact, JsonValue } from "./facts.ts";
 import {
@@ -188,7 +189,7 @@ function writeMessageNames(ledger: DatabaseSync, messages: readonly ProjectedMes
   for (const id of previousIds) remove.run(id);
   const insert = prepare(ledger, "INSERT OR REPLACE INTO message_name_inputs VALUES (?, ?, ?, ?, ?)");
   for (const message of messages) {
-    insert.run(message.id, Date.parse(message.source_ts), encodeNameOrder(message.source_event_id),
+    insert.run(message.id, Date.parse(message.source_ts), encodeNameOrder(encodeEventOrder(message.source_event_id)),
       extractMessageName(message), encodeNameOrder(message.id));
   }
 }

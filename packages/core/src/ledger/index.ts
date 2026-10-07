@@ -8,6 +8,7 @@ export * from "./ledger.ts";
 export * from "./schema.ts";
 export * from "./redact.ts";
 export * from "./turns.ts";
+export * from "./event-order.ts";
 export * from "./projections/index.ts";
 export { PROJECTION_TABLES, type ProjectionState } from "./rebuild.ts";
 

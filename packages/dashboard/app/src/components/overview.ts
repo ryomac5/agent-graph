@@ -2,7 +2,7 @@ import { selectRegisteredProject, OTHER_PROJECT } from '../lib/projects.ts';
 import type { ScreenState } from '../lib/store.ts';
 import { ACTIVE_EXECUTION_STATES, toExecutionState, type DelegationTree, type TreeNode } from '../pages/tree/model.ts';
 import type { ExecutionState } from './StateBadge.tsx';
-import { readText, type Activity } from './activity.ts';
+import { isCurrentTerminal, readText, type Activity } from './activity.ts';
 
 /** 委譲の 1 行。誰に何を頼み、どこまで進んだかを、展開せずに読める形にする。 */
 export interface DelegationLine {
@@ -27,10 +27,10 @@ export function countAllDelegations(lines: DelegationLine[]): number {
 
 /**
  * 一覧を設計書の形に組む。作業はプロジェクトごとの区画に置き、その下に委譲の木を付ける。
- * 外の端末の会話と無人実行は別の区画に置く。外の会話でも、作業として名前があるものと委譲を起こしたものは作業として扱う。
+ * 古い外の端末の会話と無人実行は別の区画に置く。外の会話でも、作業として名前があるものと委譲を起こしたものは作業として扱う。
  * 委譲で起きた会話は、行としては出さず、親の作業の木の中に出す。
  */
-export function buildOverview(state: ScreenState, activities: Activity[], tree: DelegationTree): Overview {
+export function buildOverview(state: ScreenState, activities: Activity[], tree: DelegationTree, now = Date.now()): Overview {
   const byId = new Map(tree.nodes.map(node => [node.id, node]));
   // レビュアーの関係は作業の子の行として出すので、委譲の行には含めない。
   const isLine = (node: TreeNode) => Boolean(node.delegation) || node.role !== 'Reviewer';
@@ -94,7 +94,7 @@ export function buildOverview(state: ScreenState, activities: Activity[], tree: 
     const item: WorkItem = { activity, delegations, active: isActiveState(activity.state) || delegations.some(line => line.active) };
     if (activity.section === 'unsupported') unsupported.push(item);
     else if (activity.section === 'unattended' && !delegations.length) unattended.push(item);
-    else if (activity.section === 'external' && !activity.taskId && !delegations.length && !activity.parentConversationId) external.push(item);
+    else if (activity.section === 'external' && !activity.taskId && !delegations.length && !activity.parentConversationId && !isCurrentTerminal(activity, now)) external.push(item);
     else group(activity.project).items.push(item);
   }
   for (const line of unresolved) {
@@ -126,7 +126,7 @@ function priority(state: string): number {
 /** 承認と入力の待ち、動いているもの、止まっているものの順にし、同じ順位では新しい順にする。 */
 export function compareItems(a: WorkItem, b: WorkItem): number {
   const rank = (item: WorkItem) => Math.max(priority(item.activity.state), item.active ? 1 : 0);
-  return rank(b) - rank(a) || lastActivity(b) - lastActivity(a) || a.activity.name.localeCompare(b.activity.name);
+  return rank(b) - rank(a) || priority(b.activity.state) - priority(a.activity.state) || lastActivity(b) - lastActivity(a) || a.activity.name.localeCompare(b.activity.name);
 }
 function compareLines(a: DelegationLine, b: DelegationLine): number {
   return priority(b.state) - priority(a.state) || Number(b.active) - Number(a.active) || a.node.label.localeCompare(b.node.label);

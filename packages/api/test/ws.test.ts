@@ -431,7 +431,7 @@ test("snapshot と /conversation と patch の会話の行に、core の投影�
     { name: row.name, name_is_provisional: row.name_is_provisional, first_request_excerpt: row.first_request_excerpt }]));
   const expected = {
     named: { name: "画面への配信を作る", name_is_provisional: true, first_request_excerpt: "画面への配信を作る" },
-    exec: { name: null, name_is_provisional: false, first_request_excerpt: "画面への配信を作る" },
+    exec: { name: "画面への配信を作る", name_is_provisional: true, first_request_excerpt: "画面への配信を作る" },
     empty: { name: null, name_is_provisional: false, first_request_excerpt: null },
   };
   assert.deepEqual(rows(feed.snapshot().projection.conversations), expected);
@@ -442,4 +442,22 @@ test("snapshot と /conversation と patch の会話の行に、core の投影�
     const detail = feed.conversation(JSON.stringify(["codex", id]));
     assert.deepEqual(rows(detail.projection.conversations), { [id]: values });
   }
+});
+
+test("同じ時刻の旧い rollout の発言は、行の位置を数として比べて最後の発言の抜粋を選ぶ", (t) => {
+  const { service, dbPath } = createFixture(t);
+  const base = { source: "rollout-codex", source_ts: "2025-08-30T15:23:40.934Z", confidence: "confirmed" } as const;
+  service.ledger.append({ ...base, source_event_id: "c-legacy", kind: "conversation.created", subject: "conversation:legacy",
+    payload: { provider: "codex", native_id: "legacy", origin: "observed", type: "interactive", history_format: "legacy" } } as FactInput);
+  for (const [offset, body] of [[9999, "最初の依頼。"], [104048, "最後の応答"]] as const) {
+    service.ledger.append({ ...base, source_event_id: `message:rollout-legacy.jsonl:${offset}:h:1`, kind: "message.created",
+      subject: `message:m${offset}`, payload: { provider: "codex", native_id: `m${offset}`, version: 1, role: offset === 9999 ? "user" : "assistant", body, body_state: "stored" } } as FactInput);
+    service.ledger.append({ ...base, source_event_id: `member-${offset}`, kind: "message_membership.created", subject: `message_membership:${offset}`,
+      payload: { message_id: `m${offset}`, conversation_id: "legacy", active: true } } as FactInput);
+  }
+  const feed = new ProjectionFeed(dbPath, service.catchUp);
+  t.after(() => feed.close());
+  const [row] = feed.snapshot().projection.conversations;
+  assert.equal(row.name, "最初の依頼。");
+  assert.equal(row.last_message_excerpt, "最後の応答");
 });

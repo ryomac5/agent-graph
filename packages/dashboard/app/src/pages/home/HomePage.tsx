@@ -126,8 +126,8 @@ export function HomePage({ target = store, client, language = 'en' }: { target?:
   const tree = useMemo(() => buildDelegationTree(state), [state]);
   const activities = useMemo(() => all.filter(item => showTemporary || !item.temporary), [all, showTemporary]);
   const overview = useMemo(() => buildOverview(state, activities.filter(item => (!status || item.state === status)
-    && (!provider || item.provider === provider) && (!project || item.project === project)), tree),
-  [state, tree, activities, status, provider, project]);
+    && (!provider || item.provider === provider) && (!project || item.project === project)), tree, now),
+  [state, tree, activities, status, provider, project, now]);
   const projects = [...getRegisteredProjects(state).map(row => String(row.id)), OTHER_PROJECT];
   // 最初に描く行は全区画で 200 行までにする。動いているものと直近のものから順に割り当てる。
   const initial = new Map<string, number>();

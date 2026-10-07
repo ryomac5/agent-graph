@@ -1,3 +1,4 @@
+import { compareMessages } from '../lib/projection-client.ts';
 import { conversationTitle, isProvisionalName, readTitle } from '../lib/format.ts';
 import { getRegisteredProjects, isTemporaryPath, OTHER_PROJECT, resolveProjectId } from '../lib/projects.ts';
 import type { Row, ScreenState } from '../lib/store.ts';
@@ -79,7 +80,7 @@ export function selectActivities(state: ScreenState, parallel = false): Activity
     const history = (memberships.get(conversationId) ?? []).flatMap(link => {
       const message = messages.get(readText(link.message_id));
       return message ? [message] : [];
-    }).sort((a, b) => readText(a.source_ts).localeCompare(readText(b.source_ts)) || readText(a.id).localeCompare(readText(b.id)));
+    }).sort(compareMessages);
     const orderedRuns = [...conversationRuns].sort((a, b) => Number(b.generation ?? 0) - Number(a.generation ?? 0) || readText(b.started_ts).localeCompare(readText(a.started_ts)));
     const displayedRuns = parallel ? orderedRuns.filter(run => Number(run.generation ?? 0) === Number(orderedRuns[0]?.generation ?? 0)) : orderedRuns.slice(0, 1);
     // 名前は core の投影の値をそのまま出す。名前がなければ provider と始まりの時刻で呼ぶ。
@@ -171,4 +172,12 @@ export function orderActivities(items: Activity[]): Activity[] {
   for (const item of items) if (!item.parentConversationId || !conversations.has(item.parentConversationId)) append(item);
   for (const item of items) append(item);
   return ordered;
+}
+
+export const RECENT_TERMINAL_WINDOW_MS = 60 * 60 * 1000;
+export const ACTIVE_STATES: readonly string[] = ['starting', 'running', 'waiting_approval', 'waiting_input'];
+/** 動いている外の端末と直近 1 時間に動いた端末を作業の列に出す。 */
+export function isCurrentTerminal(activity: Activity, now: number): boolean {
+  return activity.section === 'external' && (ACTIVE_STATES.includes(activity.state)
+    || Date.parse(activity.lastActivity ?? '') >= now - RECENT_TERMINAL_WINDOW_MS);
 }

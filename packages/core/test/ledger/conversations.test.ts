@@ -3,6 +3,7 @@ import test from "node:test";
 import type { Fact, FactInput, RelationKind } from "../../src/ledger/facts.ts";
 import { extractProvisionalName, projectConversations } from "../../src/ledger/projections/conversations.ts";
 import { projectMessages } from "../../src/ledger/projections/messages.ts";
+import { compareEventOrder } from "../../src/ledger/event-order.ts";
 import { createNativeId, projectRelations, selectConfirmedRelations } from "../../src/ledger/projections/relations.ts";
 
 const TS = "2026-01-01T00:00:00.000Z";
@@ -378,7 +379,7 @@ test("名前の規則は、同じ行の札、Codex の AGENTS.md、依頼を包�
   assert.equal(extractProvisionalName("あ".repeat(400)).length, 160);
 });
 
-test("名前と依頼の抜粋は利用者の発言だけから作り、無人実行にも抜粋を付ける", () => {
+test("名前と依頼の抜粋は利用者の発言だけから作り、無人実行は抜粋を仮の名前にする", () => {
   const message = (id: string, role: string, body: string, second: number) => createFact({ source: "rollout-codex", source_event_id: id,
     kind: "message.created", subject: `message:${id}`, payload: { provider: "codex", native_id: id, version: 1, role, body, body_state: "stored" },
     source_ts: new Date(Date.parse(TS) + second * 1000).toISOString(), confidence: "confirmed" });
@@ -392,6 +393,19 @@ test("名前と依頼の抜粋は利用者の発言だけから作り、無人�
   const named = conversations.find(row => row.native_id === "a")!;
   const unattended = conversations.find(row => row.native_id === "u")!;
   assert.deepEqual([named.name, named.name_is_provisional, named.first_request_excerpt], ["依頼の本文。", true, "依頼の本文。"]);
-  assert.deepEqual([unattended.name, unattended.name_is_provisional, unattended.first_request_excerpt], [null, false, "依頼の本文。"]);
+  assert.deepEqual([unattended.name, unattended.name_is_provisional, unattended.first_request_excerpt], ["依頼の本文。", true, "依頼の本文。"]);
   assert.deepEqual(projectConversations([...facts].reverse()).conversations, conversations);
+});
+
+test("同じ時刻の発言は、識別子に含まれる行の位置を数として比べ、桁数が違っても逆転しない", () => {
+  assert.ok(compareEventOrder("message:rollout-a.jsonl:9999:ff:1", "message:rollout-a.jsonl:104048:aa:1") < 0);
+  assert.ok(compareEventOrder("message:rollout-a.jsonl:104048:aa:1", "message:rollout-a.jsonl:9999:ff:1") > 0);
+  assert.ok(compareEventOrder("x:2", "x:10") < 0 && compareEventOrder("x:a", "x:1") > 0 && compareEventOrder("x:7", "x:7") === 0);
+  const line = (offset: number, body: string) => createFact({ source: "rollout-codex", source_event_id: `message:rollout-a.jsonl:${offset}:h:1`,
+    kind: "message.created", subject: `message:m${offset}`, payload: { provider: "codex", native_id: `m${offset}`, version: 1, role: "user", body, body_state: "stored" },
+    source_ts: TS, confidence: "confirmed" });
+  const facts = [createConversation("a"), line(104048, "後の依頼。"), line(9999, "最初の依頼。"),
+    createMembership("first", "a", "m9999"), createMembership("later", "a", "m104048")];
+  assert.equal(projectConversations(facts).conversations[0].name, "最初の依頼。");
+  assert.equal(projectConversations([...facts].reverse()).conversations[0].name, "最初の依頼。");
 });

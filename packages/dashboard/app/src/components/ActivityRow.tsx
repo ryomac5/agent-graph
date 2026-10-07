@@ -56,6 +56,7 @@ export function ActivityRow({ activity, now, language = 'en', onSelect, selected
   const title = <div className="activity-title">
     {onSelect ? <button className="activity-name" aria-current={selected ? 'true' : undefined} title={activity.firstRequest || undefined} onClick={onSelect}>{activity.name}</button>
       : <Link className="activity-name" to={url} title={activity.firstRequest || undefined}>{activity.name}</Link>}
+    {activity.section === 'external' && <span className="chip chip-quiet">{ja ? '端末' : 'Terminal'}</span>}
     {activity.provisional && <span className="chip chip-dashed">{ja ? '仮の名前' : 'Provisional'}</span>}
   </div>;
   const summary = <p className="activity-excerpt">{excerpt ? readBody(excerpt.body) || readText(excerpt.body_state) : activity.excerpt || <span className="muted-text">{ja ? '発言はまだありません' : 'No messages yet'}</span>}</p>;

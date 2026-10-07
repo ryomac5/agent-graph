@@ -17,7 +17,7 @@ import { createSearchClient, type SearchClient } from './pages/search/model.ts';
 import { Inbox } from './pages/inbox/Inbox.tsx';
 import { answerApproval, getDecision, getInbox } from './pages/inbox/model.ts';
 import { Notifications } from './components/notifications/Notifications.tsx';
-import { selectActivities } from './components/activity.ts';
+import { ACTIVE_STATES, selectActivities } from './components/activity.ts';
 import { Icon } from './components/Icon.tsx';
 import { fetchProjection } from './lib/projection-client.ts';
 import type { Row } from './lib/store.ts';
@@ -145,7 +145,7 @@ export function App({ target = store, client = unavailableClient, searchClient =
     { id: 'search', name: 'Search all conversations', run: () => navigate('/search') },
     { id: 'settings', name: 'Open Settings', run: () => navigate('/settings') },
     { id: 'create', name: 'Create task', run: () => setOverlay('create') },
-    ...(state.projection.conversations ?? []).map(row => ({ id: `conversation-${row.id}`, name: `Open conversation: ${row.name ?? row.id}`, run: () => navigate(`/c/${encodeURIComponent(String(row.id))}`) })),
+    ...(state.projection.conversations ?? []).map(row => ({ id: `conversation-${row.id}`, name: `Open ${activities.some(item => item.conversationId === row.id && ACTIVE_STATES.includes(item.state)) ? 'active ' : ''}conversation: ${activities.find(item => item.conversationId === row.id)?.name ?? row.name ?? row.id}`, run: () => navigate(`/c/${encodeURIComponent(String(row.id))}`) })),
     ...getInbox(state).pending.flatMap(row => (['allow', 'deny'] as const).map(action => ({
       id: `${action}-${row.id}`, name: `${action === 'allow' ? 'Allow' : 'Deny'} approval: ${row.id}`,
       disabled: state.connection !== 'connected' || !getDecision(row, action) || answered.current.has(String(row.id)),

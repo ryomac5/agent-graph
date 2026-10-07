@@ -8,7 +8,7 @@ import { ConversationPage } from '../pages/conversation/ConversationPage.tsx';
 import { SearchPage } from '../pages/search/SearchPage.tsx';
 import { isTemporaryPath } from '../lib/projects.ts';
 import { extractSnippet, type SearchResult } from '../pages/search/model.ts';
-import { loadConversationWindow } from '../lib/projection-client.ts';
+import { compareMessages, loadConversationWindow } from '../lib/projection-client.ts';
 
 const CONVERSATION_COUNT = 10_000;
 const NOW = new Date().toISOString();
@@ -232,4 +232,9 @@ it('uses readable search context, highlights a bounded excerpt, and links to Cha
   expect(within(message).getByRole('link').getAttribute('href')).toBe('/c/c#message-m');
   expect(within(screen.getByRole('region', { name: 'Diffs' })).getByRole('link').getAttribute('href')).toBe('/p/p/changes?artifact=a');
   expect(extractSnippet(result.body!, 'needle').map(part => part.text).join('').split('\n').length).toBeLessThanOrEqual(3);
+});
+it('orders same-time legacy Codex messages by their numeric line position, whatever the digit count', () => {
+  const rows = [9999, 104048, 20].map(offset => ({ id: `["codex","rollout.jsonl:${offset}:h"]`, source_ts: OLD,
+    source_event_id: `message:rollout.jsonl:${offset}:h:1` }));
+  expect(rows.toSorted(compareMessages).map(row => row.source_event_id)).toEqual([20, 9999, 104048].map(offset => `message:rollout.jsonl:${offset}:h:1`));
 });

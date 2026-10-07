@@ -7,7 +7,7 @@ import { Duplex, PassThrough } from "node:stream";
 import type { TestContext } from "node:test";
 import { defaultPolicy } from "../../../../core/src/assign/policy.ts";
 import type { IntakeRequest } from "../../../../core/src/intake/index.ts";
-import { openLedger } from "../../../../core/src/ledger/ledger.ts";
+import { openLedger } from "../../../../core/src/ledger/index.ts";
 import { Intake } from "../../../src/intake/index.ts";
 import { FakeHost } from "../../../src/host/contract.ts";
 import { McpProtocol } from "../../../src/mcp/index.ts";

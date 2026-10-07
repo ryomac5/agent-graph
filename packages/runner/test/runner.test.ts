@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { createConnection, Socket } from "node:net";
 import { once } from "node:events";
 import { test, type TestContext } from "node:test";
-import { openLedger } from "../../core/src/ledger/ledger.ts";
+import { openLedger } from "../../core/src/ledger/index.ts";
 import { projectRuns } from "../../core/src/ledger/projections/runs.ts";
 import { FakeHost, type StartRequest } from "../src/host/contract.ts";
 import { Supervisor } from "../src/supervisor.ts";

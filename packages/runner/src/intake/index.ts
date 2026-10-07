@@ -1,12 +1,12 @@
+import { readProjection } from "../projection.ts";
 import { randomUUID } from "node:crypto";
 import { decide, type DecisionInput } from "../../../core/src/assign/assign.ts";
 import { loadPolicy } from "../../../core/src/assign/policy.ts";
 import { runAcceptance } from "../../../core/src/accept/run.ts";
 import type { Assignment, DelegateResult } from "../../../core/src/delegate/types.ts";
 import { fingerprintRequest, retryStatus, transitionStatus, validateRequest, type IntakeRequest, type IntakeStatus } from "../../../core/src/intake/index.ts";
-import type { ConversationPayload, Fact, FactInput, FindingPayload, JsonValue, RunPayload } from "../../../core/src/ledger/facts.ts";
+import type { ConversationPayload, FactInput, JsonValue, RunPayload } from "../../../core/src/ledger/facts.ts";
 import type { Ledger } from "../../../core/src/ledger/ledger.ts";
-import { projectDelegations, projectEntityRecords } from "../../../core/src/ledger/projections/delegations.ts";
 import type { RunnerRuntime } from "../runtime.ts";
 import type { RunnerEvent, SocketRequest } from "../socket.ts";
 import type { WorktreeRecord } from "../worktree.ts";
@@ -16,7 +16,6 @@ import { ReviewFlow } from "../review/index.ts";
 import { buildReviewPrompt, parseReviewResult, REVIEW_OUTPUT_SCHEMA } from "./review.ts";
 
 function json(value: unknown): JsonValue { return JSON.parse(JSON.stringify(value)) as JsonValue; }
-const READ_BATCH_SIZE = 1000;
 const TURN_CHECK_INTERVAL_MS = 500;
 interface StoredRequest { request?: IntakeRequest; request_hash?: string }
 export interface IntakeOptions {
@@ -35,65 +34,25 @@ export class Intake {
   private scheduled = new Map<string, NodeJS.Immediate>();
   private launches = new Set<Promise<unknown>>();
   private closing = false;
-  private cachedFacts: Fact[] = [];
-  private entityFacts = new Map<string, Fact[]>();
-  private entityRecords = new Map<string, (object & { id: string })[]>();
-  private delegations?: ReturnType<typeof projectDelegations>;
-  private originsDirty = false;
+  private originSeq = -1;
   private lastTimestamp = 0;
   readonly review: ReviewFlow;
   private reviewTimer: NodeJS.Timeout;
   constructor(ledger: Ledger, runtime: RunnerRuntime, options: IntakeOptions = {}) {
     this.ledger = ledger; this.runtime = runtime; this.options = options;
     this.decision = options.decision ?? { policy: loadPolicy(), quota: () => undefined, performance: () => undefined };
-    this.review = new ReviewFlow(ledger, runtime, this.decision, options.publish, options.reviewBlobDirectory, (runId) => this.finishRun(runId), () => this.facts());
+    this.review = new ReviewFlow(ledger, runtime, this.decision, options.publish, options.reviewBlobDirectory, (runId) => this.finishRun(runId));
     this.reviewTimer = setInterval(() => {
-      if (this.cachedRecords<FindingPayload>("finding").some((finding) => finding.state === "sent")) {
+      if (readProjection(this.ledger).rows("findings", "state = 'sent'").length) {
         void this.review.reconcile().catch((error: unknown) => { console.error("Review reconciliation failed", error); });
       }
     }, TURN_CHECK_INTERVAL_MS);
     this.reviewTimer.unref();
   }
-  private facts(): Fact[] {
-    for (;;) {
-      const batch = this.ledger.readSince(this.cachedFacts.at(-1)?.seq ?? 0, READ_BATCH_SIZE);
-      for (const fact of batch) {
-        this.cachedFacts.push(fact);
-        this.lastTimestamp = Math.max(this.lastTimestamp, Date.parse(fact.source_ts));
-        const entity = fact.subject.slice(0, fact.subject.indexOf(":"));
-        const history = this.entityFacts.get(entity) ?? [];
-        history.push(fact);
-        this.entityFacts.set(entity, history);
-        this.entityRecords.delete(entity);
-        if (["delegation", "run", "conversation"].includes(entity)) {
-          this.delegations = undefined;
-          this.originsDirty = true;
-        }
-      }
-      if (batch.length < READ_BATCH_SIZE) return this.cachedFacts;
-    }
-  }
-  private records<P extends object>(entity: string): (Partial<P> & { id: string })[] {
-    this.facts();
-    return this.cachedRecords<P>(entity);
-  }
-  private cachedRecords<P extends object>(entity: string): (Partial<P> & { id: string })[] {
-    let records = this.entityRecords.get(entity);
-    if (!records) {
-      records = projectEntityRecords(this.entityFacts.get(entity) ?? [], entity);
-      this.entityRecords.set(entity, records);
-    }
-    return records as (Partial<P> & { id: string })[];
-  }
-  private readDelegations(): ReturnType<typeof projectDelegations> {
-    this.facts();
-    this.delegations ??= projectDelegations(["delegation", "run", "conversation"]
-      .flatMap((entity) => this.entityFacts.get(entity) ?? []));
-    return this.delegations;
-  }
+  private readDelegations() { return readProjection(this.ledger).delegations(); }
   private write(kind: FactInput["kind"], subject: FactInput["subject"], payload: unknown, confidence: "confirmed" | "unknown" = "confirmed"): void {
-    this.facts();
-    const ts = Math.max(this.lastTimestamp + 1, Date.now());
+    const ts = Math.max(readProjection(this.ledger).timestamp() + 1, this.lastTimestamp + 1, Date.now());
+    this.lastTimestamp = ts;
     const result = this.ledger.append({ source: "intake", source_event_id: randomUUID(), source_ts: new Date(ts).toISOString(),
       kind, subject, confidence, payload: json(payload) } as FactInput);
     if (result.status === "conflict") throw new Error("Conflicting intake fact");
@@ -104,12 +63,13 @@ export class Intake {
       ...(d.attempts.at(-1)?.result === undefined ? {} : { result: d.attempts.at(-1)!.result as unknown as DelegateResult }) }));
   }
   status(requestId: string): IntakeStatus {
-    const result = this.list().find((d) => d.requestId === requestId);
+    const d = readProjection(this.ledger).row("delegations", requestId);
+    const result = d && { requestId: d.request_id, state: d.state, attempt: d.attempt, ...(d.attempts.at(-1)?.result === undefined ? {} : { result: d.attempts.at(-1)!.result as unknown as DelegateResult }) };
     if (!result) throw new Error("Unknown requestId");
     return result;
   }
   private request(requestId: string): IntakeRequest {
-    const saved = this.records<StoredRequest>("delegation").find((d) => d.id === requestId)?.request;
+    const saved = readProjection(this.ledger).record<StoredRequest>("delegation", requestId)?.request;
     if (!saved) throw new Error("Request body unavailable; cannot execute delegation");
     validateRequest(saved);
     return saved;
@@ -119,7 +79,7 @@ export class Intake {
     validateRequest(value);
     // 呼び出し元の変更が受理済みの依頼を変えないよう、境界でコピーする。
     const request = JSON.parse(JSON.stringify(value)) as IntakeRequest;
-    const existing = this.records<StoredRequest>("delegation").find((d) => d.id === request.requestId);
+    const existing = readProjection(this.ledger).record<StoredRequest>("delegation", request.requestId);
     if (existing) {
       if (existing.request_hash !== fingerprintRequest(request)) throw new Error("Conflicting requestId");
       if (this.status(request.requestId).state === "received") {
@@ -166,19 +126,14 @@ export class Intake {
     return this.status(requestId);
   }
   private readRun(runId: string) {
-    const run = this.records<RunPayload & WorktreeRecord>("run").find((r) => r.id === runId);
+    const run = readProjection(this.ledger).record<RunPayload & WorktreeRecord>("run", runId);
     if (!run?.cwd || !run.base_sha || !run.repository_id || !run.worktree_id) throw new Error("Run worktree unavailable");
     return run;
   }
   private readOutput(runId: string): string {
-    const facts = this.facts();
-    const run = this.records<RunPayload>("run").find((r) => r.id === runId);
-    const ids = new Set(this.records<{ message_id: string; conversation_id: string; active: boolean }>("message_membership")
-      .filter((m) => m.conversation_id === run?.conversation_id && m.active).map((m) => m.message_id));
-    const messages = this.records<{ role: string; phase?: string; body: JsonValue }>("message")
-      .filter((m) => ids.has(m.id) && m.role === "assistant")
-      .sort((a, b) => (facts.findLast((f) => f.subject === `message:${a.id}`)?.seq ?? 0)
-        - (facts.findLast((f) => f.subject === `message:${b.id}`)?.seq ?? 0));
+    const store = readProjection(this.ledger);
+    const run = store.record<RunPayload>("run", runId);
+    const messages = run?.conversation_id ? store.messages(run.conversation_id).filter((m) => m.role === "assistant") : [];
     const final = messages.filter((m) => m.phase === "final_answer");
     return (final.length ? final : messages.slice(-1)).flatMap((m) => typeof m.body === "string" ? [m.body]
       : Array.isArray(m.body) ? m.body.flatMap((block) => block && typeof block === "object" && !Array.isArray(block) && typeof block.text === "string" ? [block.text] : []) : []).join("\n");
@@ -193,7 +148,7 @@ export class Intake {
     this.reconcileOrigins();
   }
   private async finishRun(runId: string): Promise<void> {
-    const saved = this.records<RunPayload>("run").find((r) => r.id === runId);
+    const saved = readProjection(this.ledger).record<RunPayload>("run", runId);
     const initialEvidence = saved?.last_evidence;
     if (initialEvidence && typeof initialEvidence === "object" && !Array.isArray(initialEvidence)
       && (initialEvidence.outcome === "interrupted" || initialEvidence.status === "interrupted")) throw new Error("interrupted");
@@ -204,7 +159,7 @@ export class Intake {
     const completion = finished.finally(() => { ended = true; });
     void completion.catch(() => {});
     while (!ended && this.runtime.supervisor.isOpen(runId)) {
-      const run = this.records<RunPayload>("run").find((r) => r.id === runId);
+      const run = readProjection(this.ledger).record<RunPayload>("run", runId);
       const evidence = run?.last_evidence;
       const outcome = evidence && typeof evidence === "object" && !Array.isArray(evidence)
         ? evidence.outcome ?? evidence.status : undefined;
@@ -221,7 +176,7 @@ export class Intake {
       } finally { clearTimeout(timer); }
     }
     await finished;
-    const run = this.records<RunPayload>("run").find((r) => r.id === runId);
+    const run = readProjection(this.ledger).record<RunPayload>("run", runId);
     const evidence = run?.last_evidence;
     if (evidence && typeof evidence === "object" && !Array.isArray(evidence)
       && (evidence.outcome === "interrupted" || evidence.status === "interrupted")) throw new Error("interrupted");
@@ -229,7 +184,7 @@ export class Intake {
   }
   private async captureArtifact(runId: string) {
     const run = this.readRun(runId);
-    const provider = this.records<ConversationPayload>("conversation").find((item) => item.id === run.conversation_id)!.provider!;
+    const provider = readProjection(this.ledger).record<ConversationPayload>("conversation", run.conversation_id!)!.provider!;
     const artifact = await finalizeArtifactsAsync(this.ledger, { runId, provider, sourceEventId: randomUUID(), sourceTs: new Date().toISOString() }, { blobDirectory: this.options.reviewBlobDirectory });
     if (!artifact) throw new Error("Artifact unavailable");
     return artifact;
@@ -239,7 +194,7 @@ export class Intake {
     try {
       const request = this.request(requestId);
       const attempt = this.status(requestId).attempt;
-      const savedAttempt = this.readDelegations().find((d) => d.request_id === requestId)!.attempts.at(-1)!;
+      const savedAttempt = readProjection(this.ledger).row("delegations", requestId)!.attempts.at(-1)!;
       if (!recovering && this.status(requestId).state !== "accepted") return;
       const selected = recovering
         ? { ok: true as const, assignment: savedAttempt.assignment as unknown as Assignment }
@@ -284,7 +239,7 @@ export class Intake {
         this.write("relation.created", `relation:${reviewRunId}`, { type: "review_of", from_id: reviewConversationId,
           to_id: conversationId, active: true, confidence: "confirmed", evidence: { artifact_id: artifactId, patch_hash: artifact.patch_hash } });
       } else {
-        const saved = this.records<RunPayload>("run").find((r) => r.id === reviewRunId);
+        const saved = readProjection(this.ledger).record<RunPayload>("run", reviewRunId);
         if (!saved || saved.state !== "ended" && !this.runtime.supervisor.isOpen(reviewRunId)) throw new Error("interrupted");
       }
       await this.finishRun(reviewRunId);
@@ -304,25 +259,24 @@ export class Intake {
     }
   }
   reconcileOrigins(): void {
-    const facts = this.facts();
-    if (!this.originsDirty) return;
-    this.originsDirty = false;
-    const conversations = this.records<ConversationPayload>("conversation");
-    const runs = this.records<RunPayload>("run");
+    const store = readProjection(this.ledger);
+    if (this.originSeq === store.lastSeq()) return;
+    this.originSeq = store.lastSeq();
+
     for (const d of this.readDelegations()) {
       for (const attempt of d.attempts) {
         if (!attempt.run_id) continue;
-        const child = runs.find((r) => r.id === attempt.run_id)?.conversation_id;
+        const child = store.record<RunPayload>("run", attempt.run_id)?.conversation_id;
         if (!child) continue;
-        const parent = d.parent_run_id ? runs.find((r) => r.id === d.parent_run_id)?.conversation_id
+        const parent = d.parent_run_id ? store.record<RunPayload>("run", d.parent_run_id)?.conversation_id
           : d.origin ? (() => {
-            const matches = conversations.filter((c) => c.provider === d.origin!.provider && c.native_id === d.origin!.native_id);
+            const matches = store.records<ConversationPayload>("conversation", "provider = ? AND native_id = ?", [d.origin!.provider, d.origin!.native_id]);
             return matches.length === 1 ? matches[0].id : undefined;
           })() : undefined;
         const subject = `relation:intake:${JSON.stringify([d.request_id, attempt.attempt])}` as const;
         const confidence = parent ? "confirmed" : "unknown";
-        if (facts.some((f) => f.subject === subject && f.kind === "relation.corrected")) continue;
-        const previous = facts.findLast((f) => f.subject === subject);
+        if (store.subjectFacts(subject).some((f) => f.kind === "relation.corrected")) continue;
+        const previous = store.lastFact(subject);
         if (previous?.confidence === confidence && previous.payload && "from_id" in previous.payload && previous.payload.from_id === parent) continue;
         this.write(previous ? "relation.updated" : "relation.created", subject, { type: "delegated", from_id: parent,
           to_id: child, active: true, confidence, evidence: { request_id: d.request_id, attempt: attempt.attempt,
@@ -338,7 +292,7 @@ export class Intake {
       if (d.state === "received") this.change(d.request_id, "accepted");
       if (!attempt?.run_id) { this.schedule(d.request_id); continue; }
       if (this.tasks.has(d.request_id)) continue;
-      const run = this.records<RunPayload>("run").find((r) => r.id === attempt.run_id);
+      const run = readProjection(this.ledger).record<RunPayload>("run", attempt.run_id);
       // 起動済みの試行は監督の保持した子と保存済みの成果から続ける。
       if (this.runtime.supervisor.isOpen(attempt.run_id) || run?.state === "ended") {
         const task = this.execute(d.request_id, true);

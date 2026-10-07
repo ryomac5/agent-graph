@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { test } from "node:test";
 
-import { openLedger } from "../../core/src/ledger/ledger.ts";
+import { openLedger } from "../../core/src/ledger/index.ts";
 import type { FactInput } from "../../core/src/ledger/facts.ts";
 import { projectRuns } from "../../core/src/ledger/projections/runs.ts";
 import { createNativeId } from "../../core/src/ledger/projections/relations.ts";
@@ -201,14 +201,13 @@ test("controls resolve exact and native run IDs with bounded ledger reads amid l
   for (const target of ["missing-run", '[broken]:1', '["claude","missing"]:1', `${createNativeId("claude", nativeRunId)}:2`]) {
     reads.mock.resetCalls();
     await assert.rejects(command("send", { runId: target, input: { text: "missing" } }), /Run is not open/);
-    assert.equal(fullReadCount(), 1);
+    assert.equal(fullReadCount(), 0);
   }
   for (const [target, runId] of [[exactId, exactId], [`${createNativeId("claude", nativeRunId)}:1`, nativeRunId]]) {
     for (const operation of ["send", "interrupt", "set_model", "close"]) {
       reads.mock.resetCalls();
       assert.deepEqual(await command(operation, { runId: target, input: { text: target }, model: { model: "other" } }), { runId });
-      // モデル変更の追記だけは、時刻決定のためにもう一度読む。
-      assert.equal(fullReadCount(), operation === "set_model" ? 2 : 1, `${operation}: ${target}`);
+      assert.equal(fullReadCount(), 0, `${operation}: ${target}`);
       if (operation === "send") assert.deepEqual(host.inputs.at(-1), { run: runId, input: { text: target } });
       if (operation === "set_model") assert.equal(host.starts.find((start) => start.runId === runId)?.model.model, "other");
     }

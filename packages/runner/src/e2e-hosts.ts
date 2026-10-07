@@ -1,3 +1,4 @@
+import { readProjection } from "./projection.ts";
 import assert from "node:assert/strict";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -6,10 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { WebSocket } from "../../api/src/ws/index.ts";
-import { openLedger } from "../../core/src/ledger/ledger.ts";
-import { projectEntityRecords } from "../../core/src/ledger/projections/delegations.ts";
-import { projectRuns } from "../../core/src/ledger/projections/runs.ts";
-import { projectApprovals } from "../../core/src/ledger/projections/approvals.ts";
+import { openLedger } from "../../core/src/ledger/index.ts";
 import type { JsonValue } from "../../core/src/ledger/facts.ts";
 import { APPROVAL_COMMANDS, findPendingApproval } from "./e2e-approval.ts";
 
@@ -85,7 +83,12 @@ async function runChecks(): Promise<void> {
   })();
   const onSignal = () => { void cleanup().finally(() => process.exit(130)); };
   process.once("SIGINT", onSignal); process.once("SIGTERM", onSignal);
-  const readFacts = () => ledger.readSince(0, Number.MAX_SAFE_INTEGER);
+  const projection = () => readProjection(ledger);
+  const approvalFacts = (run: ManagedRun, sinceSeq: number) => {
+    const store = projection();
+    const ids = store.rows("approvals", "run_id = ?", [run.runId]).map((a) => `approval:${a.id}`);
+    return store.facts("subject IN (SELECT value FROM json_each(?))", [JSON.stringify([`run:${run.runId}`, ...ids])]);
+  };
   const messages: WireMessage[] = [];
   let patchSeq = 0;
   const states = new Set<string>();
@@ -128,28 +131,28 @@ async function runChecks(): Promise<void> {
     }
     async function waitIdle(run: ManagedRun) {
       await waitFor(() => {
-        const state = projectRuns(readFacts()).find((entry) => entry.conversation_id === run.conversationId && entry.generation === run.generation);
+        const state = projection().rows("runs", "conversation_id = ? AND generation = ?", [run.conversationId, run.generation])[0];
         if (state?.state === "failed" || state?.state === "ended") throw new Error(`Unexpected run end: ${JSON.stringify(state)}`);
         return state?.state === "idle" ? state : undefined;
       }, `idle ${run.runId}`);
-      await waitFor(() => patchSeq >= readFacts().at(-1)!.seq ? true : undefined, "api patch caught up");
+      await waitFor(() => patchSeq >= projection().lastSeq() ? true : undefined, "api patch caught up");
     }
     async function sendTurn(run: ManagedRun, text: string) {
-      const before = readFacts().at(-1)?.seq ?? 0;
+      const before = projection().lastSeq();
       await command("send", { runId: run.runId, input: { text } });
-      await waitFor(() => readFacts().find((fact) => fact.seq > before && (fact.kind === "message_membership.created"
+      await waitFor(() => projection().facts("seq > ?", [before]).find((fact) => (fact.kind === "message_membership.created"
         && fact.payload?.conversation_id === run.conversationId || fact.kind === "run.updated"
         && fact.subject === `run:${run.runId}` && JSON.stringify(fact.payload).includes('"kind":"result"'))), "new turn output");
       await waitIdle(run);
     }
-    const lastSeq = () => readFacts().at(-1)?.seq ?? 0;
+    const lastSeq = () => projection().lastSeq();
     async function approve(run: ManagedRun, sinceSeq: number) {
-      const approval = await waitFor(() => findPendingApproval(readFacts(), run.runId, sinceSeq), `approval ${run.runId}`);
+      const approval = await waitFor(() => findPendingApproval(approvalFacts(run, sinceSeq), run.runId, sinceSeq), `approval ${run.runId}`);
       await command("answer", { approvalId: approval.id, decision: approval.available_decisions?.includes("allow") ? "allow" : "accept" });
       await waitIdle(run);
-      assert.ok(projectApprovals(readFacts()).some((entry) => entry.id === approval.id && entry.state === "resolved"));
+      assert.ok(projection().row("approvals", approval.id)?.state === "resolved");
     }
-    const evidence = (run: ManagedRun, kind: string) => readFacts().filter((fact) => fact.subject === `run:${run.runId}` && fact.kind === "run.updated"
+    const evidence = (run: ManagedRun, kind: string) => projection().subjectFacts(`run:${run.runId}`).filter((fact) => fact.kind === "run.updated"
       && fact.payload && "last_evidence" in fact.payload && fact.payload.last_evidence && typeof fact.payload.last_evidence === "object"
       && !Array.isArray(fact.payload.last_evidence) && fact.payload.last_evidence.kind === kind);
 
@@ -168,14 +171,14 @@ async function runChecks(): Promise<void> {
     console.log("3: interrupt outcome, exit diagnostics, model and resume");
     const beforeInterrupt = lastSeq();
     const interrupt = await start("claude", `Use Bash to run exactly: ${APPROVAL_COMMANDS.claudeInterrupt}. Do not use other tools.`);
-    const pending = await waitFor(() => findPendingApproval(readFacts(), interrupt.runId, beforeInterrupt), "interrupt permission");
+    const pending = await waitFor(() => findPendingApproval(approvalFacts(interrupt, beforeInterrupt), interrupt.runId, beforeInterrupt), "interrupt permission");
     await command("answer", { approvalId: pending.id, decision: "allow" });
     await delay(1000);
     await command("interrupt", { runId: interrupt.runId });
     await waitFor(() => evidence(interrupt, "result").find((fact) => JSON.stringify(fact.payload).includes('"outcome":"interrupted"')), "interrupted result");
     await command("close", { runId: interrupt.runId });
     console.log("interrupt diagnostics:", JSON.stringify(evidence(interrupt, "query_closed").map((fact) => fact.payload)));
-    assert.ok(!projectRuns(readFacts()).some((run) => run.conversation_id === interrupt.conversationId && run.state === "failed"));
+    assert.ok(!projection().rows("runs", "conversation_id = ? AND state = 'failed'", [interrupt.conversationId]).length);
     await command("set_model", { runId: claude.runId, model: { model: CLAUDE_MODEL } });
     await command("close", { runId: claude.runId });
     const resumed: ManagedRun = await command("resume", { conversationId: claude.conversationId, input: { text: "Reply HOSTS-RESUMED. Do not use tools." } });
@@ -200,8 +203,7 @@ async function runChecks(): Promise<void> {
     await sendTurn(second, "Reply OK. Do not use tools.");
     await command("set_model", { runId: second.runId, model: { model: CODEX_MODEL } });
     await command("send", { runId: second.runId, input: { text: "Spawn exactly one native subagent to reply CHILD-OK without tools, wait for it and close it. Then reply PARENT-OK." } });
-    await waitFor(() => readFacts().find((fact) => fact.kind === "relation.created" && fact.payload?.type === "delegated"
-      && fact.payload.from_id === second.conversationId && JSON.stringify(fact.payload.evidence).includes("item_id")), "collabAgentToolCall relation");
+    await waitFor(() => projection().rows("relations", "type = 'delegated' AND from_id = ?", [projection().nativeConversationId(second.conversationId)]).find((relation) => JSON.stringify(relation.evidence).includes("item_id")), "collabAgentToolCall relation");
     await waitIdle(second); console.log(`PASS 4 (one short switch turn: ${switchModel})`);
 
     console.log("6: accountInfo authentication and integration suppression candidates");
@@ -229,7 +231,7 @@ async function runChecks(): Promise<void> {
     }
     assert.ok(trials.strict.every((init) => (init.mcp_servers ?? []).length === 0), "strict run loaded MCP servers");
     console.log(`PASS 6 (default has no claude.ai integrations; enabled loads ${claudeai(trials.enabled[0]).length})`);
-    const records = projectEntityRecords<{ base_sha: string; cwd: string }>(readFacts(), "run");
+    const records = projection().records<{ base_sha: string; cwd: string }>("run");
     assert.ok(records.filter((run) => run.cwd).every((run) => run.base_sha));
     console.log("PASS: checks 1, 2, 3, 4, 6");
   } finally {

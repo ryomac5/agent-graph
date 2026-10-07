@@ -1,13 +1,11 @@
+import { readProjection } from "./projection.ts";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
-import type { Fact, FactInput, RunPayload, Provider } from "../../core/src/ledger/facts.ts";
+import type { FactInput, RunPayload, Provider } from "../../core/src/ledger/facts.ts";
 import type { Ledger } from "../../core/src/ledger/ledger.ts";
-import { projectEntityRecords } from "../../core/src/ledger/projections/delegations.ts";
-import { projectRuns } from "../../core/src/ledger/projections/runs.ts";
 import { prepareIntegration, createTaskWorktree } from "../../planner/src/worktree.ts";
 
-const READ_BATCH_SIZE = 1000;
 export interface WorktreeRecord {
   cwd: string;
   repository_id: string;
@@ -49,14 +47,8 @@ export function inspectWorktree(cwd: string): Omit<WorktreeRecord, "isolation" |
 }
 
 export function recordWorktree(ledger: Ledger, request: WorktreeRequest): WorktreeRecord {
-  const facts: Fact[] = [];
-  for (;;) {
-    const batch = ledger.readSince(facts.at(-1)?.seq ?? 0, READ_BATCH_SIZE);
-    facts.push(...batch);
-    if (batch.length < READ_BATCH_SIZE) break;
-  }
-  const records = projectEntityRecords<RunPayload & WorktreeRecord>(facts, "run");
-  const existing = records.find((run) => run.id === request.runId && run.generation === request.generation);
+  const store = readProjection(ledger);
+  const existing = store.record<RunPayload & WorktreeRecord>("run", request.runId);
   if (!existing) throw new Error("Run must be created before recording its worktree");
   if (existing.dirty_state !== undefined) {
     const record = existing as RunPayload & WorktreeRecord;
@@ -72,7 +64,8 @@ export function recordWorktree(ledger: Ledger, request: WorktreeRequest): Worktr
     cwd = createTaskWorktree(cwd, session, "execution");
   }
   const snapshot = inspectWorktree(cwd);
-  const live = projectRuns(facts);
+  const records = store.records<RunPayload & WorktreeRecord>("run", "worktree_id = ?", [snapshot.worktree_id]);
+  const live = store.rows("runs", "worktree_id = ?", [snapshot.worktree_id]);
   const peers = request.isolation === "shared" ? records.filter((run) => run.id !== request.runId
     && run.worktree_id === snapshot.worktree_id
     && live.some((state) => state.conversation_id === run.conversation_id && state.generation === run.generation

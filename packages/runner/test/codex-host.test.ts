@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { test, type TestContext } from "node:test";
 import { CodexHost } from "../src/hosts/codex/index.ts";
 import type { HostEvent, HostFact, RunHandle, StartRequest } from "../src/host/contract.ts";
-import { openLedger } from "../../core/src/ledger/ledger.ts";
+import { openLedger } from "../../core/src/ledger/index.ts";
 import { projectMessages } from "../../core/src/ledger/projections/messages.ts";
 import { projectRuns } from "../../core/src/ledger/projections/runs.ts";
 import { createNativeId } from "../../core/src/ledger/projections/relations.ts";

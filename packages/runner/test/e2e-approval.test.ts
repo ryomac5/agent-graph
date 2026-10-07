@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { test, type TestContext } from "node:test";
 import type { AccountInfo, Options, PermissionResult, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
-import { openLedger } from "../../core/src/ledger/ledger.ts";
+import { openLedger } from "../../core/src/ledger/index.ts";
 import { projectApprovals } from "../../core/src/ledger/projections/approvals.ts";
 import { ClaudeHost, type ClaudeQuery, type QueryFactory } from "../src/hosts/claude/index.ts";
 import { AsyncQueue } from "../src/hosts/claude/queue.ts";

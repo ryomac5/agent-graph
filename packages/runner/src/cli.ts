@@ -4,7 +4,7 @@ import { mkdirSync } from "node:fs";
 import { createConnection } from "node:net";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { openLedger } from "../../core/src/ledger/ledger.ts";
+import { openLedger } from "../../core/src/ledger/index.ts";
 import { ledgerDbPath, runnerSocketPath } from "./paths.ts";
 import { MAX_FRAME_BYTES, PROTOCOL_VERSION } from "./socket.ts";
 import { serveRunner } from "./runtime.ts";

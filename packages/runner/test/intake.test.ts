@@ -7,7 +7,7 @@ import { createConnection } from "node:net";
 import { test, type TestContext } from "node:test";
 import { defaultPolicy } from "../../core/src/assign/policy.ts";
 import { fingerprintRequest, readOrigin, type IntakeRequest } from "../../core/src/intake/index.ts";
-import { openLedger } from "../../core/src/ledger/ledger.ts";
+import { openLedger } from "../../core/src/ledger/index.ts";
 import { projectDelegations, projectEntityRecords } from "../../core/src/ledger/projections/delegations.ts";
 import { projectRelations } from "../../core/src/ledger/projections/relations.ts";
 import { FakeHost } from "../src/host/contract.ts";
@@ -401,7 +401,7 @@ test("review parser rejects missing, malformed and invalid final results", () =>
     { verdict: "request_changes", comment: "Fix it" });
 });
 
-test("intake reads bounded batches once and only new facts while a host is running", async (t) => {
+test("intake queries projections without ledger reads while a host is running", async (t) => {
   const { intake, ledger, request, codex, claude, observe } = fixture(t);
   for (let index = 0; index < 2500; index += 1) ledger.append({
     source: "transcript-claude", source_event_id: `history:${index}`, source_ts: "2026-01-01T00:00:00Z",
@@ -418,7 +418,7 @@ test("intake reads bounded batches once and only new facts while a host is runni
   t.after(() => { ledger.readSince = readSince; });
   intake.submit({ ...request, origin: { provider: "claude", nativeId: "terminal-claude" } });
   assert.ok(reads.every((read) => read.limit <= 1000));
-  assert.equal(reads.filter((read) => read.seq === 0).length, 1);
+  assert.equal(reads.length, 0);
   await until(() => intake.status(request.requestId).state === "running");
   intake.reconcileOrigins();
   intake.list();

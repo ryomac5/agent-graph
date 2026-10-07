@@ -55,7 +55,7 @@ it('stops the selected run with interrupt and keeps observed state until a patch
 it('places parallel runs in the task column and selects their conversation and Changes', () => {
   const target = createActivityStore();
   act(() => target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: {
-    conversations: { remove: [], upsert: [{ id: 'parallel', task_id: 't1', provider: 'claude', origin: 'managed' }] },
+    conversations: { remove: [], upsert: [{ id: 'parallel', task_id: 't1', provider: 'claude', origin: 'managed', name: 'Implement API', name_is_provisional: false, first_request_excerpt: null }] },
     runs: { remove: [], upsert: [{ id: 'r4', conversation_id: 'parallel', state: 'waiting_input', generation: 1 }] },
     messages: { remove: [], upsert: [{ id: 'pm', role: 'assistant', body: 'Parallel response' }] },
     message_memberships: { remove: [], upsert: [{ id: 'pl', message_id: 'pm', conversation_id: 'parallel', active: 1 }] },

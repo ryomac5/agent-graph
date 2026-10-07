@@ -6,7 +6,7 @@ import {
   projectArtifacts, projectApprovals, projectFindings, projectConversationIds,
 } from "./projections/index.ts";
 import { PROJECTION_ENTITIES, readNativeReference } from "./projections/dependencies.ts";
-import { encodeNameOrder, extractProvisionalName } from "./projections/conversations.ts";
+import { encodeNameOrder, extractMessageName } from "./projections/conversations.ts";
 import type { ProjectedMessage } from "./projections/messages.ts";
 import type { Projection } from "./projections/index.ts";
 import { initializeRunnerProjection, forgetRunnerProjection, RECORD_ENTITIES } from "./projections/storage.ts";
@@ -189,7 +189,7 @@ function writeMessageNames(ledger: DatabaseSync, messages: readonly ProjectedMes
   const insert = prepare(ledger, "INSERT OR REPLACE INTO message_name_inputs VALUES (?, ?, ?, ?, ?)");
   for (const message of messages) {
     insert.run(message.id, Date.parse(message.source_ts), encodeNameOrder(message.source_event_id),
-      extractProvisionalName(message.body), encodeNameOrder(message.id));
+      extractMessageName(message), encodeNameOrder(message.id));
   }
 }
 

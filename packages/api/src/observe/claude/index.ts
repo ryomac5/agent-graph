@@ -85,7 +85,8 @@ export function observeClaudeFile(ledger: Ledger, path: string, options: ClaudeO
   const subagent = absolutePath.split(sep).includes("subagents");
   const id = createNativeId("claude", nativeId);
   const rows = result.lines.filter((line) => line.text.trim()).map((line) => ({ line, row: parseRow(line.text) }));
-  const previous = projectConversations(existing).conversations.find((conversation) => conversation.id === id);
+  // 起源だけを読むため、名前の候補のために本文を投影しない。
+  const previous = projectConversations(existing, new Map()).conversations.find((conversation) => conversation.id === id);
   const validRows = rows.filter(({ row }) => !findUnsupportedReason(row)).map(({ row }) => row!);
   const payload: ConversationPayload = {
     provider: "claude", native_id: nativeId, history_format: "jsonl",

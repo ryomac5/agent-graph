@@ -53,22 +53,44 @@ export function readModel(run?: Row): { model: string; effort: string } {
   return { model: text(model.model), effort: text(model.effort) };
 }
 
-export function conversationName(state: ScreenState, conversationId: string, preference: 'task' | 'conversation' = 'task', visited = new Set<string>()): string {
+export const PROVIDER_NAMES: Record<string, string> = { claude: 'Claude', codex: 'Codex' };
+export function providerName(provider: string): string { return PROVIDER_NAMES[provider] ?? provider; }
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function formatLabelTime(value: unknown, now: number): string {
+  const time = new Date(text(value));
+  if (!Number.isFinite(time.getTime())) return '';
+  const clock = `${String(time.getHours()).padStart(2, '0')}:${String(time.getMinutes()).padStart(2, '0')}`;
+  return new Date(now).toDateString() === time.toDateString() ? clock : `${MONTHS[time.getMonth()]} ${time.getDate()} ${clock}`;
+}
+/** 会話の始まりは最初の実行の開始とし、実行がなければ最後の発言の時刻を使う。 */
+export function conversationStart(state: ScreenState, conversationId: string): string {
+  const starts = (state.projection.runs ?? []).filter(row => row.conversation_id === conversationId)
+    .map(row => text(row.started_ts)).filter(Boolean).sort();
+  return starts[0] ?? text(state.projection.conversations?.find(row => row.id === conversationId)?.last_message_ts);
+}
+/** 名前は core の投影の値をそのまま出す。名前のない会話は provider と始まりの時刻で呼び、本文から名前を導かない。 */
+export function conversationTitle(conversation: Row | undefined, startedAt?: unknown, now = Date.now()): string {
+  const name = readTitle(conversation?.name);
+  if (name) return name;
+  const provider = providerName(text(conversation?.provider)) || 'Conversation';
+  const time = formatLabelTime(startedAt, now);
+  return time ? `${provider} · ${time}` : provider;
+}
+export function isProvisionalName(conversation: Row | undefined): boolean {
+  return Boolean(readTitle(conversation?.name)) && (conversation?.name_is_provisional === true || conversation?.name_is_provisional === 1);
+}
+
+export function conversationName(state: ScreenState, conversationId: string, visited = new Set<string>()): string {
   if (visited.has(conversationId)) return '';
   visited.add(conversationId);
   const review = state.projection.relations?.find(row => row.type === 'review_of' && row.from_id === conversationId
     && (row.active === true || row.active === 1) && row.confidence === 'confirmed');
   if (review) {
-    const original = conversationName(state, text(review.to_id), 'task', visited);
+    const original = conversationName(state, text(review.to_id), visited);
     if (original) return `Review of ${original}`;
   }
   const conversation = state.projection.conversations?.find(row => row.id === conversationId);
-  if (!conversation) return '';
-  const task = state.projection.tasks?.find(row => row.id === conversation.task_id);
-  const taskName = readTitle(task?.name);
-  const name = readTitle(conversation.name);
-  const provisional = text(conversation.first_request_excerpt) || text(task?.purpose);
-  return preference === 'conversation' || conversation.type === 'subagent' ? name || taskName || provisional : taskName || name || provisional;
+  return conversation ? conversationTitle(conversation, conversationStart(state, conversationId)) : '';
 }
 
 /** 実行は会話の名前と世代で呼ぶ。 */

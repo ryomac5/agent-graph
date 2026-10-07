@@ -8,6 +8,7 @@ import test from "node:test";
 import type { TestContext } from "node:test";
 import { openLedger, project } from "../../core/src/ledger/index.ts";
 import { migrations } from "../../core/src/store/migrations.ts";
+import { extractProvisionalName } from "../../core/src/ledger/projections/conversations.ts";
 import type { MigrationReport } from "../src/migrate/index.ts";
 import { migrateLegacyDatabases } from "../src/migrate/index.ts";
 
@@ -457,4 +458,22 @@ test("旧い移行が作業ツリーの名前で写した台帳も、再移行�
   assert.deepEqual(registered.map((entry) => [entry.display_name, entry.root_path]), [["agent-graph", f.main]]);
   await migrateLegacyDatabases([path], ledger, { temporaryRoots: f.temporaryRoots });
   assert.equal(ledger.readSince(0, 1000).length, facts.length);
+});
+
+test("移行の作業の名前は、会話の名前と同じ core の規則で旧い依頼から作る", async (t) => {
+  const { db, path, ledger, addSession } = createFixture(t);
+  const prompts = {
+    injected: "# AGENTS.md instructions for /repo\n\n<INSTRUCTIONS>\n# 規約\n</INSTRUCTIONS>\n<task>\n検索を速くする。続き\n</task>",
+    review: "Review a delegated task. Do not edit files.\n\nOriginal request:\n{\"title\":\"検索を速くする\",\"task\":\"検索\"}\n",
+    unattended: "無人実行です。質問せずに作業を完了し、最後に結果を報告してください。\n元の依頼:\n# タスク D1: 画面への配信を作る\n本文",
+  };
+  for (const [id, prompt] of Object.entries(prompts)) {
+    addSession(id, "ended", "idle");
+    db.prepare("INSERT INTO turns (id, session_id, at, prompt) VALUES (?, ?, ?, ?)").run(`turn-${id}`, id, TS, prompt);
+  }
+  await migrateLegacyDatabases([path], ledger);
+  const projection = project(ledger.readSince(0, 1000));
+  const taskName = (id: string) => projection.tasks.find(task => task.id === projection.conversations.find(row => row.native_id === id)!.task_id)?.name;
+  for (const [id, prompt] of Object.entries(prompts)) assert.equal(taskName(id), extractProvisionalName(prompt), id);
+  assert.deepEqual(Object.keys(prompts).map(taskName), ["検索を速くする。", "Review of 検索を速くする", "画面への配信を作る"]);
 });

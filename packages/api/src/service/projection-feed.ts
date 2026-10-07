@@ -197,14 +197,17 @@ export class ProjectionFeed {
     const where = ids ? "WHERE t.id IN (SELECT value FROM json_each(?))" : "WHERE t.id > ?";
     const parameter = ids ? JSON.stringify(ids) : after;
     const limit = ids ? "" : `LIMIT ${LIST_PAGE_SIZE}`;
+    // 会話の名前と依頼の抜粋は core の投影の値をそのまま配る。画面は本文から名前を導かない。
     if (table === "conversations") return this.prepare(`SELECT t.id, t.provider, t.origin, t.type, t.task_id, substr(t.name, 1, ${NAME_LENGTH}) AS name,
+      t.name_is_provisional, substr(t.first_request_excerpt, 1, ${NAME_LENGTH}) AS first_request_excerpt,
       r.project_id AS project, coalesce(r.state, 'unregistered') AS project_state,
       coalesce(s.message_count, 0) AS message_count, s.last_message_ts, coalesce(s.last_message_excerpt, '') AS last_message_excerpt
       FROM conversations t LEFT JOIN tasks task ON task.id = t.task_id
       LEFT JOIN api_project_resolution r ON r.id = coalesce(task.project,
         (SELECT repository_id FROM runs WHERE conversation_id = t.id OR conversation_id IN (
           SELECT id FROM api_conversation_ids WHERE canonical_id = t.id) ORDER BY generation DESC LIMIT 1))
-      LEFT JOIN api_conversation_summaries s ON s.id = t.id ${where} ORDER BY t.id ${limit}`).all(parameter);
+      LEFT JOIN api_conversation_summaries s ON s.id = t.id ${where} ORDER BY t.id ${limit}`).all(parameter)
+      .map(row => ({ ...row, name_is_provisional: row.name_is_provisional === 1 }));
     if (table === "tasks") return this.prepare(`SELECT t.id, substr(t.name, 1, ${NAME_LENGTH}) AS name, coalesce(r.project_id, t.project) AS project,
       coalesce(r.state, 'unregistered') AS project_state, t.state FROM tasks t
       LEFT JOIN api_project_resolution r ON r.id = t.project ${where} ORDER BY t.id ${limit}`).all(parameter);
@@ -320,7 +323,8 @@ export class ProjectionFeed {
       WHERE mm.conversation_id = ? AND mm.active = 1 AND m.id > ? ORDER BY m.id LIMIT ?`).all(id, after, DETAIL_PAGE_SIZE);
     const memberships = messages.map(row => ({ id: row.membership_id, message_id: row.id, conversation_id: id, active: 1 }));
     return { seq: this.state.last_seq, generation: this.state.generation,
-      projection: { messages: messages.map(({ membership_id, ...row }) => row), message_memberships: memberships },
+      projection: { conversations: this.readList("conversations", [id]),
+        messages: messages.map(({ membership_id, ...row }) => row), message_memberships: memberships },
       next: messages.length === DETAIL_PAGE_SIZE ? messages.at(-1)!.id : null };
   }
   conversationId(id: string): string { return this.identities.conversations[id] ?? id; }

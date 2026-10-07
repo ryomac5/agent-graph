@@ -7,6 +7,7 @@ import { resolveProjectLocation, toProjectPayload } from "../../../core/src/ledg
 import type { GitRunner, ProjectLocation } from "../../../core/src/ledger/repository.ts";
 import type { AppendResult, Confidence, Fact, FactInput, FactKind, FactPayloads, JsonValue, Ledger, Provider } from "../../../core/src/ledger/index.ts";
 import type { BatchLedger } from "../service/batch-ledger.ts";
+import { extractProvisionalName } from "../../../core/src/ledger/projections/conversations.ts";
 
 const FALLBACK_TS = "1970-01-01T00:00:00.000Z";
 const FACT_BATCH_SIZE = 1000;
@@ -76,18 +77,9 @@ function readText(row: Row, key: string): string | undefined {
 }
 class UnsupportedRow extends Error {}
 
-const NAME_LENGTH = 160;
 function normalizeLegacyRequest(body: string | undefined): string {
   const text = body?.trim() ?? "";
   return text.replace(/^無人実行です。[ \t]*質問せずに[^\n]*(?:\n|$)/u, "").trim();
-}
-function extractTaskTitle(body: string | undefined): string {
-  if (!body?.trim()) return "";
-  const heading = body.match(/^\s*#{1,6}\s+(?:タスク|Task)\s+[^:：\n]+[:：]\s*(.+)$/mi)
-    ?? body.match(/^\s*#{1,6}\s+(.+)$/m);
-  if (heading) return heading[1].trim().slice(0, NAME_LENGTH);
-  return body.split(/\n|(?<=[。.!?？！])/u).map(line => line.trim()).find(line => line
-    && !/^(無人実行です|質問せずに|Review a delegated task|You are (?:an? |the )|<)/i.test(line))?.slice(0, NAME_LENGTH) ?? "";
 }
 
 function readJson(row: Row, key: string): JsonValue {
@@ -275,11 +267,12 @@ function migrateSnapshot(
     const id = String(row.target_session_id);
     if (!delegationBySession.has(id)) delegationBySession.set(id, row);
   }
+  // 旧い題と依頼の本文も、会話の名前と同じ core の規則で読む。
   function titleDelegation(row: Row): string {
-    const title = extractTaskTitle(readText(row, "title")) || extractTaskTitle(readText(row, "task"));
+    const title = extractProvisionalName(readText(row, "title")) || extractProvisionalName(readText(row, "task"));
     if (row.role !== "review") return title;
     const parent = catalogById.get(JSON.stringify([row.namespace, readText(row, "parent_id")]));
-    const original = parent ? extractTaskTitle(readText(parent, "title")) || extractTaskTitle(readText(parent, "task"))
+    const original = parent ? extractProvisionalName(readText(parent, "title")) || extractProvisionalName(readText(parent, "task"))
       : title.replace(/^Review(?: of|:)\s*/i, "");
     return original ? `Review of ${original}` : "";
   }
@@ -287,11 +280,9 @@ function migrateSnapshot(
     const delegation = delegationBySession.get(String(row.id));
     const oldTask = tasksById.get(String(row.id)) ?? [];
     const request = firstRequests.get(String(row.id));
-    const title = extractTaskTitle(request);
     return (delegation ? titleDelegation(delegation) : "")
-      || (oldTask.length === 1 ? extractTaskTitle(readText(oldTask[0], "title")) : "")
-      || (title && /^Review a delegated task\./i.test(request?.trim() ?? "") ? `Review of ${title}` : title)
-      || extractTaskTitle(readText(row, "goal"));
+      || (oldTask.length === 1 ? extractProvisionalName(readText(oldTask[0], "title")) : "")
+      || extractProvisionalName(request) || extractProvisionalName(readText(row, "goal"));
   }
   const locations = new Map(repos.map((row) => [String(row.key), locate(String(row.root_path))]));
   const projects = new Map([...locations].map(([key, location]) => [key, location.repository_id]));

@@ -148,7 +148,8 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
       const projection = Object.fromEntries(Object.entries(page.projection).map(([table, rows]) => [table,
         [...new Map([...(previous?.projection[table] ?? []), ...rows].map(row => [readText(row.id), row])).values()]]));
       setDetail({ id: conversationId, projection, hasOlder: page.hasOlder });
-      target.recordFirstRequest(conversationId, page.firstRequestExcerpt);
+      // 一覧の先頭のページにない会話も、api が返す投影の行で名前を出す。
+      if (page.conversation && page.generation !== undefined) target.mergeProjection({ conversations: [page.conversation] }, page.generation);
       if (older) { following.current = false; setMessageLimit(value => value + MESSAGE_PAGE_SIZE); }
     } catch (error) { if (!controller.signal.aborted) setHistoryError(`Unable to load messages. ${error instanceof Error ? error.message : ''}`.trim()); }
     finally { if (!controller.signal.aborted) setHistoryLoading(false); }
@@ -258,7 +259,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const worktree = worktreeLabel(run);
   const shownModel = appliedModel?.model || currentModel;
   const shownEffort = appliedModel?.effort || currentEffort;
-  const title = conversationName(state, conversationId, 'conversation') || t('conversation');
+  const title = conversationName(state, conversationId) || t('conversation');
   const dirty = Boolean(model) && (model !== currentModel || effort !== currentEffort);
   const hint = provider === 'codex' ? codexActive ? 'activeCodex' : 'nextTurn' : 'claudeEffort';
   return <section className={`conversation-page${embedded ? ' embedded' : ''}`} aria-label={t('conversation')}>

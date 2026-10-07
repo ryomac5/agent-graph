@@ -2,7 +2,7 @@ import type { Fact } from "../facts.ts";
 import { projectApprovals } from "./approvals.ts";
 import { projectArtifacts } from "./artifacts.ts";
 import { projectConnections } from "./connections.ts";
-import { projectConversations } from "./conversations.ts";
+import { collectProvisionalNames, projectConversations } from "./conversations.ts";
 import { projectDelegations } from "./delegations.ts";
 import { projectFindings } from "./findings.ts";
 import { projectMessages } from "./messages.ts";
@@ -23,10 +23,12 @@ export * from "./runs.ts";
 export * from "./projects.ts";
 
 export function project(facts: readonly Fact[]) {
+  const messages = projectMessages(facts);
   return {
     ...projectNames(facts),
-    ...projectConversations(facts),
-    ...projectMessages(facts),
+    // 発言の投影を再利用し、会話の名前のために同じ本文を再投影しない。
+    ...projectConversations(facts, collectProvisionalNames(messages)),
+    ...messages,
     runs: projectRuns(facts),
     connections: projectConnections(facts),
     delegations: projectDelegations(facts),

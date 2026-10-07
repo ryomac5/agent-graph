@@ -1,4 +1,4 @@
-import { readTitle } from '../lib/format.ts';
+import { conversationTitle, isProvisionalName, readTitle } from '../lib/format.ts';
 import { getRegisteredProjects, isTemporaryPath, OTHER_PROJECT } from '../lib/projects.ts';
 import type { Row, ScreenState } from '../lib/store.ts';
 import type { ExecutionState } from './StateBadge.tsx';
@@ -9,7 +9,7 @@ export const executionStates: ExecutionState[] = ['starting', 'running', 'waitin
 export type ActivitySection = 'managed' | 'external' | 'unattended' | 'unsupported';
 export interface Activity {
   id: string; parentConversationId?: string; taskId?: string; conversationId?: string; project: string; name: string;
-  temporary?: boolean; lastActivity?: string; excerpt?: string; provisional: boolean; provider: string; model: string; effort: string; state: ExecutionState;
+  temporary?: boolean; lastActivity?: string; excerpt?: string; firstRequest?: string; provisional: boolean; provider: string; model: string; effort: string; state: ExecutionState;
   section: ActivitySection; managed: boolean; run?: Row; messages: Row[]; artifacts: Row[];
 }
 export function readText(value: unknown): string {
@@ -69,9 +69,12 @@ export function selectActivities(state: ScreenState, parallel = false): Activity
       const message = messages.get(readText(link.message_id));
       return message ? [message] : [];
     }).sort((a, b) => readText(a.source_ts).localeCompare(readText(b.source_ts)) || readText(a.id).localeCompare(readText(b.id)));
-    const first = readText(conversation.first_request_excerpt) || history.filter(row => row.role === 'user' || !row.role).map(row => readBody(row.body)).find(Boolean)?.trim().split(/(?<=[。.!?？！])|\n/u)[0];
     const orderedRuns = [...(runs.get(conversationId) ?? [])].sort((a, b) => Number(b.generation ?? 0) - Number(a.generation ?? 0) || readText(b.started_ts).localeCompare(readText(a.started_ts)));
     const displayedRuns = parallel ? orderedRuns.filter(run => Number(run.generation ?? 0) === Number(orderedRuns[0]?.generation ?? 0)) : orderedRuns.slice(0, 1);
+    // 名前は core の投影の値をそのまま出す。名前がなければ provider と始まりの時刻で呼ぶ。
+    const name = conversationTitle(conversation, orderedRuns.map(run => readText(run.started_ts)).filter(Boolean).sort()[0]
+      || readText(conversation.last_message_ts));
+    const provisional = isProvisionalName(conversation);
     for (const run of displayedRuns.length ? displayedRuns : [undefined]) {
       const assignment = assigned.get(readText(run?.id));
       const launch = readObject(run?.launch);
@@ -87,8 +90,7 @@ export function selectActivities(state: ScreenState, parallel = false): Activity
         temporary: project?.reason === 'temporary' || conversation.project_reason === 'temporary' || isTemporaryPath(location),
         lastActivity: [conversation.last_message_ts, run?.last_evidence_ts, run?.ended_ts, run?.started_ts, conversation.created_ts].map(readText).filter(Boolean).sort().at(-1),
         excerpt: readText(conversation.last_message_excerpt),
-        name: readTitle(task?.name) || readTitle(conversation.name) || first || readText(conversation.last_message_excerpt) || readText(task?.purpose) || 'New conversation',
-        provisional: !readTitle(task?.name) && (!readTitle(conversation.name) || conversation.name_is_provisional === true || conversation.name_is_provisional === 1),
+        name, provisional, firstRequest: readText(conversation.first_request_excerpt),
         provider: readText(conversation.provider),
         // 起動の記録がない実行は、モデルを空にして画面に「記録なし」と出す。
         model: readText(assignment?.model) || readText(readObject(launch.model).model) || readText(conversation.model),

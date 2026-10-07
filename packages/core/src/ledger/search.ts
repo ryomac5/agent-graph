@@ -349,7 +349,8 @@ export function refreshSearch(db: DatabaseSync, added?: readonly Fact[], allFact
   // 通常の全件経路は投影表を読む。保持整理後は識別情報だけで失われた文脈を補う。
   const restoreContext = subjects || decoded.some(fact => fact.payload === null);
   const projection = restoreContext ? {
-    ...projectConversations(contextFacts),
+    // 検索は会話の識別と作業だけを使うため、名前の候補のために本文を投影しない。
+    ...projectConversations(contextFacts, new Map()),
     message_memberships: projectMessages(contextFacts).message_memberships,
     runs: projectRuns(contextFacts),
     artifacts: projectArtifacts(contextFacts),

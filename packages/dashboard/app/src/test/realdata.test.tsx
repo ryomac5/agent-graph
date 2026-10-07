@@ -26,7 +26,7 @@ function createLargeStore() {
   for (let index = 0; index < CONVERSATION_COUNT; index++) {
     const project = index % 3 === 0 ? 'registered-hash' : `unregistered-hash-${index}`;
     tasks.push({ id: `task-${index}`, name: `Task ${index}`, project });
-    conversations.push({ id: `conversation-${index}`, task_id: `task-${index}`, origin: 'observed', provider: 'codex',
+    conversations.push({ id: `conversation-${index}`, task_id: `task-${index}`, name: `Task ${index}`, name_is_provisional: false, origin: 'observed', provider: 'codex',
       history_format: 'legacy', project, message_count: 10, last_message_excerpt: 'Saved message excerpt', last_message_ts: OLD });
     runs.push({ id: `run-${index}`, conversation_id: `conversation-${index}`, state: 'ended', generation: 1, ended_ts: OLD });
   }
@@ -156,21 +156,23 @@ it('loads metadata after the snapshot page without overwriting a newer live row'
   expect(screen.getByRole('article', { name: 'Live title' })).toBeTruthy();
   expect(screen.queryByRole('article', { name: 'Old title' })).toBeNull();
 });
-it('replaces an unnamed task with the first request excerpt rather than the latest reply', async () => {
+it('shows an unnamed conversation by provider and start time without fetching bodies to derive a name', async () => {
   const target = createConversationStore();
   const projection = target.getSnapshot().projection;
+  const started = new Date(2026, 0, 5, 10, 46).toISOString();
   target.setSnapshot({ ...target.getSnapshot(), projection: { ...projection,
     tasks: [{ ...projection.tasks[0], name: 'Untitled task' }],
-    conversations: [{ ...projection.conversations[0], name: '', last_message_excerpt: 'Latest assistant reply' }],
+    conversations: [{ ...projection.conversations[0], name: null, name_is_provisional: false,
+      first_request_excerpt: 'Fix the product.', last_message_excerpt: 'Latest assistant reply' }],
+    runs: [{ ...projection.runs[0], started_ts: started }],
   } });
-  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ generation: 0, next: null, projection: {
-    messages: [{ id: 'first', role: 'user', body: 'Fix the product. Include tests.', source_ts: OLD },
-      { id: 'last', role: 'assistant', body: 'Latest assistant reply', source_ts: NOW }],
-    message_memberships: ['first', 'last'].map(id => ({ id, message_id: id, conversation_id: 'c', active: 1 })),
-  } }) })));
+  const fetcher = vi.fn();
+  vi.stubGlobal('fetch', fetcher);
   render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
-  expect(await screen.findByRole('article', { name: 'Fix the product.' })).toBeTruthy();
-  expect(screen.queryByText('Untitled task')).toBeNull();
+  const row = screen.getByRole('article', { name: 'Codex · Jan 5 10:46' });
+  expect(within(row).getByRole('link', { name: 'Codex · Jan 5 10:46' }).title).toBe('Fix the product.');
+  expect(screen.queryByRole('article', { name: /Untitled task|Latest assistant reply|New conversation/ })).toBeNull();
+  expect(fetcher).not.toHaveBeenCalled();
 });
 it('loads the exact old search message with at most two hundred surrounding messages', async () => {
   const rows = Array.from({ length: 600 }, (_, index) => ({ id: `m${String(index).padStart(3, '0')}`,

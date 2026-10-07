@@ -1,15 +1,15 @@
 import type { DatabaseSync } from "node:sqlite";
 import { createProjectionStorage, PROJECTION_STORAGE_TABLES, PROJECTION_STORAGE_INDEXES } from "./projections/storage.ts";
-import { projectConversations, encodeNameOrder, extractProvisionalName } from "./projections/conversations.ts";
+import { projectConversations, encodeNameOrder, extractMessageName } from "./projections/conversations.ts";
 import { projectMessages } from "./projections/messages.ts";
 import { projectRuns } from "./projections/runs.ts";
 import { projectApprovals } from "./projections/approvals.ts";
 import { serializeValue } from "./projections/relations.ts";
-import type { Fact } from "./facts.ts";
+import type { Fact, JsonValue } from "./facts.ts";
 import { collectProjectionDependencies } from "./projections/dependencies.ts";
 import { initializeSearch, refreshSearch } from "./search.ts";
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 export const FACT_SCHEMA_VERSION = 1;
 export const FACTS_DDL = `CREATE TABLE facts (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -145,7 +145,7 @@ function migrateToVersion2(db: DatabaseSync): void {
   const insert = db.prepare("INSERT INTO message_name_inputs VALUES (?, ?, ?, ?, ?)");
   for (const message of projectMessages(facts).messages) {
     insert.run(message.id, Date.parse(message.source_ts), encodeNameOrder(message.source_event_id),
-      extractProvisionalName(message.body), encodeNameOrder(message.id));
+      extractMessageName(message), encodeNameOrder(message.id));
   }
   db.exec(`INSERT INTO conversation_name_candidates
     SELECT m.id, m.conversation_id, m.message_id, n.source_time, n.source_event_id, n.name, n.message_order
@@ -178,7 +178,41 @@ function migrateToVersion3(db: DatabaseSync): void {
   for (const row of projectApprovals(facts)) approval.run(row.requested_ts ?? null, row.id);
 }
 function migrateToVersion4(db: DatabaseSync): void { initializeSearch(db); refreshSearch(db); }
-const MIGRATIONS = [migrateToVersion1, migrateToVersion2, migrateToVersion3, migrateToVersion4] as const;
+// 会話に依頼の抜粋の列を足し、名前の規則の変更を既存の発言に当て直す。発言の全体は再投影しない。
+function migrateToVersion5(db: DatabaseSync): void {
+  db.exec("ALTER TABLE conversations ADD COLUMN first_request_excerpt TEXT");
+  db.exec("DELETE FROM message_name_inputs; DELETE FROM conversation_name_candidates");
+  const insert = db.prepare("INSERT INTO message_name_inputs VALUES (?, ?, ?, ?, ?)");
+  for (const row of db.prepare("SELECT id, role, body, source_ts, source_event_id FROM messages").iterate()) {
+    const body = row.body === null ? undefined : JSON.parse(String(row.body)) as JsonValue;
+    insert.run(String(row.id), Date.parse(String(row.source_ts)), encodeNameOrder(String(row.source_event_id)),
+      extractMessageName({ role: row.role === null ? null : String(row.role), body }), encodeNameOrder(String(row.id)));
+  }
+  db.exec(`INSERT INTO conversation_name_candidates
+    SELECT m.id, m.conversation_id, m.message_id, n.source_time, n.source_event_id, n.name, n.message_order
+    FROM message_memberships m JOIN message_name_inputs n ON n.id = m.message_id
+    WHERE m.active = 1 AND m.conversation_id IS NOT NULL AND n.name <> '';`);
+  const lastSeq = Number(db.prepare("SELECT last_seq FROM projection_state WHERE id = 1").get()!.last_seq);
+  // 会話の名前は作業と会話の事実だけで決まる。発言の事実は名前の候補の索引から読む。
+  const facts = db.prepare("SELECT * FROM facts WHERE seq <= ? AND (kind LIKE 'task.%' OR kind LIKE 'conversation.%')")
+    .all(lastSeq).map((row) => ({ ...row, payload: row.payload === null ? null : JSON.parse(String(row.payload)) } as Fact));
+  const first = db.prepare(`SELECT name FROM conversation_name_candidates
+    WHERE conversation_id = ? ORDER BY source_time, source_event_id, message_order LIMIT 1`);
+  const ids = db.prepare("SELECT id FROM conversations").all().map((row) => String(row.id));
+  const names = new Map<string, string>();
+  for (const id of ids) {
+    const row = first.get(id);
+    if (row) names.set(id, String(row.name));
+  }
+  const records = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'projection_records'").get()
+    ? db.prepare("UPDATE projection_records SET data = ? WHERE projection = 'conversations' AND entity_id = ?") : undefined;
+  const update = db.prepare("UPDATE conversations SET name = ?, name_is_provisional = ?, first_request_excerpt = ? WHERE id = ?");
+  for (const conversation of projectConversations(facts, names).conversations) {
+    update.run(conversation.name, Number(conversation.name_is_provisional), conversation.first_request_excerpt, conversation.id);
+    records?.run(JSON.stringify(conversation), conversation.id);
+  }
+}
+const MIGRATIONS = [migrateToVersion1, migrateToVersion2, migrateToVersion3, migrateToVersion4, migrateToVersion5] as const;
 
 export function initializeSchema(db: DatabaseSync): void {
   db.exec("BEGIN IMMEDIATE");

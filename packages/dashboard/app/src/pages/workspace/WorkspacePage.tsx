@@ -1,4 +1,3 @@
-import { useProvisionalNames } from '../../lib/provisional-names.ts';
 import { useState, type ReactNode } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { store, useScreenStore, type ScreenStore } from '../../lib/store.ts';
@@ -32,7 +31,6 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
   const allItems = selectActivities(state, true).filter(item => item.project === project && (showTemporary || !item.temporary)).sort((a, b) =>
     order === 'state' ? a.state.localeCompare(b.state) || a.name.localeCompare(b.name) : a.name.localeCompare(b.name));
   const items = allItems.slice(0, limit);
-  useProvisionalNames(state, target, items, client);
   const selected = items.find(item => item.id === selectedId) ?? items[0];
   const available = state.connection === 'connected';
   const activeCount = items.filter(item => ACTIVE.includes(item.state)).length;

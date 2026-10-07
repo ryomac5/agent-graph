@@ -353,3 +353,45 @@ test("仮の名前は、ホストが差し込んだ AGENTS.md や skills の本�
   assert.equal(extractProvisionalName("<recommended_plugins>\nnpx がパッケージ確認で待機しています"), "");
   assert.equal(extractProvisionalName("done"), "done");
 });
+
+test("名前の規則は、同じ行の札、Codex の AGENTS.md、依頼を包む札、元の依頼の後の本文を正しく読む", () => {
+  assert.equal(extractProvisionalName("<multi_agent_role>You are `/root`, the primary agent.</multi_agent_role>\n画面の名前を直す。"), "画面の名前を直す。");
+  assert.equal(extractProvisionalName("<multi_agent_role>You are `/root`, the primary agent."), "");
+  assert.equal(extractProvisionalName("<permissions instructions>\nsandbox\n</permissions instructions>\n依頼の本文。"), "依頼の本文。");
+  assert.equal(extractProvisionalName("<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args></command-args>"), "");
+  assert.equal(extractProvisionalName("# AGENTS.md instructions for /repo\n\n<INSTRUCTIONS>\n# 規約\n本文\n</INSTRUCTIONS>\n検索を速くする。続き"), "検索を速くする。");
+  assert.equal(extractProvisionalName("# AGENTS.md instructions for /repo\n\n<INSTRUCTIONS>\n# 規約\n</INSTRUCTIONS>"), "");
+  assert.equal(extractProvisionalName("<task>\nPort best.py to C++. Keep the output.\n</task>"), "Port best.py to C++.");
+  assert.equal(extractProvisionalName("<task>Read /repo/best.py and report.</task>"), "Read /repo/best.py and report.");
+  assert.equal(extractProvisionalName("元の依頼:\n# タスク D1: 画面への配信を作る\n本文"), "画面への配信を作る");
+  assert.equal(extractProvisionalName("無人実行です。質問せずに作業を完了してください。読み取り専用のタスクです。設計を読む。"), "設計を読む。");
+  assert.equal(extractProvisionalName("Review a delegated task. Do not edit files.\nJudge the fixed artifact.\n\nOriginal request:\n{\"title\":\"Intake check\",\"task\":\"Reply OK.\"}\n\nImplementer reply:\nOK"), "Review of Intake check");
+  assert.equal(extractProvisionalName("Review a delegated task.\n# タスク X5: 横断検索を作る\nレビュー"), "Review of 横断検索を作る");
+  assert.equal(extractProvisionalName("レビュー対象: タスク T2: イベント型を実装\n本文"), "Review of イベント型を実装");
+  assert.equal(extractProvisionalName("# 解法を見直す\n\n## 目的\n手数を縮める。"), "解法を見直す");
+  assert.equal(extractProvisionalName("candidates/v32/main.py を土台に v33 を作る。背景"), "candidates/v32/main.py を土台に v33 を作る。");
+  assert.equal(extractProvisionalName("- 相手との結合は共有市場だけ。"), "相手との結合は共有市場だけ。");
+  assert.equal(extractProvisionalName("Base directory for this skill: /Users/r/.claude/skills/plan\n\n# plan"), "");
+  assert.equal(extractProvisionalName("This session is being continued from a previous conversation that ran out of context.\nSummary"), "");
+  assert.equal(extractProvisionalName([{ type: "tool_result", content: "出力。" }]), "");
+  assert.equal(extractProvisionalName([{ type: "input_text", text: "Codex への依頼。続き" }]), "Codex への依頼。");
+  assert.equal(extractProvisionalName("あ".repeat(400)).length, 160);
+});
+
+test("名前と依頼の抜粋は利用者の発言だけから作り、無人実行にも抜粋を付ける", () => {
+  const message = (id: string, role: string, body: string, second: number) => createFact({ source: "rollout-codex", source_event_id: id,
+    kind: "message.created", subject: `message:${id}`, payload: { provider: "codex", native_id: id, version: 1, role, body, body_state: "stored" },
+    source_ts: new Date(Date.parse(TS) + second * 1000).toISOString(), confidence: "confirmed" });
+  const facts = [createConversation("a"), createConversation("u", { type: "unattended" }),
+    message("developer", "developer", "<skills_instructions>\nskills\n</skills_instructions>\nスキルの一覧。", 0),
+    message("reply", "assistant", "応答を先に記録した。", 1),
+    message("agents", "user", "# AGENTS.md instructions for /repo\n\n<INSTRUCTIONS>\n規約\n</INSTRUCTIONS>", 2),
+    message("request", "user", "依頼の本文。続き", 3),
+    ...["developer", "reply", "agents", "request"].flatMap(id => [createMembership(`a-${id}`, "a", id), createMembership(`u-${id}`, "u", id)])];
+  const conversations = projectConversations(facts).conversations;
+  const named = conversations.find(row => row.native_id === "a")!;
+  const unattended = conversations.find(row => row.native_id === "u")!;
+  assert.deepEqual([named.name, named.name_is_provisional, named.first_request_excerpt], ["依頼の本文。", true, "依頼の本文。"]);
+  assert.deepEqual([unattended.name, unattended.name_is_provisional, unattended.first_request_excerpt], [null, false, "依頼の本文。"]);
+  assert.deepEqual(projectConversations([...facts].reverse()).conversations, conversations);
+});

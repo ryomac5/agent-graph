@@ -11,11 +11,12 @@ export function createActivityStore(): ScreenStore {
     projects: [{ id: '/repo/alpha', display_name: 'alpha', root_path: '/repo/alpha', state: 'registered' }, { id: '/repo/beta', display_name: 'beta', root_path: '/repo/beta', state: 'registered' }],
     tasks: [{ id: 't1', name: 'Implement API', project: '/repo/alpha', state: 'running' }, { id: 't2', name: 'Review UI', project: '/repo/beta', state: 'idle' }],
     conversations: [
-      { id: 'c1', task_id: 't1', provider: 'codex', origin: 'managed', type: 'interactive', history_format: 'jsonl' },
-      { id: 'c2', task_id: 't2', provider: 'claude', origin: 'managed', type: 'interactive', history_format: 'jsonl' },
-      { id: 'external', provider: 'claude', origin: 'observed', type: 'interactive', history_format: 'jsonl', project: '/repo/alpha' },
-      { id: 'exec', provider: 'codex', origin: 'observed', type: 'unattended', history_format: 'jsonl' },
-      { id: 'unsupported', provider: 'codex', origin: 'observed', history_format: 'paginated' },
+      // api は core の投影の名前と依頼の抜粋を会話の行に載せる。
+      { id: 'c1', task_id: 't1', provider: 'codex', origin: 'managed', type: 'interactive', history_format: 'jsonl', name: 'Implement API', name_is_provisional: false, first_request_excerpt: 'Build the API.' },
+      { id: 'c2', task_id: 't2', provider: 'claude', origin: 'managed', type: 'interactive', history_format: 'jsonl', name: 'Review UI', name_is_provisional: false, first_request_excerpt: null },
+      { id: 'external', provider: 'claude', origin: 'observed', type: 'interactive', history_format: 'jsonl', project: '/repo/alpha', name: 'Investigate latency.', name_is_provisional: true, first_request_excerpt: 'Investigate latency.' },
+      { id: 'exec', provider: 'codex', origin: 'observed', type: 'unattended', history_format: 'jsonl', name: null, name_is_provisional: false, first_request_excerpt: null },
+      { id: 'unsupported', provider: 'codex', origin: 'observed', history_format: 'paginated', name: null, name_is_provisional: false, first_request_excerpt: null },
     ],
     runs: [{ id: 'r1', conversation_id: 'c1', generation: 1, state: 'running', started_ts: '2026-10-07T01:00:00Z' },
       { id: 'r2', conversation_id: 'c2', generation: 1, state: 'idle' },
@@ -74,16 +75,27 @@ it('shows unknown with last evidence, exact time, relative time and reason, with
   act(() => target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: { runs: { upsert: [{ id: 'r1', conversation_id: 'c1', state: 'failed', cause: 'Build failed' }], remove: [] } } }));
   expect(screen.getByText('Build failed')).toBeTruthy();
 });
-it('keeps unnamed and task-only activity visible and uses the first sentence as a provisional name', () => {
+it('shows the projected name as is and names an unnamed conversation by provider and start time, never from message bodies', () => {
   const target = createStore();
+  const started = new Date(2026, 0, 5, 10, 46).toISOString();
   target.setSnapshot({ seq: 1, generation: 0, projection: {
     tasks: [{ id: 'pending', purpose: 'Waiting task', project: '/repo' }],
-    conversations: [{ id: 'new', origin: 'managed', provider: 'codex' }],
-    messages: [{ id: 'm', body: 'First sentence. Second sentence.' }],
-    message_memberships: [{ id: 'l', message_id: 'm', conversation_id: 'new', active: 1 }],
+    conversations: [
+      { id: 'named', origin: 'observed', type: 'interactive', provider: 'codex', name: '画面への配信を作る', name_is_provisional: true, first_request_excerpt: '画面への配信を作る' },
+      { id: 'exec', origin: 'observed', type: 'unattended', provider: 'claude', name: null, name_is_provisional: false, first_request_excerpt: 'Reply OK.' },
+    ],
+    runs: [{ id: 'r', conversation_id: 'exec', generation: 0, state: 'ended', started_ts: started }],
+    messages: [{ id: 'm', role: 'user', body: '<multi_agent_role>You are `/root`.\n# タスク D1: 画面への配信を作る' },
+      { id: 'n', role: 'user', body: 'First sentence. Second sentence.' }],
+    message_memberships: [{ id: 'l', message_id: 'm', conversation_id: 'named', active: 1 }, { id: 'k', message_id: 'n', conversation_id: 'exec', active: 1 }],
   } });
   render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
-  expect(screen.getByRole('article', { name: 'First sentence.' })).toBeTruthy();
+  const named = screen.getByRole('article', { name: '画面への配信を作る' });
+  expect(within(named).getByText('Provisional')).toBeTruthy();
+  const unnamed = screen.getByRole('article', { name: 'Claude · Jan 5 10:46' });
+  expect(within(unnamed).queryByText('Provisional')).toBeNull();
+  expect(within(unnamed).getByRole('link', { name: 'Claude · Jan 5 10:46' }).title).toBe('Reply OK.');
+  expect(screen.queryByRole('article', { name: /First sentence|New conversation|multi_agent_role|タスク D1/ })).toBeNull();
   expect(screen.getByRole('article', { name: 'Waiting task' })).toBeTruthy();
 });
 it('decodes SQLite JSON bodies, evidence and assignment attempts from the actual snapshot format', () => {

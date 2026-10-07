@@ -271,3 +271,15 @@ it('does not apply an old command response to a different conversation', async (
   expect(screen.queryByText('Old error')).toBeNull();
   expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).value).toBe('New message');
 });
+it('titles the conversation with the projected name and never derives it from message bodies', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ generation: 0, next: null, projection: {
+    conversations: [{ id: 'c', name: null, name_is_provisional: false, first_request_excerpt: 'Fix the product.', provider: 'codex' }],
+    messages: [{ id: 'm', role: 'user', body: '<multi_agent_role>You are `/root`.</multi_agent_role>\n# タスク D1: 画面への配信を作る', source_ts: '2026-10-07T00:00:00Z' }],
+    message_memberships: [{ id: 'l', message_id: 'm', conversation_id: 'c', active: 1 }] } }) })));
+  const { store } = setup({ projection: { conversations: [{ id: 'c', name: null, name_is_provisional: false, provider: 'codex', origin: 'managed', history_format: 'legacy' }],
+    runs: [{ id: 'r', conversation_id: 'c', generation: 1, state: 'idle', started_ts: new Date(2026, 0, 5, 10, 46).toISOString() }] } });
+  expect(await screen.findByRole('heading', { name: 'Codex · Jan 5 10:46' })).toBeTruthy();
+  await waitFor(() => expect(screen.getByText(/画面への配信を作る/)).toBeTruthy());
+  expect(screen.queryByRole('heading', { name: /画面への配信|multi_agent_role/ })).toBeNull();
+  expect(store.getSnapshot().projection.conversations.map(row => row.name)).toEqual([null]);
+});

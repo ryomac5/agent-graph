@@ -1,4 +1,3 @@
-import { useProvisionalNames } from '../../lib/provisional-names.ts';
 import type { ConversationClient } from '../conversation/ConversationPage.tsx';
 import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
@@ -47,7 +46,6 @@ export function HomePage({ target = store, client, language = 'en' }: { target?:
   const current = sorted.filter(recent);
   const history = sorted.filter(item => !recent(item));
   const visible = current.slice(0, recentLimit);
-  useProvisionalNames(state, target, [...visible, ...history.slice(0, historyLimit)], client);
   const ja = language === 'ja';
   const filtered = Boolean(status || provider || project);
   const count = (states: string[]) => activities.filter(item => states.includes(item.state)).length;

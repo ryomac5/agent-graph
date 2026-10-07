@@ -381,7 +381,7 @@ test("版 1 の台帳に索引を移行し、既存事実と続きの投影を�
   database.prepare("VACUUM INTO ?").run(path);
   const legacy = new DatabaseSync(path);
   legacy.exec("DROP TABLE fact_projection_dependencies; DROP INDEX facts_subject_seq");
-  legacy.exec("DROP TABLE conversation_name_candidates; DROP TABLE message_name_inputs; DROP INDEX membership_message; ALTER TABLE conversations DROP COLUMN name; ALTER TABLE conversations DROP COLUMN name_is_provisional");
+  legacy.exec("DROP TABLE conversation_name_candidates; DROP TABLE message_name_inputs; DROP INDEX membership_message; ALTER TABLE conversations DROP COLUMN name; ALTER TABLE conversations DROP COLUMN name_is_provisional; ALTER TABLE conversations DROP COLUMN first_request_excerpt");
   for (const [table, column] of [["messages", "source_ts"], ["messages", "source_event_id"], ["messages", "source"], ["messages", "confidence"],
     ["runs", "launch"], ["runs", "cwd"], ["runs", "branch"], ["approvals", "requested_ts"]]) legacy.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
   legacy.prepare("UPDATE schema_version SET version = ?").run(1);
@@ -399,6 +399,50 @@ test("版 1 の台帳に索引を移行し、既存事実と続きの投影を�
   const incremental = readTables(projection);
   rebuild(projection);
   assert.deepEqual(readTables(projection), incremental);
+});
+
+test("版 4 の台帳を開くと、名前の規則を既存の発言に当て直し、依頼の抜粋を会話に載せる", (t) => {
+  const { writer, database } = openTestLedger(t);
+  const inputs: FactInput[] = [
+    { ...BASE, source_event_id: "v4-c", kind: "conversation.created", subject: "conversation:c",
+      payload: { provider: "codex", native_id: "c", origin: "observed", type: "interactive", history_format: "paginated" } },
+    { ...BASE, source_event_id: "v4-u", kind: "conversation.created", subject: "conversation:u",
+      payload: { provider: "codex", native_id: "u", origin: "observed", type: "unattended", history_format: "paginated" } },
+    ...([["developer", "<permissions instructions>\nsandbox\n</permissions instructions>"],
+      ["user", "# AGENTS.md instructions for /repo\n\n<INSTRUCTIONS>\n# 規約\n</INSTRUCTIONS>"],
+      ["user", "<task>\n会話の名前を直す。続き\n</task>"]] as const).flatMap(([role, body], index): FactInput[] => [
+      { ...BASE, source_ts: new Date(Date.parse(TS) + index * 1000).toISOString(), source_event_id: `v4-m${index}`,
+        kind: "message.created", subject: `message:m${index}`,
+        payload: { provider: "codex", native_id: `m${index}`, version: 1, role, body, body_state: "stored" } },
+      ...["c", "u"].map((conversation): FactInput => ({ ...BASE, source_event_id: `v4-${conversation}${index}`,
+        kind: "message_membership.created", subject: `message_membership:${conversation}${index}`,
+        payload: { message_id: `m${index}`, conversation_id: conversation, active: true } })),
+    ]),
+  ];
+  for (const input of inputs) writer.append(input);
+  rebuild(database);
+  const expected = readTables(database);
+  const directory = mkdtempSync(join(tmpdir(), "ledger-v4-"));
+  const path = join(directory, "ledger.sqlite");
+  database.prepare("VACUUM INTO ?").run(path);
+  // 旧い規則で作った名前の索引と会話の名前を再現し、列を落として版 4 に戻す。
+  const legacy = new DatabaseSync(path);
+  legacy.exec(`UPDATE message_name_inputs SET name = 'sandbox' WHERE id = '["codex","m0"]';
+    INSERT INTO conversation_name_candidates SELECT m.id, m.conversation_id, m.message_id, n.source_time, n.source_event_id, n.name, n.message_order
+      FROM message_memberships m JOIN message_name_inputs n ON n.id = m.message_id WHERE n.id = '["codex","m0"]';
+    UPDATE conversations SET name = '<permissions instructions>' WHERE id = '["codex","c"]';
+    ALTER TABLE conversations DROP COLUMN first_request_excerpt; UPDATE schema_version SET version = 4;`);
+  legacy.close();
+  const migrated = openLedger(path, { storageScope: "full_diff" });
+  const projection = new DatabaseSync(path);
+  t.after(() => { projection.close(); migrated.close(); rmSync(directory, { recursive: true }); });
+  assert.equal(projection.prepare("SELECT version FROM schema_version WHERE id = 1").get()!.version, SCHEMA_VERSION);
+  assert.deepEqual(projection.prepare("SELECT id, name, name_is_provisional, first_request_excerpt FROM conversations ORDER BY id").all()
+    .map((row) => ({ ...row })), [
+    { id: '["codex","c"]', name: "会話の名前を直す。", name_is_provisional: 1, first_request_excerpt: "会話の名前を直す。" },
+    { id: '["codex","u"]', name: null, name_is_provisional: 0, first_request_excerpt: "会話の名前を直す。" },
+  ]);
+  assert.deepEqual(readTables(projection), expected);
 });
 
 test("独立した実体の更新で無関係の投影行を削除・上書きしない", (t) => {

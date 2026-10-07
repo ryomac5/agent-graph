@@ -1,13 +1,12 @@
 import { Link } from 'react-router';
 import type { ReactNode } from 'react';
 import type { Language } from '../lib/i18n.ts';
-import { evidenceLabel } from '../lib/format.ts';
+import { evidenceLabel, providerName } from '../lib/format.ts';
 import { StateBadge } from './StateBadge.tsx';
 import { readBody, readText, summarizeChanges, type Activity } from './activity.ts';
 import { formatDuration, RelativeTime } from './RelativeTime.tsx';
 
-export const PROVIDER_NAMES: Record<string, string> = { claude: 'Claude', codex: 'Codex' };
-export function providerName(provider: string): string { return PROVIDER_NAMES[provider] ?? provider; }
+export { PROVIDER_NAMES, providerName } from '../lib/format.ts';
 
 export function AgentCell({ provider, model, effort, language = 'en' }: { provider: string; model: string; effort?: string; language?: Language }) {
   return <span className="agent-cell">
@@ -34,8 +33,8 @@ export function ActivityRow({ activity, now, language = 'en', onSelect, selected
     evidenceTime={readText(run?.last_evidence_ts) ? <RelativeTime value={readText(run?.last_evidence_ts)} now={now} language={language}/> : undefined} reason={readText(run?.cause ?? run?.reason) || undefined}
     elapsed={statusElapsed === 'Unknown' ? undefined : statusElapsed}/>;
   const title = <div className="activity-title">
-    {onSelect ? <button className="activity-name" aria-current={selected ? 'true' : undefined} onClick={onSelect}>{activity.name}</button>
-      : <Link className="activity-name" to={url}>{activity.name}</Link>}
+    {onSelect ? <button className="activity-name" aria-current={selected ? 'true' : undefined} title={activity.firstRequest || undefined} onClick={onSelect}>{activity.name}</button>
+      : <Link className="activity-name" to={url} title={activity.firstRequest || undefined}>{activity.name}</Link>}
     {activity.provisional && <span className="chip chip-dashed">{ja ? '仮の名前' : 'Provisional'}</span>}
   </div>;
   const summary = <p className="activity-excerpt">{excerpt ? readBody(excerpt.body) || readText(excerpt.body_state) : activity.excerpt || <span className="muted-text">{ja ? '発言はまだありません' : 'No messages yet'}</span>}</p>;

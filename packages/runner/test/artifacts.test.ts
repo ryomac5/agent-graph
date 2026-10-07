@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { test, type TestContext } from "node:test";
-import { openLedger } from "../../core/src/ledger/ledger.ts";
+import { openLedger } from "../../core/src/ledger/index.ts";
 import type { FactInput } from "../../core/src/ledger/facts.ts";
 import { rebuild } from "../../core/src/ledger/rebuild.ts";
 import { projectArtifacts } from "../../core/src/ledger/projections/artifacts.ts";

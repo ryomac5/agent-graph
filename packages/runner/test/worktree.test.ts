@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
-import { openLedger } from "../../core/src/ledger/ledger.ts";
+import { openLedger } from "../../core/src/ledger/index.ts";
 import { projectEntityRecords } from "../../core/src/ledger/projections/delegations.ts";
 import { inspectWorktree, recordWorktree, type WorktreeRecord } from "../src/worktree.ts";
 

@@ -1,13 +1,11 @@
+import { readProjection } from "./projection.ts";
 import { randomUUID } from "node:crypto";
-import type { ConversationPayload, Fact, FactInput, Provider, RunPayload } from "../../core/src/ledger/facts.ts";
+import type { ConversationPayload, FactInput, Provider, RunPayload } from "../../core/src/ledger/facts.ts";
 import type { Ledger } from "../../core/src/ledger/ledger.ts";
-import { projectApprovals } from "../../core/src/ledger/projections/approvals.ts";
-import { prepareProjectionFacts, projectEntityRecords } from "../../core/src/ledger/projections/delegations.ts";
-import { projectRuns } from "../../core/src/ledger/projections/runs.ts";
+import { prepareProjectionFacts } from "../../core/src/ledger/projections/delegations.ts";
 import type { AgentHost, ResumeRequest, RunHandle } from "./host/contract.ts";
 import type { RunnerEvent } from "./socket.ts";
 
-const READ_BATCH_SIZE = 1000;
 const PENDING_APPROVAL_STATES = new Set(["pending", "requested", "waiting", "waiting_approval"]);
 export interface RecoveryRun { runId: string; conversationId: string; generation: number; provider: Provider; nativeId: string }
 export interface RecoveryAction extends RecoveryRun { operation: "resume"; reason: string }
@@ -43,19 +41,13 @@ export class Recovery {
     if (result.status === "appended") this.options.publish?.({ type: "evt", seq: result.seq });
   }
   private async recoverRuns(): Promise<RecoveryResult> {
-    const facts: Fact[] = [];
-    for (;;) {
-      const batch = this.ledger.readSince(facts.at(-1)?.seq ?? 0, READ_BATCH_SIZE);
-      facts.push(...batch);
-      if (batch.length < READ_BATCH_SIZE) break;
-    }
-    for (const fact of facts) this.timestamp = Math.max(this.timestamp, Date.parse(fact.source_ts));
-    const conversations = projectEntityRecords<ConversationPayload>(facts, "conversation");
-    const runRecords = projectEntityRecords<RunPayload>(facts, "run");
-    const active = prepareProjectionFacts(facts);
+    const store = readProjection(this.ledger);
+    this.timestamp = store.timestamp();
+    const conversations = store.records<ConversationPayload>("conversation");
+    const runRecords = store.records<RunPayload>("run");
     const runs: RecoveryRun[] = [];
     const managedIds = new Set<string>();
-    const projectedRuns = projectRuns(facts);
+    const projectedRuns = store.rows("runs");
     const latestGenerations = new Map<string, number>();
     // 終了した最新世代があっても、置き換わった旧世代へ戻らない。
     for (const run of projectedRuns) {
@@ -65,8 +57,8 @@ export class Recovery {
     for (const run of projectedRuns) {
       const conversation = conversations.find((entry) => entry.id === run.conversation_id);
       if (conversation?.origin !== "managed" || !conversation.provider || !conversation.native_id) continue;
-      const creation = active.findLast((fact) => fact.kind === "run.created"
-        && fact.payload?.conversation_id === run.conversation_id && fact.payload.generation === run.generation);
+      const subject = store.runSubject(run.conversation_id, run.generation);
+      const creation = subject && prepareProjectionFacts(store.subjectFacts(`run:${subject}`)).findLast((fact) => fact.kind === "run.created" && fact.payload?.generation === run.generation);
       if (!creation) continue;
       const runId = creation.subject.slice(4);
       managedIds.add(runId);
@@ -78,7 +70,7 @@ export class Recovery {
         last_evidence: run.last_evidence, last_evidence_ts: run.last_evidence_ts });
     }
     // unknown 化より前の投影で、未解消の要求を拾う。
-    for (const approval of projectApprovals(facts)) {
+    for (const approval of store.rows("approvals", "state IN ('pending', 'requested', 'waiting', 'waiting_approval')")) {
       if (!approval.run_id || !managedIds.has(approval.run_id) || !PENDING_APPROVAL_STATES.has(approval.state)) continue;
       const conversation = conversations.find((entry) => entry.id === runRecords
         .find((run) => run.id === approval.run_id)?.conversation_id);

@@ -23,6 +23,8 @@ export interface DiffViewProps {
 }
 function FileDiff({ file, layout, attribution, evidenceUrl, selection, onSelectLine, selectedFile }: DiffViewProps & { file: DiffFile }) {
   const [expanded, setExpanded] = useState(file.lines.length <= LARGE_FILE_LINES);
+  const fileAttribution = file.attribution ?? attribution;
+  const mixed = new Set(file.lines.filter(line => line.kind === 'add' || line.kind === 'remove').map(line => line.attribution ?? fileAttribution)).size > 1;
   function cell(line: DiffLine | undefined, side?: 'old' | 'new') {
     if (!line) return <td className="diff-cell diff-empty"/>;
     const number = side === 'old' ? line.oldLine : side === 'new' ? line.newLine : line.newLine ?? line.oldLine;
@@ -37,7 +39,7 @@ function FileDiff({ file, layout, attribution, evidenceUrl, selection, onSelectL
           aria-label={`Comment on ${file.path} ${selectedSide} line ${number}`}
           onClick={event => onSelectLine({ file: file.path, side: selectedSide, startLine: number, endLine: number }, event.shiftKey)}>{line.text || ' '}</button>
           : <code className="diff-code">{line.text || ' '}</code>}
-        {number !== undefined && <AttributionBadge attribution={attribution} evidenceUrl={evidenceUrl}/>}
+        {mixed && (line.kind === 'add' || line.kind === 'remove') && <AttributionBadge attribution={line.attribution ?? fileAttribution} evidenceUrl={evidenceUrl}/>}
       </div>
     </td>;
   }
@@ -45,7 +47,7 @@ function FileDiff({ file, layout, attribution, evidenceUrl, selection, onSelectL
     <header className="diff-file-header"><button className="btn btn-ghost btn-sm" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
       <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={14}/><Icon name="file" size={14}/>{file.path}</button>
       <span className="diff-stat"><span className="diff-add-count">+{file.additions}</span> <span className="diff-remove-count">−{file.deletions}</span></span>
-      <AttributionBadge attribution={attribution} evidenceUrl={evidenceUrl}/></header>
+      <AttributionBadge attribution={fileAttribution} evidenceUrl={evidenceUrl}/></header>
     {expanded ? <div className="diff-scroll"><table className={`diff-table diff-${layout}`} aria-label={`${file.path} ${layout} diff`}>
       {layout === 'split' && <thead><tr><th>Before</th><th>After</th></tr></thead>}
       <tbody>{layout === 'unified' ? file.lines.map((line, index) => <tr key={index}>{cell(line)}</tr>) : pairLines(file.lines).map(([old, next], index) =>

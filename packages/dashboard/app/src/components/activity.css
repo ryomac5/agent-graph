@@ -80,3 +80,5 @@ a.activity-name:hover { text-decoration: underline; text-underline-offset: 2px; 
   .workspace-header { flex-wrap: wrap; gap: var(--space-3) var(--space-6); }
   .workspace-stats { order: 3; flex-basis: 100%; }
 }
+
+.activity-child { margin-left: var(--space-4); border-left: 2px solid var(--border-strong); }

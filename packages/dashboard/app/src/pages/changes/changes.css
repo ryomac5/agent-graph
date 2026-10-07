@@ -23,3 +23,7 @@
 .stale-comparison .diff-content .chip { display: none; }
 @media (max-width: 1100px) { .changes-columns { grid-template-columns: minmax(160px, 1fr) minmax(0, 3fr); } .changes-review { grid-column: 1 / -1; } }
 @media (max-width: 680px) { .changes-columns { grid-template-columns: minmax(0, 1fr); } .changes-review { grid-column: auto; } }
+
+.acceptance-verification { min-width: 0; overflow-wrap: anywhere; }
+.acceptance-verification > .chip { justify-self: start; max-width: 100%; white-space: normal; }
+.acceptance-verification details, .acceptance-verification summary { min-width: 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }

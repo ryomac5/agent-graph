@@ -201,7 +201,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const worktree = worktreeLabel(run);
   const shownModel = appliedModel?.model || currentModel;
   const shownEffort = appliedModel?.effort || currentEffort;
-  const title = readText(conversation.name) || conversationName(state, conversationId) || t('conversation');
+  const title = conversationName(state, conversationId, 'conversation') || t('conversation');
   const dirty = Boolean(model) && (model !== currentModel || effort !== currentEffort);
   const hint = provider === 'codex' ? codexActive ? 'activeCodex' : 'nextTurn' : 'claudeEffort';
   return <section className={`conversation-page${embedded ? ' embedded' : ''}`} aria-label={t('conversation')}>

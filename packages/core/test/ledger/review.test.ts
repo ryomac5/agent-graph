@@ -162,3 +162,21 @@ test("共有の成功結果は SHA が一つの実行に対応するときだけ
   assert.equal(classifyGitAttribution(ARTIFACT, [evidence, { ...evidence, run_id: "r2", external: true }]), "inferred");
   assert.equal(classifyGitAttribution(ARTIFACT, [{ ...evidence, commit_result: { success: false, head_sha: "head" } }]), "unknown");
 });
+
+test("マージの許可は同じ差分の後続版だけに引き継ぎ、取り消しと stale は使わない", async () => {
+  const { canMergeArtifact } = await import("../../src/ledger/projections/approvals.ts");
+  const approved = createFact({ source: "ui", source_event_id: "approved", source_ts: "2026-01-01T01:00:00Z",
+    kind: "approval.created", subject: "approval:merge", confidence: "confirmed",
+    payload: { run_id: "r1", request_id: "merge", artifact_id: "a1", patch_hash: "patch", state: "approved" } });
+  const retry = createArtifact(2, "patch", { run_id: "resumed", previous_artifact_id: "a1" });
+  const unrelated = { ...createArtifact(2, "patch", { run_id: "unrelated" }), subject: "artifact:unrelated" as const, fact_id: "unrelated", source_event_id: "unrelated" };
+  const facts = [createArtifact(), approved, retry, unrelated];
+  assert.equal(canMergeArtifact(facts, "a2"), true);
+  assert.equal(canMergeArtifact(facts, "unrelated"), false);
+  const changed = createArtifact(3, "changed", { run_id: "resumed" });
+  assert.equal(canMergeArtifact([...facts, changed], "a3"), false);
+  const revoked = createFact({ source: "ui", source_event_id: "revoked", source_ts: "2026-01-04T00:00:00Z",
+    kind: "approval.state_changed", subject: "approval:merge", confidence: "confirmed", payload: { state: "revoked" } });
+  assert.equal(canMergeArtifact([...facts, revoked], "a2"), false);
+  assert.equal(projectApprovals([...facts, changed, revoked]).find((entry) => entry.id === "merge")!.state, "revoked");
+});

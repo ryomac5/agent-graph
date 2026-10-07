@@ -16,3 +16,12 @@ export interface ScreenCommand {
 }
 export type ScreenInput = ScreenHello | ScreenCommand;
 export type { ProjectionPatch, ProjectionRows } from "../service/projection-feed.ts";
+
+// 成果物 ID は操作の間も固定し、再送時には同じ cmd_id を保つ。
+export const REVIEW_COMMANDS = [
+  "review.add_finding", "review.send", "review.reverify", "review.finding_state",
+  "review.relation_target", "review.approve", "review.revoke", "review.start", "review.correct_relation",
+] as const;
+export interface ReviewCommand extends ScreenCommand {
+  command: typeof REVIEW_COMMANDS[number];
+}

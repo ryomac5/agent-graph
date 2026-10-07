@@ -1,0 +1,149 @@
+[
+  {
+    "source": "host-codex",
+    "source_event_id": "parent",
+    "source_ts": "2026-01-01T00:00:00Z",
+    "kind": "conversation.created",
+    "subject": "conversation:parent",
+    "confidence": "confirmed",
+    "payload": {
+      "provider": "codex",
+      "native_id": "parent",
+      "origin": "managed",
+      "type": "interactive",
+      "history_format": "jsonl"
+    }
+  },
+  {
+    "source": "host-codex",
+    "source_event_id": "run-parent",
+    "source_ts": "2026-01-01T00:00:01Z",
+    "kind": "run.created",
+    "subject": "run:parent",
+    "confidence": "confirmed",
+    "payload": {
+      "conversation_id": "parent",
+      "generation": 1,
+      "state": "running",
+      "cwd": "/tmp/s14"
+    }
+  },
+  {
+    "source": "host-codex",
+    "source_event_id": "wrong",
+    "source_ts": "2026-01-01T00:00:02Z",
+    "kind": "conversation.created",
+    "subject": "conversation:wrong",
+    "confidence": "confirmed",
+    "payload": {
+      "provider": "codex",
+      "native_id": "wrong",
+      "origin": "managed",
+      "type": "interactive",
+      "history_format": "jsonl"
+    }
+  },
+  {
+    "source": "host-codex",
+    "source_event_id": "run-wrong",
+    "source_ts": "2026-01-01T00:00:03Z",
+    "kind": "run.created",
+    "subject": "run:wrong",
+    "confidence": "confirmed",
+    "payload": {
+      "conversation_id": "wrong",
+      "generation": 1,
+      "state": "running",
+      "cwd": "/tmp/s14"
+    }
+  },
+  {
+    "source": "host-codex",
+    "source_event_id": "correct",
+    "source_ts": "2026-01-01T00:00:04Z",
+    "kind": "conversation.created",
+    "subject": "conversation:correct",
+    "confidence": "confirmed",
+    "payload": {
+      "provider": "codex",
+      "native_id": "correct",
+      "origin": "managed",
+      "type": "interactive",
+      "history_format": "jsonl"
+    }
+  },
+  {
+    "source": "host-codex",
+    "source_event_id": "run-correct",
+    "source_ts": "2026-01-01T00:00:05Z",
+    "kind": "run.created",
+    "subject": "run:correct",
+    "confidence": "confirmed",
+    "payload": {
+      "conversation_id": "correct",
+      "generation": 1,
+      "state": "running",
+      "cwd": "/tmp/s14"
+    }
+  },
+  {
+    "source": "host-codex",
+    "source_event_id": "relation",
+    "source_ts": "2026-01-01T00:00:06Z",
+    "kind": "relation.created",
+    "subject": "relation:merged",
+    "confidence": "confirmed",
+    "payload": {
+      "type": "delegated",
+      "from_id": "parent",
+      "to_id": "wrong",
+      "active": true,
+      "confidence": "inferred",
+      "evidence": {
+        "request_id": "s14"
+      }
+    }
+  },
+  {
+    "source": "host-codex",
+    "source_event_id": "message",
+    "source_ts": "2026-01-01T00:00:07Z",
+    "kind": "message.created",
+    "subject": "message:reply",
+    "confidence": "confirmed",
+    "payload": {
+      "provider": "codex",
+      "native_id": "reply",
+      "version": 1,
+      "role": "assistant",
+      "body": "[redacted reply]",
+      "body_state": "stored"
+    }
+  },
+  {
+    "source": "host-codex",
+    "source_event_id": "membership",
+    "source_ts": "2026-01-01T00:00:08Z",
+    "kind": "message_membership.created",
+    "subject": "message_membership:reply",
+    "confidence": "confirmed",
+    "payload": {
+      "message_id": "reply",
+      "conversation_id": "correct",
+      "active": true
+    }
+  },
+  {
+    "source": "ui",
+    "source_event_id": "correction",
+    "source_ts": "2026-01-01T00:00:09Z",
+    "kind": "relation.corrected",
+    "subject": "relation:merged",
+    "confidence": "confirmed",
+    "payload": {
+      "to_id": "correct",
+      "confidence": "confirmed"
+    },
+    "supersedes": "5980d3a482dfa6aa69d0b3a8238347bdf83cc3f76c602576a5141397efb47951"
+  }
+]

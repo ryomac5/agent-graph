@@ -16,6 +16,9 @@ interface StateBadgeProps {
 // 状態は色だけに頼らず、印と文字で示す。不明は破線の枠と印で示す。
 export function StateBadge({ state, language = 'en', evidenceUrl, evidence, evidenceTime, reason, elapsed }: StateBadgeProps) {
   const t = dictionaries[language];
+  evidence = evidence === 'Unknown' || evidence === t.unknown ? undefined : evidence;
+  reason = reason === 'Unknown' || reason === t.unknown ? undefined : reason;
+  if (state === 'unknown' && !reason) reason = language === 'ja' ? '実行の状態を確認できる根拠がありません' : 'No evidence confirming execution state';
   const label = state === 'starting' ? (language === 'ja' ? '起動中' : 'Starting') : t[state];
   const title = [label, ['starting', 'running', 'waiting_approval', 'waiting_input'].includes(state) ? elapsed : undefined,
     ['unknown', 'ended'].includes(state) ? evidence : undefined, ['unknown', 'failed'].includes(state) ? reason : undefined].filter(Boolean).join(' · ');
@@ -23,8 +26,8 @@ export function StateBadge({ state, language = 'en', evidenceUrl, evidence, evid
     {state === 'unknown' ? <Icon name="unknown" size={13}/> : state === 'failed' ? <Icon name="alert" size={13}/> : <span className="state-dot" aria-hidden="true"/>}
     <span className="state-label">{label}</span>
     {['starting', 'running', 'waiting_approval', 'waiting_input'].includes(state) && elapsed && <span className="state-detail">{elapsed}</span>}
-    {['unknown', 'ended'].includes(state) && <span className="state-detail">{evidence ?? t.unknown}</span>}
-    {state === 'unknown' && <span className="state-detail">{evidenceTime ?? t.unknown}</span>}
-    {['unknown', 'failed'].includes(state) && <span className="state-detail">{reason ?? t.unknown}</span>}
+    {['unknown', 'ended'].includes(state) && evidence && <span className="state-detail">{evidence}</span>}
+    {state === 'unknown' && evidenceTime && <span className="state-detail">{evidenceTime}</span>}
+    {['unknown', 'failed'].includes(state) && reason && <span className="state-detail">{reason}</span>}
   </AppLink>;
 }

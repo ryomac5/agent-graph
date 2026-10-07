@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router';
 import { AppLink } from '../../components/AppLink.tsx';
 import { Icon } from '../../components/Icon.tsx';
@@ -12,10 +12,25 @@ import './changes.css';
 
 export interface ChangesClient { command(command: string, payload?: unknown, cmdId?: string): Promise<Ack> }
 export interface ChangesPageProps { client: ChangesClient; target?: ScreenStore; project?: string; artifactId?: string }
+function hasReviewResult(state: ReturnType<ScreenStore['getSnapshot']>, command: string, value: unknown, artifactId: string): boolean {
+  const result = readObject(value);
+  if (typeof result.review_result_seq === 'number') return state.seq >= result.review_result_seq;
+  if (command === 'review.reverify') {
+    const artifact = state.projection.artifacts?.find(row => row.id === result.artifactId);
+    return Boolean(artifact && JSON.stringify(readValue(artifact.verification)) === JSON.stringify(readValue(result.verification)));
+  }
+  if (command === 'review.send') {
+    return Array.isArray(result.findingIds) && result.findingIds.every(id => state.projection.findings?.some(row =>
+      row.id === id && (row.state === 'sent' || row.artifact_id !== artifactId)));
+  }
+  const table = ['review.add_finding', 'review.finding_state'].includes(command) ? 'findings' : 'approvals';
+  return Boolean(result.id && state.projection[table]?.some(row => row.id === result.id
+    && (row.state === result.state || ['review.start', 'review.approve', 'review.add_finding'].includes(command))));
+}
 function Verification({ value }: { value: unknown }) {
   const result = readObject(value);
   const checks = readValue(result.checks ?? result.results);
-  return <section className="review-section" aria-label="Acceptance verification"><h2>Acceptance verification</h2>
+  return <section className="review-section acceptance-verification" aria-label="Acceptance verification"><h2>Acceptance verification</h2>
     <span className={`chip ${result.passed === false ? 'chip-danger' : result.passed === true ? '' : 'chip-dashed'}`}>
       <Icon name={result.passed === true ? 'check' : result.passed === false ? 'alert' : 'unknown'} size={12}/>
       {result.passed === true ? 'Passed' : result.passed === false ? 'Failed' : 'Unknown · No verification result'}</span>
@@ -51,8 +66,11 @@ export function ChangesPage({ client, target = store, project, artifactId }: Cha
   const [returnedFindings, setReturnedFindings] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
+  const [notice, setNotice] = useState<{ artifactId: string; command: string; result: unknown }>();
   const lock = useRef(false);
+  useEffect(() => {
+    if (notice && (notice.artifactId !== id || hasReviewResult(state, notice.command, notice.result, notice.artifactId))) setNotice(undefined);
+  }, [id, notice, state]);
   const patch = readText(artifact?.diff);
   const files = useMemo(() => parseDiff(patch), [patch]);
   const family = collectVersionFamily(artifacts, id);
@@ -69,11 +87,11 @@ export function ChangesPage({ client, target = store, project, artifactId }: Cha
   const obsolete = artifacts.some(row => successors.has(readText(row.id)) && row.id !== id && row.patch_hash !== artifact?.patch_hash);
   async function command(name: string, payload: unknown, onSuccess?: () => void) {
     if (lock.current) return;
-    lock.current = true; setBusy(true); setError(''); setNotice('');
+    lock.current = true; setBusy(true); setError(''); setNotice(undefined);
     try {
       const ack = await client.command(name, payload);
       if (!ack.ok) throw new Error(ack.error ?? 'Review command failed');
-      setNotice('Command accepted; waiting for the updated review.'); onSuccess?.();
+      setNotice({ artifactId: id, command: name, result: ack.result }); onSuccess?.();
     } catch (error) { setError(error instanceof Error ? error.message : String(error)); }
     finally { lock.current = false; setBusy(false); }
   }
@@ -82,7 +100,7 @@ export function ChangesPage({ client, target = store, project, artifactId }: Cha
       ? { startLine: Math.min(activeSelection.startLine, location.startLine), endLine: Math.max(activeSelection.endLine, location.endLine) } : {}) });
   }
   function selectVersion(value: string) {
-    setChosenId(value); setCompareId(''); setSelection(undefined); setSelectedFindings([]); setSelectedFile(''); setBody(''); setNotice(''); setError('');
+    setChosenId(value); setCompareId(''); setSelection(undefined); setSelectedFindings([]); setSelectedFile(''); setBody(''); setNotice(undefined); setError('');
   }
   const comparisonFiles = compare && typeof compare.diff === 'string' && typeof artifact?.diff === 'string' ? comparePatches(compare.diff, patch) : undefined;
   return <section className="page changes-page" aria-label="Changes and review">
@@ -97,9 +115,9 @@ export function ChangesPage({ client, target = store, project, artifactId }: Cha
       <AppLink to={`/p/${encodeURIComponent(projectId)}/changes`} aria-current="page">Changes</AppLink>
     </nav>}
     {error && <p role="alert" className="banner banner-danger">{error}</p>}
-    {notice && <p role="status" className="muted-text">{notice}</p>}
-    <div className="toolbar changes-toolbar"><label className="inline-field">Version<select value={id} disabled={busy || !artifact} onChange={event => selectVersion(event.target.value)}>
-      {artifacts.map(row => <option key={readText(row.id)} value={readText(row.id)}>Version {String(row.version)} · {runLabel(state, row.run_id)}</option>)}</select></label>
+    {notice?.artifactId === id && !hasReviewResult(state, notice.command, notice.result, notice.artifactId) && <p role="status" className="muted-text">Command accepted; waiting for the updated review.</p>}
+    <div className="toolbar changes-toolbar"><div className="inline-field"><label htmlFor="artifact-version">Version</label><select id="artifact-version" value={id} disabled={busy || !artifact} onChange={event => selectVersion(event.target.value)}>
+      {artifacts.map(row => <option key={readText(row.id)} value={readText(row.id)}>Version {String(row.version)} · {runLabel(state, row.run_id)}</option>)}</select></div>
       <label className="inline-field">Compare with<select value={compare?.id ? readText(compare.id) : ''} onChange={event => { setCompareId(event.target.value); setSelection(undefined); }}>
         <option value="">Base commit</option>{artifacts.filter(row => family.has(readText(row.id)) && row.id !== id).map(row => <option key={readText(row.id)} value={readText(row.id)}>Version {String(row.version)} · {readText(row.id)}</option>)}</select></label>
       <div className="button-row" role="group" aria-label="Diff layout">{(['unified', 'split'] as const).map(value => <button key={value} className="btn btn-secondary btn-sm" aria-pressed={layout === value}
@@ -151,12 +169,12 @@ export function ChangesPage({ client, target = store, project, artifactId }: Cha
               const stale = row.state === 'stale';
               return <article className="review-approval" key={readText(row.id)} aria-label={`Approval ${readText(row.id)}`}>
                 <details open={stale}><summary className={`chip ${stale || row.state === 'rejected' ? 'chip-attention' : ''}`}><Icon name={stale ? 'alert' : row.state === 'approved' ? 'check' : 'x'} size={12}/>{stale ? 'Stale · Invalid approval' : readText(row.state)}</summary>
-                  <p>Version {String(original?.version ?? 'Unknown')} · Patch {readText(row.patch_hash)}</p>{readText(row.reason) && <p>{readText(row.reason)}</p>}</details>
+                  <p>Version {String(original?.version ?? 'Unknown')} · Patch {readText(row.patch_hash).slice(0, 8)}</p>{!stale && readText(row.reason) && <p>{readText(row.reason)}</p>}</details>
                 {readText(result.verdict) && <p>Reviewer: {readText(reviewer.executor ?? reviewer.provider)} {readText(reviewer.model)}{readText(reviewer.family) ? ` (${readText(reviewer.family)})` : ''} · {readText(result.verdict)}</p>}
                 {readText(result.comment) && <p>{readText(result.comment)}</p>}
                 {readText(request.reviewer_run_id) && <AppLink className="btn btn-link" to={`/c/${encodeURIComponent(readText(state.projection.runs?.find(run => run.id === request.reviewer_run_id)?.conversation_id))}`}>Reviewer evidence</AppLink>}
-                {stale && <div className="stale-comparison"><p>Approval cannot authorize merging because the patch changed.</p><p>{readText(row.reason) || 'Artifact patch hash changed.'}</p>
-                  <div className="stale-hashes"><code>Approved: {readText(row.patch_hash)}</code><code>Changed: {readText(changed?.patch_hash) || 'Unavailable'}</code></div>
+                {stale && <div className="stale-comparison"><p>Approved for version {String(original?.version ?? 'Unknown')}. {changed ? `Version ${String(changed.version)} changed the patch, so this approval no longer applies.` : 'The patch changed, so this approval no longer applies.'}</p>
+                  <div className="stale-hashes"><code>Approved: {readText(row.patch_hash).slice(0, 8)}</code><code>Changed: {readText(changed?.patch_hash).slice(0, 8) || 'Unavailable'}</code></div>
                   {typeof original?.diff === 'string' && typeof changed?.diff === 'string' ? <DiffView files={comparePatches(original.diff, changed.diff)} layout="split" attribution="unknown" evidenceUrl={evidenceUrl}/>
                     : <p>Saved diff unavailable for stale comparison.</p>}</div>}
                 {['approved', 'stale'].includes(readText(row.state)) && <button className="btn btn-secondary btn-sm" disabled={!enabled} onClick={() => void command('review.revoke', { approvalId: row.id })}>Revoke approval</button>}

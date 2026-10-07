@@ -1,7 +1,7 @@
 export type Attribution = 'confirmed' | 'inferred' | 'joint' | 'unknown';
 export type DiffLayout = 'unified' | 'split';
-export interface DiffLine { kind: 'context' | 'add' | 'remove' | 'meta'; text: string; oldLine?: number; newLine?: number }
-export interface DiffFile { path: string; previousPath?: string; lines: DiffLine[]; additions: number; deletions: number }
+export interface DiffLine { kind: 'context' | 'add' | 'remove' | 'meta'; text: string; oldLine?: number; newLine?: number; attribution?: Attribution }
+export interface DiffFile { path: string; previousPath?: string; lines: DiffLine[]; additions: number; deletions: number; attribution?: Attribution }
 export interface LineLocation { file: string; side: 'old' | 'new'; startLine: number; endLine: number }
 export const LARGE_FILE_LINES = 300;
 

@@ -8,6 +8,7 @@ import type { ConversationPayload, Fact, FactInput, FindingPayload, JsonValue, R
 import type { Ledger } from "../../../core/src/ledger/ledger.ts";
 import { projectArtifacts } from "../../../core/src/ledger/projections/artifacts.ts";
 import { collectArtifactSuccessors, projectApprovals } from "../../../core/src/ledger/projections/approvals.ts";
+import { projectConversations } from "../../../core/src/ledger/projections/conversations.ts";
 import { projectEntityRecords } from "../../../core/src/ledger/projections/delegations.ts";
 import { getMessageText } from "../../../core/src/ledger/projections/messages.ts";
 import { projectFindings, remapFinding } from "../../../core/src/ledger/projections/findings.ts";
@@ -19,6 +20,10 @@ import { buildReviewPrompt, parseReviewResult, REVIEW_OUTPUT_SCHEMA } from "../i
 import { collectContexts, readFindingLines } from "./contexts.ts";
 
 function json(value: unknown): JsonValue { return JSON.parse(JSON.stringify(value)); }
+// 結果が前回と同じでも、今回の結果の事実が画面へ届いたことを確かめる。
+function attachResultSequence(result: JsonValue, seq: number): JsonValue {
+  return result && typeof result === "object" && !Array.isArray(result) ? { ...result, review_result_seq: seq } : result;
+}
 function text(value: unknown): string {
   if (typeof value !== "string" || !value) throw new TypeError("Expected nonempty text");
   return value;
@@ -55,7 +60,7 @@ export class ReviewFlow {
       if (batch.length < 1000) return this.cachedFacts;
     }
   }
-  private write(kind: FactInput["kind"], subject: FactInput["subject"], payload: unknown, supersedes?: string): void {
+  private write(kind: FactInput["kind"], subject: FactInput["subject"], payload: unknown, supersedes?: string): number {
     const facts = this.facts();
     for (let index = facts.length - 1; index >= 0 && facts[index].seq > this.timestampSeq; index--) {
       this.lastTimestamp = Math.max(this.lastTimestamp, Date.parse(facts[index].source_ts));
@@ -67,6 +72,7 @@ export class ReviewFlow {
     if (result.status === "conflict") throw new Error("Conflicting review fact");
     this.lastTimestamp = timestamp;
     if (result.status === "appended") this.publish?.({ type: "evt", seq: result.seq });
+    return result.seq;
   }
   private artifact(id: string) {
     const artifact = projectArtifacts(this.facts()).find((entry) => entry.id === id);
@@ -111,11 +117,11 @@ export class ReviewFlow {
   }
   command(request: SocketRequest): Promise<JsonValue> {
     const hash = createHash("sha256").update(serializeValue(json({ command: request.command, payload: request.payload }))).digest("hex");
-    const receipt = this.facts().map((fact) => (fact.payload as { review_command?: { id: string; hash: string; result: JsonValue } } | null)?.review_command)
-      .find((entry) => entry?.id === request.cmd_id);
-    if (receipt) {
+    const receiptFact = this.facts().find((fact) => (fact.payload as { review_command?: { id: string } } | null)?.review_command?.id === request.cmd_id);
+    if (receiptFact) {
+      const receipt = (receiptFact.payload as unknown as { review_command: { hash: string; result: JsonValue } }).review_command;
       if (receipt.hash !== hash) return Promise.reject(new Error("Conflicting review cmd_id"));
-      return Promise.resolve(receipt.result);
+      return Promise.resolve(attachResultSequence(receipt.result, receiptFact.seq));
     }
     const pending = this.commands.get(request.cmd_id);
     if (pending) return pending.hash === hash ? pending.task : Promise.reject(new Error("Conflicting review cmd_id"));
@@ -127,8 +133,8 @@ export class ReviewFlow {
         : typeof p.approvalId === "string" ? `approval:${p.approvalId}`
         : this.facts().find((fact) => fact.fact_id === p.factId)!.subject;
       const entity = subject.slice(0, subject.indexOf(":"));
-      this.write(`${entity}.updated` as FactInput["kind"], subject, { review_command: { id: request.cmd_id, hash, result } });
-      return result;
+      const seq = this.write(`${entity}.updated` as FactInput["kind"], subject, { review_command: { id: request.cmd_id, hash, result } });
+      return attachResultSequence(result, seq);
     }).finally(() => this.commands.delete(request.cmd_id));
     this.commands.set(request.cmd_id, { hash, task });
     return task;
@@ -291,14 +297,24 @@ export class ReviewFlow {
     if (!selected.ok) throw new Error(selected.reason.join("\n"));
     const delegation = this.findRequest(artifact);
     const runId = randomUUID(); const conversationId = randomUUID();
+    const original = this.run(artifact.run_id);
+    const projection = projectConversations(this.facts());
+    const originalRecord = projectEntityRecords<ConversationPayload>(this.facts(), "conversation").find((entry) => entry.id === original.conversation_id);
+    const originalId = originalRecord?.provider && originalRecord.native_id
+      ? createNativeId(originalRecord.provider, originalRecord.native_id) : original.conversation_id;
+    const conversation = projection.conversations.find((entry) => entry.id === originalId);
+    this.write("conversation.created", `conversation:${conversationId}`, {
+      provider: selected.assignment.executor, native_id: conversationId, origin: "managed", type: "subagent", history_format: "jsonl",
+      task_id: conversation?.task_id, name: `Review of ${conversation?.name || delegation.title}`,
+    });
+    this.write("relation.created", `relation:${runId}`, { type: "review_of", from_id: conversationId,
+      to_id: original.conversation_id!, active: true, confidence: "confirmed",
+      evidence: { artifact_id: artifact.id, patch_hash: artifact.patch_hash } });
     await this.runtime.supervisor.start(selected.assignment.executor, { runId, conversationId, generation: 1,
       cwd: this.run(artifact.run_id).cwd!, model: { model: selected.assignment.model },
       input: { text: buildReviewPrompt({ request: { title: delegation.title!, task: delegation.task, accept: delegation.accept!, scope: delegation.scope },
         reply: this.readReply(this.run(artifact.run_id).conversation_id!) || delegation.result?.output || "",
         artifact: { ...artifact, diff: this.patch(artifact), findings: projectFindings(this.facts()).filter((entry) => entry.artifact_id === artifact.id) } }) }, outputSchema: json(REVIEW_OUTPUT_SCHEMA) as { [key: string]: JsonValue } });
-    this.write("relation.created", `relation:${runId}`, { type: "review_of", from_id: conversationId,
-      to_id: this.run(artifact.run_id).conversation_id!, active: true, confidence: "confirmed",
-      evidence: { artifact_id: artifact.id, patch_hash: artifact.patch_hash } });
     await this.finishRun(runId);
     const result = parseReviewResult(this.readReply(conversationId));
     // レビュアーが作業ツリーを変えた場合も、新版を残して固定版の承認を無効にする。

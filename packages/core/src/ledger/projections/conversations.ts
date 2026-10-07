@@ -22,15 +22,8 @@ export function encodeNameOrder(value: string): string {
 export function extractProvisionalName(body: Parameters<typeof getMessageText>[0]): string {
   return getMessageText(body).trim().split(/(?<=[。.!?？！])|\n/u)[0];
 }
-export function projectConversations(
-  facts: readonly Fact[], names?: ReadonlyMap<string, string>,
-): ConversationProjection {
-  const { tasks } = projectNames(facts);
+function projectProvisionalNames(facts: readonly Fact[]): Map<string, string> {
   const { messages, message_memberships: memberships } = projectMessages(facts);
-  const rows = projectEntities(facts, "conversation", (payload, id) =>
-    payload.provider && payload.native_id ? createNativeId(payload.provider, payload.native_id) : id,
-  (fact) => [fact.source.startsWith("host-") ? 1 : 0]);
-  const tasksById = new Map(tasks.map((task) => [task.id, task]));
   const conversationsByMessage = new Map<string, Set<string>>();
   for (const membership of memberships) {
     if (!membership.active || !membership.message_id || !membership.conversation_id) continue;
@@ -49,11 +42,28 @@ export function projectConversations(
       if (!provisionalNames.has(id)) provisionalNames.set(id, name);
     }
   }
+  return provisionalNames;
+}
+export function projectConversations(
+  facts: readonly Fact[], names?: ReadonlyMap<string, string>,
+): ConversationProjection {
+  const { tasks } = projectNames(facts);
+  const rows = projectEntities(facts, "conversation", (payload, id) =>
+    payload.provider && payload.native_id ? createNativeId(payload.provider, payload.native_id) : id,
+  (fact) => [fact.source.startsWith("host-") ? 1 : 0]);
+  const tasksById = new Map(tasks.map((task) => [task.id, task]));
+  // 差分反映の索引が渡された場合や名前が確定済みの場合は、本文を再投影しない。
+  const needsProvisionalNames = names === undefined && rows.some(conversation => conversation.type !== "unattended"
+    && conversation.type !== "subagent" && !(conversation as ProjectedConversation).name
+    && !tasksById.get(conversation.task_id ?? "")?.name);
+  const provisionalNames = names ?? (needsProvisionalNames ? projectProvisionalNames(facts) : new Map<string, string>());
   const conversations = rows.map((conversation): ProjectedConversation => {
     const task = conversation.task_id ? tasksById.get(conversation.task_id) : undefined;
-    const provisionalName = (names ?? provisionalNames).get(conversation.id) || null;
-    const name = conversation.type === "unattended" ? null : task?.name ?? provisionalName;
-    return { ...conversation, name, name_is_provisional: name !== null && !task?.name };
+    const provisionalName = provisionalNames.get(conversation.id) || null;
+    const explicitName = (conversation as ProjectedConversation).name;
+    const name = conversation.type === "unattended" ? null
+      : conversation.type === "subagent" ? explicitName ?? task?.name ?? null : task?.name ?? explicitName ?? provisionalName;
+    return { ...conversation, name, name_is_provisional: name !== null && !explicitName && !task?.name };
   });
   const relations = projectRelations(facts);
   return {

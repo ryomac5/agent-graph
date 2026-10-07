@@ -4,6 +4,8 @@ import { MemoryRouter } from 'react-router';
 import { App } from '../App.tsx';
 import { createStore, type Row } from '../lib/store.ts';
 import { approvalOutcome, evidenceLabel, projectLabel, readApprovalRequest, runLabel, summarizeApproval, worktreeLabel } from '../lib/format.ts';
+import { HomePage } from '../pages/home/HomePage.tsx';
+import { WorkspacePage } from '../pages/workspace/WorkspacePage.tsx';
 import { ConversationPage } from '../pages/conversation/ConversationPage.tsx';
 import { Inbox } from '../pages/inbox/Inbox.tsx';
 import { selectTimeline } from '../components/conversation/model.ts';
@@ -173,4 +175,40 @@ it('uses the same outcome marks in the inbox expired list and in notifications',
     expect(line.textContent).toBe(text);
     expect(iconPath(line)).toContain(OUTCOME_PATHS[outcome]);
   }
+});
+
+it('groups reviewer conversation beneath its original task using review_of facts', () => {
+  const target = setup();
+  const review = 'review-conversation';
+  target.setSnapshot({ seq: 2, generation: 1, projection: projection({
+    conversations: [{ ...projection().conversations[0], name: 'Implementation conversation' }, { id: review, origin: 'managed', provider: 'codex', name: '{"verdict":"approve"}' }],
+    runs: [...projection().runs, { id: 'review-run', conversation_id: review, generation: 1, state: 'ended' }],
+    relations: [{ id: 'review-edge', type: 'review_of', active: 1, confidence: 'confirmed', from_id: review, to_id: CONVERSATION }],
+  }) });
+  const view = render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
+  const group = screen.getByRole('region', { name: REPO });
+  const rows = within(group).getAllByRole('article');
+  expect(rows.map(row => row.getAttribute('aria-label'))).toEqual(['Browser fixture task', 'Review of Browser fixture task']);
+  expect(rows[1].classList.contains('activity-child')).toBe(true);
+  expect(screen.queryByRole('region', { name: 'No project' })).toBeNull();
+  expect(runLabel(target.getSnapshot(), 'review-run')).toBe('Review of Browser fixture task · Run 1');
+  view.unmount();
+  render(<MemoryRouter><WorkspacePage target={target} client={client} project={REPO}/></MemoryRouter>);
+  const tasks = screen.getByRole('region', { name: 'Tasks' });
+  expect(within(tasks).getAllByRole('article').map(row => row.getAttribute('aria-label'))).toEqual(['Browser fixture task', 'Review of Browser fixture task']);
+});
+
+it('shows one Unknown and a reason when external execution evidence is absent', () => {
+  const target = setup();
+  target.setSnapshot({ seq: 2, generation: 1, projection: projection({
+    conversations: [{ id: 'external', origin: 'observed', provider: 'codex', name: 'External conversation' }],
+    runs: [], tasks: [], messages: [], message_memberships: [], approvals: [],
+  }) });
+  render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
+  const row = screen.getByRole('article', { name: 'External conversation' });
+  const badge = within(row).getByRole('link', { name: 'Unknown · Evidence' });
+  expect(badge.textContent?.match(/Unknown/g)).toHaveLength(1);
+  expect(badge.textContent).toContain('No evidence confirming execution state');
+  expect([...badge.querySelectorAll('.state-detail')].map(detail => detail.textContent)).toEqual(['No evidence confirming execution state']);
+  expect(badge.title).toBe('Unknown · No evidence confirming execution state');
 });

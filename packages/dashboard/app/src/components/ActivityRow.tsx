@@ -31,7 +31,7 @@ export function ActivityRow({ activity, now, language = 'en', onSelect, selected
   const changes = summarizeChanges(activity.artifacts);
   const badge = <StateBadge state={activity.state} language={language} evidenceUrl={url}
     evidence={evidenceLabel(activity.state === 'ended' ? run?.end_evidence : run?.last_evidence) || undefined}
-    evidenceTime={<RelativeTime value={readText(run?.last_evidence_ts)} now={now} language={language}/>} reason={readText(run?.cause ?? run?.reason) || undefined}
+    evidenceTime={readText(run?.last_evidence_ts) ? <RelativeTime value={readText(run?.last_evidence_ts)} now={now} language={language}/> : undefined} reason={readText(run?.cause ?? run?.reason) || undefined}
     elapsed={statusElapsed === 'Unknown' ? undefined : statusElapsed}/>;
   const title = <div className="activity-title">
     {onSelect ? <button className="activity-name" aria-current={selected ? 'true' : undefined} onClick={onSelect}>{activity.name}</button>
@@ -40,13 +40,13 @@ export function ActivityRow({ activity, now, language = 'en', onSelect, selected
   </div>;
   const summary = <p className="activity-excerpt">{excerpt ? readBody(excerpt.body) || readText(excerpt.body_state) : <span className="muted-text">{ja ? '発言はまだありません' : 'No messages yet'}</span>}</p>;
   if (variant === 'list') {
-    return <article className={`activity-item${selected ? ' selected' : ''}`} aria-label={activity.name}>
+    return <article className={`activity-item${activity.parentConversationId ? ' activity-child' : ''}${selected ? ' selected' : ''}`} aria-label={activity.name}>
       <div className="activity-item-head">{title}{actions && <div className="row-actions">{actions}</div>}</div>
       <div className="activity-item-meta">{badge}<AgentCell provider={activity.provider} model={activity.model} effort={activity.effort} language={language}/></div>
       {summary}
     </article>;
   }
-  return <article className="activity-row" aria-label={activity.name}>
+  return <article className={`activity-row${activity.parentConversationId ? ' activity-child' : ''}`} aria-label={activity.name}>
     <div className="cell cell-name">{title}{summary}</div>
     <div className="cell cell-state">{badge}</div>
     <div className="cell cell-agent"><AgentCell provider={activity.provider} model={activity.model} effort={activity.effort} language={language}/></div>

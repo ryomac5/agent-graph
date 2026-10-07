@@ -4,7 +4,7 @@ import type { ExecutionState } from './StateBadge.tsx';
 export const executionStates: ExecutionState[] = ['starting', 'running', 'waiting_approval', 'waiting_input', 'idle', 'ended', 'failed', 'unknown'];
 export type ActivitySection = 'managed' | 'external' | 'unattended' | 'unsupported';
 export interface Activity {
-  id: string; taskId?: string; conversationId?: string; project: string; name: string;
+  id: string; parentConversationId?: string; taskId?: string; conversationId?: string; project: string; name: string;
   provisional: boolean; provider: string; model: string; effort: string; state: ExecutionState;
   section: ActivitySection; managed: boolean; run?: Row; messages: Row[]; artifacts: Row[];
 }
@@ -62,7 +62,7 @@ export function selectActivities(state: ScreenState, parallel = false): Activity
       const message = messages.get(readText(link.message_id));
       return message ? [message] : [];
     }).sort((a, b) => readText(a.source_ts).localeCompare(readText(b.source_ts)) || readText(a.id).localeCompare(readText(b.id)));
-    const first = history.map(row => readBody(row.body)).find(Boolean)?.trim().split(/(?<=[。.!?？！])|\n/u)[0];
+    const first = history.filter(row => row.role === 'user' || !row.role).map(row => readBody(row.body)).find(Boolean)?.trim().split(/(?<=[。.!?？！])|\n/u)[0];
     const orderedRuns = [...(runs.get(conversationId) ?? [])].sort((a, b) => Number(b.generation ?? 0) - Number(a.generation ?? 0) || readText(b.started_ts).localeCompare(readText(a.started_ts)));
     const displayedRuns = parallel ? orderedRuns.filter(run => Number(run.generation ?? 0) === Number(orderedRuns[0]?.generation ?? 0)) : orderedRuns.slice(0, 1);
     for (const run of displayedRuns.length ? displayedRuns : [undefined]) {
@@ -94,6 +94,19 @@ export function selectActivities(state: ScreenState, parallel = false): Activity
       state: executionStates.includes(task.state as ExecutionState) ? task.state as ExecutionState : 'unknown',
       section: 'managed', managed: true, messages: [], artifacts: [] });
   }
+  // review_of はレビューから対象への向き。所属と表示順は対象の作業から辿る。
+  for (const relation of p.relations ?? []) {
+    if (relation.type !== 'review_of' || ![true, 1].includes(relation.active as boolean | number) || relation.confidence !== 'confirmed') continue;
+    const parent = result.find(item => item.conversationId === relation.to_id);
+    if (!parent) continue;
+    for (const child of result.filter(item => item.conversationId === relation.from_id)) {
+      child.parentConversationId = parent.conversationId;
+      child.taskId = parent.taskId;
+      child.project = parent.project;
+      child.name = `Review of ${parent.name}`;
+      child.provisional = parent.provisional;
+    }
+  }
   return result;
 }
 /** 成果物がないときは undefined を返す。画面は「成果物なし」と出す。 */
@@ -113,4 +126,17 @@ export function summarizeChanges(artifacts: Row[]): string | undefined {
   }
   if (![...latest.values()].some(row => typeof row.diff === 'string')) return;
   return `${files} ${files === 1 ? 'file' : 'files'} · +${added} −${removed}`;
+}
+
+export function orderActivities(items: Activity[]): Activity[] {
+  const ordered: Activity[] = [];
+  const visited = new Set<string>();
+  function append(item: Activity) {
+    if (visited.has(item.id)) return;
+    visited.add(item.id); ordered.push(item);
+    if (item.conversationId) for (const child of items.filter(child => child.parentConversationId === item.conversationId)) append(child);
+  }
+  for (const item of items.filter(item => !item.parentConversationId || !items.some(parent => parent.conversationId === item.parentConversationId))) append(item);
+  for (const item of items) append(item);
+  return ordered;
 }

@@ -243,7 +243,12 @@ async function main() {
     assert.ok(original.diff.includes(MARKER), 'fixed diff retained');
     assert.equal(original.version, 1);
     assert.equal(execFileSync('git', ['status', '--porcelain'], { cwd: options.repo, encoding: 'utf8' }).trim(), 'M code.txt');
-    await open('/'); await screenshots('overview');
+    await open('/');
+    const reviewerName = 'Review of ' + TITLE;
+    await page.getByRole('region', { name: options.repo, exact: true }).getByRole('article', { name: reviewerName, exact: true }).waitFor();
+    assert.equal(await page.getByRole('region', { name: 'No project', exact: true }).getByRole('article', { name: reviewerName, exact: true }).count(), 0, 'reviewer is not an independent No project task');
+    assert.equal(await page.getByRole('article', { name: reviewerName, exact: true }).evaluate(row => row.previousElementSibling?.getAttribute('aria-label')), TITLE, 'reviewer appears directly beneath the original task');
+    await screenshots('overview');
     await page.getByRole('navigation', { name: 'Projects', exact: true }).getByRole('link').click();
     await page.getByRole('heading', { name: 'repo', exact: true }).waitFor();
     await page.getByRole('region', { name: 'Tasks', exact: true }).getByRole('article').filter({ hasText: MARKER + ' implementation completed' }).getByRole('button', { name: TITLE, exact: true }).click();
@@ -268,6 +273,7 @@ async function main() {
     await waitUntil(async () => (await snapshot()).projection.artifacts.some(a => a.previous_artifact_id === original.id && (typeof a.verification === 'string' ? JSON.parse(a.verification) : a.verification)?.passed), 'successor automatically reverified');
     state = await snapshot();
     const successor = state.projection.artifacts.find(a => a.previous_artifact_id === original.id);
+    assert.equal(successor.version, 2, 'correction advances the artifact version');
     assert.notEqual(successor.patch_hash, original.patch_hash);
     assert.ok(successor.diff.includes('fixed answer'));
     assert.equal(state.projection.approvals.find(a => a.id === approved.id).state, 'stale');
@@ -275,6 +281,7 @@ async function main() {
     const { readFile } = await import('node:fs/promises');
     assert.equal((await readFile(join(directory, 'acceptance.log'), 'utf8')).trim().split('\n').length, 2, 'acceptance reran on correction');
     await page.getByLabel('Version', { exact: true }).selectOption(successor.id);
+    assert.match(await page.getByLabel('Version', { exact: true }).locator('option:checked').textContent(), /^Version 2(?: ·|$)/, 'corrected version is displayed as Version 2');
     await page.getByText('Stale · Invalid approval', { exact: true }).waitFor();
     await page.getByRole('region', { name: 'Acceptance verification' }).getByText('Passed', { exact: true }).waitFor();
     await screenshots('changes-corrected');
@@ -282,6 +289,8 @@ async function main() {
     const tree = page.getByRole('region', { name: 'Delegation tree', exact: true });
     await tree.getByRole('button', { name: 'Terminal origin', exact: true }).waitFor();
     await tree.getByRole('button', { name: TITLE, exact: true }).waitFor();
+    const implementationNode = tree.getByRole('button', { name: TITLE, exact: true }).locator('xpath=ancestor::li[1]');
+    await implementationNode.locator('ul').getByRole('button', { name: reviewerName, exact: true }).waitFor();
     assert.ok(await tree.locator('li').filter({ has: page.getByRole('button', { name: 'Terminal origin', exact: true }) }).locator('ul').count(), 'child nested under origin');
     await tree.getByRole('button', { name: TITLE, exact: true }).click();
     await page.getByRole('region', { name: 'Selected node', exact: true }).getByRole('link', { name: 'Open conversation', exact: true }).waitFor();

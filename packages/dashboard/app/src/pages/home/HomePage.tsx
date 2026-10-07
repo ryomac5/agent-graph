@@ -4,7 +4,7 @@ import { store, useScreenStore, type ScreenStore } from '../../lib/store.ts';
 import { dictionaries, type Language } from '../../lib/i18n.ts';
 import { projectLabel } from '../../lib/format.ts';
 import { ActivityRow, providerName } from '../../components/ActivityRow.tsx';
-import { executionStates, selectActivities, type Activity, type ActivitySection } from '../../components/activity.ts';
+import { executionStates, selectActivities, orderActivities, type Activity, type ActivitySection } from '../../components/activity.ts';
 import { useNow } from '../../components/RelativeTime.tsx';
 import { Icon } from '../../components/Icon.tsx';
 import '../../components/activity.css';
@@ -40,7 +40,7 @@ export function HomePage({ target = store, language = 'en' }: { target?: ScreenS
     ['unattended', ja ? '無人実行' : 'Unattended runs', ja ? '名前のない自動の実行' : 'Automated runs without a conversation name'],
     ['unsupported', ja ? '形式未対応の会話' : 'Unsupported conversations', ja ? '履歴の形式に未対応' : 'History format not supported yet']];
   const rows = (items: Activity[], actions?: (item: Activity) => ReactNode) => <div className="table" role="presentation"><TableHead language={language}/>
-    {items.map(item => <ActivityRow key={item.id} activity={item} now={now} language={language} actions={actions?.(item)}/>)}</div>;
+    {orderActivities(items).map(item => <ActivityRow key={item.id} activity={item} now={now} language={language} actions={actions?.(item)}/>)}</div>;
   return <div className="page">
     <header className="page-header"><div className="page-title"><h1>{ja ? '一覧' : 'Overview'}</h1>
       <p className="page-subtitle">{summary.map(([value, label]) => <span key={label}><strong className="numeric">{value}</strong> {label}</span>)}</p></div></header>

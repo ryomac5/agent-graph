@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
+import { readFileSync } from 'node:fs';
 import { ChangesPage } from '../pages/changes/ChangesPage.tsx';
 import { DiffView } from '../components/diff/DiffView.tsx';
 import { comparePatches, LARGE_FILE_LINES, parseDiff } from '../components/diff/model.ts';
@@ -37,12 +38,13 @@ it('renders the file list, numbered additions and removals, attribution and acce
   expect(within(verification).getByText('OK')).toBeTruthy();
 });
 
-it.each(['confirmed', 'inferred', 'joint', 'unknown'])('shows %s attribution on files and lines with an evidence link', attribution => {
+it.each(['confirmed', 'inferred', 'joint', 'unknown'])('shows %s attribution once per file and omits uniform line badges', attribution => {
   setup({ artifacts: [{ ...artifact, attribution }] });
   const label = attribution[0].toUpperCase() + attribution.slice(1);
   const fileBadge = within(screen.getByRole('complementary', { name: 'Files' })).getByRole('link', { name: label });
   expect(fileBadge.getAttribute('href')).toBe('#artifact-evidence-a1');
-  expect(within(screen.getByRole('table')).getAllByRole('link', { name: label }).length).toBe(4);
+  expect(within(screen.getByRole('table')).queryAllByRole('link', { name: label })).toHaveLength(0);
+  expect(within(screen.getByRole('article', { name: 'Diff for code.txt' })).getAllByRole('link', { name: label })).toHaveLength(1);
   if (['unknown', 'inferred'].includes(attribution)) expect(fileBadge.className).toContain('chip-dashed');
   if (attribution === 'unknown') {
     expect(fileBadge.getAttribute('title')).toBe('Changes whose author could not be identified');
@@ -107,7 +109,8 @@ it('shows stale approval reason, both hashes and patch differences, then revokes
       request: JSON.stringify({ result: { verdict: 'approve', comment: 'Reviewer approved original version' }, reviewer: { provider: 'claude', model: 'sonnet' } }) }] });
   const approval = screen.getByRole('article', { name: 'Approval approval' });
   expect(within(approval).getByText('Stale · Invalid approval')).toBeTruthy();
-  expect(within(approval).getAllByText('artifact patch_hash changed').length).toBeGreaterThan(0);
+  expect(within(approval).queryByText('artifact patch_hash changed')).toBeNull();
+  expect(within(approval).getAllByText('Approved for version 1. Version 2 changed the patch, so this approval no longer applies.')).toHaveLength(1);
   expect(within(approval).getByText('Approved: hash1')).toBeTruthy();
   expect(within(approval).getByText('Changed: hash2')).toBeTruthy();
   expect(within(approval).getByRole('table', { name: 'Patch comparison split diff' })).toBeTruthy();
@@ -207,4 +210,121 @@ it('keeps resumed successors in a run deep link while excluding other executions
   expect([...versions.options].map(option => option.value)).toEqual(['a1', 'successor']);
   expect(versions.value).toBe('successor');
   expect(screen.getByRole('button', { name: 'Comment on code.txt new line 2' }).textContent).toBe('fixed');
+});
+
+it('shows attribution on changed lines only when the file contains mixed attribution', () => {
+  const files = parseDiff(PATCH);
+  files[0].lines.find(line => line.kind === 'add')!.attribution = 'unknown';
+  render(<DiffView files={files} layout="unified" attribution="confirmed" evidenceUrl="#evidence"/>);
+  const diff = screen.getByRole('article', { name: 'Diff for code.txt' });
+  expect(within(diff).queryByRole('link', { name: 'Joint' })).toBeNull();
+  expect(within(diff.querySelector('header')!).getByRole('link', { name: 'Confirmed' })).toBeTruthy();
+  expect(within(screen.getByRole('table')).getAllByRole('link')).toHaveLength(2);
+  expect(within(diff).getByRole('link', { name: 'Unknown' }).title).toBe('Changes whose author could not be identified');
+});
+
+it('clears accepted commands only when their results arrive, including a result preceding ack', async () => {
+  const { client, target } = setup();
+  const approval = { id: 'new-approval', artifact_id: 'a1', state: 'approved' };
+  client.command.mockResolvedValueOnce({ type: 'ack', cmd_id: 'cmd', ok: true, result: approval } as Awaited<ReturnType<typeof client.command>>);
+  fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+  await screen.findByRole('status');
+  act(() => target.setSnapshot({ seq: 2, generation: 1, projection: { ...target.getSnapshot().projection, messages: [{ id: 'unrelated' }] } }));
+  expect(screen.getByRole('status')).toBeTruthy();
+  act(() => target.setSnapshot({ seq: 3, generation: 1, projection: { ...target.getSnapshot().projection, approvals: [approval] } }));
+  expect(screen.queryByRole('status')).toBeNull();
+  client.command.mockImplementationOnce(async () => {
+    act(() => target.setSnapshot({ seq: 4, generation: 1, projection: { ...target.getSnapshot().projection, approvals: [{ ...approval, state: 'revoked' }] } }));
+    return { type: 'ack', cmd_id: 'cmd', ok: true, result: { ...approval, state: 'revoked' } };
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Revoke approval' }));
+  await waitFor(() => expect(screen.queryByRole('status')).toBeNull());
+});
+
+it('clears command notice when version changes and labels the selection exactly Version', async () => {
+  setup({ artifacts: [artifact, { ...artifact, id: 'a2', version: 2, previous_artifact_id: 'a1', patch_hash: 'hash2', diff: NEXT }] });
+  const version = screen.getByRole('combobox', { name: 'Version' }) as HTMLSelectElement;
+  expect(version.selectedOptions[0].textContent).toContain('Version 2');
+  fireEvent.click(screen.getByRole('button', { name: 'Reverify' }));
+  await screen.findByRole('status');
+  fireEvent.change(version, { target: { value: 'a1' } });
+  expect(screen.queryByRole('status')).toBeNull();
+});
+
+it('waits for the requested revalidation result rather than the previous verification', async () => {
+  const { client, target } = setup();
+  const verification = { passed: false, results: [{ command: 'exit 1', exitCode: 1 }] };
+  client.command.mockResolvedValueOnce({ type: 'ack', cmd_id: 'cmd', ok: true, result: { artifactId: 'a1', verification } } as Awaited<ReturnType<typeof client.command>>);
+  fireEvent.click(screen.getByRole('button', { name: 'Reverify' }));
+  await screen.findByRole('status');
+  act(() => target.setSnapshot({ seq: 2, generation: 1, projection: { ...target.getSnapshot().projection, messages: [{ id: 'unrelated' }] } }));
+  expect(screen.getByRole('status')).toBeTruthy();
+  act(() => target.setSnapshot({ seq: 3, generation: 1, projection: {
+    ...target.getSnapshot().projection, artifacts: [{ ...artifact, verification: JSON.stringify(verification) }],
+  } }));
+  expect(screen.queryByRole('status')).toBeNull();
+});
+
+it('waits for the command result fact even when the projected verification is unchanged', async () => {
+  const { client, target } = setup();
+  client.command.mockResolvedValueOnce({ type: 'ack', cmd_id: 'cmd', ok: true, result: {
+    artifactId: 'a1', verification: JSON.parse(artifact.verification), review_result_seq: 3,
+  } } as Awaited<ReturnType<typeof client.command>>);
+  fireEvent.click(screen.getByRole('button', { name: 'Reverify' }));
+  await screen.findByRole('status');
+  act(() => target.setSnapshot({ seq: 2, generation: 1, projection: target.getSnapshot().projection }));
+  expect(screen.getByRole('status')).toBeTruthy();
+  act(() => target.setSnapshot({ seq: 3, generation: 1, projection: target.getSnapshot().projection }));
+  expect(screen.queryByRole('status')).toBeNull();
+});
+
+it('clears a reviewer notice when the stored approval has already become stale', async () => {
+  const { client, target } = setup();
+  const approval = { id: 'review-result', artifact_id: 'a1', state: 'approved', patch_hash: 'hash1' };
+  client.command.mockResolvedValueOnce({ type: 'ack', cmd_id: 'cmd', ok: true, result: approval } as Awaited<ReturnType<typeof client.command>>);
+  fireEvent.click(screen.getByRole('button', { name: 'Start reviewer' }));
+  await screen.findByRole('status');
+  act(() => target.setSnapshot({ seq: 2, generation: 1, projection: {
+    ...target.getSnapshot().projection, approvals: [{ ...approval, state: 'stale' }],
+  } }));
+  expect(screen.queryByRole('status')).toBeNull();
+});
+
+it('clears a return notice after the finding has already moved to the corrected artifact', async () => {
+  const { client, target } = setup({ findings: [finding('one')] });
+  client.command.mockResolvedValueOnce({ type: 'ack', cmd_id: 'cmd', ok: true, result: { runId: 'resumed', findingIds: ['one'] } } as Awaited<ReturnType<typeof client.command>>);
+  fireEvent.click(screen.getByLabelText('Select finding one'));
+  fireEvent.click(screen.getByRole('button', { name: 'Return selected to agent' }));
+  await screen.findByRole('status');
+  act(() => target.setSnapshot({ seq: 2, generation: 1, projection: {
+    ...target.getSnapshot().projection, findings: [{ ...finding('one', 'fixed'), artifact_id: 'a2', version: 2 }],
+  } }));
+  expect(screen.queryByRole('status')).toBeNull();
+});
+
+it('abbreviates hashes in stale approvals', () => {
+  setup({ artifacts: [{ ...artifact, patch_hash: '1234567890abcdef' }, { ...artifact, id: 'a2', version: 2, previous_artifact_id: 'a1', patch_hash: 'abcdef1234567890', diff: NEXT }],
+    approvals: [{ id: 'stale', artifact_id: 'a1', state: 'stale', patch_hash: '1234567890abcdef', reason: 'artifact patch_hash changed' }] });
+  const approval = screen.getByRole('article', { name: 'Approval stale' });
+  expect(within(approval).getByText('Approved: 12345678')).toBeTruthy();
+  expect(within(approval).getByText('Changed: abcdef12')).toBeTruthy();
+  expect(approval.textContent).not.toContain('1234567890abcdef');
+});
+
+it('keeps long acceptance commands inside the wrapping verification section', () => {
+  const style = document.createElement('style');
+  style.textContent = readFileSync('app/src/pages/changes/changes.css', 'utf8');
+  document.head.append(style);
+  const command = 'node ' + 'very-long-path/'.repeat(30) + 'test.mjs';
+  setup({ artifacts: [{ ...artifact, verification: { passed: true, results: [{ command, exitCode: 0 }] } }] });
+  const verification = screen.getByRole('region', { name: 'Acceptance verification' });
+  expect(verification.classList.contains('acceptance-verification')).toBe(true);
+  expect(within(verification).getByText(command + ' · Passed')).toBeTruthy();
+  const chip = within(verification).getByText('Passed', { exact: true });
+  const summary = within(verification).getByText(command + ' · Passed');
+  expect(getComputedStyle(chip).justifySelf).toBe('start');
+  expect(getComputedStyle(chip).maxWidth).toBe('100%');
+  expect(getComputedStyle(summary).whiteSpace).toBe('normal');
+  expect(getComputedStyle(summary).overflowWrap).toBe('anywhere');
+  style.remove();
 });

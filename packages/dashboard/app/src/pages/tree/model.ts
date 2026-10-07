@@ -90,7 +90,22 @@ export function buildDelegationTree(state: ScreenState, project?: string): Deleg
     return nodes.has(`conversation:${c}`) ? `conversation:${c}` : undefined;
   };
   for (const relation of p.relations ?? []) {
-    if (relation.active === false || relation.active === 0 || !['delegated', 'depends_on', 'dependency'].includes(readText(relation.type))) continue;
+    if (relation.active === false || relation.active === 0 || !['delegated', 'review_of', 'depends_on', 'dependency'].includes(readText(relation.type))) continue;
+    if (relation.type === 'review_of') {
+      const source = endpoint(relation.to_id);
+      const target = endpoint(relation.from_id, true);
+      if (source && target) {
+        const parent = nodes.get(source)!;
+        const child = nodes.get(target)!;
+        child.label = `Review of ${conversationName(state, parent.conversationId ?? '') || parent.label}`;
+        child.role = 'Reviewer';
+        const edge: TreeEdge = { id: `relation:${readText(relation.id)}`, source, target, title: 'Review',
+          confidence: readText(relation.confidence), kind: relation.confidence === 'confirmed' ? 'delegated' : 'candidate' };
+        if (relation.confidence === 'confirmed') attach(source, target, edge);
+        else { unresolved.add(target); edges.push(edge); }
+      }
+      continue;
+    }
     const evidence = readObject(relation.evidence);
     const dNode = delegationNodes.get(readText(evidence.request_id));
     const d = dNode ? nodes.get(dNode)?.delegation : undefined;
@@ -150,6 +165,9 @@ export function buildDelegationTree(state: ScreenState, project?: string): Deleg
       const c = conversations.find(c => c.id === n.conversationId);
       return c?.project === project || taskIds.has(c?.task_id) || n.delegation?.cwd === project || n.run?.cwd === project;
     }).map(n => n.id));
+    for (const node of nodes.values()) {
+      if (node.role === 'Reviewer' && visible.has(parents.get(node.id) ?? '')) visible.add(node.id);
+    }
     for (const id of [...visible]) {
       let parent = parents.get(id);
       while (parent) { visible.add(parent); parent = parents.get(parent); }

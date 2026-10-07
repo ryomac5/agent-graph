@@ -41,11 +41,19 @@ export function readModel(run?: Row): { model: string; effort: string } {
   return { model: text(model.model), effort: text(model.effort) };
 }
 
-export function conversationName(state: ScreenState, conversationId: string): string {
+export function conversationName(state: ScreenState, conversationId: string, preference: 'task' | 'conversation' = 'task', visited = new Set<string>()): string {
+  if (visited.has(conversationId)) return '';
+  visited.add(conversationId);
+  const review = state.projection.relations?.find(row => row.type === 'review_of' && row.from_id === conversationId
+    && (row.active === true || row.active === 1) && row.confidence === 'confirmed');
+  if (review) {
+    const original = conversationName(state, text(review.to_id), 'task', visited);
+    if (original) return `Review of ${original}`;
+  }
   const conversation = state.projection.conversations?.find(row => row.id === conversationId);
   if (!conversation) return '';
   const task = state.projection.tasks?.find(row => row.id === conversation.task_id);
-  return text(task?.name) || text(conversation.name);
+  return preference === 'conversation' || conversation.type === 'subagent' ? text(conversation.name) || text(task?.name) : text(task?.name) || text(conversation.name);
 }
 
 /** 実行は会話の名前と世代で呼ぶ。 */

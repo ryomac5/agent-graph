@@ -4,7 +4,7 @@ import { store, useScreenStore, type ScreenStore } from '../../lib/store.ts';
 import type { Language } from '../../lib/i18n.ts';
 import { projectLabel } from '../../lib/format.ts';
 import { ActivityRow, providerName } from '../../components/ActivityRow.tsx';
-import { readBody, readText, selectActivities, summarizeChanges } from '../../components/activity.ts';
+import { readBody, readText, selectActivities, orderActivities, summarizeChanges } from '../../components/activity.ts';
 import { CreateTaskForm, type CommandClient } from '../../components/CreateTaskForm.tsx';
 import { RelativeTime, useNow } from '../../components/RelativeTime.tsx';
 import { Icon } from '../../components/Icon.tsx';
@@ -72,7 +72,7 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
       <section className="workspace-tasks" aria-label={ja ? '作業' : 'Tasks'}>
         <header className="column-header"><h2>{ja ? '作業' : 'Tasks'}</h2><span className="count-pill">{items.length}</span></header>
         <div className="column-scroll">
-          {items.map(item => <ActivityRow key={item.id} variant="list" selected={item.id === selected?.id} activity={item} now={now} language={language} onSelect={() => setSelectedId(item.id)}
+          {orderActivities(items).map(item => <ActivityRow key={item.id} variant="list" selected={item.id === selected?.id} activity={item} now={now} language={language} onSelect={() => setSelectedId(item.id)}
             actions={item.run && item.managed && [...ACTIVE, 'idle', 'unknown'].includes(item.state)
               ? <button className="btn btn-ghost btn-xs" aria-label={pending.includes(item.id) ? (ja ? '停止要求中' : 'Stop requested') : (ja ? '実行を停止' : 'Stop run')}
                 title={ja ? '実行を停止' : 'Stop run'} disabled={!available || pending.includes(item.id)} onClick={() => void stop(item.id)}><Icon name="stop" size={12}/>{ja ? '停止' : 'Stop'}</button> : undefined}/>)}

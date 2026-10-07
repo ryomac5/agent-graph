@@ -153,3 +153,13 @@ it('filters other projects, renders unresolved branches and disables retry while
   fireEvent.click(within(branch).getByRole('button', { name: 'Implement code' }));
   expect((screen.getByRole('button', { name: 'Retry delegation' }) as HTMLButtonElement).disabled).toBe(true);
 });
+
+it('nests review_of in the original execution direction with a readable reviewer label', () => {
+  const state = fixture().getSnapshot();
+  state.projection.relations = [state.projection.relations[0], { id: 'review-of', type: 'review_of', active: true,
+    confidence: 'confirmed', from_id: 'claude', to_id: 'codex', evidence: { artifact_id: 'artifact' } }];
+  state.projection.delegations = [state.projection.delegations[0]];
+  const tree = buildDelegationTree(state, PROJECT);
+  expect(tree.nodes.find(node => node.id === 'run:codex:1')!.children).toEqual(['run:claude:1']);
+  expect(tree.nodes.find(node => node.id === 'run:claude:1')).toMatchObject({ label: 'Review of Terminal task graph', role: 'Reviewer' });
+});

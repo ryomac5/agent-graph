@@ -11,13 +11,20 @@ import type { FactInput } from "../../core/src/ledger/facts.ts";
 import { rebuild } from "../../core/src/ledger/rebuild.ts";
 import { projectArtifacts } from "../../core/src/ledger/projections/artifacts.ts";
 import { projectRuns } from "../../core/src/ledger/projections/runs.ts";
-import { finalizeArtifacts, recordCommitResult, type CommitResult } from "../src/artifacts/index.ts";
+import { finalizeArtifacts, finalizeArtifactsAsync, recordCommitResult, type CommitResult } from "../src/artifacts/index.ts";
 import { recordWorktree } from "../src/worktree.ts";
 import { FakeHost } from "../src/host/contract.ts";
 import { Supervisor } from "../src/supervisor.ts";
 
 function runGit(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+}
+async function waitUntil(check: () => boolean): Promise<void> {
+  const deadline = performance.now() + 5000;
+  while (!check()) {
+    if (performance.now() >= deadline) throw new Error("Timed out waiting for artifact capture");
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
 }
 function createFixture(t: TestContext, customPatterns: string[] = []) {
   const directory = mkdtempSync(join(tmpdir(), "artifacts-test-"));
@@ -56,7 +63,7 @@ function createFixture(t: TestContext, customPatterns: string[] = []) {
   }
   function capture(runId: string, verification?: { passed: boolean }) {
     return finalizeArtifacts(ledger, { ...request(runId), ...(verification ? { verification } : {}) },
-      { blobDirectory: blobs, redactionRules: rules })!;
+      { blobDirectory: blobs })!;
   }
   function commit(cwd: string, body: string, ...args: string[]) {
     writeFileSync(join(cwd, "tracked.txt"), body);
@@ -107,7 +114,7 @@ test("dedicated execution fixes HEAD, range, staged, unstaged and untracked chan
   assert.equal(fixture.readPatch(artifact.patch_hash), patch);
 });
 
-test("amend creates a new version and retains its original SHA, including unchanged patches", (t) => {
+test("amend with an unchanged patch retains the same version", (t) => {
   const fixture = createFixture(t);
   const tree = fixture.start("amend", "worktree");
   const original = fixture.commit(tree.cwd, "committed\n");
@@ -116,11 +123,12 @@ test("amend creates a new version and retains its original SHA, including unchan
   const head = runGit(tree.cwd, "rev-parse", "HEAD");
   assert.notEqual(head, original);
   const amended = fixture.capture("amend");
-  assert.equal(amended.version, 2);
+  assert.equal(amended.version, 1);
   assert.equal(amended.patch_hash, first.patch_hash);
+  assert.equal(amended.id, first.id);
   assert.deepEqual(amended.commits, [head]);
   assert.deepEqual(amended.commit_relations, [{ kind: "amend", original_sha: original, head_sha: head }]);
-  assert.equal(fixture.capture("amend").version, 2);
+  assert.equal(fixture.capture("amend").version, 1);
 });
 
 test("cherry-pick records the successful result SHA and original commit relation", (t) => {
@@ -202,7 +210,7 @@ test("supervisor captures changes during execution and at exit, publishing artif
     cwd: fixture.repo, input: { text: "task" }, model: { model: "fake" } });
   writeFileSync(join(fixture.repo, "tracked.txt"), "first\n");
   host.emit("managed", { type: "state", state: "idle" });
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await waitUntil(() => projectArtifacts(fixture.ledger.readSince(0, 1000)).length === 1);
   const first = projectArtifacts(fixture.ledger.readSince(0, 1000));
   assert.equal(first.length, 1);
   writeFileSync(join(fixture.repo, "tracked.txt"), "second\n");
@@ -213,13 +221,15 @@ test("supervisor captures changes during execution and at exit, publishing artif
   for (const fact of facts.filter((fact) => fact.kind === "artifact.version_created")) assert.ok(seqs.includes(fact.seq));
 });
 
-test("dedicated uncommitted changes are captured without claiming commit attribution", (t) => {
+test("dedicated uncommitted and untracked changes have confirmed attribution", (t) => {
   const fixture = createFixture(t);
   const tree = fixture.start("uncommitted", "worktree");
   writeFileSync(join(tree.cwd, "tracked.txt"), "edited\n");
+  writeFileSync(join(tree.cwd, "new.txt"), "new\n");
   const artifact = fixture.capture("uncommitted");
   assert.deepEqual(artifact.commits, []);
-  assert.equal(artifact.attribution, "unknown");
+  assert.equal(artifact.attribution, "confirmed");
+  assert.deepEqual(artifact.file_attribution, [{ file: "new.txt", attribution: "confirmed" }, { file: "tracked.txt", attribution: "confirmed" }]);
   assert.ok(fixture.readPatch(artifact.patch_hash).includes("+edited"));
 });
 
@@ -290,7 +300,7 @@ test("fact capture failure does not stop later host events or retry at exit; unr
   host.emit("retry", { type: "fact", fact: { source_event_id: "tool", source_ts: new Date().toISOString(),
     kind: "message.created", subject: "message:tool", confidence: "confirmed", payload: {
       provider: "codex", native_id: "tool", version: 1, role: "tool", tool_output: "written", body_state: "stored" } } });
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await waitUntil(() => fixture.ledger.readSince(0, 1000).some((fact) => fact.payload && "artifact_capture" in fact.payload));
   assert.equal(fixture.ledger.readSince(0, 1000).filter((fact) => fact.payload && "artifact_capture" in fact.payload).length, 1);
   rmSync(fixture.blobs);
   writeFileSync(join(fixture.repo, "tracked.txt"), "second\n");
@@ -303,7 +313,7 @@ test("fact capture failure does not stop later host events or retry at exit; unr
   assert.ok(fixture.readPatch(projectArtifacts(facts)[0].patch_hash!).includes("+second"));
 });
 
-test("garbage-collected previous HEAD still permits a new artifact version", async (t) => {
+test("garbage-collected previous HEAD still permits artifact recapture", async (t) => {
   const fixture = createFixture(t);
   const host = new FakeHost("codex");
   const supervisor = new Supervisor(fixture.ledger, () => {},
@@ -313,7 +323,7 @@ test("garbage-collected previous HEAD still permits a new artifact version", asy
     cwd: fixture.repo, input: { text: "task" }, model: { model: "fake" } });
   const original = fixture.commit(fixture.repo, "original\n");
   host.emit("gc", { type: "state", state: "idle" });
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await waitUntil(() => projectArtifacts(fixture.ledger.readSince(0, 1000)).length === 1);
   assert.equal(projectArtifacts(fixture.ledger.readSince(0, 1000)).length, 1);
   runGit(fixture.repo, "commit", "--amend", "-m", "replacement");
   runGit(fixture.repo, "reflog", "expire", "--expire=now", "--all");
@@ -325,9 +335,7 @@ test("garbage-collected previous HEAD still permits a new artifact version", asy
   assert.equal(projectRuns(facts)[0].state, "ended");
   assert.ok(!facts.some((fact) => fact.payload && "artifact_capture" in fact.payload));
   const artifacts = projectArtifacts(facts);
-  assert.equal(artifacts.length, 2);
-  assert.equal(artifacts[1].version, 2);
-  assert.equal(artifacts[1].head_sha, runGit(fixture.repo, "rev-parse", "HEAD"));
+  assert.equal(artifacts.length, 1);
 });
 
 test("S8: replay, shuffled input and rebuilding preserve simultaneous commits, failure, amend and untracked diff", (t) => {
@@ -417,4 +425,241 @@ test("observed conversations remain unknown even in a dedicated tree with a succ
   const head = fixture.commit(tree.cwd, "outside change\n");
   fixture.result("outside", { success: true, head_sha: head });
   assert.equal(fixture.capture("outside").attribution, "unknown");
+});
+
+test("resumed runs continue task versions and identical patches do not create a version", async (t) => {
+  const fixture = createFixture(t);
+  fixture.start("first");
+  writeFileSync(join(fixture.repo, "tracked.txt"), "first change\n");
+  const first = fixture.capture("first");
+  fixture.start("second");
+  fixture.ledger.append({ source: "host-codex", source_event_id: "resume-conversation", source_ts: "2031-01-01T00:00:00Z",
+    kind: "run.updated", subject: "run:second", confidence: "confirmed", payload: { conversation_id: "first", generation: 2 } });
+  assert.equal(fixture.capture("second").id, first.id);
+  writeFileSync(join(fixture.repo, "tracked.txt"), "corrected change\n");
+  const second = fixture.capture("second");
+  assert.equal(second.version, 2);
+  assert.equal(second.previous_artifact_id, first.id);
+  assert.equal(second.run_id, "second");
+  assert.equal(fixture.capture("second", { passed: true }).id, second.id);
+  assert.equal(fixture.ledger.readSince(0, 1000).filter((fact) => fact.kind === "artifact.version_created").length, 2);
+});
+
+test("different conversations in one task continue versions without including another task", (t) => {
+  const fixture = createFixture(t);
+  for (const [conversation, task] of [["first", "task"], ["second", "task"], ["unrelated", "other-task"]]) {
+    fixture.ledger.append({ source: "host-codex", source_event_id: `conversation:${conversation}`, source_ts: "2029-01-01T00:00:00Z",
+      kind: "conversation.created", subject: `conversation:${conversation}`, confidence: "confirmed",
+      payload: { provider: "codex", native_id: conversation, type: "interactive", origin: "managed", task_id: task, history_format: "jsonl" } });
+  }
+  fixture.start("first");
+  writeFileSync(join(fixture.repo, "tracked.txt"), "first change\n");
+  const first = fixture.capture("first");
+  fixture.start("unrelated");
+  const unrelated = fixture.capture("unrelated");
+  assert.equal(unrelated.version, 1);
+  assert.equal(unrelated.previous_artifact_id, undefined);
+  fixture.start("second");
+  writeFileSync(join(fixture.repo, "tracked.txt"), "second change\n");
+  const second = fixture.capture("second");
+  assert.equal(second.version, 2);
+  assert.equal(second.previous_artifact_id, first.id);
+});
+
+test("concurrent asynchronous captures create exactly one version for an unchanged patch", async (t) => {
+  const fixture = createFixture(t);
+  fixture.start("concurrent");
+  writeFileSync(join(fixture.repo, "tracked.txt"), "concurrent change\n");
+  const artifacts = await Promise.all(Array.from({ length: 3 }, (_, index) => finalizeArtifactsAsync(fixture.ledger,
+    { runId: "concurrent", provider: "codex", sourceEventId: `concurrent:${index}`, sourceTs: "2031-01-01T00:00:00Z" },
+    { blobDirectory: fixture.blobs })));
+  assert.ok(artifacts[0]);
+  assert.ok(artifacts.every((artifact) => artifact?.id === artifacts[0]!.id));
+  assert.equal(fixture.ledger.readSince(0, 1000).filter((fact) => fact.kind === "artifact.version_created").length, 1);
+});
+
+test("resuming after a commit retains the task diff base and skips the unchanged version", (t) => {
+  const fixture = createFixture(t);
+  const tree = fixture.start("committed-first");
+  fixture.commit(fixture.repo, "first committed change\n");
+  const first = fixture.capture("committed-first");
+  const resumedTree = fixture.start("committed-resumed");
+  assert.notEqual(resumedTree.base_sha, tree.base_sha);
+  fixture.ledger.append({ source: "host-codex", source_event_id: "committed-resume", source_ts: "2031-01-01T00:00:00Z",
+    kind: "run.updated", subject: "run:committed-resumed", confidence: "confirmed",
+    payload: { conversation_id: "committed-first", generation: 2 } });
+  assert.equal(fixture.capture("committed-resumed").id, first.id);
+  fixture.commit(fixture.repo, "corrected committed change\n");
+  const second = fixture.capture("committed-resumed");
+  assert.equal(second.version, 2);
+  assert.equal(second.previous_artifact_id, first.id);
+  assert.equal(second.base_sha, first.base_sha);
+  assert.ok(fixture.readPatch(second.patch_hash).includes("-base\n+corrected committed change"));
+  assert.equal(fixture.ledger.readSince(0, 1000).filter((fact) => fact.kind === "artifact.version_created").length, 2);
+});
+
+test("dedicated trees used by multiple runs become joint at file level", (t) => {
+  const fixture = createFixture(t);
+  const tree = fixture.start("owner", "worktree");
+  fixture.ledger.append({ source: "host-codex", source_event_id: "peer", source_ts: "2031-01-01T00:00:00Z",
+    kind: "run.created", subject: "run:peer", confidence: "confirmed", payload: { conversation_id: "peer", generation: 1, state: "running" } });
+  fixture.ledger.append({ source: "host-codex", source_event_id: "peer-tree", source_ts: "2031-01-01T00:00:01Z",
+    kind: "run.updated", subject: "run:peer", confidence: "confirmed", payload: { ...tree } });
+  writeFileSync(join(tree.cwd, "tracked.txt"), "joint edit\n");
+  writeFileSync(join(tree.cwd, "new.txt"), "joint new\n");
+  const artifact = fixture.capture("owner");
+  assert.equal(artifact.attribution, "joint");
+  assert.deepEqual(artifact.file_attribution, [{ file: "new.txt", attribution: "joint" }, { file: "tracked.txt", attribution: "joint" }]);
+});
+
+test("shared files store line attribution only when committed and uncommitted additions mix", (t) => {
+  const fixture = createFixture(t);
+  fixture.start("mixed");
+  const head = fixture.commit(fixture.repo, "committed line\nbase\n");
+  fixture.result("mixed", { success: true, head_sha: head });
+  writeFileSync(join(fixture.repo, "tracked.txt"), "committed line\nbase\nuncommitted line\n");
+  writeFileSync(join(fixture.repo, "new.txt"), "untracked\n");
+  const artifact = fixture.capture("mixed");
+  assert.deepEqual(artifact.file_attribution, [
+    { file: "new.txt", attribution: "unknown" },
+    { file: "tracked.txt", attribution: "unknown", line_attribution: [{ line: 1, side: "new", attribution: "inferred" }, { line: 3, side: "new", attribution: "unknown" }] },
+  ]);
+});
+
+test("artifact recapture stays responsive with 2000 commits", async (t) => {
+  const fixture = createFixture(t);
+  const historySize = 2000;
+  const input = Array.from({ length: historySize }, (_, index) => {
+    const body = `history ${index}\n`;
+    return `commit refs/heads/history\ncommitter Test <test@example.invalid> ${1700000000 + index} +0000\ndata 7\nhistory\n${index === 0 ? `from ${runGit(fixture.repo, "rev-parse", "HEAD")}\n` : ""}M 100644 inline history.txt\ndata ${Buffer.byteLength(body)}\n${body}\n`;
+  }).join("");
+  const imported = spawnSync("git", ["fast-import", "--quiet"], { cwd: fixture.repo, input });
+  assert.equal(imported.status, 0, imported.stderr.toString());
+  assert.equal(Number(runGit(fixture.repo, "rev-list", "--count", "history")), historySize + 1);
+  runGit(fixture.repo, "checkout", "history");
+  const origin = fixture.commit(fixture.repo, "picked from large history\n");
+  runGit(fixture.repo, "checkout", "main");
+  fixture.start("large");
+  runGit(fixture.repo, "cherry-pick", origin);
+  let lastTick = performance.now();
+  let maximumGap = 0;
+  const timer = setInterval(() => { const now = performance.now(); maximumGap = Math.max(maximumGap, now - lastTick); lastTick = now; }, 5);
+  try {
+    for (let index = 0; index < 2; index++) await finalizeArtifactsAsync(fixture.ledger,
+      { runId: "large", provider: "codex", sourceEventId: `large:${index}`, sourceTs: "2031-01-01T00:00:00Z" },
+      { blobDirectory: fixture.blobs });
+    maximumGap = Math.max(maximumGap, performance.now() - lastTick);
+  } finally { clearInterval(timer); }
+  t.diagnostic(`Maximum event loop gap: ${maximumGap.toFixed(1)} ms`);
+  assert.ok(maximumGap < 100, `Event loop stalled for ${maximumGap} ms`);
+  const artifacts = projectArtifacts(fixture.ledger.readSince(0, 1000));
+  assert.equal(artifacts.length, 1);
+  const artifact = artifacts[0] as unknown as { commit_relations: { original_sha: string }[] };
+  assert.equal(artifact.commit_relations[0].original_sha, runGit(fixture.repo, "rev-parse", "history"));
+});
+
+test("requests received during capture collapse into one latest recapture", async (t) => {
+  const fixture = createFixture(t);
+  const host = new FakeHost("codex");
+  const supervisor = new Supervisor(fixture.ledger, () => {}, { recover: false, isolation: "shared", artifacts: { blobDirectory: fixture.blobs } });
+  supervisor.registerHost(host);
+  await supervisor.start("codex", { runId: "coalesced", conversationId: "coalesced", generation: 1,
+    cwd: fixture.repo, input: { text: "task" }, model: { model: "fake" } });
+  const directory = join(fixture.repo, ".git", "capture-test");
+  mkdirSync(directory);
+  const log = join(directory, "commands");
+  writeFileSync(log, "");
+  const git = execFileSync("/usr/bin/which", ["git"], { encoding: "utf8" }).trim();
+  writeFileSync(join(directory, "git"), `#!/bin/sh\nprintf '%s\\n' "$1" >> '${log}'\nsleep 0.02\nexec '${git}' "$@"\n`, { mode: 0o700 });
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${directory}:${previousPath}`;
+  try {
+    writeFileSync(join(fixture.repo, "tracked.txt"), "initial\n");
+    host.emit("coalesced", { type: "state", state: "idle" });
+    await waitUntil(() => readFileSync(log, "utf8").includes("rev-parse"));
+    writeFileSync(join(fixture.repo, "tracked.txt"), "latest\n");
+    for (let index = 0; index < 20; index++) {
+      host.emit("coalesced", { type: "fact", fact: { source_event_id: `pending:${index}`, source_ts: new Date().toISOString(),
+        kind: "message.created", subject: `message:pending:${index}`, confidence: "confirmed",
+        payload: { provider: "codex", native_id: `pending:${index}`, version: 1, role: "tool", tool_output: "changed", body_state: "stored" } } });
+    }
+    host.emit("coalesced", { type: "exit", exitCode: 0 });
+    await supervisor.wait("coalesced");
+  } finally { process.env.PATH = previousPath; }
+  assert.equal(readFileSync(log, "utf8").split("\n").filter((command) => command === "rev-parse").length, 4);
+  const artifacts = projectArtifacts(fixture.ledger.readSince(0, 1000));
+  assert.equal(artifacts.length, 1);
+  assert.ok(fixture.readPatch(artifacts[0].patch_hash!).includes("+latest"));
+});
+
+test("file attribution follows the final changed lines when dirty edits restore base context", (t) => {
+  const fixture = createFixture(t);
+  fixture.start("restored-context");
+  const head = fixture.commit(fixture.repo, "committed\n");
+  fixture.result("restored-context", { success: true, head_sha: head });
+  writeFileSync(join(fixture.repo, "tracked.txt"), "committed\nbase\n");
+  const artifact = fixture.capture("restored-context");
+  assert.deepEqual(artifact.file_attribution, [{ file: "tracked.txt", attribution: "inferred" }]);
+});
+
+test("mixed attribution preserves Unicode and control characters in Git quoted paths", (t) => {
+  const fixture = createFixture(t);
+  const file = "日本語\x07.txt";
+  writeFileSync(join(fixture.repo, file), "base\n");
+  runGit(fixture.repo, "add", "."); runGit(fixture.repo, "commit", "-m", "named base");
+  fixture.start("quoted-path");
+  writeFileSync(join(fixture.repo, file), "committed\nbase\n");
+  runGit(fixture.repo, "add", "."); runGit(fixture.repo, "commit", "-m", "named change");
+  fixture.result("quoted-path", { success: true, head_sha: runGit(fixture.repo, "rev-parse", "HEAD") });
+  writeFileSync(join(fixture.repo, file), "committed\nbase\ndirty\n");
+  assert.deepEqual(fixture.capture("quoted-path").file_attribution, [{ file, attribution: "unknown", line_attribution: [
+    { line: 1, side: "new", attribution: "inferred" }, { line: 3, side: "new", attribution: "unknown" },
+  ] }]);
+});
+
+test("asynchronous binary capture uses the same custom redaction rules as ledger storage", async (t) => {
+  const fixture = createFixture(t, ["custom-binary-secret"]);
+  fixture.start("async-binary");
+  writeFileSync(join(fixture.repo, "new.dat"), Buffer.from("\0custom-binary-secret\n"));
+  const artifact = (await finalizeArtifactsAsync(fixture.ledger, { runId: "async-binary", provider: "codex",
+    sourceEventId: "async-binary-capture", sourceTs: "2031-01-01T00:00:00Z" }, { blobDirectory: fixture.blobs }))!;
+  const record = fixture.readPatch(artifact.patch_hash).split("\n").find((line) => line.startsWith("agent-graph-binary "))!;
+  const content = JSON.parse(record.slice("agent-graph-binary ".length));
+  assert.ok(!Buffer.from(content.new, "base64").toString("utf8").includes("custom-binary-secret"));
+  fixture.ledger.append({ source: "host-codex", source_event_id: "binary-message", source_ts: "2031-01-01T00:00:01Z",
+    kind: "message.created", subject: "message:binary-secret", confidence: "confirmed", payload: {
+      provider: "codex", native_id: "binary-secret", role: "assistant", version: 1, body_state: "stored", body: "custom-binary-secret" } });
+  assert.ok(!JSON.stringify(fixture.ledger.readSince(0, 1000)).includes("custom-binary-secret"));
+});
+
+test("an unchanged version becomes joint when another run uses its dedicated tree", (t) => {
+  const fixture = createFixture(t);
+  const tree = fixture.start("original-owner", "worktree");
+  writeFileSync(join(tree.cwd, "tracked.txt"), "existing change\n");
+  const first = fixture.capture("original-owner");
+  fixture.ledger.append({ source: "host-codex", source_event_id: "reuse-run", source_ts: "2031-01-01T00:00:00Z",
+    kind: "run.created", subject: "run:reuser", confidence: "confirmed",
+    payload: { conversation_id: "original-owner", generation: 2, state: "running" } });
+  fixture.ledger.append({ source: "host-codex", source_event_id: "reuse-tree", source_ts: "2031-01-01T00:00:01Z",
+    kind: "run.updated", subject: "run:reuser", confidence: "confirmed", payload: { ...tree } });
+  const repeated = fixture.capture("reuser");
+  assert.equal(repeated.id, first.id);
+  assert.equal(repeated.version, 1);
+  assert.equal(repeated.run_id, "original-owner");
+  assert.equal(repeated.attribution, "joint");
+  assert.deepEqual(repeated.file_attribution, [{ file: "tracked.txt", attribution: "joint" }]);
+  const facts = fixture.ledger.readSince(0, 1000);
+  assert.equal(facts.filter((fact) => fact.kind === "artifact.version_created").length, 1);
+  assert.equal(projectArtifacts(facts)[0].attribution, "joint");
+});
+
+test("mixed attribution treats lines resembling diff headers as changed content", (t) => {
+  const fixture = createFixture(t);
+  fixture.start("header-content");
+  const head = fixture.commit(fixture.repo, "++ committed\nbase\n");
+  fixture.result("header-content", { success: true, head_sha: head });
+  writeFileSync(join(fixture.repo, "tracked.txt"), "++ committed\nbase\n++ dirty\n");
+  assert.deepEqual(fixture.capture("header-content").file_attribution, [{ file: "tracked.txt", attribution: "unknown", line_attribution: [
+    { line: 1, side: "new", attribution: "inferred" }, { line: 3, side: "new", attribution: "unknown" },
+  ] }]);
 });

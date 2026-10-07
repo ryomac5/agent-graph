@@ -66,7 +66,12 @@ it('shares live activity, approval counts, commands and notices across all stage
   expect(screen.getByRole('heading', { name: 'Approval pending' })).toBeTruthy();
   fireEvent.click(within(screen.getByRole('complementary')).getByRole('link', { name: 'demo' }));
   expect(screen.getByRole('heading', { name: 'demo' })).toBeTruthy();
-  expect(screen.getByText('Project workspace')).toBeTruthy();
+  const header = document.querySelector<HTMLElement>('.workspace-header')!;
+  expect(header.textContent).toBe('demoNew task');
+  expect(within(header).getAllByRole('button')).toHaveLength(1);
+  expect(within(header).getByRole('button', { name: 'New task' }).getAttribute('aria-expanded')).toBe('false');
+  expect(within(header).queryByRole('checkbox')).toBeNull();
+  expect(within(header).queryByRole('combobox')).toBeNull();
   expect(screen.getByRole('textbox', { name: 'Message' })).toBeTruthy();
   fireEvent.click(within(screen.getByRole('region', { name: 'Root conversations' })).getByRole('button', { name: /Console conversation/ }));
   expect(screen.getByRole('heading', { name: 'Console conversation' })).toBeTruthy();

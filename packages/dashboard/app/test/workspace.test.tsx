@@ -10,7 +10,7 @@ function createCommandClient() {
   return { command: vi.fn(async (_command: string, _payload?: unknown, cmdId?: string): Promise<Ack> => ({ type: 'ack', cmd_id: cmdId ?? 'cmd', ok: true })) };
 }
 function fillTaskForm() {
-  fireEvent.click(screen.getByRole('button', { name: 'Create task' }));
+  fireEvent.click(screen.getByRole('button', { name: 'New task' }));
   fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Build feature' } });
   fireEvent.change(screen.getByLabelText('Task'), { target: { value: 'Implement feature and validate it.' } });
   fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'claude' } });

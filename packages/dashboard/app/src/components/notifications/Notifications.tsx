@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import { AppLink } from '../AppLink.tsx';
+import { dictionaries, type Language } from '../../lib/i18n.ts';
 import { store, useScreenStore, type ScreenStore, type ScreenState } from '../../lib/store.ts';
 import { ApprovalActions, ApprovalDetails } from '../../pages/inbox/Inbox.tsx';
 import { getInbox, isPending, type CommandClient } from '../../pages/inbox/model.ts';
@@ -6,8 +8,8 @@ import { collectNotifications, loadPreferences, NOTIFICATION_KINDS, NOTIFICATION
   type Notice, type NotificationMode } from './model.ts';
 
 const NOTICE_LIMIT = 100;
-export interface NotificationsProps { client: CommandClient; target?: ScreenStore; initiallyOpen?: boolean }
-export function Notifications({ client, target = store, initiallyOpen = true }: NotificationsProps) {
+export interface NotificationsProps { client: CommandClient; target?: ScreenStore; initiallyOpen?: boolean; compact?: boolean; language?: Language }
+export function Notifications({ client, target = store, initiallyOpen = true, compact = false, language = 'en' }: NotificationsProps) {
   const state = useScreenStore(target);
   const previous = useRef<ScreenState | undefined>(undefined);
   const occurrence = useRef(0);
@@ -55,10 +57,12 @@ export function Notifications({ client, target = store, initiallyOpen = true }: 
     }
   }
   return <div className="notifications">
-    <button aria-label="Notifications" aria-expanded={open} onClick={() => setOpen(value => !value)}>Notifications ({notices.length})</button>
-    <a href="/inbox">Pending approvals: {getInbox(state).pending.length}</a>
-    {open && <section ref={panel} tabIndex={-1} aria-label="Notifications" aria-live="polite">
-      <h2>Notifications</h2>
+    <button className={compact ? 'bell' : undefined} aria-label={dictionaries[language].notifications} aria-expanded={open} onClick={() => setOpen(value => !value)}>
+      {compact && <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>}
+      {compact ? notices.length : `${dictionaries[language].notifications} (${notices.length})`}</button>
+    {!compact && <AppLink to="/inbox">Pending approvals: {getInbox(state).pending.length}</AppLink>}
+    {open && <section className={compact ? 'notification-panel' : undefined} ref={panel} tabIndex={-1} aria-label={dictionaries[language].notifications} aria-live="polite">
+      <h2>{dictionaries[language].notifications}</h2>
       <details><summary>Notification settings</summary>{NOTIFICATION_KINDS.map(kind => <label key={kind} style={{ display: 'block' }}>
         {NOTIFICATION_LABELS[kind]}<select value={preferences[kind]} onChange={event => void changePreference(kind, event.target.value as NotificationMode)}>
           <option value="in_app">In app</option><option value="browser">Browser</option><option value="silent">Silent</option>
@@ -70,7 +74,7 @@ export function Notifications({ client, target = store, initiallyOpen = true }: 
         return <li key={notice.id} data-kind={notice.kind} style={notice.kind === 'unknown' ? { border: '1px dashed gray' } : undefined}>
           <h3>{notice.title}</h3><pre style={{ whiteSpace: 'pre-wrap' }}>{notice.detail}</pre>
           {notice.time && <time dateTime={notice.time}>{notice.time}</time>}
-          {notice.conversationId && <a href={`/c/${encodeURIComponent(notice.conversationId)}`}>Evidence</a>}
+          {notice.conversationId && <AppLink to={`/c/${encodeURIComponent(notice.conversationId)}`}>Evidence</AppLink>}
           {approval && <><ApprovalDetails row={approval} state={state}/>
             {isPending(approval) ? <ApprovalActions row={approval} client={client}/>
               : <p>Approval {String(approval.state)}</p>}</>}

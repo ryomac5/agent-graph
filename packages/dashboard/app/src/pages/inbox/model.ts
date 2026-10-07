@@ -1,5 +1,6 @@
 import type { createClient } from '../../lib/client.ts';
 import type { Row, ScreenState } from '../../lib/store.ts';
+import { decodeStoredValue } from '../../components/activity.ts';
 
 export type CommandClient = Pick<ReturnType<typeof createClient>, 'command'>;
 export type ApprovalAction = 'allow' | 'deny' | 'session';
@@ -31,8 +32,9 @@ export function getInbox(state: ScreenState) {
 export function getDecision(row: Row, action: ApprovalAction): string | undefined {
   const candidates = action === 'allow' ? ['allow', 'accept'] : action === 'deny' ? ['deny', 'decline']
     : ['acceptForSession', 'allow_for_session', 'allowForSession'];
-  return Array.isArray(row.available_decisions)
-    ? row.available_decisions.find((value): value is string => typeof value === 'string' && candidates.includes(value)) : undefined;
+  const decisions = decodeStoredValue(row.available_decisions);
+  return Array.isArray(decisions)
+    ? decisions.find((value): value is string => typeof value === 'string' && candidates.includes(value)) : undefined;
 }
 export async function answerApproval(client: CommandClient, row: Row, action: ApprovalAction) {
   const decision = getDecision(row, action);

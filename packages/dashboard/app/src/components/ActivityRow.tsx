@@ -38,7 +38,7 @@ export function ActivityRow({ activity, now, language = 'en', onSelect, selected
       : <Link className="activity-name" to={url}>{activity.name}</Link>}
     {activity.provisional && <span className="chip chip-dashed">{ja ? '仮の名前' : 'Provisional'}</span>}
   </div>;
-  const summary = <p className="activity-excerpt">{excerpt ? readBody(excerpt.body) || readText(excerpt.body_state) : <span className="muted-text">{ja ? '発言はまだありません' : 'No messages yet'}</span>}</p>;
+  const summary = <p className="activity-excerpt">{excerpt ? readBody(excerpt.body) || readText(excerpt.body_state) : activity.excerpt || <span className="muted-text">{ja ? '発言はまだありません' : 'No messages yet'}</span>}</p>;
   if (variant === 'list') {
     return <article className={`activity-item${activity.parentConversationId ? ' activity-child' : ''}${selected ? ' selected' : ''}`} aria-label={activity.name}>
       <div className="activity-item-head">{title}{actions && <div className="row-actions">{actions}</div>}</div>

@@ -23,8 +23,9 @@ it('groups all kinds and shows provenance, unsupported formats and a link to the
   for (const name of ['Messages', 'Tool output', 'Diffs', 'Findings', 'Task names', 'Aliases']) expect(screen.getByRole('region', { name })).toBeTruthy();
   const section = screen.getByRole('region', { name: 'Messages' });
   expect(within(section).getByText('confirmed')).toBeTruthy();
-  expect(within(section).getByText('run-1')).toBeTruthy();
-  expect(within(section).getByText('2026-01-01T00:00:00Z')).toBeTruthy();
+  expect(section.textContent).not.toContain('run-1');
+  expect(section.textContent).not.toContain('["codex","c"]');
+  expect(section.querySelector('time')?.getAttribute('datetime')).toBe('2026-01-01T00:00:00Z');
   expect(within(section).getByRole('link').getAttribute('href')).toBe('/c/%5B%22codex%22%2C%22c%22%5D#message-%5B%22codex%22%2C%22m%22%5D');
   expect(screen.getByText('Unsupported history formats cannot be searched.')).toBeTruthy();
   expect(screen.getByText(/Unknown format version/)).toBeTruthy();

@@ -13,7 +13,7 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 it('renders navigation, projects, pending approvals, connection state and bell', () => {
   const store = createStore();
-  store.setSnapshot({ seq: 1, generation: 0, projection: { tasks: [{ id: 't', project: 'demo' }], approvals: [{ id: 'a', state: 'pending' }, { id: 'b', state: 'expired' }] } });
+  store.setSnapshot({ seq: 1, generation: 0, projection: { projects: [{ id: 'demo', display_name: 'demo', state: 'registered' }], tasks: [{ id: 't', project: 'demo' }], approvals: [{ id: 'a', state: 'pending' }, { id: 'b', state: 'expired' }] } });
   store.setConnection('runner_unavailable');
   render(<MemoryRouter><App target={store}/></MemoryRouter>);
   expect(screen.getByRole('heading', { name: 'Overview' })).toBeTruthy();
@@ -34,14 +34,14 @@ it('uses the OS theme, reacts to changes, allows explicit overrides and Japanese
   expect(screen.getByRole('heading', { name: '設定' })).toBeTruthy();
   expect(document.documentElement.lang).toBe('ja');
 });
-it.each([['/p/demo', 'demo'], ['/c/demo', 'Conversation'], ['/inbox', 'Approval inbox'],
+it.each([['/p/demo', 'Other'], ['/c/demo', 'Conversation'], ['/inbox', 'Approval inbox'],
   ['/p/demo/tree', 'Delegation tree and graph'], ['/p/demo/changes', 'Changes'], ['/search', 'Search']])('renders route %s', (path, heading) => {
   render(<MemoryRouter initialEntries={[path]}><App/></MemoryRouter>);
   expect(screen.getByRole('heading', { name: heading })).toBeTruthy();
 });
 it('shows unknown with evidence, time, reason and a link instead of relying on color', async () => {
   const { StateBadge } = await import('../components/StateBadge.tsx');
-  render(<MemoryRouter><StateBadge state="unknown" evidenceUrl="/c/demo" evidence="Disconnect" evidenceTime="2026-10-07" reason="Observation interrupted"/></MemoryRouter>);
+  render(<MemoryRouter><StateBadge detailed state="unknown" evidenceUrl="/c/demo" evidence="Disconnect" evidenceTime="2026-10-07" reason="Observation interrupted"/></MemoryRouter>);
   const link = screen.getByRole('link', { name: 'Unknown · Evidence' });
   expect(link.className).toContain('status-unknown');
   expect(link.textContent).toContain('Disconnect'); expect(link.textContent).toContain('2026-10-07');
@@ -51,6 +51,7 @@ it('shares live activity, approval counts, commands and notices across all stage
   const target = createStore();
   const client = { command: vi.fn(async (_command: string, _payload?: unknown) => ({ type: 'ack' as const, cmd_id: 'cmd', ok: true, result: [] })) };
   target.setSnapshot({ seq: 1, generation: 0, projection: {
+    projects: [{ id: '/repo/demo', display_name: 'demo', root_path: '/repo/demo', state: 'registered' }],
     tasks: [{ id: 't', name: 'Build console', project: '/repo/demo' }],
     conversations: [{ id: 'c', task_id: 't', name: 'Console conversation', origin: 'managed', provider: 'claude' }],
     runs: [{ id: 'r', conversation_id: 'c', state: 'running', generation: 1 }],
@@ -62,7 +63,7 @@ it('shares live activity, approval counts, commands and notices across all stage
   } }));
   fireEvent.click(screen.getByRole('button', { name: 'Notifications' }));
   expect(screen.getByRole('heading', { name: 'Approval pending' })).toBeTruthy();
-  fireEvent.click(within(screen.getByRole('complementary')).getByRole('link', { name: '/repo/demo' }));
+  fireEvent.click(within(screen.getByRole('complementary')).getByRole('link', { name: 'demo' }));
   expect(screen.getByRole('heading', { name: 'demo' })).toBeTruthy();
   expect(screen.getByText('Project workspace')).toBeTruthy();
   expect(screen.getByRole('textbox', { name: 'Message' })).toBeTruthy();
@@ -83,6 +84,7 @@ it('shares live activity, approval counts, commands and notices across all stage
 it('opens the selected run from the workspace Changes summary and sends review commands', async () => {
   const target = createStore();
   target.setSnapshot({ seq: 1, generation: 0, projection: {
+    projects: [{ id: '/repo', display_name: 'repo', root_path: '/repo', state: 'registered' }],
     tasks: [{ id: 'task', name: 'Review task', project: '/repo' }],
     conversations: [{ id: 'c', task_id: 'task', origin: 'managed', provider: 'codex' }],
     runs: [{ id: 'r', conversation_id: 'c', state: 'ended', generation: 1 }],

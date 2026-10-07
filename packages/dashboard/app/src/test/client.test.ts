@@ -34,7 +34,7 @@ describe('WebSocket client', () => {
     expect(target.getSnapshot().projection.tasks).toEqual([{ id: 'new' }]);
     sockets[0].close(); expect(target.getSnapshot().connection).toBe('reconnecting');
     await vi.advanceTimersByTimeAsync(500); sockets[1].open();
-    expect(sockets[1].sent[0]).toEqual({ type: 'hello', seq: 12, generation: 1 });
+    expect(sockets[1].sent[0]).toEqual({ type: 'hello', seq: 12, generation: 1, scope: { conversations: [] } });
     sockets[1].close(); await vi.advanceTimersByTimeAsync(999); expect(sockets).toHaveLength(2);
     await vi.advanceTimersByTimeAsync(1); expect(sockets).toHaveLength(3);
     client.stop();
@@ -44,7 +44,7 @@ describe('WebSocket client', () => {
     sockets[0].receive({ type: 'resync' }); sockets[0].receive({ type: 'resync' });
     await vi.waitFor(() => expect(target.getSnapshot().seq).toBe(20));
     expect(fetchSnapshot).toHaveBeenCalledTimes(1);
-    expect(sockets[0].sent.at(-1)).toEqual({ type: 'hello', seq: 20, generation: 2 });
+    expect(sockets[0].sent.at(-1)).toEqual({ type: 'hello', seq: 20, generation: 2, scope: { conversations: [] } });
     client.stop();
   });
   it('retries an unacknowledged command with the same id and the receiver acts once', async () => {
@@ -81,6 +81,29 @@ describe('WebSocket client', () => {
     sockets[0].receive({ type: 'runner', available: true }); expect(target.getSnapshot().connection).toBe('connected');
     sockets[0].close(); expect(target.getSnapshot().deltas).toEqual({}); client.stop();
   });
+  it('trusts the reported runner state over command errors and recovers when no report exists', () => {
+    const { client, sockets, target } = fixture();
+    sockets[0].receive({ type: 'runner', available: true });
+    sockets[0].receive({ type: 'ack', cmd_id: 'a', ok: false, error: 'Runner unavailable' });
+    expect(target.getSnapshot().connection).toBe('connected');
+    client.stop();
+    const direct = fixture();
+    direct.sockets[0].receive({ type: 'ack', cmd_id: 'a', ok: false, error: 'Runner unavailable' });
+    expect(direct.target.getSnapshot().connection).toBe('runner_unavailable');
+    direct.sockets[0].receive({ type: 'ack', cmd_id: 'b', ok: true, result: {} });
+    expect(direct.target.getSnapshot().connection).toBe('connected');
+    direct.client.stop();
+  });
+  it('subscribes to opened conversations without resending pending commands', () => {
+    const { client, sockets } = fixture();
+    void client.command('start', {}, 'pending').catch(() => undefined);
+    const release = client.watchConversation('c1');
+    expect(sockets[0].sent.at(-1)).toEqual({ type: 'hello', seq: 10, generation: 1, scope: { conversations: ['c1'] } });
+    release();
+    expect(sockets[0].sent.at(-1)).toEqual({ type: 'hello', seq: 10, generation: 1, scope: { conversations: [] } });
+    expect(sockets[0].sent.filter(message => message.type === 'cmd')).toHaveLength(1);
+    client.stop();
+  });
   it('ignores a stale snapshot after disconnect', async () => {
     let complete!: (value: { seq: number; generation: number; projection: {} }) => void;
     const fetchSnapshot = vi.fn(() => new Promise<{ seq: number; generation: number; projection: {} }>(done => { complete = done; }));
@@ -99,7 +122,7 @@ it('loads the initial snapshot before hello and commands so existing rows are pr
   const result = client.command('start', {}, 'initial');
   socket.open(); expect(socket.sent).toEqual([]);
   await Promise.resolve();
-  expect(socket.sent[0]).toEqual({ type: 'hello', seq: 7, generation: 0 });
+  expect(socket.sent[0]).toEqual({ type: 'hello', seq: 7, generation: 0, scope: { conversations: [] } });
   expect(target.getSnapshot().projection.tasks).toEqual([{ id: 'existing' }]);
   socket.receive({ type: 'ack', cmd_id: 'initial', ok: true, result: {} });
   await result; client.stop();

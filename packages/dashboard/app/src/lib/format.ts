@@ -11,6 +11,18 @@ function object(value: unknown): Row {
 }
 function text(value: unknown): string { return typeof value === 'string' ? value : ''; }
 
+export function readTitle(value: unknown): string {
+  const name = text(value).trim();
+  return /^Untitled(?: task| conversation)?$/i.test(name) ? '' : name;
+}
+
+// 台帳の理由は機械向けの語で書かれる。人が読む文に置き換え、置き換えられない機械語は出さない。
+export function approvalReasonText(reason: string): string {
+  if (/patch_hash|patch changed/i.test(reason)) return 'The patch changed after this request.';
+  if (/expired|timeout/i.test(reason)) return 'The request expired before an answer was sent.';
+  return /^[a-z0-9_.:-]+(?: [a-z0-9_.:-]+)*$/.test(reason) && /[_:.]/.test(reason) ? '' : reason;
+}
+
 export function splitPath(path: string): string[] { return path.split(/[\\/]+/).filter(Boolean); }
 
 /** プロジェクトの主の名前はリポジトリの名前とし、従の表示は親の場所を短く出す。 */
@@ -53,7 +65,10 @@ export function conversationName(state: ScreenState, conversationId: string, pre
   const conversation = state.projection.conversations?.find(row => row.id === conversationId);
   if (!conversation) return '';
   const task = state.projection.tasks?.find(row => row.id === conversation.task_id);
-  return preference === 'conversation' || conversation.type === 'subagent' ? text(conversation.name) || text(task?.name) : text(task?.name) || text(conversation.name);
+  const taskName = readTitle(task?.name);
+  const name = readTitle(conversation.name);
+  const provisional = text(conversation.first_request_excerpt) || text(task?.purpose);
+  return preference === 'conversation' || conversation.type === 'subagent' ? name || taskName || provisional : taskName || name || provisional;
 }
 
 /** 実行は会話の名前と世代で呼ぶ。 */

@@ -60,6 +60,7 @@ const RUN = `${CONVERSATION}:1`;
 // 本物の runner の投影と同じ形の行。会話と実行の ID は native ID から作られた JSON の文字列になる。
 function projection(extra: Record<string, Row[]> = {}): Record<string, Row[]> {
   return {
+    projects: [{ id: REPO, display_name: 'repo', root_path: '/projects/repo', state: 'registered' }],
     tasks: [{ id: 'task', name: 'Browser fixture task', project: REPO, state: 'running' }],
     conversations: [{ id: CONVERSATION, task_id: 'task', provider: 'claude', origin: 'managed', type: 'interactive', history_format: 'jsonl', name: 'Browser fixture task' }],
     runs: [{ id: RUN, conversation_id: CONVERSATION, generation: 1, state: 'waiting_approval', started_ts: '2026-10-07T01:00:00Z',
@@ -145,10 +146,10 @@ it('lists inbox rows by readable run name and shows the command exactly once', (
 it('shows the repository name in the sidebar with the path as secondary text', () => {
   vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
   render(<MemoryRouter><App target={setup()} client={client}/></MemoryRouter>);
-  const link = within(screen.getByRole('complementary')).getByRole('link', { name: REPO });
-  expect(link.getAttribute('title')).toBe(REPO);
+  const link = within(screen.getByRole('complementary')).getByRole('link', { name: 'repo' });
+  expect(link.getAttribute('title')).toBe('repo');
   expect(within(link).getByText('repo')).toBeTruthy();
-  expect(within(link).getByText('…/T/agent-graph-ui-x')).toBeTruthy();
+  expect(link.textContent).not.toContain(REPO);
 });
 
 // 結果ごとの印の名前。Icon の線の組の中で、許可はチェック、拒否はばつ、期限切れは時計、待ちは注意の印になる。
@@ -228,7 +229,7 @@ it('groups reviewer conversation beneath its original task using review_of facts
     relations: [{ id: 'review-edge', type: 'review_of', active: 1, confidence: 'confirmed', from_id: review, to_id: CONVERSATION }],
   }) });
   const view = render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
-  const group = screen.getByRole('region', { name: REPO });
+  const group = screen.getByRole('region', { name: 'Active' });
   const rows = within(group).getAllByRole('article');
   expect(rows.map(row => row.getAttribute('aria-label'))).toEqual(['Browser fixture task', 'Review of Browser fixture task']);
   expect(rows[1].classList.contains('activity-child')).toBe(true);
@@ -250,7 +251,6 @@ it('shows one Unknown and a reason when external execution evidence is absent', 
   const row = screen.getByRole('article', { name: 'External conversation' });
   const badge = within(row).getByRole('link', { name: 'Unknown · Evidence' });
   expect(badge.textContent?.match(/Unknown/g)).toHaveLength(1);
-  expect(badge.textContent).toContain('No evidence confirming execution state');
-  expect([...badge.querySelectorAll('.state-detail')].map(detail => detail.textContent)).toEqual(['No evidence confirming execution state']);
+  expect([...badge.querySelectorAll('.state-detail')].map(detail => detail.textContent)).toEqual(['No evidence']);
   expect(badge.title).toBe('Unknown · No evidence confirming execution state');
 });

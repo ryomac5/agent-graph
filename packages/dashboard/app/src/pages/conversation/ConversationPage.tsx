@@ -1,10 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { useParams } from 'react-router';
+import { useLocation, useParams } from 'react-router';
+import { getRegisteredProjects, OTHER_PROJECT } from '../../lib/projects.ts';
+import { compareMessages, loadConversationWindow, MESSAGE_PAGE_SIZE } from '../../lib/projection-client.ts';
+import { staleApprovalText } from '../changes/model.ts';
 import type { Ack, createClient } from '../../lib/client.ts';
 import { store, useScreenStore, type Row, type ScreenState, type ScreenStore } from '../../lib/store.ts';
 import type { Language } from '../../lib/i18n.ts';
 import { dictionaries } from '../../lib/i18n.ts';
-import { approvalOutcome, type ApprovalOutcome, conversationName, decisionLabel, evidenceLabel, formatClock, formatSeconds, isPositiveDecision, readApprovalRequest, readModel, runLabel, worktreeLabel } from '../../lib/format.ts';
+import { approvalOutcome, approvalReasonText, type ApprovalOutcome, conversationName, decisionLabel, evidenceLabel, formatClock, formatSeconds, isPositiveDecision, readApprovalRequest, readModel, runLabel, worktreeLabel } from '../../lib/format.ts';
 import { AppLink } from '../../components/AppLink.tsx';
 import { StateBadge } from '../../components/StateBadge.tsx';
 import { Icon } from '../../components/Icon.tsx';
@@ -18,7 +21,7 @@ import { ACTIVE_STATES, PENDING_APPROVALS, readObject, readText, selectTimeline,
 import { translate, type ConversationText } from '../../components/conversation/text.ts';
 import './conversation.css';
 
-export type ConversationClient = Pick<ReturnType<typeof createClient>, 'command'>;
+export type ConversationClient = Pick<ReturnType<typeof createClient>, 'command'> & Partial<Pick<ReturnType<typeof createClient>, 'watchConversation' | 'fetchConversation'>>;
 interface Model { model: string; displayName: string; effort?: string }
 export interface ConversationPageProps {
   client: ConversationClient;
@@ -40,23 +43,30 @@ function nameOf(state: ScreenState, id: unknown): string {
 function TimeStamp({ value, fallback }: { value: string; fallback: string }) {
   return value ? <time dateTime={value} title={value}>{formatClock(value) || value}</time> : <span className="muted-text">{fallback}</span>;
 }
-function ApprovalCard({ entry, t, disabled, answered, onAnswer }: {
-  entry: TimelineEntry; t: (key: ConversationText) => string; disabled: boolean; answered: boolean; onAnswer: (decision: string) => void;
+function ApprovalCard({ entry, t, disabled, answered, onAnswer, screen }: {
+  screen: ScreenState; entry: TimelineEntry; t: (key: ConversationText) => string; disabled: boolean; answered: boolean; onAnswer: (decision: string) => void;
 }) {
   const row = entry.row;
   const request = readApprovalRequest(row.request);
+  const artifact = screen.projection.artifacts?.find(artifact => artifact.id === row.artifact_id);
+  const run = screen.projection.runs?.find(run => run.id === (artifact?.run_id ?? row.run_id));
+  const conversation = screen.projection.conversations?.find(conversation => conversation.id === (run?.conversation_id ?? row.conversation_id));
+  const task = screen.projection.tasks?.find(task => task.id === conversation?.task_id);
+  const projectId = readText(conversation?.project ?? task?.project ?? artifact?.repository_id);
+  const project = getRegisteredProjects(screen).some(row => row.id === projectId) ? projectId : OTHER_PROJECT;
+  const changesQuery = row.artifact_id ? `artifact=${encodeURIComponent(readText(row.artifact_id))}` : `run=${encodeURIComponent(readText(row.run_id))}`;
+  const review = row.state === 'stale' || Boolean(row.artifact_id && !row.request);
   const state = readText(row.state);
   const pending = PENDING_APPROVALS.includes(state);
   const outcome = approvalOutcome(row, answered);
   const labels: Record<ApprovalOutcome, ConversationText> = { pending: 'pendingState', answered: 'answered', allowed: 'allowed', denied: 'denied', expired: 'expired', stale: 'stale', resolved: 'resolved' };
   const decisions = Array.isArray(row.available_decisions) ? row.available_decisions.filter((value): value is string => typeof value === 'string') : [];
   return <article className={`timeline-approval ${pending ? 'is-pending' : 'is-settled'} outcome-${outcome}`} aria-label={t('approval')} data-outcome={outcome}>
-    <header><OutcomeIcon outcome={outcome}/><strong>{t('approval')}</strong><span className="tool-name">{request.tool}</span>
-      {request.summary && <span className="truncate muted-text">{request.summary}</span>}
+    <header><OutcomeIcon outcome={outcome}/><strong>{t('approval')}</strong>{!review && <span className="tool-name">{request.tool}</span>}
+      {!review && request.summary && <span className="truncate muted-text">{request.summary}</span>}
       <span className="spacer"/><OutcomeChip row={row} answered={answered} label={value => t(labels[value])}/>
       <TimeStamp value={entry.time} fallback={t('timeUnknown')}/></header>
-    <ApprovalRequestView request={row.request} compact/>
-    {readText(row.reason) && <p className="muted-text">{readText(row.reason)}</p>}
+    {review ? <><p>{row.state === 'stale' ? staleApprovalText(artifact) : 'Review approval for this change.'}</p><AppLink to={`/p/${encodeURIComponent(project)}/changes?${changesQuery}`}>Open Changes</AppLink></> : <><ApprovalRequestView request={row.request} compact/>{approvalReasonText(readText(row.reason)) && <p className="muted-text">{approvalReasonText(readText(row.reason))}</p>}</>}
     {pending && decisions.length > 0 && <div className="button-row">{decisions.map(value => <button key={value}
       className={`btn btn-sm btn-secondary${isPositiveDecision(value) ? ' btn-allow' : ''}`}
       disabled={disabled || answered} onClick={() => onAnswer(value)}>
@@ -70,7 +80,18 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const visibleConversation = useRef(conversationId);
   visibleConversation.current = conversationId;
   const timeline = useRef<HTMLDivElement>(null);
+  const following = useRef(true);
   const state = useScreenStore(target);
+  const location = useLocation();
+  const anchorId = location.hash.startsWith('#message-') ? decodeURIComponent(location.hash.slice(9)) : undefined;
+  const [detail, setDetail] = useState<{ id: string; projection: Record<string, Row[]>; hasOlder: boolean }>();
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState('');
+  const [historyRevision, setHistoryRevision] = useState(0);
+  const [messageLimit, setMessageLimit] = useState(MESSAGE_PAGE_SIZE);
+  const historyController = useRef<AbortController | null>(null);
+  const detailRef = useRef(detail);
+  detailRef.current = detail;
   const t = (key: ConversationText) => translate(language, key);
   const conversation = (state.projection.conversations ?? []).find(row => row.id === conversationId);
   const runs = (state.projection.runs ?? []).filter(row => row.conversation_id === conversationId);
@@ -105,7 +126,44 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const canLaunch = connected && !pending && Boolean(model && cwd.trim()) && supported;
   const rawStatus = readText(run?.state);
   const status = executionStates.find(value => value === rawStatus) ?? 'unknown';
-  const entries = selectTimeline(state, conversationId);
+  const local = detail?.id === conversationId ? detail.projection : {};
+  const combine = (table: string) => [...new Map([...(local[table] ?? []), ...(state.projection[table] ?? [])].map(row => [readText(row.id), row])).values()];
+  const historyState = { ...state, projection: { ...state.projection, messages: combine('messages'), message_memberships: combine('message_memberships') } };
+  const allEntries = selectTimeline(historyState, conversationId);
+  const messageEntries = allEntries.filter(entry => entry.kind === 'message');
+  const shownMessages = new Set(messageEntries.slice(-messageLimit).map(entry => entry.row.id));
+  if (anchorId) shownMessages.add(anchorId);
+  const entries = allEntries.filter(entry => entry.kind !== 'message' || shownMessages.has(entry.row.id));
+  async function loadHistory(older = false) {
+    historyController.current?.abort();
+    const controller = new AbortController(); historyController.current = controller;
+    setHistoryLoading(true); setHistoryError('');
+    const previous = older && detailRef.current?.id === conversationId ? detailRef.current : undefined;
+    const before = previous?.projection.messages?.toSorted(compareMessages)[0];
+    try {
+      const page = await loadConversationWindow(conversationId, controller.signal, before, older ? undefined : anchorId,
+        client.fetchConversation ? path => client.fetchConversation!(path, controller.signal) : undefined);
+      if (controller.signal.aborted || visibleConversation.current !== conversationId) return;
+      if (page.generation !== target.getSnapshot().generation) throw new Error('Conversation changed. Please retry.');
+      const projection = Object.fromEntries(Object.entries(page.projection).map(([table, rows]) => [table,
+        [...new Map([...(previous?.projection[table] ?? []), ...rows].map(row => [readText(row.id), row])).values()]]));
+      setDetail({ id: conversationId, projection, hasOlder: page.hasOlder });
+      target.recordFirstRequest(conversationId, page.firstRequestExcerpt);
+      if (older) { following.current = false; setMessageLimit(value => value + MESSAGE_PAGE_SIZE); }
+    } catch (error) { if (!controller.signal.aborted) setHistoryError(`Unable to load messages. ${error instanceof Error ? error.message : ''}`.trim()); }
+    finally { if (!controller.signal.aborted) setHistoryLoading(false); }
+  }
+  useEffect(() => {
+    setDetail(undefined); setMessageLimit(MESSAGE_PAGE_SIZE); following.current = !anchorId;
+    const release = client.watchConversation?.(conversationId);
+    void loadHistory();
+    return () => { historyController.current?.abort(); release?.(); };
+  }, [conversationId, state.generation, client, anchorId, historyRevision]);
+  useEffect(() => {
+    if (!anchorId || !shownMessages.has(anchorId)) return;
+    const element = document.getElementById(`message-${encodeURIComponent(anchorId)}`);
+    if (element) { following.current = false; element.scrollIntoView?.({ block: 'center' }); }
+  }, [detail, anchorId]);
   const toolResults = collectToolResults(entries.filter(entry => entry.kind === 'message').map(entry => entry.row));
   const deltas = Object.entries(state.deltas).filter(([, delta]) => delta.conversationId === conversationId || !delta.conversationId && delta.runId === run?.id);
   const streamLength = deltas.reduce((total, [, delta]) => total + delta.text.length, 0);
@@ -122,7 +180,6 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     return () => clearInterval(timer);
   }, []);
   // 末尾を見ている間だけ、新しい発言と幅の変化に合わせて下へ送る。利用者が上へ送ったら追わない。
-  const following = useRef(true);
   const inner = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const element = timeline.current;
@@ -207,7 +264,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   return <section className={`conversation-page${embedded ? ' embedded' : ''}`} aria-label={t('conversation')}>
     <header className="conv-header">
       <div className="conv-title-row"><Heading className="conv-title truncate" title={title}>{title}</Heading>
-        <StateBadge state={status} language={language} evidenceUrl="#conversation-evidence"
+        <StateBadge detailed state={status} language={language} evidenceUrl="#conversation-evidence"
           evidence={evidenceLabel(evidence) || undefined}
           evidenceTime={run?.last_evidence_ts ? <time dateTime={readText(run.last_evidence_ts)} title={readText(run.last_evidence_ts)}>{formatClock(run.last_evidence_ts) || readText(run.last_evidence_ts)}</time> : undefined}
           reason={readText(run?.cause ?? run?.reason) || undefined} elapsed={elapsed ? `${t(status.startsWith('waiting') ? 'waiting' : 'elapsed')} ${elapsed}` : undefined}/>
@@ -234,9 +291,13 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     <div className="conv-timeline" ref={timeline} aria-label={t('conversation')} tabIndex={0}
       onScroll={event => { if (nearBottom(event.currentTarget)) following.current = true; }}
       onWheel={userScrolled} onTouchMove={userScrolled} onKeyDown={userScrolled} onPointerUp={userScrolled}><div className="conv-timeline-inner" ref={inner}>
-      {entries.length === 0 && deltas.length === 0 && <p className="timeline-empty"><Icon name="message" size={16}/>{t('empty')}</p>}
+      {anchorId && <AppLink to={`/c/${encodeURIComponent(conversationId)}`}>Latest messages</AppLink>}
+      {historyLoading && <p role="status" className="status-line">Loading messages…</p>}
+      {historyError && <p role="alert" className="status-line danger">{historyError} <button className="btn btn-secondary btn-sm" onClick={() => setHistoryRevision(value => value + 1)}>Retry</button></p>}
+      {(detail?.hasOlder || messageEntries.length > shownMessages.size) && <button className="btn btn-secondary btn-sm" disabled={historyLoading} onClick={() => { following.current = false; if (detail?.hasOlder) void loadHistory(true); else setMessageLimit(value => value + MESSAGE_PAGE_SIZE); }}>Load older messages</button>}
+      {!historyLoading && !historyError && entries.length === 0 && deltas.length === 0 && <p className="timeline-empty"><Icon name="message" size={16}/>{t('empty')}</p>}
       {entries.map(entry => entry.kind === 'message' ? <Message key={entry.key} row={entry.row} language={language} agent={providerName(provider)} toolResults={toolResults}/>
-        : entry.kind === 'approval' ? <ApprovalCard key={entry.key} entry={entry} t={t} disabled={!writable} answered={answered.has(entry.row.id)} onAnswer={decision => void answer(entry.row.id, decision)}/>
+        : entry.kind === 'approval' ? <ApprovalCard screen={historyState} key={entry.key} entry={entry} t={t} disabled={!writable} answered={answered.has(entry.row.id)} onAnswer={decision => void answer(entry.row.id, decision)}/>
         : <div role="separator" className={`timeline-boundary${entry.kind === 'gap' ? ' gap' : ''}${entry.row.confidence === 'inferred' ? ' inferred' : ''}`} key={entry.key}>
           {entry.kind === 'gap' ? <>{t('missing')}: {showValue(entry.row.from_ts ?? entry.row.from)} – {showValue(entry.row.to_ts ?? entry.row.to)} {readText(entry.row.reason)}</>
             : <>{t(entry.row.type as ConversationText)} · {nameOf(state, entry.row.from_id)} → {nameOf(state, entry.row.to_id)} · {t('confidence')}: {readText(entry.row.confidence) || t('unknown')}</>}
@@ -251,7 +312,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
         {error && <p role="alert" className="status-line danger"><Icon name="alert" size={14}/>{error}</p>}
         {pending && <p role="status" className="status-line">{t('pending')}</p>}
         {modelsError && <p role="alert" className="status-line danger">{modelsError}</p>}
-        {nextConversation && <AppLink className="status-line" to={`/c/${encodeURIComponent(nextConversation)}`}>{t('conversation')}: {nameOf(state, nextConversation) === 'another conversation' ? nextConversation : nameOf(state, nextConversation)}</AppLink>}
+        {nextConversation && <AppLink className="status-line" to={`/c/${encodeURIComponent(nextConversation)}`}>{conversationName(state, nextConversation) ? `${t('conversation')}: ${conversationName(state, nextConversation)}` : 'Open the new conversation'}</AppLink>}
       </div>}
       {confirmation && <section role="dialog" aria-modal="false" aria-label={t('stopped')} className="confirm-panel"><h3>{t('stopped')}</h3>
         <div className="button-row"><button className="btn btn-primary btn-sm" disabled={pending} onClick={() => void launchConversation('adopt', true)}>{t('confirm')}</button>

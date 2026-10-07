@@ -18,7 +18,7 @@ export function ApprovalRequestView({ request, compact = false }: { request: unk
     {parsed.file && <p className="approval-file" title={parsed.file}><Icon name="file" size={14}/><span className="truncate">{splitPath(parsed.file).length > 3 ? `…/${splitPath(parsed.file).slice(-3).join('/')}` : parsed.file}</span></p>}
     {parsed.diff !== undefined && <DiffView diff={parsed.diff}/>}
     {parsed.command === undefined && parsed.diff === undefined && parsed.fields.length > 0 && <Fields value={Object.fromEntries(parsed.fields)}/>}
-    {parsed.command === undefined && parsed.diff === undefined && parsed.fields.length === 0 && !parsed.file && <p className="muted-text">Request content unavailable.</p>}
+    {parsed.command === undefined && parsed.diff === undefined && parsed.fields.length === 0 && !parsed.file && <p className="muted-text">The agent did not record what it asked to do.</p>}
   </div>;
 }
 

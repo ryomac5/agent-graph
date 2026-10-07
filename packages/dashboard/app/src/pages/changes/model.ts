@@ -1,3 +1,4 @@
+import { getRegisteredProjects, OTHER_PROJECT } from '../../lib/projects.ts';
 import type { Row, ScreenState } from '../../lib/store.ts';
 import type { Attribution } from '../../components/diff/model.ts';
 
@@ -18,6 +19,11 @@ export function selectArtifacts(state: ScreenState, project?: string): Row[] {
     if (!project || artifact.repository_id === project) return true;
     const run = state.projection.runs?.find(row => row.id === artifact.run_id);
     const conversation = state.projection.conversations?.find(row => row.id === run?.conversation_id);
+    if (project === OTHER_PROJECT) {
+      const task = state.projection.tasks?.find(row => row.id === conversation?.task_id);
+      const id = conversation?.project ?? task?.project ?? artifact.repository_id;
+      return !getRegisteredProjects(state).some(row => row.id === id);
+    }
     return state.projection.tasks?.some(row => row.id === conversation?.task_id && row.project === project);
   }).sort((a, b) => Number(a.version) - Number(b.version) || readText(a.id).localeCompare(readText(b.id)));
 }
@@ -52,4 +58,9 @@ export function collectSuccessors(artifacts: Row[], artifactId: string): Set<str
     }
   }
   return successors;
+}
+
+export function staleApprovalText(artifact?: Row, changed?: Row): string {
+  const prefix = artifact?.version !== undefined ? `Approved for version ${String(artifact.version)}. ` : '';
+  return prefix + (changed?.version !== undefined ? `Version ${String(changed.version)} changed the patch, so this approval no longer applies.` : 'The patch changed, so this approval no longer applies.');
 }

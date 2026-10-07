@@ -14,6 +14,8 @@ const client = createClient({ url: `${location.protocol === 'https:' ? 'wss:' : 
     const next = document.querySelector<HTMLMetaElement>('meta[name="agent-graph-token"]')?.content;
     if (!next || next === '__AGENT_GRAPH_TOKEN__') throw new Error('Credentials unavailable');
     token = next;
+    const meta = window.document.querySelector<HTMLMetaElement>('meta[name="agent-graph-token"]');
+    if (meta) meta.content = next;
     return next;
   } });
 client.start();

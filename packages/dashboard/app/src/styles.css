@@ -130,9 +130,10 @@ input[type='checkbox'] { width: 15px; height: 15px; margin: 0; accent-color: var
 .status-idle, .status-ended { color: var(--text-2); }
 .status-ended .state-dot { background: var(--text-3); }
 .status-unknown { color: var(--unknown); background: transparent; border: 1px dashed var(--unknown); }
-/* 不明は根拠と時刻と理由を省かずに見せる。幅が足りなければ折り返す。 */
-.state-badge.status-unknown { flex-wrap: wrap; height: auto; min-height: 22px; padding: 2px var(--space-2); border-radius: var(--radius-sm); white-space: normal; row-gap: 0; }
-.state-badge.status-unknown .state-detail { overflow: visible; }
+/* 一覧の不明は印と短い理由を 1 行に収め、全文は title に置く。見出しでは根拠と時刻も折り返して見せる。 */
+.state-badge.status-unknown { border-radius: var(--radius-sm); }
+.state-badge.status-unknown.detailed { flex-wrap: wrap; height: auto; min-height: 22px; padding: 2px var(--space-2); border-radius: var(--radius-sm); white-space: normal; row-gap: 0; }
+.state-badge.status-unknown.detailed .state-detail { overflow: visible; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 @media (prefers-reduced-motion: reduce) { .status-running .state-dot, .pulse { animation: none; } }
 
@@ -189,6 +190,7 @@ main.full-height > * { flex: 1; min-height: 0; }
 .banner-danger { border-color: var(--danger-border); background: var(--danger-soft); color: var(--danger); white-space: pre-wrap; }
 .status-line { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); color: var(--text-2); }
 .status-line.danger { color: var(--danger); }
+.list-error { padding: var(--space-2) var(--space-4); border-bottom: 1px solid var(--danger-border); background: var(--danger-soft); }
 .settings-card { max-width: 640px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); box-shadow: var(--shadow-sm); }
 .settings-card label { display: flex; align-items: center; justify-content: space-between; gap: var(--space-6); padding: var(--space-4) var(--space-5); border-bottom: 1px solid var(--border); }
 .settings-card label:last-child { border-bottom: 0; }

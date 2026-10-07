@@ -7,7 +7,7 @@ import { comparePatches, parseDiff, type DiffLayout, type LineLocation } from '.
 import type { Ack } from '../../lib/client.ts';
 import { runLabel, worktreeLabel } from '../../lib/format.ts';
 import { store, useScreenStore, type Row, type ScreenStore } from '../../lib/store.ts';
-import { collectSuccessors, collectVersionFamily, readAttribution, readObject, readText, readValue, selectArtifacts } from './model.ts';
+import { collectSuccessors, collectVersionFamily, readAttribution, readObject, readText, readValue, selectArtifacts, staleApprovalText } from './model.ts';
 import './changes.css';
 
 export interface ChangesClient { command(command: string, payload?: unknown, cmdId?: string): Promise<Ack> }
@@ -53,7 +53,9 @@ export function ChangesPage({ client, target = store, project, artifactId }: Cha
   const runArtifacts = allArtifacts.filter(row => row.run_id === runId);
   const related = new Set(runArtifacts.flatMap(row => [...collectVersionFamily(allArtifacts, readText(row.id))]));
   const artifacts = runId ? allArtifacts.filter(row => related.has(readText(row.id))) : allArtifacts;
-  const [chosenId, setChosenId] = useState(artifactId ?? '');
+  const requestedArtifactId = artifactId ?? search.get('artifact') ?? '';
+  const [chosenId, setChosenId] = useState(requestedArtifactId);
+  useEffect(() => setChosenId(requestedArtifactId), [requestedArtifactId]);
   const artifact = artifacts.find(row => row.id === chosenId) ?? artifacts.findLast(row => !artifacts.some(next => next.previous_artifact_id === row.id)) ?? artifacts.at(-1);
   const id = readText(artifact?.id);
   const [compareId, setCompareId] = useState('');
@@ -179,7 +181,7 @@ export function ChangesPage({ client, target = store, project, artifactId }: Cha
                 {readText(result.verdict) && <p>Reviewer: {readText(reviewer.executor ?? reviewer.provider)} {readText(reviewer.model)}{readText(reviewer.family) ? ` (${readText(reviewer.family)})` : ''} · {readText(result.verdict)}</p>}
                 {readText(result.comment) && <p>{readText(result.comment)}</p>}
                 {readText(request.reviewer_run_id) && <AppLink className="btn btn-link" to={`/c/${encodeURIComponent(readText(state.projection.runs?.find(run => run.id === request.reviewer_run_id)?.conversation_id))}`}>Reviewer evidence</AppLink>}
-                {stale && <div className="stale-comparison"><p>Approved for version {String(original?.version ?? 'Unknown')}. {changed ? `Version ${String(changed.version)} changed the patch, so this approval no longer applies.` : 'The patch changed, so this approval no longer applies.'}</p>
+                {stale && <div className="stale-comparison"><p>{staleApprovalText(original, changed)}</p>
                   <div className="stale-hashes"><code>Approved: {readText(row.patch_hash).slice(0, 8)}</code><code>Changed: {readText(changed?.patch_hash).slice(0, 8) || 'Unavailable'}</code></div>
                   {typeof original?.diff === 'string' && typeof changed?.diff === 'string' ? <DiffView files={comparePatches(original.diff, changed.diff)} layout="split" attribution="unknown" evidenceUrl={evidenceUrl}/>
                     : <p>Saved diff unavailable for stale comparison.</p>}</div>}

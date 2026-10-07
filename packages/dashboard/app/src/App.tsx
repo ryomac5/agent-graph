@@ -20,7 +20,9 @@ import { answerApproval, getDecision, getInbox } from './pages/inbox/model.ts';
 import { Notifications } from './components/notifications/Notifications.tsx';
 import { selectActivities } from './components/activity.ts';
 import { Icon } from './components/Icon.tsx';
-import { projectLabel } from './lib/format.ts';
+import { fetchProjection } from './lib/projection-client.ts';
+import type { Row } from './lib/store.ts';
+import { getRegisteredProjects, OTHER_PROJECT } from './lib/projects.ts';
 import './styles.css';
 
 export type Theme = 'system' | 'light' | 'dark';
@@ -55,7 +57,26 @@ export function App({ target = store, client = unavailableClient, searchClient =
     return () => media.removeEventListener('change', update);
   }, [theme]);
   useEffect(() => { document.documentElement.lang = language; localStorage.setItem('agent-graph-language', language); }, [language]);
-  const projects = [...new Set(selectActivities(state).map(row => row.project).filter(Boolean))].sort().map(id => ({ id, ...projectLabel(id) }));
+  const projects = getRegisteredProjects(state).map(row => ({ id: String(row.id), name: String(row.display_name), full: String(row.display_name), detail: '' }));
+  const hasOther = selectActivities(state).some(row => row.project === OTHER_PROJECT && !row.temporary);
+  const [listError, setListError] = useState('');
+  useEffect(() => {
+    const controller = new AbortController();
+    setListError('');
+    void (async () => {
+      for (const [table, page] of Object.entries(state.pages ?? {})) {
+        let after = page.next;
+        while (after) {
+          const next = await fetchProjection<{ rows: Row[]; next: string | null; generation: number }>(`/projection?table=${encodeURIComponent(table)}&after=${encodeURIComponent(after)}`, controller.signal);
+          if (controller.signal.aborted || next.generation !== target.getSnapshot().generation) return;
+          target.mergeProjection({ [table]: next.rows }, next.generation);
+          if (next.next === after) throw new Error('Unable to advance activity list');
+          after = next.next;
+        }
+      }
+    })().catch(error => { if (!controller.signal.aborted) setListError(`Unable to load the full activity list. ${error instanceof Error ? error.message : ''}`.trim()); });
+    return () => controller.abort();
+  }, [state.pages, state.generation, target]);
   const approvals = getInbox(state).pending.length;
   const location = useLocation();
   const { bindings, setBindings } = useKeySettings(client);
@@ -141,19 +162,19 @@ export function App({ target = store, client = unavailableClient, searchClient =
     </nav><div className="projects"><p className="eyebrow">{t('projects')}<span className="numeric">{projects.length}</span></p>
       {projects.length === 0 ? <p className="muted-text sidebar-empty">{t('noProjects')}</p> : <nav aria-label={t('projects')} className="nav-group">{projects.map(row => <NavLink key={row.id} to={`/p/${encodeURIComponent(row.id)}`} title={row.full} aria-label={row.full}>
         <Icon name="folder" size={16}/><span className="project-link"><span className="truncate">{row.name}</span>{row.detail && <span className="project-path truncate">{row.detail}</span>}</span></NavLink>)}</nav>}
-    </div><NavLink className="settings-link" to="/settings"><Icon name="settings" size={16}/>{t('settings')}</NavLink></aside>
-    <div className="main-column"><header className="topbar"><span className={`connection ${state.connection}`} role="status"><span className="connection-dot" aria-hidden="true"/>{t(state.connection)}</span>
+    {hasOther && <NavLink to="/p/other">Other</NavLink>}</div><NavLink className="settings-link" to="/settings"><Icon name="settings" size={16}/>{t('settings')}</NavLink></aside>
+    <div className="main-column">{listError && <p role="alert" className="status-line danger list-error">{listError}</p>}<header className="topbar"><span className={`connection ${state.connection}`} role="status"><span className="connection-dot" aria-hidden="true"/>{t(state.connection)}</span>
       <div className="topbar-actions"><button className="btn btn-ghost btn-sm" onClick={() => { contextFocus.current = document.activeElement as HTMLElement; setOverlay('commands'); }}>Search and commands <kbd>{bindings.command}</kbd></button><Link className="approval-count" to="/inbox"><Icon name="inbox" size={15}/>{t('approvals')}<strong className="numeric">{approvals}</strong></Link>
       <Notifications target={target} client={client} initiallyOpen={false} compact language={language}/></div>
     </header><main ref={mainRef} className={fullHeight ? 'full-height' : undefined}><Routes>
-      <Route path="/" element={<HomePage target={target} language={language}/>}/>
+      <Route path="/" element={<HomePage target={target} client={client} language={language}/>}/>
       <Route path="/p/:project" element={<WorkspacePage target={target} client={client} language={language} renderConversation={id => conversation(id, true)}/>}/>
       <Route path="/c/:conversation" element={conversation()}/>
       <Route path="/inbox" element={<Inbox target={target} client={client}/>}/>
       <Route path="/p/:project/tree" element={<TreePage target={target} client={client} language={language}/>}/>
       <Route path="/p/:project/changes" element={<ChangesPage target={target} client={client}/>}/>
       <Route path="/p/:project/files" element={<FilesPage target={target} client={client}/>}/>
-      <Route path="/search" element={<SearchPage client={searchClient} language={language}/>}/>
+      <Route path="/search" element={<SearchPage target={target} client={searchClient} language={language}/>}/>
       <Route path="/settings" element={<div className="page"><header className="page-header"><div className="page-title"><p className="eyebrow">{t('workspace')}</p><h1>{t('settings')}</h1></div></header><div className="settings-card">
         <label><span><strong>{t('theme')}</strong><small>{t('themeHint')}</small></span><select aria-label={t('theme')} value={theme} onChange={event => setTheme(event.target.value as Theme)}>{(['system', 'light', 'dark'] as const).map(value => <option key={value} value={value}>{t(value)}</option>)}</select></label>
         <label><span><strong>{t('language')}</strong><small>{t('languageHint')}</small></span><select aria-label={t('language')} value={language} onChange={event => setLanguage(event.target.value as Language)}><option value="en" lang="en">{t('english')}</option><option value="ja" lang="ja">{t('japanese')}</option></select></label>

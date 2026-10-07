@@ -17,5 +17,8 @@ export default defineConfig({
   server: { host: '127.0.0.1', proxy: {
     '/ws': { target, ws: true, changeOrigin: true, rewriteWsOrigin: true },
     '/snapshot': { target, changeOrigin: true },
+    '/conversation': { target, changeOrigin: true },
+    '/projection': { target, changeOrigin: true },
+    '/api/search': { target, changeOrigin: true },
   } },
 });

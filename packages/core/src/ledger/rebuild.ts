@@ -9,6 +9,7 @@ import { PROJECTION_ENTITIES, readNativeReference } from "./projections/dependen
 import { encodeNameOrder, extractProvisionalName } from "./projections/conversations.ts";
 import type { ProjectedMessage } from "./projections/messages.ts";
 import type { Projection } from "./projections/index.ts";
+import { refreshSearch } from "./search.ts";
 
 export const PROJECTION_TABLES = [
   "tasks", "conversations", "relations", "runs", "connections", "messages",
@@ -260,6 +261,7 @@ function updateProjection(ledger: DatabaseSync, sinceSeq?: number): ProjectionSt
       prepare(ledger, "UPDATE projection_state SET generation = ?, last_seq = ? WHERE id = 1")
         .run(state.generation, state.last_seq);
     }
+    refreshSearch(ledger, sinceSeq === undefined ? undefined : added, sinceSeq === undefined ? added : undefined);
     ledger.exec("COMMIT");
     return state;
   } catch (error) {

@@ -6,5 +6,5 @@ if [[ "${AGENT_GRAPH_E2E:-}" != "1" ]]; then
 fi
 repo_root="$(builtin cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 builtin cd "$repo_root"
-# 認証設定はそのまま使い、台帳・ソケット・作業場だけを一時領域に隔離する。
+# 認証設定はそのまま使い、試験専用 runner で会話の保存を止める。
 exec node packages/runner/src/e2e-hosts.ts

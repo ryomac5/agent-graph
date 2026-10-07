@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { query, type AccountInfo, type CanUseTool, type Options, type PermissionResult, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { JsonValue } from "../../../../core/src/ledger/facts.ts";
-import type { AgentHost, ApprovalId, Decision, ForkRequest, HostCapabilities, HostEvent, HostFact, IntegrationMode, ModelChoice, ModelInfo, ResumeRequest, RunHandle, StartRequest, UserInput } from "../../host/contract.ts";
+import type { AgentHost, ApprovalId, Decision, ForkRequest, HostCapabilities, HostEvent, HostFact, HostLaunchOptions, IntegrationMode, ModelChoice, ModelInfo, ResumeRequest, RunHandle, StartRequest, UserInput } from "../../host/contract.ts";
 import { AsyncQueue } from "./queue.ts";
 
 export type ClaudeQuery = AsyncIterable<SDKMessage> & Pick<Query, "interrupt" | "setModel" | "close" | "accountInfo" | "supportedModels">;
@@ -10,7 +10,7 @@ export type QueryFactory = (args: { prompt: AsyncIterable<SDKUserMessage>; optio
 export interface ClaudeCapabilities extends HostCapabilities {
   authentication: { type: "unknown" | "subscription" | "api_key"; verified: boolean; subscriptionType?: string; apiProvider?: string };
 }
-export interface ClaudeHostOptions { enableFork?: boolean; integrationMode?: IntegrationMode }
+export interface ClaudeHostOptions extends HostLaunchOptions { enableFork?: boolean; integrationMode?: IntegrationMode }
 interface OpenRun {
   request: StartRequest;
   integrationMode: IntegrationMode;
@@ -57,7 +57,7 @@ export class ClaudeHost implements AgentHost {
   private options: ClaudeHostOptions;
   constructor(factory: QueryFactory = query, options: ClaudeHostOptions = {}) { this.factory = factory; this.options = options; }
   capabilities(): ClaudeCapabilities {
-    return { start: true, resume: true, fork: this.options.enableFork ?? false, interrupt: true, approvals: true, setModel: true, delta: true,
+    return { start: true, resume: this.options.persistSession !== false, fork: this.options.persistSession !== false && (this.options.enableFork ?? false), interrupt: true, approvals: true, setModel: true, delta: true,
       authentication: { ...this.authentication }, degraded: [...this.degraded] };
   }
   start(req: StartRequest): Promise<RunHandle> { return this.open(req, randomUUID()); }
@@ -67,6 +67,7 @@ export class ClaudeHost implements AgentHost {
     return this.open(req, randomUUID(), false, req.nativeId);
   }
   private async open(req: StartRequest, sessionId: string, resume = false, forkFrom?: string): Promise<RunHandle> {
+    if (this.options.persistSession === false && (resume || forkFrom)) throw new Error("Non-persistent Claude sessions cannot be resumed or forked");
     if (this.runs.has(req.runId)) throw new Error("Run already exists");
     if ([...this.runs.values()].some((run) => !run.finished && run.request.conversationId === req.conversationId)) throw new Error("Conversation is already open");
     const effort = getEffort(req.model);
@@ -81,7 +82,7 @@ export class ClaudeHost implements AgentHost {
       ...(forkFrom ? { sessionId, resume: forkFrom, forkSession: true } : resume ? { resume: sessionId } : { sessionId }),
       ...(integrationMode === "strict" ? { strictMcpConfig: true, mcpServers: {} } : {}),
       ...(req.outputSchema ? { outputFormat: { type: "json_schema" as const, schema: req.outputSchema } } : {}),
-      settingSources: ["user", "project"], permissionMode: "default", includePartialMessages: true, persistSession: true,
+      settingSources: ["user", "project"], permissionMode: "default", includePartialMessages: true, persistSession: this.options.persistSession ?? true,
       env: { ...process.env, ...req.env, ...(integrationMode === "enabled" ? {} : { ENABLE_CLAUDEAI_MCP_SERVERS: "false" }),
         CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1", AGENT_GRAPH_MANAGED: "1",
         AGENT_GRAPH_RUN_ID: req.runId, AGENT_GRAPH_CONVERSATION_ID: req.conversationId, AGENT_GRAPH_GENERATION: String(req.generation) },

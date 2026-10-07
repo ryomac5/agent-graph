@@ -19,6 +19,10 @@ export type Decision = string | { decision: string; updatedInput?: JsonValue };
 /** Claude の外部連携の読み込み方。disabled は claude.ai の連携だけを止め、strict は MCP をすべて止める。 */
 export type IntegrationMode = "disabled" | "strict" | "enabled";
 export const INTEGRATION_MODES: readonly IntegrationMode[] = ["disabled", "strict", "enabled"];
+export interface HostLaunchOptions {
+  /** 会話のディスク保存。省略時は保存する。 */
+  persistSession?: boolean;
+}
 export interface StartRequest {
   runId: RunId;
   conversationId: string;

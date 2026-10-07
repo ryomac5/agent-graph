@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { JsonValue, FactKind, FactPayloads, RunState } from "../../../../core/src/ledger/facts.ts";
 import { createNativeId } from "../../../../core/src/ledger/projections/relations.ts";
-import type { AgentHost, ApprovalId, Decision, ForkRequest, HostCapabilities, HostEvent, HostFact, ModelChoice, ModelInfo, ResumeRequest, RunHandle, StartRequest, UserInput } from "../../host/contract.ts";
+import type { AgentHost, ApprovalId, Decision, ForkRequest, HostCapabilities, HostEvent, HostFact, HostLaunchOptions, ModelChoice, ModelInfo, ResumeRequest, RunHandle, StartRequest, UserInput } from "../../host/contract.ts";
 import { AppServer, type RpcMessage, type ServerOptions } from "./rpc.ts";
 
 class EventQueue {
@@ -41,7 +41,7 @@ interface Approval {
   available: JsonValue[];
   answered: boolean;
 }
-export interface CodexHostOptions extends ServerOptions {
+export interface CodexHostOptions extends ServerOptions, HostLaunchOptions {
   approvalPolicy?: string;
   sandbox?: string;
 }
@@ -113,6 +113,9 @@ export class CodexHost implements AgentHost {
   resume(req: ResumeRequest): Promise<RunHandle> { return this.launch(req, "resume"); }
   fork(req: ForkRequest): Promise<RunHandle> { return this.launch(req, "fork"); }
   private async launch(req: StartRequest | ResumeRequest, operation: "start" | "resume" | "fork"): Promise<RunHandle> {
+    if (this.options.persistSession === false && operation !== "start" && !this.threads.has((req as ResumeRequest).nativeId)) {
+      throw new Error("Non-persistent Codex hosts can only resume or fork their own live threads");
+    }
     if (this.runs.has(req.runId)) throw new Error("Run already exists");
     const queue = new EventQueue();
     const thread: Thread = { nativeId: "", conversationId: req.conversationId, runId: req.runId,
@@ -122,7 +125,9 @@ export class CodexHost implements AgentHost {
     try {
       await this.connect(req);
       const result = await this.server!.request(`thread/${operation}`, {
-        cwd: req.cwd, model: req.model.model, ephemeral: false,
+        cwd: req.cwd, model: req.model.model,
+        // 再開には ephemeral の口がないため、このホストのメモリ内の会話だけを許す。
+        ...(operation !== "resume" ? { ephemeral: this.options.persistSession === false } : {}),
         approvalPolicy: this.options.approvalPolicy ?? "untrusted", sandbox: this.options.sandbox ?? "workspace-write",
         ...(operation !== "start" ? { threadId: (req as ResumeRequest).nativeId, excludeTurns: true } : {}),
       });

@@ -56,31 +56,63 @@ export function buildDelegationTree(state: ScreenState, project?: string): Deleg
     return true;
   };
   const delegationNodes = new Map<string, string>();
+  const runNodes = new Map<string, string>();
+  const conversationNodes = new Map<string, string>();
+  const runsById = new Map(runs.map(run => [readText(run.id), run]));
+  const conversationRuns = new Map<string, Row[]>();
+  for (const run of runs) {
+    const id = readText(run.conversation_id);
+    const history = conversationRuns.get(id) ?? [];
+    history.push(run);
+    conversationRuns.set(id, history);
+  }
+  for (const history of conversationRuns.values()) {
+    history.sort((a, b) => Number(a.generation) - Number(b.generation) || readText(a.id).localeCompare(readText(b.id)));
+  }
   for (const d of p.delegations ?? []) {
-    const attempts = readAttempts(d);
-    for (const attempt of attempts.slice(0, -1)) {
-      const previous = nodes.get(`run:${runId(readText(attempt.run_id))}`);
-      if (!previous) continue;
-      previous.delegation = d;
-      previous.attempts = attempts;
-      previous.label = `${readText(d.title) || previous.label} · Attempt ${Number(attempt.attempt)}`;
-      previous.role = readText(d.role) || 'Delegation';
-      previous.model = readText(readObject(attempt.assignment).model) || previous.model;
-      previous.state = readText(attempt.state) || previous.state;
+    const recorded = readAttempts(d);
+    const recordedRuns = new Map(recorded.filter(attempt => attempt.run_id)
+      .map(attempt => [runId(readText(attempt.run_id)), attempt]));
+    const attempts: Row[] = [];
+    const seen = new Set<string>();
+    // 委譲は会話に結ばれる。再開の世代も、受付の再試行も同じ節の履歴に収める。
+    for (const attempt of recorded) {
+      const original = runsById.get(runId(readText(attempt.run_id)));
+      const history = original ? (conversationRuns.get(readText(original.conversation_id)) ?? [])
+        .filter(run => Number(run.generation) >= Number(original.generation)) : [];
+      for (const run of history.length ? history : [undefined]) {
+        const key = run ? readText(run.id) : runId(readText(attempt.run_id));
+        if (key && seen.has(key)) continue;
+        if (key) seen.add(key);
+        const saved = recordedRuns.get(key);
+        attempts.push({ ...(saved ?? (run ? { assignment: attempt.assignment } : attempt)), attempt: attempts.length + 1,
+          ...(run ? { run_id: run.id, state: saved?.state ?? run.state } : {}) });
+      }
     }
     const latest = attempts.at(-1);
     const id = latest?.run_id ? `run:${runId(readText(latest.run_id))}` : `delegation:${readText(d.id)}`;
     const existing = nodes.get(id);
     const assignment = readObject(latest?.assignment);
+    const resumed = latest && !recordedRuns.has(runId(readText(latest.run_id)));
     const node: TreeNode = { id, kind: existing?.kind ?? 'delegation', label: readText(d.title) || existing?.label || 'Untitled delegation',
       run: existing?.run, conversationId: existing?.conversationId, delegation: d, attempts,
-      role: readText(d.role) || 'Delegation', model: readText(assignment.model) || existing?.model || '',
-      state: readText(d.state) || existing?.state || 'unknown', cost: existing?.cost, children: [] };
+      role: readText(d.role) || 'Delegation', model: resumed ? readModel(existing?.run ?? {}).model || readText(assignment.model)
+        : readText(assignment.model) || existing?.model || '',
+      state: resumed ? existing?.state || 'unknown' : readText(d.state) || existing?.state || 'unknown', cost: existing?.cost, children: [] };
+    for (const attempt of attempts) {
+      const key = runId(readText(attempt.run_id));
+      const run = runsById.get(key);
+      if (key) runNodes.set(key, id);
+      if (run) conversationNodes.set(readText(run.conversation_id), id);
+      nodes.delete(`run:${key}`);
+    }
     nodes.set(id, node);
     delegationNodes.set(readText(d.request_id ?? d.id), id);
   }
   const endpoint = (value: unknown, child = false): string | undefined => {
     const raw = readText(value);
+    const delegated = runNodes.get(runId(raw)) ?? conversationNodes.get(conversationId(raw));
+    if (delegated) return delegated;
     const direct = `run:${runId(raw)}`;
     if (nodes.has(direct)) return direct;
     const c = conversationId(raw);

@@ -27,9 +27,11 @@ function fixture(t: TestContext, isolation: "shared" | "worktree" = "shared") {
   const runtime = new RunnerRuntime(ledger, [codex, claude], () => {}, isolation);
   const intake = new Intake(ledger, runtime, { cwd, decision: { policy: defaultPolicy(), quota: () => undefined, performance: () => undefined } });
   const request: IntakeRequest = { requestId: "request", source: "planner", role: "implement", title: "Fixture", task: "Make change", accept: ["test -f file.txt"], cwd };
+  const previousState = process.env.XDG_STATE_HOME; process.env.XDG_STATE_HOME = join(directory, "state");
   const previousCache = process.env.XDG_CACHE_HOME; process.env.XDG_CACHE_HOME = join(directory, "cache");
   t.after(async () => {
     await intake.close(); ledger.close(); rmSync(directory, { recursive: true, force: true });
+    if (previousState === undefined) delete process.env.XDG_STATE_HOME; else process.env.XDG_STATE_HOME = previousState;
     if (previousCache === undefined) delete process.env.XDG_CACHE_HOME; else process.env.XDG_CACHE_HOME = previousCache;
   });
   function observe() {
@@ -101,6 +103,12 @@ test("acceptance and a managed reviewer of another family use a fixed artifact",
   const status = await intake.wait(request.requestId);
   assert.equal(status.state, "done");
   assert.equal(status.result?.acceptance.passed, true);
+  const versions = ledger.readSince(0, 1000).filter((fact) => fact.kind === "artifact.version_created");
+  assert.equal(versions.length, 1);
+  const fixed = projectEntityRecords<{ verification: { passed: boolean } }>(ledger.readSince(0, 1000), "artifact");
+  assert.equal(fixed[0].verification!.passed, true);
+  const attempt = projectDelegations(ledger.readSince(0, 1000))[0].attempts[0];
+  assert.equal((attempt.review as { artifact_id: string }).artifact_id, fixed[0].id);
   assert.notEqual(status.result?.assignment.family, status.result?.review?.reviewer.family);
   assert.equal(intake.submit(request).state, "done");
   assert.equal(codex.starts.length, 1); assert.equal(claude.starts.length, 1);
@@ -429,4 +437,32 @@ test("intake reads bounded batches once and only new facts while a host is runni
   await until(() => claude.starts.length === 1);
   emitReview(claude);
   assert.equal((await intake.wait(request.requestId)).state, "done");
+});
+
+test("a retried delegation links acceptance and review to the next task artifact version", async (t) => {
+  const { intake, ledger, codex, claude, request } = fixture(t);
+  intake.submit(request);
+  await until(() => intake.status(request.requestId).state === "running");
+  writeFileSync(join(codex.starts[0].cwd, "file.txt"), "first change\n");
+  codex.emit(codex.starts[0].runId, { type: "exit", exitCode: 0 });
+  await until(() => claude.starts.length === 1);
+  emitReview(claude, "request_changes");
+  assert.equal((await intake.wait(request.requestId)).state, "failed");
+  const first = projectEntityRecords<{ version: number }>(ledger.readSince(0, 1000), "artifact")[0];
+  assert.equal(first.version, 1);
+  intake.retry(request.requestId);
+  await until(() => codex.starts.length === 2);
+  writeFileSync(join(codex.starts[1].cwd, "file.txt"), "corrected change\n");
+  codex.emit(codex.starts[1].runId, { type: "exit", exitCode: 0 });
+  await until(() => claude.starts.length === 2);
+  emitReview(claude);
+  assert.equal((await intake.wait(request.requestId)).state, "done");
+  const facts = ledger.readSince(0, 1000);
+  assert.equal(facts.filter((fact) => fact.kind === "artifact.version_created").length, 2);
+  const second = projectEntityRecords<{ version: number; previous_artifact_id: string; verification: { passed: boolean } }>(facts, "artifact")
+    .find((artifact) => artifact.version === 2)!;
+  assert.equal(second.previous_artifact_id, first.id);
+  assert.equal(second.verification!.passed, true);
+  const attempt = projectDelegations(facts)[0].attempts[1];
+  assert.equal((attempt.review as { artifact_id: string }).artifact_id, second.id);
 });

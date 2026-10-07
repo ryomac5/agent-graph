@@ -1,0 +1,20 @@
+.settings-page { max-width: 1060px; }
+.settings-section { margin: 0 0 var(--space-6); }
+.settings-section header { display: grid; gap: var(--space-2); margin-bottom: var(--space-3); }
+.settings-section header h2 { font-size: var(--text-md); }
+.settings-page .settings-card { max-width: none; overflow: hidden; }
+.settings-page .settings-card > p, .settings-page .settings-card > .fields,
+.settings-page .settings-card > .button-row, .settings-models,
+.settings-page .settings-card > [role='region'], .settings-page .settings-card > progress { margin: var(--space-4) var(--space-5); }
+.settings-page fieldset { border: 0; border-bottom: 1px solid var(--border); padding: var(--space-3) 0; min-width: 0; }
+.settings-page legend { padding: 0 var(--space-5); font-weight: 600; color: var(--text-2); }
+.settings-page textarea { min-width: 200px; max-width: 50%; }
+.settings-array-row { margin: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.settings-array-row .button-row { padding: var(--space-2) var(--space-4); }
+.settings-page table { width: 100%; border-collapse: collapse; text-align: left; }
+.settings-page td, .settings-page th { padding: var(--space-2); border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.settings-page > .banner { margin-bottom: var(--space-3); }
+.settings-page > .button-row { margin-bottom: var(--space-6); }
+.settings-page .settings-card > .btn { margin: var(--space-3) var(--space-5); }
+[data-density='compact'] .settings-page label { padding-top: var(--space-2); padding-bottom: var(--space-2); }
+@media (max-width: 760px) { .settings-page .settings-card label { flex-wrap: wrap; } .settings-page textarea { max-width: 100%; } }

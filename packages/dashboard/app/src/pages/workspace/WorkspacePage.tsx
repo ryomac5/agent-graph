@@ -63,6 +63,11 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
       {error && <p role="alert" className="banner banner-danger"><Icon name="alert" size={14}/>{error}</p>}
       {creating && <CreateTaskForm key={project} project={project} client={client} disabled={!available || !project} language={language} onCancel={() => setCreating(false)}/>}
     </div>}
+    <nav className="tabs" aria-label={ja ? 'プロジェクト' : 'Project'}>
+      <Link to={`/p/${encodeURIComponent(project)}`} aria-current="page">{ja ? 'プロジェクト' : 'Project'}</Link>
+      <Link to={`/p/${encodeURIComponent(project)}/tree`}>{ja ? '委譲' : 'Tree'}</Link>
+      <Link to={`/p/${encodeURIComponent(project)}/changes`}>Changes</Link>
+    </nav>
     <div className="workspace-columns">
       <section className="workspace-tasks" aria-label={ja ? '作業' : 'Tasks'}>
         <header className="column-header"><h2>{ja ? '作業' : 'Tasks'}</h2><span className="count-pill">{items.length}</span></header>
@@ -90,7 +95,7 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
         <div className="column-scroll">
           {changes ? <p className="numeric">{changes}</p> : <div className="empty-mini"><Icon name="diff" size={18}/><p>{ja ? '成果物はまだありません' : 'No artifact yet'}</p>
             <p className="muted-text">{ja ? '実行が成果を確定すると、差分の概要がここに出ます。' : 'A diff summary appears here once the run records an artifact.'}</p></div>}
-          <Link className="btn btn-secondary btn-sm" to={`/p/${encodeURIComponent(project)}/changes`}><Icon name="diff" size={14}/>{ja ? '変更を開く' : 'Open Changes'}</Link>
+          <Link className="btn btn-secondary btn-sm" to={`/p/${encodeURIComponent(project)}/changes${selected?.run ? `?run=${encodeURIComponent(selected.id)}` : ''}`}><Icon name="diff" size={14}/>{ja ? '変更を開く' : 'Open Changes'}</Link>
         </div>
       </aside>
     </div>

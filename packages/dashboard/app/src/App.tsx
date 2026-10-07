@@ -6,6 +6,10 @@ import type { ConversationClient } from './pages/conversation/ConversationPage.t
 import { ConversationPage } from './pages/conversation/ConversationPage.tsx';
 import { HomePage } from './pages/home/HomePage.tsx';
 import { WorkspacePage } from './pages/workspace/WorkspacePage.tsx';
+import { TreePage } from './pages/tree/TreePage.tsx';
+import { ChangesPage } from './pages/changes/ChangesPage.tsx';
+import { SearchPage } from './pages/search/SearchPage.tsx';
+import { createSearchClient, type SearchClient } from './pages/search/model.ts';
 import { Inbox } from './pages/inbox/Inbox.tsx';
 import { getInbox } from './pages/inbox/model.ts';
 import { Notifications } from './components/notifications/Notifications.tsx';
@@ -26,7 +30,10 @@ function EmptyView({ title, future, t }: { title: TextKey; future?: boolean; t: 
     <h2>{t(future ? 'futureTitle' : 'emptyTitle')}</h2><p>{t(future ? 'futureBody' : 'emptyBody')}</p></div></div>;
 }
 const unavailableClient: ConversationClient = { command: async (_command, _payload, cmdId = '') => ({ type: 'ack', cmd_id: cmdId, ok: false, error: 'Runner unavailable' }) };
-export function App({ target = store, client = unavailableClient }: { target?: ScreenStore; client?: ConversationClient }) {
+const defaultSearchClient: SearchClient = { search: (query, signal) => createSearchClient({
+  token: document.querySelector<HTMLMetaElement>('meta[name="agent-graph-token"]')?.content ?? '',
+}).search(query, signal) };
+export function App({ target = store, client = unavailableClient, searchClient = defaultSearchClient }: { target?: ScreenStore; client?: ConversationClient; searchClient?: SearchClient }) {
   const navigate = useNavigate();
   const state = useScreenStore(target);
   const [language, setLanguage] = useState<Language>(() => localStorage.getItem('agent-graph-language') === 'ja' ? 'ja' : 'en');
@@ -66,9 +73,9 @@ export function App({ target = store, client = unavailableClient }: { target?: S
       <Route path="/p/:project" element={<WorkspacePage target={target} client={client} language={language} renderConversation={id => conversation(id, true)}/>}/>
       <Route path="/c/:conversation" element={conversation()}/>
       <Route path="/inbox" element={<Inbox target={target} client={client}/>}/>
-      <Route path="/p/:project/tree" element={<EmptyView title="tree" future t={t}/>}/>
-      <Route path="/p/:project/changes" element={<EmptyView title="changes" future t={t}/>}/>
-      <Route path="/search" element={<EmptyView title="search" future t={t}/>}/>
+      <Route path="/p/:project/tree" element={<TreePage target={target} client={client} language={language}/>}/>
+      <Route path="/p/:project/changes" element={<ChangesPage target={target} client={client}/>}/>
+      <Route path="/search" element={<SearchPage client={searchClient} language={language}/>}/>
       <Route path="/settings" element={<div className="page"><header className="page-header"><div className="page-title"><p className="eyebrow">{t('workspace')}</p><h1>{t('settings')}</h1></div></header><div className="settings-card">
         <label><span><strong>{t('theme')}</strong><small>{t('themeHint')}</small></span><select aria-label={t('theme')} value={theme} onChange={event => setTheme(event.target.value as Theme)}>{(['system', 'light', 'dark'] as const).map(value => <option key={value} value={value}>{t(value)}</option>)}</select></label>
         <label><span><strong>{t('language')}</strong><small>{t('languageHint')}</small></span><select aria-label={t('language')} value={language} onChange={event => setLanguage(event.target.value as Language)}><option value="en" lang="en">{t('english')}</option><option value="ja" lang="ja">{t('japanese')}</option></select></label>
@@ -76,4 +83,4 @@ export function App({ target = store, client = unavailableClient }: { target?: S
       <Route path="*" element={<EmptyView title="notFound" t={t}/>}/>
     </Routes></main></div></div>;
 }
-export function Dashboard({ client }: { client: ConversationClient }) { return <BrowserRouter><App client={client}/></BrowserRouter>; }
+export function Dashboard({ client, searchClient }: { client: ConversationClient; searchClient?: SearchClient }) { return <BrowserRouter><App client={client} searchClient={searchClient}/></BrowserRouter>; }

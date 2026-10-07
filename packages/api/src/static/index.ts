@@ -34,9 +34,9 @@ export async function startStaticServer(options: StaticOptions) {
     }
     const url = readRequestUrl(request);
     if (!url || request.method !== 'GET') { response.writeHead(404).end(); return; }
-    if (url.pathname === '/snapshot') {
+    if (url.pathname === '/snapshot' || url.pathname === '/api/search') {
       if (!authorize(request, port, upstream.token)) { response.writeHead(403).end(); return; }
-      const proxy = requestHttp(new URL('/snapshot', upstream.url), {
+      const proxy = requestHttp(new URL(url.pathname + url.search, upstream.url), {
         headers: { 'x-agent-graph-token': upstream.token },
       }, result => {
         response.writeHead(result.statusCode ?? 502, { 'Content-Type': 'application/json' });

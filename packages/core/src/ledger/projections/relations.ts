@@ -113,3 +113,14 @@ export function selectConfirmedRelations(relations: readonly ProjectedRelation[]
     && relation.type !== undefined && relation.from_id !== undefined && relation.to_id !== undefined
     && relation.evidence !== undefined);
 }
+
+// 操作も表示と同じ訂正済みの投影から端点を選ぶ。保存時の関係 ID も受け付ける。
+export function resolveRelationTarget(facts: readonly Fact[], relationId: string, side: "from" | "to" = "to"): string {
+  const relations = projectRelations(facts);
+  const subjectFacts = facts.filter((fact) => fact.subject === `relation:${relationId}`);
+  const identity = projectRelations(subjectFacts.length ? [...facts.filter((fact) => fact.kind.startsWith("conversation.")), ...subjectFacts] : []).at(0)?.id;
+  const relation = relations.find((entry) => entry.id === (identity ?? relationId));
+  const target = side === "from" ? relation?.from_id : relation?.to_id;
+  if (!relation?.active || !target) throw new Error("Active relation target unavailable");
+  return target;
+}

@@ -6,8 +6,9 @@ import { projectApprovals } from "./projections/approvals.ts";
 import { serializeValue } from "./projections/relations.ts";
 import type { Fact } from "./facts.ts";
 import { collectProjectionDependencies } from "./projections/dependencies.ts";
+import { initializeSearch, refreshSearch } from "./search.ts";
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 export const FACT_SCHEMA_VERSION = 1;
 export const FACTS_DDL = `CREATE TABLE facts (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -163,7 +164,8 @@ function migrateToVersion3(db: DatabaseSync): void {
   const approval = db.prepare("UPDATE approvals SET requested_ts = ? WHERE id = ?");
   for (const row of projectApprovals(facts)) approval.run(row.requested_ts ?? null, row.id);
 }
-const MIGRATIONS = [migrateToVersion1, migrateToVersion2, migrateToVersion3] as const;
+function migrateToVersion4(db: DatabaseSync): void { initializeSearch(db); refreshSearch(db); }
+const MIGRATIONS = [migrateToVersion1, migrateToVersion2, migrateToVersion3, migrateToVersion4] as const;
 
 export function initializeSchema(db: DatabaseSync): void {
   db.exec("BEGIN IMMEDIATE");
@@ -184,6 +186,7 @@ export function initializeSchema(db: DatabaseSync): void {
       MIGRATIONS[index](db);
       db.prepare("UPDATE schema_version SET version = ? WHERE id = 1").run(index + 1);
     }
+    initializeSearch(db);
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");

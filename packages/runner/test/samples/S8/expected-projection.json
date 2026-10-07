@@ -1,0 +1,8 @@
+[
+  { "run_id": "dedicated", "version": 1, "attribution": "confirmed", "untracked": [] },
+  { "run_id": "dedicated", "version": 2, "attribution": "confirmed", "untracked": [] },
+  { "run_id": "shared-a", "version": 1, "attribution": "joint", "untracked": [] },
+  { "run_id": "shared-a", "version": 2, "attribution": "joint", "untracked": ["untracked.txt"] },
+  { "run_id": "shared-b", "version": 1, "attribution": "joint", "untracked": [] },
+  { "run_id": "shared-b", "version": 2, "attribution": "joint", "untracked": [] }
+]

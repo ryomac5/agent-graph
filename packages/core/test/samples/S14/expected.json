@@ -1,0 +1,23 @@
+{
+  "relations": [
+    {
+      "active": true,
+      "confidence": "confirmed",
+      "evidence": {
+        "request_id": "s14"
+      },
+      "from_id": "[\"codex\",\"parent\"]",
+      "to_id": "[\"codex\",\"correct\"]",
+      "type": "delegated",
+      "id": "[\"delegated\",\"[\\\"codex\\\",\\\"parent\\\"]\",\"[\\\"codex\\\",\\\"correct\\\"]\",\"{\\\"request_id\\\":\\\"s14\\\"}\"]"
+    }
+  ],
+  "message_memberships": [
+    {
+      "active": true,
+      "conversation_id": "[\"codex\",\"correct\"]",
+      "message_id": "[\"codex\",\"reply\"]",
+      "id": "[\"[\\\"codex\\\",\\\"reply\\\"]\",\"[\\\"codex\\\",\\\"correct\\\"]\"]"
+    }
+  ]
+}

@@ -13,6 +13,7 @@ import { createSearchHandler } from "../search/index.ts";
 import { createFilesApi, handleFilesCommand } from "../files/index.ts";
 import { FILE_COMMANDS } from "./contract.ts";
 import type { RedactionRules } from "../../../core/src/ledger/redact.ts";
+import type { SettingsService } from "../settings/index.ts";
 
 export const DEFAULT_WS_PORT = 7421;
 const MAX_FRAME_BYTES = 1024 * 1024;
@@ -22,6 +23,7 @@ export interface WebSocketOptions {
   runnerPath?: string;
   patchRetention?: number;
   readRedactionRules?: () => RedactionRules;
+  settings?: SettingsService;
 }
 
 export async function startWebSocketServer(service: ReturnType<typeof openObservationService>, options: WebSocketOptions = {}) {
@@ -103,6 +105,10 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
         for (const patch of patches) sendPatch(socket, patch);
       } else if (message.type === "cmd" && clients.has(socket) && typeof message.cmd_id === "string"
         && message.cmd_id.length > 0 && typeof message.command === "string" && message.command.length > 0) {
+        if (message.command.startsWith("settings.") && options.settings) {
+          void options.settings.handle(message).then(ack => send(socket, ack));
+          return;
+        }
         if ((FILE_COMMANDS as readonly string[]).includes(message.command)) {
           refresh();
           void handleFilesCommand(files, message.command, message.payload).then((result) => {
@@ -131,6 +137,10 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
   const timer = setInterval(() => pollObservation(refresh), PROJECTION_POLL_MS);
   return {
     url: `http://127.0.0.1:${port}`, wsUrl: `ws://127.0.0.1:${port}/ws`, token, runner,
+    resync() {
+      for (const socket of clients.keys()) send(socket, { type: "resync", reason: "Projection rebuilt" });
+      clients.clear();
+    },
     close: async () => {
       clearInterval(timer);
       runner.close();

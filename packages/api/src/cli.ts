@@ -5,10 +5,12 @@ import { pathToFileURL } from "node:url";
 import { startObservationWorker } from "./service/worker-client.ts";
 import { migrateLegacyDatabases } from "./migrate/index.ts";
 import { openObservationService } from "./service/index.ts";
-import { DEFAULT_WS_PORT, startWebSocketServer } from "./ws/index.ts";
+import { startWebSocketServer } from "./ws/index.ts";
 import { runWatchCli, WATCH_HELP } from "./watch/index.ts";
 
 import { DEFAULT_DASHBOARD_PORT, startStaticServer } from "./static/index.ts";
+import { createServeSettings, readServePort } from "./ws/settings.ts";
+import { bindSettingsRequests } from "./settings/websocket.ts";
 
 const HELP = "Usage: agent-graph-api ingest --once | migrate --from <path> [--temporary-root <path>]... | rebuild | serve [--db <path>] [--port <port>] [--dashboard-port <port>] [--runner-socket <path>] [--no-observe]" + "\n" + WATCH_HELP;
 
@@ -29,7 +31,7 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
   if (!["ingest", "migrate", "rebuild", "serve"].includes(command)) throw new TypeError(HELP);
   let dbPath: string | undefined;
   let from: string | undefined;
-  let port = DEFAULT_WS_PORT;
+  let port: number | undefined;
   let dashboardPort = DEFAULT_DASHBOARD_PORT;
   let runnerPath: string | undefined;
   let once = false;
@@ -76,9 +78,15 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
       const endpoint = join(service.outbox, ".endpoint");
       let websocket: Awaited<ReturnType<typeof startWebSocketServer>> | undefined;
       let dashboard: Awaited<ReturnType<typeof startStaticServer>> | undefined;
+      let configured: ReturnType<typeof createServeSettings> | undefined;
+      let detachSettings: (() => void) | undefined;
       let stop: () => void = () => {};
       try {
-        websocket = await startWebSocketServer(service, { port, runnerPath });
+        websocket = await startWebSocketServer(service, { port: port ?? readServePort(process.cwd()), runnerPath,
+          readRedactionRules: () => configured?.settings.read("config").storage.redaction ?? service.ledger.getRedactionRules() });
+        configured = createServeSettings(service, { repository: process.cwd(), runner: websocket.runner, resync: websocket.resync });
+        detachSettings = bindSettingsRequests(websocket.runner, configured.settings);
+        await configured.settings.start();
         dashboard = await startStaticServer({ port: dashboardPort, upstream: websocket });
         mkdirSync(service.outbox, { recursive: true, mode: 0o700 });
         const temporary = join(service.outbox, `.endpoint-${process.pid}.tmp`);
@@ -96,6 +104,8 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
       } finally {
         await observation.close();
         await dashboard?.close();
+        detachSettings?.();
+        configured?.close();
         await websocket?.close();
         process.removeListener("SIGINT", stop);
         process.removeListener("SIGTERM", stop);

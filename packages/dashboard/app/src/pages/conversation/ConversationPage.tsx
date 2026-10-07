@@ -32,6 +32,8 @@ export interface ConversationPageProps {
   target?: ScreenStore;
   language?: Language;
   embedded?: boolean;
+  seriesIds?: string[];
+  displayName?: string;
   onConversation?: (conversationId: string) => void;
 }
 const CODEX_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
@@ -84,7 +86,7 @@ function ApprovalCard({ entry, t, disabled, answered, onAnswer, screen }: {
   </article>;
 }
 
-export function ConversationPage({ client, conversationId: explicitId, target = store, language = 'en', embedded = false, onConversation }: ConversationPageProps) {
+export function ConversationPage({ client, conversationId: explicitId, target = store, language = 'en', embedded = false, seriesIds, displayName, onConversation }: ConversationPageProps) {
   const params = useParams();
   const conversationId = explicitId ?? params.conversation ?? '';
   const visibleConversation = useRef(conversationId);
@@ -144,7 +146,19 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const local = detail?.id === conversationId ? detail.projection : {};
   const combine = (table: string) => [...new Map([...(local[table] ?? []), ...(state.projection[table] ?? [])].map(row => [readText(row.id), row])).values()];
   const historyState = { ...state, projection: { ...state.projection, messages: combine('messages'), message_memberships: combine('message_memberships') } };
-  const allEntries = selectTimeline(historyState, conversationId);
+  const historyIds = seriesIds?.length ? seriesIds : [conversationId];
+  const seriesKey = historyIds.join('|');
+  const seenMessages = new Set<unknown>();
+  const allEntries = historyIds.flatMap((id, index) => {
+    const entries = selectTimeline(historyState, id).filter(entry => {
+      if (entry.kind === 'boundary' && seriesIds && ['continued', 'compacted'].includes(readText(entry.row.type))) return false;
+      if (entry.kind !== 'message') return true;
+      if (seenMessages.has(entry.row.id)) return false;
+      seenMessages.add(entry.row.id); return true;
+    });
+    const boundary: TimelineEntry[] = index ? [{ kind: 'boundary', key: 'series:' + id, time: '', row: { type: 'continued', series: true } }] : [];
+    return [...boundary, ...entries];
+  });
   const messageEntries = allEntries.filter(entry => entry.kind === 'message');
   const shownMessages = new Set(messageEntries.slice(-messageLimit).map(entry => entry.row.id));
   if (anchorId) shownMessages.add(anchorId);
@@ -154,10 +168,16 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     const controller = new AbortController(); historyController.current = controller;
     setHistoryLoading(true); setHistoryError('');
     const previous = older && detailRef.current?.id === conversationId ? detailRef.current : undefined;
-    const before = previous?.projection.messages?.toSorted(compareMessages)[0];
     try {
-      const page = await loadConversationWindow(conversationId, controller.signal, before, older ? undefined : anchorId,
-        client.fetchConversation ? path => client.fetchConversation!(path, controller.signal) : undefined);
+      const pages = await Promise.all(historyIds.map(id => loadConversationWindow(id, controller.signal,
+        older ? previous?.projection.messages?.filter(row => previous.projection.message_memberships?.some(link => link.message_id === row.id && link.conversation_id === id)).toSorted(compareMessages)[0] : undefined,
+        older ? undefined : anchorId, client.fetchConversation ? path => client.fetchConversation!(path, controller.signal) : undefined)));
+      const page = { generation: pages[0].generation, conversation: pages.at(-1)?.conversation,
+        hasOlder: pages.some(page => page.hasOlder), projection: {} as Record<string, Row[]> };
+      for (const part of pages) {
+        if (part.generation !== page.generation) throw new Error('Conversation changed. Please retry.');
+        for (const [table, rows] of Object.entries(part.projection)) page.projection[table] = [...(page.projection[table] ?? []), ...rows];
+      }
       if (controller.signal.aborted || visibleConversation.current !== conversationId) return;
       if (page.generation !== target.getSnapshot().generation) throw new Error('Conversation changed. Please retry.');
       const projection = Object.fromEntries(Object.entries(page.projection).map(([table, rows]) => [table,
@@ -171,17 +191,17 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   }
   useEffect(() => {
     setDetail(undefined); setMessageLimit(MESSAGE_PAGE_SIZE); following.current = !anchorId;
-    const release = client.watchConversation?.(conversationId);
+    const releases = historyIds.map(id => client.watchConversation?.(id));
     void loadHistory();
-    return () => { historyController.current?.abort(); release?.(); };
-  }, [conversationId, state.generation, client, anchorId, historyRevision]);
+    return () => { historyController.current?.abort(); for (const release of releases) release?.(); };
+  }, [conversationId, seriesKey, state.generation, client, anchorId, historyRevision]);
   useEffect(() => {
     if (!anchorId || !shownMessages.has(anchorId)) return;
     const element = document.getElementById(`message-${encodeURIComponent(anchorId)}`);
     if (element) { following.current = false; element.scrollIntoView?.({ block: 'center' }); }
   }, [detail, anchorId]);
   const toolResults = collectToolResults(entries.filter(entry => entry.kind === 'message').map(entry => entry.row));
-  const deltas = Object.entries(state.deltas).filter(([, delta]) => delta.conversationId === conversationId || !delta.conversationId && delta.runId === run?.id);
+  const deltas = Object.entries(state.deltas).filter(([, delta]) => historyIds.includes(delta.conversationId ?? '') || !delta.conversationId && delta.runId === run?.id);
   const streamLength = deltas.reduce((total, [, delta]) => total + delta.text.length, 0);
 
   useEffect(() => {
@@ -276,7 +296,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const worktree = worktreeLabel(run);
   const shownModel = appliedModel?.model || currentModel;
   const shownEffort = appliedModel?.effort || currentEffort;
-  const title = conversationName(state, conversationId) || t('conversation');
+  const title = displayName || conversationName(state, conversationId) || t('conversation');
   const dirty = Boolean(model) && (model !== currentModel || effort !== currentEffort);
   const hint = provider === 'codex' ? codexActive ? 'activeCodex' : 'nextTurn' : 'claudeEffort';
   const participants = resolveParticipants(state, conversationId, { user: t('user'), assistant: t('assistant'), parent: t('parentAgent') });
@@ -344,9 +364,9 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
         if (entry.kind === 'approval') return <ApprovalCard screen={historyState} key={entry.key} entry={entry} t={t} disabled={!writable} answered={answered.has(entry.row.id)} onAnswer={decision => void answer(entry.row.id, decision)}/>;
         nameShown(undefined);
         return <div role="separator" className={`timeline-boundary${entry.kind === 'gap' ? ' gap' : ''}${entry.row.confidence === 'inferred' ? ' inferred' : ''}`} key={entry.key}>
-          {entry.kind === 'gap' ? <>{t('missing')}: {showValue(entry.row.from_ts ?? entry.row.from)} – {showValue(entry.row.to_ts ?? entry.row.to)} {readText(entry.row.reason)}</>
+          {entry.row.series ? <span>Conversation continued</span> : entry.kind === 'gap' ? <>{t('missing')}: {showValue(entry.row.from_ts ?? entry.row.from)} – {showValue(entry.row.to_ts ?? entry.row.to)} {readText(entry.row.reason)}</>
             : <>{t(entry.row.type as ConversationText)} · {nameOf(state, entry.row.from_id)} → {nameOf(state, entry.row.to_id)} · {t('confidence')}: {readText(entry.row.confidence) || t('unknown')}</>}
-          <TimeStamp value={entry.time} fallback={t('timeUnknown')}/>
+          {!entry.row.series && <TimeStamp value={entry.time} fallback={t('timeUnknown')}/>}
         </div>;
       })}
       {deltas.map(([key, delta]) => <Message key={key} language={language} streaming sender={agentSender} showName={nameShown(agentSender)}

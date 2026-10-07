@@ -23,9 +23,9 @@ it('creates concurrent intake delegations with selected provider, model, effort 
   render(<MemoryRouter><WorkspacePage project="/repo/alpha" target={createActivityStore()} client={client}/></MemoryRouter>);
   fillTaskForm();
   await act(async () => fireEvent.submit(screen.getByRole('form', { name: 'Create task' })));
-  expect(client.command).toHaveBeenCalledTimes(3);
+  expect(client.command.mock.calls.filter(([name]) => name === 'intake.submit')).toHaveLength(3);
   const ids = new Set<string>();
-  client.command.mock.calls.forEach(([command, payload, cmdId], index) => {
+  client.command.mock.calls.filter(([name]) => name === 'intake.submit').forEach(([command, payload, cmdId], index) => {
     expect(command).toBe('intake.submit');
     expect(cmdId).toBeTruthy(); ids.add(cmdId!);
     expect(payload).toEqual({ requestId: `ui:${JSON.stringify([cmdId])}`, source: 'ui', role: 'implement',
@@ -37,52 +37,36 @@ it('creates concurrent intake delegations with selected provider, model, effort 
 });
 it('sends all delegations before acknowledgements arrive and prevents duplicate submissions', async () => {
   const resolves: ((ack: Ack) => void)[] = [];
-  const client = { command: vi.fn(() => new Promise<Ack>(resolve => resolves.push(resolve))) };
+  const client = { command: vi.fn((name: string) => name === 'intake.submit' ? new Promise<Ack>(resolve => resolves.push(resolve)) : Promise.resolve({ type: 'ack' as const, cmd_id: 'model', ok: true })) };
   render(<MemoryRouter><WorkspacePage project="/repo/alpha" target={createActivityStore()} client={client}/></MemoryRouter>);
   fillTaskForm(); fireEvent.submit(screen.getByRole('form', { name: 'Create task' }));
-  expect(client.command).toHaveBeenCalledTimes(3);
+  expect(client.command.mock.calls.filter(([name]) => name === 'intake.submit')).toHaveLength(3);
   fireEvent.submit(screen.getByRole('form', { name: 'Create task' }));
-  expect(client.command).toHaveBeenCalledTimes(3);
+  expect(client.command.mock.calls.filter(([name]) => name === 'intake.submit')).toHaveLength(3);
   await act(async () => resolves.forEach(resolve => resolve({ type: 'ack', cmd_id: 'id', ok: true })));
 });
-it('stops the selected run with interrupt and keeps observed state until a patch arrives', async () => {
+it('interrupts the selected root and keeps projected state until a patch arrives', async () => {
+ const client = createCommandClient(); render(<MemoryRouter><WorkspacePage project="/repo/alpha" target={createActivityStore()} client={client}/></MemoryRouter>);
+ await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Interrupt' })));
+ expect(client.command).toHaveBeenCalledWith('interrupt', { runId: 'r1' });
+ expect(within(screen.getByRole('region', { name: 'Root conversations' })).getByText('running')).toBeTruthy();
+});it('does not list parallel child conversations among roots', () => {
+ const target = createActivityStore(); const snapshot = target.getSnapshot();
+ target.setSnapshot({ ...snapshot, projection: { ...snapshot.projection, conversations: [...snapshot.projection.conversations, { id: 'parallel', provider: 'claude', origin: 'managed', name: 'Parallel child' }] } });
+ render(<MemoryRouter><WorkspacePage project="/repo/alpha" target={target} client={createCommandClient()}/></MemoryRouter>);
+ const roots = screen.getByRole('region', { name: 'Root conversations' }); expect(within(roots).getAllByRole('button')).toHaveLength(2);
+ expect(within(roots).queryByText('Parallel child')).toBeNull();
+ fireEvent.click(within(roots).getByRole('button', { name: /Investigate latency/ })); expect(screen.getByText('Investigate latency. Then report.')).toBeTruthy();
+});it('disables root controls without the runner and reports rejected interrupts', async () => {
+ const target = createActivityStore(); const client = createCommandClient(); target.setConnection('runner_unavailable');
+ render(<MemoryRouter><WorkspacePage project="/repo/alpha" target={target} client={client}/></MemoryRouter>);
+ const stop = screen.getByRole('button', { name: 'Interrupt' }) as HTMLButtonElement; expect(stop.disabled).toBe(true);
+ act(() => target.setConnection('connected')); await act(async () => {});
+ client.command.mockResolvedValueOnce({ type: 'ack', cmd_id: 'id', ok: false, error: 'Run is not open' });
+ await act(async () => fireEvent.click(stop)); expect(screen.getByText('Run is not open')).toBeTruthy();
+});it('reports partial creation failure without hiding successful requests', async () => {
   const client = createCommandClient();
-  render(<MemoryRouter><WorkspacePage project="/repo/alpha" target={createActivityStore()} client={client}/></MemoryRouter>);
-  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Stop run' })));
-  expect(client.command).toHaveBeenCalledWith('interrupt', { runId: 'r1' });
-  expect(screen.getByRole('link', { name: 'Running · Evidence' })).toBeTruthy();
-});
-it('places parallel runs in the task column and selects their conversation and Changes', () => {
-  const target = createActivityStore();
-  act(() => target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: {
-    conversations: { remove: [], upsert: [{ id: 'parallel', task_id: 't1', provider: 'claude', origin: 'managed', name: 'Implement API', name_is_provisional: false, first_request_excerpt: null }] },
-    runs: { remove: [], upsert: [{ id: 'r4', conversation_id: 'parallel', state: 'waiting_input', generation: 1 }] },
-    messages: { remove: [], upsert: [{ id: 'pm', role: 'assistant', body: 'Parallel response' }] },
-    message_memberships: { remove: [], upsert: [{ id: 'pl', message_id: 'pm', conversation_id: 'parallel', active: 1 }] },
-  } }));
-  render(<MemoryRouter><WorkspacePage project="/repo/alpha" target={target} client={createCommandClient()}/></MemoryRouter>);
-  const tasks = screen.getByRole('region', { name: 'Tasks' });
-  expect(within(tasks).getAllByRole('article', { name: 'Implement API' })).toHaveLength(2);
-  expect(within(tasks).queryByRole('article', { name: 'Review UI' })).toBeNull();
-  fireEvent.click(within(tasks).getAllByRole('button', { name: 'Implement API' })[1]);
-  expect(within(screen.getByRole('region', { name: 'Conversation' })).getByText('Parallel response')).toBeTruthy();
-  expect(screen.getByText('Not reported')).toBeTruthy();
-  expect(within(screen.getByRole('complementary', { name: 'Changes' })).getByText('No artifact yet')).toBeTruthy();
-});
-it('disables commands without the runner and reports rejected stop commands', async () => {
-  const target = createActivityStore(); const client = createCommandClient();
-  target.setConnection('runner_unavailable');
-  render(<MemoryRouter><WorkspacePage project="/repo/alpha" target={target} client={client}/></MemoryRouter>);
-  const stop = screen.getByRole('button', { name: 'Stop run' }) as HTMLButtonElement;
-  expect(stop.disabled).toBe(true); fireEvent.click(stop); expect(client.command).not.toHaveBeenCalled();
-  act(() => target.setConnection('connected'));
-  client.command.mockResolvedValueOnce({ type: 'ack', cmd_id: 'id', ok: false, error: 'Run is not open' });
-  await act(async () => fireEvent.click(stop));
-  expect(screen.getByRole('alert').textContent).toBe('Run is not open');
-});
-it('reports partial creation failure without hiding successful requests', async () => {
-  const client = createCommandClient();
-  client.command.mockResolvedValueOnce({ type: 'ack', cmd_id: 'id', ok: false, error: 'Runner unavailable' });
+  client.command.mockImplementation(async (name, _payload, cmdId) => ({ type: 'ack', cmd_id: cmdId ?? 'id', ok: name !== 'intake.submit' || client.command.mock.calls.filter(([command]) => command === 'intake.submit').length > 1, error: 'Runner unavailable' }));
   render(<MemoryRouter><WorkspacePage project="/repo/alpha" target={createActivityStore()} client={client}/></MemoryRouter>);
   fillTaskForm();
   await act(async () => fireEvent.submit(screen.getByRole('form', { name: 'Create task' })));

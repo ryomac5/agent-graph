@@ -17,6 +17,7 @@ function mount(path = '/') {
   const target = createStore();
   target.setSnapshot({ seq: 1, generation: 0, projection: {
     projects: [{ id: 'demo', display_name: 'demo', root_path: '/projects/demo', state: 'registered' }],
+    roots: [{ id: 'c', name: 'Build console', project: 'demo', state: 'running', last_activity_ts: null, conversation_ids: ['c'], running_children: 0, total_children: 0 }],
     tasks: [{ id: 't', name: 'Task', project: 'demo' }],
     conversations: [{ id: 'c', task_id: 't', name: 'Build console', origin: 'managed', provider: 'claude' }],
     runs: [{ id: 'r', conversation_id: 'c', state: 'running', generation: 1 }],
@@ -82,7 +83,7 @@ it('searches and executes commands with keyboard and opens conversations and cre
   press('k', document, { metaKey: true });
   const input = screen.getByRole('combobox', { name: 'Search commands' }); expect(document.activeElement).toBe(input);
   fireEvent.change(input, { target: { value: 'console' } }); press('Enter', input);
-  expect(screen.getByTestId('location').textContent).toBe('/c/c'); expect(screen.queryByRole('dialog')).toBeNull();
+  expect(screen.getByTestId('location').textContent).toBe('/p/demo'); expect(screen.queryByRole('dialog')).toBeNull();
   press('k', document, { metaKey: true });
   fireEvent.change(screen.getByRole('combobox', { name: 'Search commands' }), { target: { value: 'create task' } }); press('Enter', screen.getByRole('combobox', { name: 'Search commands' }));
   expect(screen.getByRole('form', { name: 'Create task' })).toBeTruthy();
@@ -178,15 +179,18 @@ it('selects delegation tree rows with j and k', async () => {
   act(() => target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: {
     conversations: { remove: [], upsert: [{ id: 'child', provider: 'codex', origin: 'managed', name: 'Child' }] },
     runs: { remove: [], upsert: [{ id: 'child:1', conversation_id: 'child', state: 'running', generation: 1 }] },
-    delegations: { remove: [], upsert: [{ id: 'd', request_id: 'd', title: 'Child work', role: 'implement', state: 'running', attempt: 1,
+    relations: { remove: [], upsert: [{ id: 'delegate-child', type: 'delegated', from_id: 'c', to_id: 'child', evidence: { agentType: 'implement', description: 'Child work' } }] },
+    delegations: { remove: [], upsert: [{ root_id: 'c', id: 'd', request_id: 'd', title: 'Child work', role: 'implement', state: 'running', attempt: 1,
       parent: JSON.stringify({ confidence: 'confirmed', conversation_id: 'c' }), attempts: JSON.stringify([{ attempt: 1, run_id: 'child:1' }]) }] },
   } }));
   await act(async () => {});
   press('j');
+  expect(document.activeElement?.classList.contains('activity-name')).toBe(true);
+  press('j');
   expect(document.activeElement?.classList.contains('delegation-select')).toBe(true);
   expect(document.activeElement?.getAttribute('aria-pressed')).toBe('true');
   press('k');
-  expect(document.activeElement?.classList.contains('delegation-select')).toBe(true);
+  expect(document.activeElement?.classList.contains('activity-name')).toBe(true);
 });
 it('skips unavailable commands and clamps selection when live commands change', () => {
   const run = vi.fn(); const onClose = vi.fn();
@@ -204,6 +208,7 @@ it('skips unavailable commands and clamps selection when live commands change', 
 it('finds an active external terminal by its displayed name and opens it with Cmd+K', async () => {
   const { target } = mount();
   act(() => target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: {
+    roots: { remove: [], upsert: [{ id: 'terminal', name: 'Fix the merge', project: 'demo', state: 'running', last_activity_ts: null, conversation_ids: ['terminal'], running_children: 0, total_children: 0 }] },
     conversations: { remove: [], upsert: [{ id: 'terminal', origin: 'observed', type: 'interactive', provider: 'claude', name: 'Fix the merge', repository_id: 'demo' }] },
     runs: { remove: [], upsert: [{ id: 'terminal:1', conversation_id: 'terminal', state: 'running', generation: 1 }] },
   } }));
@@ -213,5 +218,5 @@ it('finds an active external terminal by its displayed name and opens it with Cm
   fireEvent.change(input, { target: { value: 'fix merge' } });
   expect(screen.getByRole('button', { name: 'Open active conversation: Fix the merge' })).toBeTruthy();
   press('Enter', input);
-  expect(screen.getByTestId('location').textContent).toBe('/c/terminal');
+  expect(screen.getByTestId('location').textContent).toBe('/p/demo');
 });

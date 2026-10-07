@@ -40,7 +40,7 @@ function parentLink(state: ScreenState, conversationId: string): ParentLink | un
     if (relation.type === 'delegated' && conversationOf(state, relation.to_id) === conversationId) {
       const parentId = conversationOf(state, relation.from_id);
       if (parentId === conversationId) continue;
-      return { parentId, role: delegationRole(state, conversationId, readObject(relation.evidence)) || 'subagent' };
+      return { parentId, role: readText(readObject(relation.evidence).agentType) || delegationRole(state, conversationId, readObject(relation.evidence)) || 'subagent' };
     }
     if (relation.type === 'review_of' && conversationOf(state, relation.from_id) === conversationId) {
       const parentId = conversationOf(state, relation.to_id);

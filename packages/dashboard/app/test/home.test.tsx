@@ -1,3 +1,4 @@
+import { projectRoots } from '../src/test/root-fixture.ts';
 import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
@@ -27,6 +28,7 @@ export function createActivityStore(): ScreenStore {
     delegations: [{ id: 'd1', attempts: [{ run_id: 'r1', assignment: { executor: 'codex', model: 'test-model' } }] }],
     artifacts: [{ id: 'a1', run_id: 'r1', version: 1, diff: 'diff --git a/api.ts b/api.ts\n--- a/api.ts\n+++ b/api.ts\n-old\n+new\n+added' }],
   } });
+  projectRoots(target, ['c1', 'c2', 'external']);
   target.setConnection('connected');
   return target;
 }
@@ -34,103 +36,33 @@ export function createActivityStore(): ScreenStore {
 export function openFolds(...names: string[]) {
   for (const name of names) fireEvent.click(screen.getByRole('button', { name }));
 }
-it('groups managed tasks by project and keeps external, unattended and unsupported conversations in separate sections', () => {
-  render(<MemoryRouter><HomePage target={createActivityStore()}/></MemoryRouter>);
-  const alpha = screen.getByRole('region', { name: 'alpha' });
-  expect(within(alpha).getAllByRole('article').map(row => row.getAttribute('aria-label'))).toEqual(['Implement API']);
-  expect(within(alpha).getByText('running')).toBeTruthy();
-  const beta = screen.getByRole('region', { name: 'beta' });
-  expect(within(beta).getByRole('article', { name: 'Review UI' }).classList.contains('is-stopped')).toBe(true);
-  // 外の端末の会話と無人実行は畳み、件数だけを見せる。
-  const external = screen.getByRole('region', { name: 'External conversations' });
-  expect(within(external).queryByRole('article')).toBeNull();
-  expect(within(external).getByText('1').className).toContain('count-pill');
-  expect(screen.getByRole('button', { name: 'External conversations' }).getAttribute('aria-expanded')).toBe('false');
-  expect(within(screen.getByRole('region', { name: 'Unattended runs' })).queryByRole('article')).toBeNull();
-  openFolds('External conversations', 'Unattended runs', 'Unsupported conversations');
-  expect(within(external).getByRole('article', { name: 'Investigate latency.' })).toBeTruthy();
-  expect(within(screen.getByRole('region', { name: 'Unattended runs' })).getAllByRole('article')).toHaveLength(1);
-  expect(within(screen.getByRole('region', { name: 'Unsupported conversations' })).getAllByRole('article')).toHaveLength(1);
-  expect(screen.getByRole('link', { name: 'Take over' }).getAttribute('href')).toBe('/c/external?adopt=1');
-  const implement = screen.getByRole('article', { name: 'Implement API' });
-  expect(within(implement).getByText('Codex')).toBeTruthy();
-  expect(within(implement).getByText('test-model')).toBeTruthy();
-  expect(within(implement).getByText('Added the endpoint')).toBeTruthy();
-  expect(within(implement).getByText('1 file · +2 −1')).toBeTruthy();
-  // 記録のないモデルと成果物は Unknown と書かず、記録なしと示す。
-  const review = screen.getByRole('article', { name: 'Review UI' });
-  // モデルが記録されていないときは provider だけを出し、記録なしの文言を行ごとに繰り返さない。
-  expect(within(review).getByText('Claude')).toBeTruthy();
-  expect(within(review).queryByText('No model recorded')).toBeNull();
-  expect(within(review).queryByText('Unknown')).toBeNull();
-  expect(screen.queryByRole('link', { name: 'Build the API.' })).toBeNull();
-});
-it('combines state, provider and project filters and can clear them', () => {
-  render(<MemoryRouter><HomePage target={createActivityStore()}/></MemoryRouter>);
-  openFolds('External conversations', 'Unattended runs', 'Unsupported conversations');
-  fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'claude' } });
-  fireEvent.change(screen.getByLabelText('State'), { target: { value: 'unknown' } });
-  fireEvent.change(screen.getByLabelText('Project'), { target: { value: '/repo/alpha' } });
-  expect(screen.getAllByRole('article')).toHaveLength(1);
-  expect(screen.getByRole('article', { name: 'Investigate latency.' })).toBeTruthy();
-  fireEvent.change(screen.getByLabelText('State'), { target: { value: 'running' } });
-  expect(screen.queryAllByRole('article')).toHaveLength(0);
-  fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
-  expect(screen.getAllByRole('article')).toHaveLength(5);
-});
-it('shows unknown with last evidence, exact time, relative time and reason, without inferring completion from elapsed time', () => {
-  const target = createActivityStore();
-  render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
-  openFolds('External conversations');
-  const row = screen.getByRole('article', { name: 'Investigate latency.' });
-  const evidence = within(row).getByRole('link', { name: 'Unknown · Evidence' });
-  // 一覧の不明は印だけを 1 行で出し、根拠と理由は title に残す。
-  expect(evidence.textContent?.match(/Unknown/g)).toHaveLength(1);
-  expect([...evidence.querySelectorAll('.state-detail')].map(detail => detail.textContent)).toEqual([]);
-  expect(evidence.title).toBe('Unknown · disconnect · Observation interrupted');
-  expect(evidence.className).toContain('status-unknown');
-  expect(evidence.getAttribute('href')).toBe('/c/external');
-  expect(within(screen.getByRole('article', { name: 'Implement API' })).getByRole('link', { name: 'Running · Evidence' })).toBeTruthy();
-  act(() => target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: { runs: { upsert: [{ id: 'r1', conversation_id: 'c1', state: 'failed', cause: 'Build failed' }], remove: [] } } }));
-  expect(screen.getByText('Build failed')).toBeTruthy();
-});
-it('shows the projected name as is and names an unnamed conversation by provider and start time, never from message bodies', () => {
-  const target = createStore();
-  const started = new Date(2026, 0, 5, 10, 46).toISOString();
-  target.setSnapshot({ seq: 1, generation: 0, projection: {
-    tasks: [{ id: 'pending', purpose: 'Waiting task', project: '/repo' }],
-    conversations: [
-      { id: 'named', origin: 'observed', type: 'interactive', provider: 'codex', name: '画面への配信を作る', name_is_provisional: true, first_request_excerpt: '画面への配信を作る' },
-      { id: 'exec', origin: 'observed', type: 'unattended', provider: 'claude', name: null, name_is_provisional: false, first_request_excerpt: 'Reply OK.' },
-    ],
-    runs: [{ id: 'r', conversation_id: 'exec', generation: 0, state: 'ended', started_ts: started }],
-    messages: [{ id: 'm', role: 'user', body: '<multi_agent_role>You are `/root`.\n# タスク D1: 画面への配信を作る' },
-      { id: 'n', role: 'user', body: 'First sentence. Second sentence.' }],
-    message_memberships: [{ id: 'l', message_id: 'm', conversation_id: 'named', active: 1 }, { id: 'k', message_id: 'n', conversation_id: 'exec', active: 1 }],
-  } });
-  render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
-  openFolds('External conversations', 'Unattended runs');
-  const named = screen.getByRole('article', { name: '画面への配信を作る' });
-  expect(within(named).getByText('Provisional')).toBeTruthy();
-  const unnamed = screen.getByRole('article', { name: 'Claude · Jan 5 10:46' });
-  expect(within(unnamed).queryByText('Provisional')).toBeNull();
-  expect(within(unnamed).getByRole('link', { name: 'Claude · Jan 5 10:46' }).title).toBe('Reply OK.');
-  expect(screen.queryByRole('article', { name: /First sentence|New conversation|multi_agent_role|タスク D1/ })).toBeNull();
-  expect(screen.getByRole('article', { name: 'Waiting task' })).toBeTruthy();
-});
-it('decodes SQLite JSON bodies, evidence and assignment attempts from the actual snapshot format', () => {
-  const target = createActivityStore();
-  const snapshot = target.getSnapshot();
-  const projection = { ...snapshot.projection,
-    messages: snapshot.projection.messages.map(row => ({ ...row, body: JSON.stringify(row.body) })),
-    runs: snapshot.projection.runs.map(row => ({ ...row, last_evidence: row.last_evidence ? JSON.stringify(row.last_evidence) : null })),
-    delegations: snapshot.projection.delegations.map(row => ({ ...row, attempts: JSON.stringify(row.attempts) })),
-  };
-  target.setSnapshot({ seq: 1, generation: 0, projection });
-  render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
-  openFolds('External conversations');
-  expect(screen.getByText('Added the endpoint')).toBeTruthy();
-  expect(screen.getByRole('article', { name: 'Investigate latency.' })).toBeTruthy();
-  expect(screen.getByText('test-model')).toBeTruthy();
-  expect(within(screen.getByRole('article', { name: 'Investigate latency.' })).getByRole('link', { name: 'Unknown · Evidence' }).title).toContain('disconnect');
+it('groups roots by project and folds only unlinked unattended conversations', () => {
+ render(<MemoryRouter><HomePage target={createActivityStore()}/></MemoryRouter>);
+ expect(within(screen.getByRole('region', { name: 'alpha' })).getAllByRole('link').map(row => row.textContent)).toContain('Implement APIrunningActivity unknown0 running · 0 total');
+ expect(screen.getByRole('link', { name: /Review UI/ })).toBeTruthy();
+ expect(screen.queryByText('External conversations')).toBeNull(); expect(screen.queryByText('Unsupported conversations')).toBeNull();
+ const unattended = screen.getByText('Unattended').closest('details')!; expect(unattended.open).toBe(false);
+ fireEvent.click(unattended.querySelector('summary')!); expect(within(unattended).getByRole('link').getAttribute('href')).toBe('/c/exec');
+});it('orders running roots first and links each root to its project', () => {
+ render(<MemoryRouter><HomePage target={createActivityStore()}/></MemoryRouter>);
+ const alpha = screen.getByRole('region', { name: 'alpha' }); const rows = alpha.querySelectorAll('.root-row');
+ expect(rows[0].textContent).toContain('Implement API'); expect(rows[1].textContent).toContain('Investigate latency.');
+ expect(rows[0].getAttribute('href')).toBe('/p/%2Frepo%2Falpha?root=c1');
+});it('shows projected root state and activity time and applies root patches', () => {
+ const target = createActivityStore(); render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
+ const row = screen.getByRole('link', { name: /Investigate latency/ }); expect(row.querySelector('.root-state')!.textContent).toBe('unknown');
+ expect(row.querySelector('time')!.getAttribute('datetime')).toBe('2026-10-07T01:05:00Z');
+ act(() => target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: { roots: { remove: [], upsert: [{ ...target.getSnapshot().projection.roots[0], state: 'failed' }] } } }));
+ expect(screen.getByRole('link', { name: /Implement API/ }).textContent).toContain('failed');
+});it('uses the projected root name and leaves unrelated conversations out of the list', () => {
+ const target = createActivityStore(); const snapshot = target.getSnapshot();
+ target.setSnapshot({ ...snapshot, projection: { ...snapshot.projection, roots: [{ ...snapshot.projection.roots[0], name: 'agent-graph-001' }] } });
+ render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
+ expect(screen.getByRole('link', { name: /agent-graph-001/ })).toBeTruthy();
+ expect(screen.queryByText('Added the endpoint')).toBeNull(); expect(screen.queryByRole('link', { name: /Investigate latency/ })).toBeNull();
+});it('keeps JSON conversation bodies out of root rows', () => {
+ const target = createActivityStore(); const snapshot = target.getSnapshot();
+ target.setSnapshot({ ...snapshot, projection: { ...snapshot.projection, messages: snapshot.projection.messages.map(row => ({ ...row, body: JSON.stringify(row.body) })) } });
+ render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
+ expect(screen.getByRole('link', { name: /Implement API/ })).toBeTruthy(); expect(screen.queryByText('Added the endpoint')).toBeNull();
 });

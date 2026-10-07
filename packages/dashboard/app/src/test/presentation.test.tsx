@@ -1,3 +1,4 @@
+import { projectRoots } from './root-fixture.ts';
 import { afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
@@ -33,21 +34,18 @@ it.each(['approve', 'request_changes', 'reject'])('formats %s review output cons
   target.setSnapshot({ seq: 2, generation: 1, projection: projection({
     conversations: [...projection().conversations, { id: review, origin: 'managed', provider: 'codex', history_format: 'jsonl' }],
     runs: [...projection().runs, { id: 'review-run', conversation_id: review, generation: 1, state: 'ended' }],
-    relations: [{ id: 'review-edge', type: 'review_of', active: 1, confidence: 'confirmed', from_id: review, to_id: CONVERSATION }],
+    relations: [{ id: 'review-edge', type: 'review_of', active: 1, confidence: 'confirmed', from_id: review, to_id: CONVERSATION }, { id: 'review-child', type: 'delegated', from_id: CONVERSATION, to_id: review, evidence: { agentType: 'review', description: 'Review the work' } }],
     messages: [{ id: 'review-message', role: 'assistant', body_state: 'stored', body: JSON.stringify(raw) }],
     message_memberships: [{ id: 'review-link', message_id: 'review-message', conversation_id: review, active: 1 }],
   }) });
   const name = 'Review of Browser fixture task';
   const overview = render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
-  const row = screen.getByRole('article', { name });
-  expect(row.querySelector('.activity-excerpt')!.textContent).toBe(expected);
-  expect(row.textContent).not.toContain(raw);
-  overview.unmount();
+  expect(screen.queryByRole('article', { name })).toBeNull();
+  expect(screen.getByRole('link', { name: /Browser fixture task/ })).toBeTruthy(); overview.unmount();
   const workspace = render(<MemoryRouter><WorkspacePage target={target} client={client} project={REPO}/></MemoryRouter>);
-  const workspaceRow = within(screen.getByRole('region', { name: 'Tasks' })).getByRole('article', { name });
-  expect(workspaceRow.querySelector('.activity-excerpt')!.textContent).toBe(expected);
-  fireEvent.click(within(workspaceRow).getByRole('button', { name }));
-  expect(document.querySelector('.message-main p')!.textContent).toBe(expected);
+  expect(within(screen.getByRole('region', { name: 'Root conversations' })).queryByText(name)).toBeNull();
+  fireEvent.click(within(screen.getByRole('complementary', { name: 'Delegation tree' })).getByRole('button', { name: 'Codex · review · ended' }));
+  expect(document.querySelector('.conversation-markdown')!.textContent).toBe(expected);
   workspace.unmount();
   render(<MemoryRouter><ConversationPage conversationId={review} target={target} client={client}/></MemoryRouter>);
   const bubble = document.querySelector('.conversation-markdown')!;
@@ -61,6 +59,7 @@ const RUN = `${CONVERSATION}:1`;
 // 本物の runner の投影と同じ形の行。会話と実行の ID は native ID から作られた JSON の文字列になる。
 function projection(extra: Record<string, Row[]> = {}): Record<string, Row[]> {
   return {
+    roots: [{ id: CONVERSATION, name: 'Browser fixture task', project: REPO, state: 'waiting_approval', last_activity_ts: '2026-10-07T01:00:05Z', conversation_ids: [CONVERSATION], running_children: 0, total_children: 1 }],
     projects: [{ id: REPO, display_name: 'repo', root_path: '/projects/repo', state: 'registered' }],
     tasks: [{ id: 'task', name: 'Browser fixture task', project: REPO, state: 'running' }],
     conversations: [{ id: CONVERSATION, task_id: 'task', provider: 'claude', origin: 'managed', type: 'interactive', history_format: 'jsonl', name: 'Browser fixture task' }],
@@ -80,6 +79,7 @@ function projection(extra: Record<string, Row[]> = {}): Record<string, Row[]> {
 function setup() {
   const target = createStore();
   target.setSnapshot({ seq: 1, generation: 1, projection: projection() });
+  projectRoots(target, [CONVERSATION]);
   target.setConnection('connected');
   return target;
 }
@@ -223,40 +223,15 @@ it('uses the same outcome marks in the inbox expired list and in notifications',
   }
 });
 
-it('groups reviewer conversation beneath its original task using review_of facts', () => {
-  const target = setup();
-  const review = 'review-conversation';
-  target.setSnapshot({ seq: 2, generation: 1, projection: projection({
-    // core は作業の名前を会話の名前に投影する。画面は投影の名前をそのまま出し、レビューは review_of から名付ける。
-    conversations: [projection().conversations[0], { id: review, origin: 'managed', provider: 'codex', name: '{"verdict":"approve"}' }],
-    runs: [...projection().runs, { id: 'review-run', conversation_id: review, generation: 1, state: 'ended' }],
-    relations: [{ id: 'review-edge', type: 'review_of', active: 1, confidence: 'confirmed', from_id: review, to_id: CONVERSATION }],
-  }) });
-  const view = render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
-  const group = screen.getByRole('region', { name: 'repo' });
-  const rows = within(group).getAllByRole('article');
-  expect(rows.map(row => row.getAttribute('aria-label'))).toEqual(['Browser fixture task', 'Review of Browser fixture task']);
-  expect(rows[1].classList.contains('activity-child')).toBe(true);
-  expect(screen.queryByRole('region', { name: 'No project' })).toBeNull();
-  expect(runLabel(target.getSnapshot(), 'review-run')).toBe('Review of Browser fixture task · Run 1');
-  view.unmount();
-  render(<MemoryRouter><WorkspacePage target={target} client={client} project={REPO}/></MemoryRouter>);
-  const tasks = screen.getByRole('region', { name: 'Tasks' });
-  expect(within(tasks).getAllByRole('article').map(row => row.getAttribute('aria-label'))).toEqual(['Browser fixture task', 'Review of Browser fixture task']);
+it('keeps reviewers in the selected root tree and out of the root list', () => {
+ const target = setup(); const review = 'review-conversation'; target.setSnapshot({ seq: 2, generation: 1, projection: projection({ conversations: [projection().conversations[0], { id: review, origin: 'managed', provider: 'codex', name: '{"verdict":"approve"}' }], runs: [...projection().runs, { id: 'review-run', conversation_id: review, generation: 1, state: 'running' }], relations: [{ id: 'review-edge', type: 'review_of', active: 1, confidence: 'confirmed', from_id: review, to_id: CONVERSATION }, { id: 'review-child', type: 'delegated', from_id: CONVERSATION, to_id: review, evidence: { agentType: 'review' } }] }) });
+ const view = render(<MemoryRouter><HomePage target={target}/></MemoryRouter>); const group = screen.getByRole('region', { name: 'repo' });
+ expect(group.querySelectorAll('.root-row')).toHaveLength(1); expect(within(group).getByRole('button', { name: 'Codex · review · running' })).toBeTruthy();
+ expect(runLabel(target.getSnapshot(), 'review-run')).toBe('Review of Browser fixture task · Run 1'); view.unmount();
+ render(<MemoryRouter><WorkspacePage target={target} client={client} project={REPO}/></MemoryRouter>);
+ expect(within(screen.getByRole('region', { name: 'Root conversations' })).getAllByRole('button')).toHaveLength(1); expect(screen.getByRole('button', { name: 'Codex · review · running' })).toBeTruthy();
 });
-
-it('shows one Unknown and a reason when external execution evidence is absent', () => {
-  const target = setup();
-  target.setSnapshot({ seq: 2, generation: 1, projection: projection({
-    conversations: [{ id: 'external', origin: 'observed', provider: 'codex', name: 'External conversation' }],
-    runs: [], tasks: [], messages: [], message_memberships: [], approvals: [],
-  }) });
-  render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
-  fireEvent.click(screen.getByRole('button', { name: 'External conversations' }));
-  const row = screen.getByRole('article', { name: 'External conversation' });
-  const badge = within(row).getByRole('link', { name: 'Unknown · Evidence' });
-  expect(badge.textContent?.match(/Unknown/g)).toHaveLength(1);
-  // 一覧の不明は印だけを出し、理由は title に置く。
-  expect([...badge.querySelectorAll('.state-detail')].map(detail => detail.textContent)).toEqual([]);
-  expect(badge.title).toBe('Unknown · No evidence confirming execution state');
+it('shows the projected unknown state once when root execution evidence is absent', () => {
+ const target = setup(); target.setSnapshot({ seq: 2, generation: 1, projection: projection({ roots: [{ id: 'external', name: 'External root', project: REPO, state: 'unknown', last_activity_ts: null, conversation_ids: ['external'], running_children: 0, total_children: 0 }], conversations: [{ id: 'external', origin: 'observed', provider: 'codex' }], runs: [], tasks: [], messages: [], message_memberships: [], approvals: [] }) });
+ render(<MemoryRouter><HomePage target={target}/></MemoryRouter>); const row = screen.getByRole('link', { name: /External root/ }); expect(row.querySelectorAll('.root-state')).toHaveLength(1); expect(row.querySelector('.root-state')!.textContent).toBe('unknown'); expect(row.textContent).toContain('Activity unknown');
 });

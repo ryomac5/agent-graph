@@ -17,7 +17,7 @@ import { createSearchClient, type SearchClient } from './pages/search/model.ts';
 import { Inbox } from './pages/inbox/Inbox.tsx';
 import { answerApproval, getDecision, getInbox } from './pages/inbox/model.ts';
 import { Notifications } from './components/notifications/Notifications.tsx';
-import { ACTIVE_STATES, selectActivities } from './components/activity.ts';
+import { selectRoots, isRunning } from './lib/roots.ts';
 import { Icon } from './components/Icon.tsx';
 import { fetchProjection } from './lib/projection-client.ts';
 import type { Row } from './lib/store.ts';
@@ -63,7 +63,8 @@ export function App({ target = store, client = unavailableClient, searchClient =
   }, [theme]);
   useEffect(() => { document.documentElement.lang = language; localStorage.setItem('agent-graph-language', language); }, [language]);
   const projects = getRegisteredProjects(state).map(row => ({ id: String(row.id), name: String(row.display_name), full: String(row.display_name), detail: '' }));
-  const hasOther = selectActivities(state).some(row => row.project === OTHER_PROJECT && !row.temporary);
+  const roots = useMemo(() => selectRoots(state), [state.projection.roots]);
+  const hasOther = roots.some(row => row.project === OTHER_PROJECT || row.project === null);
   const [listError, setListError] = useState('');
   useEffect(() => {
     const controller = new AbortController();
@@ -93,9 +94,9 @@ export function App({ target = store, client = unavailableClient, searchClient =
   const mainRef = useRef<HTMLElement>(null);
   const pathProject = /^\/p\/([^/]+)/.exec(location.pathname)?.[1];
   const pathConversation = /^\/c\/([^/]+)/.exec(location.pathname)?.[1];
-  const activities = selectActivities(state);
+
   // 経路のプロジェクトは表示名でも識別子でも受け、投影の projects の識別子に揃える。
-  const project = pathProject ? resolveProjectId(state, decodeURIComponent(pathProject)) : activities.find(item => item.conversationId === (pathConversation && decodeURIComponent(pathConversation)))?.project || projects[0]?.id;
+  const project = pathProject ? resolveProjectId(state, decodeURIComponent(pathProject)) : roots.find(root => root.conversation_ids.includes(pathConversation ? decodeURIComponent(pathConversation) : ''))?.project || projects[0]?.id;
   const projectRoot = String(state.projection.projects?.find(row => row.id === project)?.root_path ?? '');
   function moveRow(direction: number) {
     const rows = [...(mainRef.current?.querySelectorAll<HTMLElement>('.activity-name, [data-approval-id], .delegation-select, [role="treeitem"][tabindex]') ?? [])];
@@ -145,7 +146,7 @@ export function App({ target = store, client = unavailableClient, searchClient =
     { id: 'search', name: 'Search all conversations', run: () => navigate('/search') },
     { id: 'settings', name: 'Open Settings', run: () => navigate('/settings') },
     { id: 'create', name: 'Create task', run: () => setOverlay('create') },
-    ...(state.projection.conversations ?? []).map(row => ({ id: `conversation-${row.id}`, name: `Open ${activities.some(item => item.conversationId === row.id && ACTIVE_STATES.includes(item.state)) ? 'active ' : ''}conversation: ${activities.find(item => item.conversationId === row.id)?.name ?? row.name ?? row.id}`, run: () => navigate(`/c/${encodeURIComponent(String(row.id))}`) })),
+    ...roots.map(root => ({ id: `conversation-${root.id}`, name: `Open ${isRunning(root.state) ? 'active ' : ''}conversation: ${root.name}`, run: () => navigate(`/p/${encodeURIComponent(root.project ?? OTHER_PROJECT)}?root=${encodeURIComponent(root.id)}`) })),
     ...getInbox(state).pending.flatMap(row => (['allow', 'deny'] as const).map(action => ({
       id: `${action}-${row.id}`, name: `${action === 'allow' ? 'Allow' : 'Deny'} approval: ${row.id}`,
       disabled: state.connection !== 'connected' || !getDecision(row, action) || answered.current.has(String(row.id)),
@@ -175,7 +176,7 @@ export function App({ target = store, client = unavailableClient, searchClient =
       <Notifications target={target} client={client} initiallyOpen={false} compact language={language}/></div>
     </header><main ref={mainRef} className={fullHeight ? 'full-height' : undefined}><Routes>
       <Route path="/" element={<HomePage target={target} client={client} language={language}/>}/>
-      <Route path="/p/:project" element={<WorkspacePage target={target} client={client} language={language} renderConversation={id => conversation(id, true)}/>}/>
+      <Route path="/p/:project" element={<WorkspacePage target={target} client={client} language={language}/>}/>
       <Route path="/c/:conversation" element={conversation()}/>
       <Route path="/inbox" element={<Inbox target={target} client={client}/>}/>
       <Route path="/p/:project/tree" element={<TreePage target={target} client={client} language={language}/>}/>

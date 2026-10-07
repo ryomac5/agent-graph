@@ -5,7 +5,7 @@ import { Icon } from '../../components/Icon.tsx';
 import { AttributionBadge, DiffView } from '../../components/diff/DiffView.tsx';
 import { comparePatches, parseDiff, type DiffLayout, type LineLocation } from '../../components/diff/model.ts';
 import type { Ack } from '../../lib/client.ts';
-import { runLabel } from '../../lib/format.ts';
+import { runLabel, worktreeLabel } from '../../lib/format.ts';
 import { store, useScreenStore, type Row, type ScreenStore } from '../../lib/store.ts';
 import { collectSuccessors, collectVersionFamily, readAttribution, readObject, readText, readValue, selectArtifacts } from './model.ts';
 import './changes.css';
@@ -84,6 +84,9 @@ export function ChangesPage({ client, target = store, project, artifactId }: Cha
   function selectVersion(value: string) {
     setChosenId(value); setCompareId(''); setSelection(undefined); setSelectedFindings([]); setSelectedFile(''); setBody(''); setNotice(''); setError('');
   }
+  const artifactRun = state.projection.runs?.find(row => row.id === artifact?.run_id);
+  const runPlace = worktreeLabel(artifactRun)?.full;
+  const fileHref = projectId ? (path: string) => `/p/${encodeURIComponent(projectId)}/files?${new URLSearchParams({ path, ...(runPlace ? { worktree: runPlace } : {}) })}` : undefined;
   const comparisonFiles = compare && typeof compare.diff === 'string' && typeof artifact?.diff === 'string' ? comparePatches(compare.diff, patch) : undefined;
   return <section className="page changes-page" aria-label="Changes and review">
     <header className="page-header"><div className="page-title"><h1>Changes</h1><p className="page-subtitle">Review a fixed artifact version</p></div>
@@ -95,6 +98,7 @@ export function ChangesPage({ client, target = store, project, artifactId }: Cha
       <AppLink to={`/p/${encodeURIComponent(projectId)}`}>Project</AppLink>
       <AppLink to={`/p/${encodeURIComponent(projectId)}/tree`}>Tree</AppLink>
       <AppLink to={`/p/${encodeURIComponent(projectId)}/changes`} aria-current="page">Changes</AppLink>
+      <AppLink to={`/p/${encodeURIComponent(projectId)}/files`}>Files</AppLink>
     </nav>}
     {error && <p role="alert" className="banner banner-danger">{error}</p>}
     {notice && <p role="status" className="muted-text">{notice}</p>}
@@ -107,7 +111,9 @@ export function ChangesPage({ client, target = store, project, artifactId }: Cha
     {!artifact ? <div className="empty-state"><Icon name="diff" size={22}/><h2>No artifact versions</h2><p>Changes appear after an execution captures its artifact.</p></div> :
       <div className="changes-columns"><aside className="changes-files" aria-label="Files"><h2>Files <span className="count-pill">{files.length}</span></h2>
         <ul>{files.map(file => <li key={file.path}><button className="changes-file-button" aria-pressed={selectedFile === file.path} onClick={() => { setSelectedFile(file.path); setCompareId(''); }}><Icon name="file" size={14}/><span>{file.path}</span>
-          <span className="diff-stat">+{file.additions} −{file.deletions}</span></button><AttributionBadge attribution={attribution} evidenceUrl={evidenceUrl}/></li>)}</ul>
+          <span className="diff-stat">+{file.additions} −{file.deletions}</span></button>
+          <span className="button-row"><AttributionBadge attribution={attribution} evidenceUrl={evidenceUrl}/>
+            {fileHref && <AppLink className="btn btn-link btn-xs" to={fileHref(file.path)} aria-label={`Open ${file.path} in Files`} title={`Open ${file.path} in Files`}><Icon name="external" size={12}/>Open in Files</AppLink>}</span></li>)}</ul>
         <details id={evidenceId} className="artifact-evidence"><summary>Artifact evidence</summary><dl>
           {['version', 'repository_id', 'worktree_id', 'base_sha', 'head_sha', 'patch_hash', 'run_id'].map(key => <div key={key}><dt>{key.replaceAll('_', ' ')}</dt><dd>{String(artifact[key] ?? 'Unknown')}</dd></div>)}</dl>
           <p>{attribution === 'unknown' ? 'Changes whose author could not be identified' : `Attribution: ${attribution}`}</p>
@@ -116,7 +122,7 @@ export function ChangesPage({ client, target = store, project, artifactId }: Cha
           {compare ? <><h2>Patch comparison · Version {String(compare.version)} → {String(artifact.version)}</h2><p className="muted-text">Comparing saved patch text. Switch to Base commit to comment on artifact lines.</p>
             {comparisonFiles ? comparisonFiles.length ? <DiffView key={`${compare.id}:${id}`} files={comparisonFiles} layout={layout} attribution="unknown" evidenceUrl={evidenceUrl}/> : <p>No patch changes.</p> : <p>Saved diff unavailable for comparison.</p>}</>
             : typeof artifact.diff !== 'string' ? <p className="chip chip-dashed">Saved diff unavailable. Content may not have been retained.</p>
-              : files.length ? <DiffView key={id} files={selectedFile ? files.filter(file => file.path === selectedFile) : files} layout={layout} attribution={attribution} evidenceUrl={evidenceUrl} selection={activeSelection} selectedFile={selectedFile} onSelectLine={selectLine}/>
+              : files.length ? <DiffView key={id} files={selectedFile ? files.filter(file => file.path === selectedFile) : files} layout={layout} attribution={attribution} evidenceUrl={evidenceUrl} selection={activeSelection} selectedFile={selectedFile} onSelectLine={selectLine} fileHref={fileHref}/>
                 : <p>No file changes in this version.</p>}
           {selectedFile && !compare && <button className="btn btn-ghost btn-sm" onClick={() => setSelectedFile('')}>Show all files</button>}
         </section>

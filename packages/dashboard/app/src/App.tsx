@@ -8,6 +8,7 @@ import { HomePage } from './pages/home/HomePage.tsx';
 import { WorkspacePage } from './pages/workspace/WorkspacePage.tsx';
 import { TreePage } from './pages/tree/TreePage.tsx';
 import { ChangesPage } from './pages/changes/ChangesPage.tsx';
+import { FilesPage } from './pages/files/FilesPage.tsx';
 import { SearchPage } from './pages/search/SearchPage.tsx';
 import { createSearchClient, type SearchClient } from './pages/search/model.ts';
 import { Inbox } from './pages/inbox/Inbox.tsx';
@@ -25,7 +26,7 @@ export function applyTheme(theme: Theme, dark: boolean) {
 function EmptyView({ title, future, t }: { title: TextKey; future?: boolean; t: (key: TextKey) => string }) {
   const params = useParams();
   return <div className="page"><header className="page-header"><div className="page-title"><p className="eyebrow">{t('workspace')}</p><h1>{t(title)}</h1></div></header>
-    {params.project && <nav className="tabs" aria-label={t('project')}><NavLink end to={`/p/${encodeURIComponent(params.project)}`}>{t('project')}</NavLink><NavLink to={`/p/${encodeURIComponent(params.project)}/tree`}>{t('tree')}</NavLink><NavLink to={`/p/${encodeURIComponent(params.project)}/changes`}>{t('changes')}</NavLink></nav>}
+    {params.project && <nav className="tabs" aria-label={t('project')}><NavLink end to={`/p/${encodeURIComponent(params.project)}`}>{t('project')}</NavLink><NavLink to={`/p/${encodeURIComponent(params.project)}/tree`}>{t('tree')}</NavLink><NavLink to={`/p/${encodeURIComponent(params.project)}/changes`}>{t('changes')}</NavLink><NavLink to={`/p/${encodeURIComponent(params.project)}/files`}>Files</NavLink></nav>}
     <div className="empty-state"><Icon name={future ? 'sparkle' : 'search'} size={22}/>
     <h2>{t(future ? 'futureTitle' : 'emptyTitle')}</h2><p>{t(future ? 'futureBody' : 'emptyBody')}</p></div></div>;
 }
@@ -53,7 +54,7 @@ export function App({ target = store, client = unavailableClient, searchClient =
   const projects = [...new Set(selectActivities(state).map(row => row.project).filter(Boolean))].sort().map(id => ({ id, ...projectLabel(id) }));
   const approvals = getInbox(state).pending.length;
   const location = useLocation();
-  const fullHeight = /^\/(c|p)\/[^/]+$/.test(location.pathname);
+  const fullHeight = /^\/(c|p)\/[^/]+$/.test(location.pathname) || /^\/p\/[^/]+\/files$/.test(location.pathname);
   const conversation = (conversationId?: string, embedded = false) => <ConversationPage key={conversationId} conversationId={conversationId} target={target} client={client} language={language} embedded={embedded}
     onConversation={id => navigate(`/c/${encodeURIComponent(id)}`)}/>;
   const icons = { overview: 'overview', inbox: 'inbox', search: 'search' } as const;
@@ -75,6 +76,7 @@ export function App({ target = store, client = unavailableClient, searchClient =
       <Route path="/inbox" element={<Inbox target={target} client={client}/>}/>
       <Route path="/p/:project/tree" element={<TreePage target={target} client={client} language={language}/>}/>
       <Route path="/p/:project/changes" element={<ChangesPage target={target} client={client}/>}/>
+      <Route path="/p/:project/files" element={<FilesPage target={target} client={client}/>}/>
       <Route path="/search" element={<SearchPage client={searchClient} language={language}/>}/>
       <Route path="/settings" element={<div className="page"><header className="page-header"><div className="page-title"><p className="eyebrow">{t('workspace')}</p><h1>{t('settings')}</h1></div></header><div className="settings-card">
         <label><span><strong>{t('theme')}</strong><small>{t('themeHint')}</small></span><select aria-label={t('theme')} value={theme} onChange={event => setTheme(event.target.value as Theme)}>{(['system', 'light', 'dark'] as const).map(value => <option key={value} value={value}>{t(value)}</option>)}</select></label>

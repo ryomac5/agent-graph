@@ -20,8 +20,10 @@ export interface DiffViewProps {
   files: DiffFile[]; layout: DiffLayout; attribution: Attribution; evidenceUrl: string;
   onSelectLine?: (location: LineLocation, extend: boolean) => void;
   selection?: LineLocation; selectedFile?: string;
+  /** 差分のファイル名から Files の該当の位置へ移る先。 */
+  fileHref?: (path: string) => string;
 }
-function FileDiff({ file, layout, attribution, evidenceUrl, selection, onSelectLine, selectedFile }: DiffViewProps & { file: DiffFile }) {
+function FileDiff({ file, layout, attribution, evidenceUrl, selection, onSelectLine, selectedFile, fileHref }: DiffViewProps & { file: DiffFile }) {
   const [expanded, setExpanded] = useState(file.lines.length <= LARGE_FILE_LINES);
   function cell(line: DiffLine | undefined, side?: 'old' | 'new') {
     if (!line) return <td className="diff-cell diff-empty"/>;
@@ -44,6 +46,7 @@ function FileDiff({ file, layout, attribution, evidenceUrl, selection, onSelectL
   return <article className={`diff-file${selectedFile === file.path ? ' diff-file-selected' : ''}`} aria-label={`Diff for ${file.path}`}>
     <header className="diff-file-header"><button className="btn btn-ghost btn-sm" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
       <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={14}/><Icon name="file" size={14}/>{file.path}</button>
+      {fileHref && <AppLink className="btn btn-link btn-sm" to={fileHref(file.path)} title={`Open ${file.path} in Files`} aria-label={`Open ${file.path} in Files`}><Icon name="external" size={12}/>Files</AppLink>}
       <span className="diff-stat"><span className="diff-add-count">+{file.additions}</span> <span className="diff-remove-count">−{file.deletions}</span></span>
       <AttributionBadge attribution={attribution} evidenceUrl={evidenceUrl}/></header>
     {expanded ? <div className="diff-scroll"><table className={`diff-table diff-${layout}`} aria-label={`${file.path} ${layout} diff`}>

@@ -179,7 +179,7 @@ main.full-height > * { flex: 1; min-height: 0; }
 .toolbar-icon { color: var(--text-3); }
 .tabs { display: flex; gap: var(--space-1); margin-bottom: var(--space-4); border-bottom: 1px solid var(--border); }
 .tabs a { padding: var(--space-2) var(--space-3); color: var(--text-2); font-weight: 500; border-bottom: 2px solid transparent; margin-bottom: -1px; }
-.tabs a.active { color: var(--text); border-bottom-color: var(--accent); }
+.tabs a.active, .tabs a[aria-current='page'] { color: var(--text); border-bottom-color: var(--accent); }
 .empty-state { display: grid; justify-items: center; gap: var(--space-2); max-width: 440px; margin: var(--space-10) auto; padding: var(--space-8) var(--space-6); text-align: center; border: 1px dashed var(--border-strong); border-radius: var(--radius-lg); color: var(--text-3); }
 .empty-state h1, .empty-state h2 { font-size: var(--text-md); color: var(--text); }
 .empty-state p { color: var(--text-2); font-size: var(--text-sm); }

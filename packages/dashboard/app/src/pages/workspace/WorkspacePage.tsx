@@ -67,6 +67,7 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
       <Link to={`/p/${encodeURIComponent(project)}`} aria-current="page">{ja ? 'プロジェクト' : 'Project'}</Link>
       <Link to={`/p/${encodeURIComponent(project)}/tree`}>{ja ? '委譲' : 'Tree'}</Link>
       <Link to={`/p/${encodeURIComponent(project)}/changes`}>Changes</Link>
+      <Link to={`/p/${encodeURIComponent(project)}/files`}>Files</Link>
     </nav>
     <div className="workspace-columns">
       <section className="workspace-tasks" aria-label={ja ? '作業' : 'Tasks'}>

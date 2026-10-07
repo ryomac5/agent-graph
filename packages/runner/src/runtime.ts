@@ -11,7 +11,9 @@ import { ClaudeHost, type ClaudeHostOptions } from "./hosts/claude/index.ts";
 type Launch = { cwd: string; model: ModelChoice; integrationMode?: IntegrationMode };
 import { CodexHost } from "./hosts/codex/index.ts";
 import { Recovery, type RecoveryAction } from "./recovery.ts";
-import { serveSocket, type SocketRequest, type RunnerEvent } from "./socket.ts";
+import { type SocketRequest, type RunnerEvent } from "./socket.ts";
+import { serveMcpRunner } from "./mcp/index.ts";
+import type { IntakeOptions } from "./intake/index.ts";
 import { Supervisor } from "./supervisor.ts";
 
 function readObject(value: unknown): Record<string, unknown> {
@@ -211,16 +213,7 @@ export class RunnerRuntime {
   }
 }
 
-export async function serveRunner(ledger: Ledger, path: string, options: { hosts?: readonly AgentHost[]; isolation?: "shared" | "worktree"; claude?: ClaudeHostOptions } = {}) {
+export async function serveRunner(ledger: Ledger, path: string, options: IntakeOptions & { hosts?: readonly AgentHost[]; isolation?: "shared" | "worktree"; claude?: ClaudeHostOptions } = {}) {
   const hosts = options.hosts ?? [new ClaudeHost(undefined, { enableFork: true, ...options.claude }), new CodexHost()];
-  let runtime: RunnerRuntime;
-  let ready = false;
-  const socket = await serveSocket(path, (request) => {
-    if (!ready) throw new Error("Runner is recovering; retry with a new cmd_id");
-    return runtime.command(request);
-  });
-  runtime = new RunnerRuntime(ledger, hosts, (event) => socket.publish(event), options.isolation);
-  try { await runtime.recover(); ready = true; }
-  catch (error) { await runtime.close(); await socket.close(); throw error; }
-  return { runtime, async close() { ready = false; try { await runtime.close(); } finally { await socket.close(); } } };
+  return serveMcpRunner(ledger, path, { ...options, hosts });
 }

@@ -107,6 +107,24 @@ test("interrupt records the turn; idle model changes apply to the next turn", { 
   assert.equal(turn.params.model, "other"); assert.equal(turn.params.effort, "high");
 });
 
+test("output schema is sent with every turn of the run and omitted otherwise", { timeout: TEST_TIMEOUT_MS }, async (t) => {
+  const { host, readLog } = createFixture(t);
+  const schema = { type: "object", additionalProperties: false, required: ["verdict"], properties: { verdict: { type: "string" } } };
+  const constrained = await host.start({ ...createRequest("constrained", "READY"), outputSchema: schema });
+  const stream = collect(constrained);
+  await stream.wait((events) => hasFinal(events, "READY") && hasState(events, "idle"));
+  await host.send("constrained", { text: "NEXT" });
+  await stream.wait((events) => hasFinal(events, "NEXT"));
+  const plain = await host.start(createRequest("plain", "READY"));
+  await collect(plain).wait((events) => hasFinal(events, "READY"));
+  const turns = readLog().filter((message) => message.method === "turn/start");
+  const threads = new Map([[constrained.nativeId, "constrained"], [plain.nativeId, "plain"]]);
+  const byRun = (run: string) => turns.filter((turn) => threads.get(turn.params.threadId) === run);
+  assert.equal(byRun("constrained").length, 2);
+  assert.ok(byRun("constrained").every((turn) => JSON.stringify(turn.params.outputSchema) === JSON.stringify(schema)));
+  assert.ok(byRun("plain").every((turn) => !("outputSchema" in turn.params)));
+});
+
 test("resume and fork exclude history; fork explicitly selects model and records its source", { timeout: TEST_TIMEOUT_MS }, async (t) => {
   const { host, readLog } = createFixture(t);
   const original = await host.start(createRequest("original", "READY"));

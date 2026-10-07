@@ -1,0 +1,2 @@
+{"ts":"2026-01-01T00:00:01Z","event":"codex_start","session":"fixture-001","node_id":"codex-01","parent":"root","parent_provider":"codex","parent_native_id":"s5-parent","native_id":"s5-child","task":"[redacted]","description":"[redacted]","accept":[]}
+{"ts":"2026-01-01T00:00:02Z","event":"codex_done","session":"fixture-001","node_id":"codex-01","status":"done","exit_code":0,"verify":{"passed":true,"results":[]}}

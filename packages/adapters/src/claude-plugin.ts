@@ -1,7 +1,8 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { selectShim, type RelayOptions } from "./relay.ts";
 
-export interface ClaudePluginOptions { outDir: string; shimPath: string; hookPath: string; nodePath: string }
+export interface ClaudePluginOptions extends RelayOptions { outDir: string; hookPath: string; nodePath: string }
 
 // Claude Code の hook イベントと、agent-graph-hook に渡す引数と、ツール名の matcher。
 export const HOOK_COMMANDS: readonly [string, string, string?][] = [
@@ -24,7 +25,7 @@ export function renderClaudePlugin(options: ClaudePluginOptions): Record<string,
   return {
     ".claude-plugin/plugin.json": json({ name: "agent-graph", version: "0.1.0", description: "Register agent-graph delegation" }),
     ".mcp.json": json({ mcpServers: { "agent-graph": {
-      command: options.nodePath, args: [options.shimPath], env: { AGENT_GRAPH_CLIENT: "claude" },
+      command: options.nodePath, args: [selectShim(options)], env: { AGENT_GRAPH_CLIENT: "claude" },
     } } }),
     "hooks/hooks.json": json({ hooks: Object.fromEntries(HOOK_COMMANDS.map(([event, args, matcher]) => [event, [hook(args, matcher)]])) }),
     "recommended-settings.json": json({ permissions: { deny: ["Bash(sudo *)", "Bash(git push *)"] } }),

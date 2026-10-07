@@ -1003,6 +1003,10 @@ Codex は、子の環境に `CODEX_THREAD_ID` を渡す。
 - レビュアーは、実装者と別系統のモデルにする。Codex が実装なら Claude、Claude が実装なら Codex が見る
 - 選び方は、割り当ての決まりの `reviewerDifferentFamily` に従う
 - レビューの結果は、固定した版に結び付く。版が変われば、レビューも再実施になる
+- レビュアーには、元の依頼と実装者の返答と固定した成果物を渡す。依頼がなければ、空の差分を未実装と読む
+- レビューの返答の形式は、ホストが JSON Schema で縛る。自由文の JSON は、引用符の書き損じで読めなくなる
+- Claude は `outputFormat` で縛り、検証済みの値を `final_answer` の発言として台帳に残す
+- Codex は `turn/start` の `outputSchema` で縛り、最終の返答をそのまま使う
 
 ## 画面
 

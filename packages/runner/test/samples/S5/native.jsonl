@@ -1,0 +1,3 @@
+{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"id":"s5-parent","timestamp":"2026-01-01T00:00:00Z","cwd":"/fixture","source":"cli","history_mode":"legacy"}}
+{"timestamp":"2026-01-01T00:00:01Z","method":"turn/started","params":{"threadId":"s5-child","turn":{"id":"child-turn"}}}
+{"timestamp":"2026-01-01T00:00:02Z","method":"item/completed","params":{"threadId":"s5-parent","item":{"id":"spawn-s5","type":"collabAgentToolCall","tool":"spawnAgent","status":"completed","senderThreadId":"s5-parent","receiverThreadIds":["s5-child"]}}}

@@ -1,0 +1,6 @@
+{
+  "success": { "states": ["accepted", "assigned", "running", "verifying", "reviewing", "done"], "exitCode": 0 },
+  "failure": { "states": ["accepted", "assigned", "running", "failed"], "exitCode": 1 },
+  "interruption": { "states": ["accepted", "assigned", "running", "interrupted"], "exitCode": 2 },
+  "denial": { "states": ["accepted", "denied"], "exitCode": 3 }
+}

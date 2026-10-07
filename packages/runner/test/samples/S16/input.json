@@ -1,0 +1,4 @@
+[
+  { "name": "already observed", "observeBefore": true, "env": { "CLAUDE_CODE_SESSION_ID": "terminal-claude" } },
+  { "name": "observed later", "observeBefore": false, "env": { "CLAUDE_CODE_SESSION_ID": "terminal-claude" } }
+]

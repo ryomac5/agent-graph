@@ -34,7 +34,7 @@ export async function startStaticServer(options: StaticOptions) {
     }
     const url = readRequestUrl(request);
     if (!url || request.method !== 'GET') { response.writeHead(404).end(); return; }
-    if (url.pathname === '/snapshot' || url.pathname === '/api/search') {
+    if (['/snapshot', '/conversation', '/projection', '/api/search'].includes(url.pathname)) {
       if (!authorize(request, port, upstream.token)) { response.writeHead(403).end(); return; }
       const proxy = requestHttp(new URL(url.pathname + url.search, upstream.url), {
         headers: { 'x-agent-graph-token': upstream.token },
@@ -50,7 +50,7 @@ export async function startStaticServer(options: StaticOptions) {
       const pathname = decodeURIComponent(url.pathname);
       let file = resolve(root, `.${pathname}`);
       if (file !== root && !file.startsWith(root + sep)) { response.writeHead(403).end(); return; }
-      const isRoute = url.pathname === '/' || /^\/(?:p|c)\/[^/]+(?:\/(?:tree|changes))?$/.test(url.pathname)
+      const isRoute = url.pathname === '/' || /^\/(?:p|c)\/[^/]+(?:\/(?:tree|changes|files))?$/.test(url.pathname)
         || ['/inbox', '/search', '/settings'].includes(url.pathname);
       if (isRoute) file = resolve(root, 'index.html');
       const actual = await realpath(file);

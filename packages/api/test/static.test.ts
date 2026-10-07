@@ -25,7 +25,7 @@ async function fixture(t: TestContext) {
 }
 testSocket('static SPA routes embed token, serve assets and enforce same-origin access', async t => {
   const { server, upstream } = await fixture(t);
-  for (const path of ['/', '/p/demo', '/c/demo', '/inbox', '/p/demo/tree', '/p/demo/changes', '/search', '/settings']) {
+  for (const path of ['/', '/p/demo', '/c/demo', '/inbox', '/p/demo/tree', '/p/demo/changes', '/p/demo/files', '/search', '/settings']) {
     const response = await fetch(server.url + path);
     assert.equal(response.status, 200);
     assert.match(response.headers.get('content-security-policy')!, /frame-ancestors 'none'/);
@@ -56,6 +56,14 @@ testSocket('snapshot requires token and returns the exact API snapshot', async t
   const response = await fetch(server.url + '/snapshot', { headers });
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), await (await fetch(upstream.url + '/snapshot', { headers })).json());
+  // 会話の発言と一覧の続きも、同じ検証で api へ中継する。
+  for (const path of ['/conversation?id=demo', '/projection?table=conversations']) {
+    assert.equal((await fetch(server.url + path)).status, 403);
+    const proxied = await fetch(server.url + path, { headers });
+    const direct = await fetch(upstream.url + path, { headers });
+    assert.equal(proxied.status, direct.status);
+    assert.deepEqual(await proxied.text(), await direct.text());
+  }
 });
 testSocket('WebSocket proxies hello and commands, reports runner absence and rejects a bad origin', async t => {
   const { server, upstream } = await fixture(t);

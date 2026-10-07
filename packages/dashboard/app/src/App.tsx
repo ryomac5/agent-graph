@@ -3,12 +3,13 @@ import { createKeyHandler, isTextInput, KEY_LABELS, type KeyAction } from './lib
 import { CommandDialog, CommandPalette, KeyboardSettings, useKeySettings, type Command } from './components/command/Commands.tsx';
 import { CreateTaskForm } from './components/CreateTaskForm.tsx';
 import './components/command/command.css';
-import { BrowserRouter, Link, Navigate, NavLink, Route, Routes, useLocation, useNavigate, useParams } from 'react-router';
+import { BrowserRouter, Link, NavLink, Route, Routes, useLocation, useNavigate, useParams } from 'react-router';
 import { dictionaries, type Language, type TextKey } from './lib/i18n.ts';
 import { store, useScreenStore, type ScreenStore } from './lib/store.ts';
 import type { ConversationClient } from './pages/conversation/ConversationPage.tsx';
 import { ConversationPage } from './pages/conversation/ConversationPage.tsx';
 import { HomePage } from './pages/home/HomePage.tsx';
+import { FileNotices, FileTreePanel, FileViewerPanel, useFileExplorer } from './pages/files/FilesPage.tsx';
 import { WorkspacePage } from './pages/workspace/WorkspacePage.tsx';
 import { TreePage } from './pages/tree/TreePage.tsx';
 import { ChangesPage } from './pages/changes/ChangesPage.tsx';
@@ -24,6 +25,7 @@ import type { Row } from './lib/store.ts';
 import { getRegisteredProjects, OTHER_PROJECT, resolveProjectId } from './lib/projects.ts';
 import './styles.css';
 
+const FILES_COLLAPSE_WIDTH = 1024;
 export type Theme = 'system' | 'light' | 'dark';
 export function applyTheme(theme: Theme, dark: boolean) {
   document.documentElement.dataset.theme = theme === 'system' ? (dark ? 'dark' : 'light') : theme;
@@ -34,12 +36,6 @@ function EmptyView({ title, future, t }: { title: TextKey; future?: boolean; t: 
     {params.project && <nav className="tabs" aria-label={t('project')}><NavLink end to={`/p/${encodeURIComponent(params.project)}`}>{t('project')}</NavLink><NavLink to={`/p/${encodeURIComponent(params.project)}/tree`}>{t('tree')}</NavLink><NavLink to={`/p/${encodeURIComponent(params.project)}/changes`}>{t('changes')}</NavLink></nav>}
     <div className="empty-state"><Icon name={future ? 'sparkle' : 'search'} size={22}/>
     <h2>{t(future ? 'futureTitle' : 'emptyTitle')}</h2><p>{t(future ? 'futureBody' : 'emptyBody')}</p></div></div>;
-}
-/** Files は作業場の左の列に移った。旧い経路は、開くファイルと作業ツリーを保ったまま作業場へ送る。 */
-function FilesRedirect() {
-  const params = useParams();
-  const location = useLocation();
-  return <Navigate replace to={`/p/${encodeURIComponent(params.project ?? '')}${location.search}`}/>;
 }
 const unavailableClient: ConversationClient = { command: async (_command, _payload, cmdId = '') => ({ type: 'ack', cmd_id: cmdId, ok: false, error: 'Runner unavailable' }) };
 const defaultSearchClient: SearchClient = { search: (query, signal) => createSearchClient({
@@ -96,6 +92,16 @@ export function App({ target = store, client = unavailableClient, searchClient =
   const activities = selectActivities(state);
   // 経路のプロジェクトは表示名でも識別子でも受け、投影の projects の識別子に揃える。
   const project = pathProject ? resolveProjectId(state, decodeURIComponent(pathProject)) : activities.find(item => item.conversationId === (pathConversation && decodeURIComponent(pathConversation)))?.project || projects[0]?.id;
+  const [wide, setWide] = useState(() => window.innerWidth > FILES_COLLAPSE_WIDTH);
+  const [expandedProject, setExpandedProject] = useState<{ id: string; open: boolean }>();
+  useEffect(() => {
+    const resize = () => { setWide(window.innerWidth > FILES_COLLAPSE_WIDTH); if (window.innerWidth <= FILES_COLLAPSE_WIDTH) setExpandedProject(undefined); };
+    window.addEventListener('resize', resize);
+    return () => window.removeEventListener('resize', resize);
+  }, []);
+  const filesOpen = expandedProject && expandedProject.id === project ? expandedProject.open : wide;
+  const explorer = useFileExplorer({ client, target, project: pathProject ? decodeURIComponent(pathProject) : project ?? '',
+    enabled: Boolean(project) && (filesOpen || location.pathname.endsWith('/files')) });
   const projectRoot = String(state.projection.projects?.find(row => row.id === project)?.root_path ?? '');
   function moveRow(direction: number) {
     const rows = [...(mainRef.current?.querySelectorAll<HTMLElement>('.activity-name, [data-approval-id], .delegation-select, [role="treeitem"][tabindex]') ?? [])];
@@ -132,7 +138,7 @@ export function App({ target = store, client = unavailableClient, searchClient =
   const handleKey = useMemo(() => createKeyHandler(bindings, action => executeRef.current(action)), [bindings, location.pathname, overlay]);
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
-      if (overlay) return;
+      if (overlay || (event.key === 'Escape' && event.target instanceof HTMLElement && event.target.matches('.explorer-filter input'))) return;
       contextFocus.current = event.target instanceof HTMLElement ? event.target : null;
       if (handleKey(event)) { event.preventDefault(); event.stopPropagation(); }
       else if (!isTextInput(event.target) && !event.metaKey && !event.ctrlKey && !event.altKey && ['a', 'd'].includes(event.key.toLowerCase())) event.stopPropagation();
@@ -158,7 +164,7 @@ export function App({ target = store, client = unavailableClient, searchClient =
     }))),
     ...projects.map(row => ({ id: `workspace-${row.id}`, name: `Open workspace: ${row.full}`, run: () => navigate(`/p/${encodeURIComponent(row.id)}`) })),
   ];
-  const fullHeight = /^\/(c|p)\/[^/]+$/.test(location.pathname);
+  const fullHeight = /^\/(c|p)\/[^/]+(?:\/files)?$/.test(location.pathname);
   const conversation = (conversationId?: string, embedded = false) => <ConversationPage key={conversationId} conversationId={conversationId} target={target} client={client} language={language} embedded={embedded}
     onConversation={id => navigate(`/c/${encodeURIComponent(id)}`)}/>;
   const icons = { overview: 'overview', inbox: 'inbox', search: 'search' } as const;
@@ -167,8 +173,14 @@ export function App({ target = store, client = unavailableClient, searchClient =
       {(['overview', 'inbox', 'search'] as const).map(key => <NavLink key={key} end to={key === 'overview' ? '/' : `/${key}`}><Icon name={icons[key]} size={16}/><span className="nav-label">{t(key)}</span>
         {key === 'inbox' && approvals > 0 && <span className="nav-count numeric" aria-hidden="true">{approvals}</span>}</NavLink>)}
     </nav><div className="projects"><p className="eyebrow">{t('projects')}<span className="numeric">{projects.length}</span></p>
-      {projects.length === 0 ? <p className="muted-text sidebar-empty">{t('noProjects')}</p> : <nav aria-label={t('projects')} className="nav-group">{projects.map(row => <NavLink key={row.id} to={`/p/${encodeURIComponent(row.id)}`} title={row.full} aria-label={row.full}>
-        <Icon name="folder" size={16}/><span className="project-link"><span className="truncate">{row.name}</span>{row.detail && <span className="project-path truncate">{row.detail}</span>}</span></NavLink>)}</nav>}
+      {projects.length === 0 ? <p className="muted-text sidebar-empty">{t('noProjects')}</p> : <nav aria-label={t('projects')} className="nav-group project-list">{projects.map(row => <div key={row.id} className={row.id === project && filesOpen ? 'sidebar-project expanded' : 'sidebar-project'}>
+        <div className="sidebar-project-row"><button className="icon-button" aria-label={`Toggle files for ${row.name}`} aria-expanded={row.id === project && filesOpen}
+          onClick={() => { setExpandedProject({ id: row.id, open: row.id !== project || !filesOpen }); if (row.id !== project) navigate(`/p/${encodeURIComponent(row.id)}`); }}>
+          <Icon name={row.id === project && filesOpen ? 'chevronDown' : 'chevronRight'} size={12}/></button>
+          <NavLink to={`/p/${encodeURIComponent(row.id)}`} title={row.full} aria-label={row.full}>
+            <Icon name="folder" size={16}/><span className="project-link"><span className="truncate">{row.name}</span></span></NavLink></div>
+        {row.id === project && filesOpen && <div className="sidebar-files"><FileTreePanel explorer={explorer}/><FileNotices explorer={explorer}/></div>}
+      </div>)}</nav>}
     {hasOther && <NavLink to="/p/other">Other</NavLink>}</div><NavLink className="settings-link" to="/settings"><Icon name="settings" size={16}/>{t('settings')}</NavLink></aside>
     <div className="main-column">{listError && <p role="alert" className="status-line danger list-error">{listError}</p>}<header className="topbar"><span className={`connection ${state.connection}`} role="status"><span className="connection-dot" aria-hidden="true"/>{t(state.connection)}</span>
       <div className="topbar-actions"><button className="btn btn-ghost btn-sm" onClick={() => { contextFocus.current = document.activeElement as HTMLElement; setOverlay('commands'); }}>Search and commands <kbd>{bindings.command}</kbd></button><Link className="approval-count" to="/inbox"><Icon name="inbox" size={15}/>{t('approvals')}<strong className="numeric">{approvals}</strong></Link>
@@ -180,7 +192,7 @@ export function App({ target = store, client = unavailableClient, searchClient =
       <Route path="/inbox" element={<Inbox target={target} client={client}/>}/>
       <Route path="/p/:project/tree" element={<TreePage target={target} client={client} language={language}/>}/>
       <Route path="/p/:project/changes" element={<ChangesPage target={target} client={client}/>}/>
-      <Route path="/p/:project/files" element={<FilesRedirect/>}/>
+      <Route path="/p/:project/files" element={<div className="files-page"><FileNotices explorer={explorer}/><FileViewerPanel explorer={explorer} actions={<button className="btn btn-ghost btn-xs" onClick={explorer.closeFile}><Icon name="chevronLeft" size={12}/>Back</button>}/></div>}/>
       <Route path="/search" element={<SearchPage target={target} client={searchClient} language={language}/>}/>
       <Route path="/settings" element={<div className="page"><header className="page-header"><div className="page-title"><p className="eyebrow">{t('workspace')}</p><h1>{t('settings')}</h1></div></header><div className="settings-card">
         <label><span><strong>{t('theme')}</strong><small>{t('themeHint')}</small></span><select aria-label={t('theme')} value={theme} onChange={event => setTheme(event.target.value as Theme)}>{(['system', 'light', 'dark'] as const).map(value => <option key={value} value={value}>{t(value)}</option>)}</select></label>

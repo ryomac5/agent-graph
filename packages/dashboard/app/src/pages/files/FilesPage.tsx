@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import { useSearchParams } from 'react-router';
+import { useLocation, useNavigate, useSearchParams } from 'react-router';
 import { AppLink } from '../../components/AppLink.tsx';
 import { Icon } from '../../components/Icon.tsx';
 import { store, useScreenStore, type ScreenStore } from '../../lib/store.ts';
@@ -66,14 +66,16 @@ function FileContent({ path, content }: { path: string; content: string }) {
 
 export type FileExplorer = ReturnType<typeof useFileExplorer>;
 /**
- * プロジェクトの作業ツリーの木と、選んだファイルの中身を読む。作業場の左の列と中央の表示が同じ状態を共有する。
+ * プロジェクトの作業ツリーの木と、選んだファイルの中身を読む。サイドバーと中央の表示が同じ状態を共有する。
  * 選んだファイルと作業ツリーはアドレスの path と worktree に持ち、Changes からの移動でも同じ場所を開く。
  */
 export function useFileExplorer({ client, target = store, project, enabled = true }: { client: FilesClient; target?: ScreenStore; project: string; enabled?: boolean }) {
   const state = useScreenStore(target);
   const projectId = resolveProjectId(state, project);
   const [search, setSearch] = useSearchParams();
-  const selectedPath = search.get('path') ?? '';
+  const location = useLocation();
+  const navigate = useNavigate();
+  const selectedPath = location.pathname.endsWith('/files') ? search.get('path') ?? '' : '';
   const wantedWorktree = search.get('worktree') ?? '';
   const [revision, setRevision] = useState(0);
   const [trees, setTrees] = useState<Keyed<{ status: 'loading' } | { status: 'loaded'; result: WorktreesResult } | { status: 'error'; error: string }>>({ key: '', value: { status: 'loading' } });
@@ -224,7 +226,15 @@ export function useFileExplorer({ client, target = store, project, enabled = tru
   function activate(row: TreeRow) {
     setFocusedPath(row.entry.path);
     if (row.entry.kind === 'directory') { if (row.open) collapse(row.entry); else expand(row.entry); }
-    else setParams(next => next.set('path', row.entry.path));
+    else {
+      const next = new URLSearchParams();
+      next.set('path', row.entry.path);
+      if (wantedWorktree) next.set('worktree', wantedWorktree);
+      navigate(`/p/${encodeURIComponent(project)}/files?${next}`, {
+        replace: location.pathname.endsWith('/files'),
+        state: location.pathname.endsWith('/files') ? location.state : { returnTo: location.pathname + location.search },
+      });
+    }
   }
   function move(row?: TreeRow, focus = true) {
     if (!row) return;
@@ -264,7 +274,7 @@ export function useFileExplorer({ client, target = store, project, enabled = tru
   return { project, projectId, dirs, rows, current, needle, query, setQuery, selectedPath, selectedEntry, shown, root, worktrees, worktreeValue,
     wantedWorktree, unknownWorktree, offline, items, onKeyDown, activate, move, setParams,
     selectWorktree: (value: string) => setParams(next => next.set('worktree', value)),
-    closeFile: () => setParams(next => next.delete('path')),
+    closeFile: () => { if (location.key !== 'default') navigate(-1); else navigate(`/p/${encodeURIComponent(project)}`); },
     refresh: () => { cache.current.clear(); setRevision(value => value + 1); } };
 }
 
@@ -299,7 +309,7 @@ function TreeLevel({ explorer, path }: { explorer: FileExplorer; path: string })
   });
 }
 
-/** 作業ツリーの選択と、名前の絞り込みと、ファイルの木。作業場の左の列に置く。 */
+/** 作業ツリーの選択と、名前の絞り込みと、ファイルの木。サイドバーのプロジェクトの下に置く。 */
 export function FileTreePanel({ explorer, actions }: { explorer: FileExplorer; actions?: ReactNode }) {
   const { worktrees, worktreeValue, root, rows, needle, query, setQuery, current, move, onKeyDown } = explorer;
   return <section className="explorer-tree" aria-label="Explorer">

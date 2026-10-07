@@ -8,15 +8,11 @@ import { isCurrentTerminal, readBody, readText, selectActivities, orderActivitie
 import { CreateTaskForm, type CommandClient } from '../../components/CreateTaskForm.tsx';
 import { useNow } from '../../components/RelativeTime.tsx';
 import { Icon } from '../../components/Icon.tsx';
-import { FileNotices, FileTreePanel, FileViewerPanel, useFileExplorer } from '../files/FilesPage.tsx';
 import '../../components/activity.css';
 import '../files/files.css';
 
 const TASK_PAGE_SIZE = 50;
 const ACTIVE = ['starting', 'running', 'waiting_approval', 'waiting_input'];
-/** この幅以下では、Files の列を既定で畳む。 */
-export const FILES_COLLAPSE_WIDTH = 1024;
-function readWideScreen(): boolean { return typeof window === 'undefined' || window.innerWidth > FILES_COLLAPSE_WIDTH; }
 
 export function WorkspacePage({ project: suppliedProject, target = store, client, language = 'en', renderConversation }: {
   project?: string; target?: ScreenStore; client: CommandClient; language?: Language; renderConversation?: (conversationId: string) => ReactNode;
@@ -36,9 +32,6 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
   const [error, setError] = useState('');
   const [showTemporary, setShowTemporary] = useState(false);
   const [limit, setLimit] = useState(TASK_PAGE_SIZE);
-  // 左の列には Files の木を常に置く。狭い画面では既定で畳み、ファイルを指す経路では開いて出す。
-  const [filesOpen, setFilesOpen] = useState(() => search.has('path') || readWideScreen());
-  const explorer = useFileExplorer({ client, target, project: route, enabled: filesOpen || search.has('path') });
   const allItems = selectActivities(state, true).filter(item => item.project === project && (item.section !== 'external' || Boolean(item.taskId || item.parentConversationId) || isCurrentTerminal(item, now)) && (showTemporary || !item.temporary)).sort((a, b) =>
     order === 'state' ? a.state.localeCompare(b.state) || a.name.localeCompare(b.name) : a.name.localeCompare(b.name));
   const items = allItems.slice(0, limit);
@@ -65,7 +58,7 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
     {!selected?.messages.length && <p className="empty-row">{ja ? '発言はまだありません' : 'No messages yet'}</p>}
     {selected?.conversationId && <Link className="btn btn-link btn-sm" to={`/c/${encodeURIComponent(selected.conversationId)}`}>{ja ? '会話を開く' : 'Open conversation'}</Link>}
   </div>;
-  return <div className={`workspace${filesOpen ? ' files-open' : ' files-collapsed'}`}>
+  return <div className="workspace">
     <header className="workspace-header">
       <div className="page-title"><p className="eyebrow">{ja ? 'プロジェクトの作業場' : 'Project workspace'}</p>
         <h1 className="truncate" title={label.full}><Icon name="folder" size={18}/>{label.name}</h1>
@@ -95,20 +88,12 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
       <Link to={`${prefix}/changes`}>Changes</Link>
     </nav>
     <div className="workspace-columns">
-      <aside className="workspace-files" aria-label={ja ? 'ファイルの列' : 'Files column'}>
-        {filesOpen ? <>
-          <FileTreePanel explorer={explorer} actions={<button className="icon-button" aria-label={ja ? 'ファイルの列を畳む' : 'Hide files'} title={ja ? 'ファイルの列を畳む' : 'Hide files'}
-            onClick={() => setFilesOpen(false)}><Icon name="chevronLeft" size={14}/></button>}/>
-          <FileNotices explorer={explorer}/>
-        </> : <button className="files-rail" aria-label={ja ? 'ファイルの列を開く' : 'Show files'} title={ja ? 'ファイルの列を開く' : 'Show files'} onClick={() => setFilesOpen(true)}>
-          <Icon name="chevronRight" size={14}/><span className="files-rail-label" aria-hidden="true">Files</span></button>}
-      </aside>
       <div className="workspace-center">
         <section className="workspace-tasks" aria-label={ja ? '作業' : 'Tasks'}>
           <header className="column-header"><h2>{ja ? '作業' : 'Tasks'}</h2><span className="count-pill">{items.length}</span></header>
           <div className="column-scroll">
-            {orderActivities(items).map(item => <ActivityRow key={item.id} variant="compact" selected={item.id === selected?.id && !explorer.selectedPath} activity={item} now={now} language={language}
-              onSelect={() => { setSelectedId(item.id); if (explorer.selectedPath) explorer.closeFile(); }}
+            {orderActivities(items).map(item => <ActivityRow key={item.id} variant="compact" selected={item.id === selected?.id} activity={item} now={now} language={language}
+              onSelect={() => setSelectedId(item.id)}
               actions={item.run && item.managed && [...ACTIVE, 'idle', 'unknown'].includes(item.state)
                 ? <button className="btn btn-ghost btn-xs" aria-label={pending.includes(item.id) ? (ja ? '停止要求中' : 'Stop requested') : (ja ? '実行を停止' : 'Stop run')}
                   title={ja ? '実行を停止' : 'Stop run'} disabled={!available || pending.includes(item.id)} onClick={() => void stop(item.id)}><Icon name="stop" size={12}/>{ja ? '停止' : 'Stop'}</button> : undefined}/>)}
@@ -117,11 +102,7 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
           </div>
         </section>
         <section className="workspace-conversation" aria-label={ja ? '会話' : 'Conversation'}>
-        {explorer.selectedPath ? <FileViewerPanel explorer={explorer} actions={<button className="btn btn-ghost btn-xs" onClick={explorer.closeFile}>
-          <Icon name="x" size={12}/>{ja ? '会話に戻る' : 'Back to conversation'}</button>}/> : <>
-          {/* 不明の根拠と時刻は、会話の見出しの Details に畳んで置く。 */}
-          {conversation}
-        </>}
+        {conversation}
         </section>
       </div>
       <aside className="workspace-changes" aria-label="Changes">

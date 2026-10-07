@@ -107,7 +107,7 @@ export function ChangesPage({ client, target = store, project, artifactId }: Cha
   const artifactRun = state.projection.runs?.find(row => row.id === artifact?.run_id);
   const runPlace = worktreeLabel(artifactRun)?.full;
   // ファイルは作業場の左の列の木と中央の表示で開く。
-  const fileHref = projectId ? (path: string) => `/p/${encodeURIComponent(projectId)}?${new URLSearchParams({ path, ...(runPlace ? { worktree: runPlace } : {}) })}` : undefined;
+  const fileHref = projectId ? (path: string) => `/p/${encodeURIComponent(projectId)}/files?${new URLSearchParams({ path, ...(runPlace ? { worktree: runPlace } : {}) })}` : undefined;
   const comparisonFiles = compare && typeof compare.diff === 'string' && typeof artifact?.diff === 'string' ? comparePatches(compare.diff, patch) : undefined;
   return <section className="page changes-page" aria-label="Changes and review">
     <header className="page-header"><div className="page-title"><h1>Changes</h1><p className="page-subtitle">Review a fixed artifact version</p></div>

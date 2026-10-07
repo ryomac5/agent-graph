@@ -15,6 +15,8 @@ export interface ScreenCommand {
   payload?: JsonValue;
 }
 export type ScreenInput = ScreenHello | ScreenCommand;
+export const FILE_COMMANDS = ["files.list", "files.read", "files.worktrees"] as const;
+export type { FilesRequest, FileEntry, GitMark } from "../files/index.ts";
 export type { ProjectionPatch, ProjectionRows } from "../service/projection-feed.ts";
 
 // 成果物 ID は操作の間も固定し、再送時には同じ cmd_id を保つ。

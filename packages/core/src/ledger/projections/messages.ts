@@ -30,7 +30,8 @@ export function projectMessages(facts: readonly Fact[]): MessageProjection {
   const messages = projectEntities(facts, "message", identify, prioritize);
   const messageIds = new Map(projectEntities(facts, "message", undefined, prioritize)
     .map((message) => [message.id, identify(message, message.id)]));
-  const conversationIds = projectConversationIds(facts);
+  const conversationIds = facts.some(fact => fact.kind.startsWith("message_membership."))
+    ? projectConversationIds(facts) : new Map<string, string>();
   const firstFacts = new Map<string, Fact>();
   const bodyFacts = new Map<string, Fact[]>();
   const superseded = new Set(uniqueFacts.filter((fact) => fact.supersedes).map((fact) => fact.supersedes));

@@ -33,20 +33,24 @@ export function projectEntities<E extends EntityKind>(
     const previous = fact.supersedes && byFactId.get(fact.supersedes);
     return previous && previous.subject === fact.subject;
   }).map((fact) => fact.supersedes));
-  function readPayload(fact: Fact, visited = new Set<string>()): Partial<EntityPayloads[E]> {
-    if (visited.has(fact.fact_id)) return {};
-    visited.add(fact.fact_id);
+  function readPayload(fact: Fact, visited?: Set<string>): Partial<EntityPayloads[E]> {
     const previous = fact.supersedes && byFactId.get(fact.supersedes);
-    const inherited = previous && previous.subject === fact.subject ? readPayload(previous, visited) : {};
+    if (!previous || previous.subject !== fact.subject) return (fact.payload ?? {}) as Partial<EntityPayloads[E]>;
+    const chain = visited ?? new Set<string>();
+    if (chain.has(fact.fact_id)) return {};
+    chain.add(fact.fact_id);
+    const inherited = readPayload(previous, chain);
     return { ...inherited, ...fact.payload } as Partial<EntityPayloads[E]>;
   }
   const candidates = relevant.filter((fact) => !superseded.has(fact.fact_id));
-  function isCreation(fact: Fact, visited = new Set<string>()): boolean {
-    if (visited.has(fact.fact_id)) return false;
-    visited.add(fact.fact_id);
+  function isCreation(fact: Fact, visited?: Set<string>): boolean {
     if (fact.kind.endsWith(".created") || fact.kind.endsWith(".version_created")) return true;
     const previous = fact.supersedes && byFactId.get(fact.supersedes);
-    return Boolean(previous && previous.subject === fact.subject && isCreation(previous, visited));
+    if (!previous || previous.subject !== fact.subject) return false;
+    const chain = visited ?? new Set<string>();
+    if (chain.has(fact.fact_id)) return false;
+    chain.add(fact.fact_id);
+    return isCreation(previous, chain);
   }
   const creations = candidates.filter((fact) => isCreation(fact));
   creations.sort((left, right) => {
@@ -81,8 +85,10 @@ export function projectEntities<E extends EntityKind>(
     return rows;
   }
   // 識別にも訂正と出所の優先を適用し、端点と所属で同じ ID を使う。
-  const identities = new Map([...mergeRows((id) => id)].map(([id, row]) => [id, identify(row, id)]));
-  const rows = mergeRows((id) => identities.get(id)!);
+  const original = mergeRows((id) => id);
+  const identities = new Map([...original].map(([id, row]) => [id, identify(row, id)]));
+  const rows = [...identities].some(([id, canonical]) => id !== canonical)
+    ? mergeRows((id) => identities.get(id)!) : original;
   return [...rows.values()].sort((left, right) => compareText(left.id, right.id));
 }
 

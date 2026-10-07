@@ -181,7 +181,7 @@ test("旧 DB の増分と可変行を再取り込みできる", async (t) => {
   db.prepare("INSERT INTO turns (id, session_id, at, prompt) VALUES ('later', 'live', ?, 'new')").run(LATER);
   const report = await migrateLegacyDatabases([path], ledger);
   assert.equal(report.databases, 1);
-  assert.equal(ledger.readSince(0, 100).length, initial + 3);
+  assert.equal(ledger.readSince(0, 100).length, initial + 4);
   assert.ok(ledger.readSince(0, 100).some((fact) => fact.kind === "run.state_changed" && fact.payload?.state === "ended"));
   assert.deepEqual(await migrateLegacyDatabases([path], ledger), report);
 });

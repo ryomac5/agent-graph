@@ -67,6 +67,7 @@ const END_CASES: { source: Source; evidence: EndEvidence }[] = [
   { source: "rollout-codex", evidence: { kind: "archived", location: "archived_sessions" } },
   { source: "hook", evidence: { kind: "process_check", succeeded: true, matches: false, pid: 101, start_fingerprint: "process-1" } },
   { source: "ui", evidence: { kind: "user_correction" } },
+  { source: "legacy", evidence: { kind: "legacy_delegation", table: "delegations", id: "d1", status: "done" } },
 ];
 for (const { source, evidence } of END_CASES) {
   test(`終了の根拠 ${evidence.kind} を確認する`, () => {
@@ -76,6 +77,22 @@ for (const { source, evidence } of END_CASES) {
     assert.equal(runs[0].ended_ts, LATER_TS);
   });
 }
+
+test("旧委譲の失敗は確認済みの記録だけを根拠にし、idle や別の出所を終了としない", () => {
+  const evidence = { kind: "legacy_delegation", table: "delegations", id: "d1", status: "failed" };
+  const failed = createState({ state: "failed", cause: "legacy delegation failed", end_evidence: evidence }, "legacy");
+  assert.equal(projectRuns([createRun(), failed])[0].state, "failed");
+  for (const fact of [
+    { ...failed, confidence: "inferred" as const },
+    { ...failed, source: "hook" as const },
+    createState({ state: "ended", end_evidence: { ...evidence, status: "idle" } }, "legacy"),
+    createState({ state: "ended", end_evidence: evidence }, "legacy"),
+  ]) {
+    const run = projectRuns([createRun(), fact])[0];
+    assert.equal(run.state, "unknown");
+    assert.equal(run.ended_ts, undefined);
+  }
+});
 
 for (const reason of ["no_updates", "mcp_disconnected", "runner_restarted", "runner_updated", "api_restarted", "process_list_failed"]) {
   test(`${reason} は終了にせず最後の根拠を保持する`, () => {

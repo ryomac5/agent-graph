@@ -13,6 +13,17 @@ const FACT_BATCH_SIZE = 1000;
 type Row = Record<string, SQLInputValue>;
 type LegacyVersion = Pick<Fact, "fact_id" | "source_event_id" | "source_ts" | "confidence" | "subject"> & { digest: string };
 
+function indexRows(rows: Iterable<Row>, key: (row: Row) => string): Map<string, Row[]> {
+  const index = new Map<string, Row[]>();
+  for (const row of rows) {
+    const id = key(row);
+    const matches = index.get(id) ?? [];
+    matches.push(row);
+    index.set(id, matches);
+  }
+  return index;
+}
+
 export interface MigrationReport {
   databases: number;
   rows: Record<string, number>;
@@ -50,7 +61,8 @@ function readLatestVersions(ledger: Ledger): Map<string, LegacyVersion> {
       }
       if (!Array.isArray(identity) || (identity.length !== 5 && identity.length !== 6)
         || !identity.every((value) => typeof value === "string") || identity[3] !== fact.kind) continue;
-      versions.set(JSON.stringify(identity.slice(0, 4)), { ...fact, digest: identity[4] });
+      versions.set(JSON.stringify(identity.slice(0, 4)), { fact_id: fact.fact_id, source_event_id: fact.source_event_id,
+        source_ts: fact.source_ts, confidence: fact.confidence, subject: fact.subject, digest: identity[4] });
     }
     seq = facts.at(-1)!.seq;
   }
@@ -63,6 +75,20 @@ function readText(row: Row, key: string): string | undefined {
   return row[key] == null ? undefined : String(row[key]);
 }
 class UnsupportedRow extends Error {}
+
+const NAME_LENGTH = 160;
+function normalizeLegacyRequest(body: string | undefined): string {
+  const text = body?.trim() ?? "";
+  return text.replace(/^無人実行です。[ \t]*質問せずに[^\n]*(?:\n|$)/u, "").trim();
+}
+function extractTaskTitle(body: string | undefined): string {
+  if (!body?.trim()) return "";
+  const heading = body.match(/^\s*#{1,6}\s+(?:タスク|Task)\s+[^:：\n]+[:：]\s*(.+)$/mi)
+    ?? body.match(/^\s*#{1,6}\s+(.+)$/m);
+  if (heading) return heading[1].trim().slice(0, NAME_LENGTH);
+  return body.split(/\n|(?<=[。.!?？！])/u).map(line => line.trim()).find(line => line
+    && !/^(無人実行です|質問せずに|Review a delegated task|You are (?:an? |the )|<)/i.test(line))?.slice(0, NAME_LENGTH) ?? "";
+}
 
 function readJson(row: Row, key: string): JsonValue {
   const value = readText(row, key);
@@ -85,12 +111,79 @@ function appendFact(ledger: Ledger, input: FactInput): AppendResult {
   }
 }
 
+function isUnreadableDatabase(error: unknown): boolean {
+  return error instanceof Error && "code" in error
+    && (["SQLITE_CORRUPT", "SQLITE_NOTADB", "SQLITE_CANTOPEN", "ENOENT", "EACCES", "EPERM"].includes(String(error.code))
+      || (error.code === "ERR_SQLITE_ERROR" && "errcode" in error && [11, 14, 26].includes(Number(error.errcode))));
+}
+
+// 親と子が別の旧 DB に保存されるため、委譲の対応表は変換対象全体で持つ。
+function readDelegationCatalog(paths: readonly string[]): Row[] {
+  const catalog = new Map<string, Row>();
+  const sessions = new Map<string, Row>();
+  for (const path of paths) {
+    let db: DatabaseSync | undefined;
+    try {
+      db = new DatabaseSync(path, { readOnly: true });
+      const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map(row => String(row.name)));
+      if (!tables.has("repos") || !tables.has("delegations")) continue;
+      const namespace = JSON.stringify(db.prepare("SELECT key FROM repos ORDER BY key").all().map(row => String(row.key)));
+      if (tables.has("sessions")) {
+        const hidden = tables.has("turns") && db.prepare("PRAGMA table_info(turns)").all().some(row => row.name === "hidden");
+        const prompts = new Map<string, SQLInputValue>();
+        if (tables.has("turns")) for (const row of db.prepare(`SELECT session_id, prompt FROM turns
+          WHERE trim(coalesce(prompt, '')) <> '' ${hidden ? "AND coalesce(hidden, 0) <> 1" : ""}
+          ORDER BY at, id`).iterate()) {
+          const id = String(row.session_id);
+          if (!prompts.has(id)) prompts.set(id, row.prompt);
+        }
+        for (const session of db.prepare("SELECT id FROM sessions").iterate()) {
+          sessions.set(JSON.stringify([namespace, String(session.id)]), { ...session, prompt: prompts.get(String(session.id)) ?? null, namespace });
+        }
+      }
+      const tasks = indexRows(tables.has("tasks") ? db.prepare("SELECT id, title FROM tasks").iterate() : [], row => String(row.id));
+      const requests = indexRows(tables.has("delegation_requests") ? db.prepare(`SELECT delegation_id,
+        json_extract(request, '$.task') AS task FROM delegation_requests WHERE json_valid(request)`).iterate() : [], row => String(row.delegation_id));
+      for (const row of db.prepare("SELECT * FROM delegations ORDER BY rowid").iterate()) {
+        const identity = JSON.stringify([namespace, String(row.id)]);
+        const matchingTasks = row.task_id == null ? [] : tasks.get(String(row.task_id)) ?? [];
+        catalog.set(identity, { id: row.id, session_id: row.session_id, parent_id: row.parent_id,
+          role: row.role, title: row.title || (matchingTasks.length === 1 ? matchingTasks[0].title : null), status: row.status, child_session_id: row.child_session_id ?? null,
+          task: row.task ?? requests.get(String(row.id))?.[0]?.task ?? null,
+          ended_at: row.ended_at ?? null, namespace, file_path: resolve(path) } as Row);
+      }
+    } catch (error) {
+      if (!isUnreadableDatabase(error)) throw error;
+      // 読めない入力の報告は、バックアップを取る本経路で行う。
+    } finally { db?.close(); }
+  }
+  const delegations = [...catalog.values()];
+  const sessionsById = indexRows(sessions.values(), row => String(row.id));
+  const sessionsByRequest = indexRows(sessions.values(), row => normalizeLegacyRequest(readText(row, "prompt")));
+  const delegationsByRequest = indexRows(delegations, row => normalizeLegacyRequest(readText(row, "task")));
+  // 同じ依頼を持つ子が複数の DB にあれば、終了の記録をどの子にも断定しない。
+  for (const row of delegations) {
+    const request = normalizeLegacyRequest(readText(row, "task"));
+    const explicit = [...new Set([...(sessionsById.get(readText(row, "child_session_id") ?? "") ?? []),
+      ...(sessionsById.get(String(row.id)) ?? [])])].filter(session => String(session.id) !== String(row.session_id));
+    const uniqueRequest = request && delegationsByRequest.get(request)?.length === 1;
+    const matches = explicit.length ? explicit : uniqueRequest
+      ? (sessionsByRequest.get(request) ?? []).filter(session => String(session.id) !== String(row.session_id)) : [];
+    if (matches.length === 1) {
+      row.target_namespace = matches[0].namespace;
+      row.target_session_id = matches[0].id;
+    }
+  }
+  return delegations;
+}
+
 /** 件数は今回読み取った変換対象を数える。再送による duplicate も同じ件数を返す。 */
 export async function migrateLegacyDatabases(
   paths: readonly string[], ledger: Ledger, options: MigrationOptions = {},
 ): Promise<MigrationReport> {
   const report: MigrationReport = { databases: 0, rows: {}, facts: {}, unsupported: 0, errors: [], unknown: 0, inferred: 0 };
   const versions = readLatestVersions(ledger);
+  const catalog = readDelegationCatalog([...new Set(paths.map(value => resolve(value)))]);
   const seenPaths = new Set<string>();
   const locations = new Map<string, ProjectLocation>();
   // 同じパスは 1 回だけ git に問い合わせる。判定は導入の登録と同じ関数で行う。
@@ -129,7 +222,7 @@ export async function migrateLegacyDatabases(
         try {
           // 各取り込みは専用の複製を読む。保存した最新のバックアップとは分ける。
           const batch = options.batch ?? (ledger as Partial<BatchLedger>).batch ?? ((operation) => operation());
-          batch(() => migrateSnapshot(snapshot, ledger, report, versions, path, locate));
+          batch(() => migrateSnapshot(snapshot, ledger, report, versions, path, locate, catalog));
           options.afterDatabase?.();
         } finally {
           snapshot.close();
@@ -140,10 +233,8 @@ export async function migrateLegacyDatabases(
       report.databases += 1;
     } catch (error) {
       // 読めない入力だけを飛ばす。バックアップと台帳の障害は呼び出し元へ返す。
-      if (!readingInput || !(error instanceof Error && "code" in error
-        && (["SQLITE_CORRUPT", "SQLITE_NOTADB", "SQLITE_CANTOPEN", "ENOENT", "EACCES", "EPERM"].includes(String(error.code))
-          || (error.code === "ERR_SQLITE_ERROR" && "errcode" in error && [11, 14, 26].includes(Number(error.errcode)))))) throw error;
-      report.errors.push({ path: inputPath, reason: error.message });
+      if (!readingInput || !isUnreadableDatabase(error)) throw error;
+      report.errors.push({ path: inputPath, reason: (error as Error).message });
     } finally {
       db?.close();
     }
@@ -154,6 +245,7 @@ export async function migrateLegacyDatabases(
 function migrateSnapshot(
   db: DatabaseSync, ledger: Ledger, report: MigrationReport, versions: Map<string, LegacyVersion>, path: string,
   locate: (root: string) => ProjectLocation,
+  catalog: Row[],
 ): void {
   const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => String(row.name)));
   function readRows(table: string): Row[] {
@@ -165,10 +257,45 @@ function migrateSnapshot(
   const repos = readRows("repos");
   const sessions = readRows("sessions");
   const sessionById = new Map(sessions.map((row) => [String(row.id), row]));
+  const turns = readRows("turns");
+  const delegations = readRows("delegations");
+  const oldTasks = tables.has("tasks") ? db.prepare("SELECT * FROM tasks ORDER BY graph_id, id").all() as Row[] : [];
+  const tasksById = indexRows(oldTasks, row => String(row.id));
+  const catalogById = new Map(catalog.map(row => [JSON.stringify([row.namespace, String(row.id)]), row]));
+  const namespace = JSON.stringify(repos.map((row) => String(row.key)).sort());
+  const firstRequests = new Map<string, string>();
+  for (const row of [...turns].sort((a, b) => String(a.at).localeCompare(String(b.at)) || String(a.id).localeCompare(String(b.id)))) {
+    if (row.hidden === 1 || !readText(row, "prompt")?.trim()) continue;
+    if (!firstRequests.has(String(row.session_id))) firstRequests.set(String(row.session_id), String(row.prompt));
+  }
+  // 親 session_id は実行先に使わず、明示 ID または一意の依頼本文で子を結ぶ。
+  const delegationBySession = new Map<string, Row>();
+  for (const row of catalog) {
+    if (row.target_namespace !== namespace || !row.target_session_id) continue;
+    const id = String(row.target_session_id);
+    if (!delegationBySession.has(id)) delegationBySession.set(id, row);
+  }
+  function titleDelegation(row: Row): string {
+    const title = extractTaskTitle(readText(row, "title")) || extractTaskTitle(readText(row, "task"));
+    if (row.role !== "review") return title;
+    const parent = catalogById.get(JSON.stringify([row.namespace, readText(row, "parent_id")]));
+    const original = parent ? extractTaskTitle(readText(parent, "title")) || extractTaskTitle(readText(parent, "task"))
+      : title.replace(/^Review(?: of|:)\s*/i, "");
+    return original ? `Review of ${original}` : "";
+  }
+  function nameSession(row: Row): string {
+    const delegation = delegationBySession.get(String(row.id));
+    const oldTask = tasksById.get(String(row.id)) ?? [];
+    const request = firstRequests.get(String(row.id));
+    const title = extractTaskTitle(request);
+    return (delegation ? titleDelegation(delegation) : "")
+      || (oldTask.length === 1 ? extractTaskTitle(readText(oldTask[0], "title")) : "")
+      || (title && /^Review a delegated task\./i.test(request?.trim() ?? "") ? `Review of ${title}` : title)
+      || extractTaskTitle(readText(row, "goal"));
+  }
   const locations = new Map(repos.map((row) => [String(row.key), locate(String(row.root_path))]));
   const projects = new Map([...locations].map(([key, location]) => [key, location.repository_id]));
   // DB の置き場が変わっても、repo key と旧行の主キーから同じ識別子を作る。
-  const namespace = JSON.stringify(repos.map((row) => String(row.key)).sort());
   function identify(entity: string, id: string): string {
     return `legacy-${hash(JSON.stringify([namespace, entity, id]))}`;
   }
@@ -230,7 +357,7 @@ function migrateSnapshot(
     }
     if (!projects.has(String(row.repo_key))) throw new UnsupportedRow("旧 session の repo がありません");
     emit("sessions", id, "task.created", `task:${taskId}`, {
-      purpose: readText(row, "goal") ?? "", project: projects.get(String(row.repo_key))!, state: "open",
+      name: nameSession(row), purpose: readText(row, "goal") ?? "", project: projects.get(String(row.repo_key))!, state: "open",
       ...(planner ? { origin: "planner" } : {}),
     }, ts);
     emit("sessions", id, "alias.created", `alias:${identify("alias", id + String(row.name))}`, {
@@ -248,15 +375,21 @@ function migrateSnapshot(
       ...(row.pid == null ? {} : { pid: Number(row.pid) }),
       ...(row.pid_started_at == null ? {} : { start_fingerprint: String(row.pid_started_at) }),
     }, ts);
+    const delegation = delegationBySession.get(id);
+    const completed = delegation && (delegation.status === "done" || delegation.status === "failed");
     const ended = row.status === "ended";
     const explicit = ended && row.ended_reason === "explicit";
     const unknown = ended && !explicit;
     emit("sessions", id, "run.state_changed", `run:${runId(id)}`, {
-      state: unknown ? "unknown" : explicit ? "ended" : row.status === "waiting" ? "waiting_input" : "running",
-      ...(explicit ? { ended_ts: readText(row, "ended_at") ?? ts, end_evidence: { kind: "explicit", legacy_reason: "explicit" } } : {}),
-      ...(unknown ? { reason: `legacy ended inference: ${readText(row, "ended_reason") ?? "missing evidence"}`,
+      state: completed ? delegation.status === "done" ? "ended" : "failed"
+        : unknown ? "unknown" : explicit ? "ended" : row.status === "waiting" ? "waiting_input" : "running",
+      ...(completed ? { ended_ts: readText(delegation, "ended_at") ?? readText(row, "ended_at") ?? ts,
+        end_evidence: { kind: "legacy_delegation", table: "delegations", id: String(delegation.id), status: String(delegation.status), file_path: String(delegation.file_path) },
+        ...(delegation.status === "failed" ? { cause: "legacy delegation failed" } : {}) } : {}),
+      ...(explicit && !completed ? { ended_ts: readText(row, "ended_at") ?? ts, end_evidence: { kind: "explicit", legacy_reason: "explicit" } } : {}),
+      ...(unknown && !completed ? { reason: `legacy ended inference: ${readText(row, "ended_reason") ?? "missing evidence"}`,
         last_evidence: { status: "ended", ended_reason: readText(row, "ended_reason") ?? null, ended_at: readText(row, "ended_at") ?? null } } : {}),
-    }, readText(row, "ended_at") ?? readText(row, "last_seen_at") ?? ts, unknown ? "unknown" : "confirmed");
+    }, readText(row, "ended_at") ?? readText(row, "last_seen_at") ?? ts, unknown && !completed ? "unknown" : "confirmed");
     for (const [column, type, confidence] of [
       ["continued_in", "continued", "confirmed"], ["source_thread_id", "copied", "inferred"],
     ] as const) {
@@ -277,7 +410,7 @@ function migrateSnapshot(
       }, ts, confidence);
     }
   });
-  migrateRows("turns", readRows("turns"), (row) => {
+  migrateRows("turns", turns, (row) => {
     const session = sessionById.get(String(row.session_id));
     if (!session || !migratedSessions.has(String(row.session_id))) throw new UnsupportedRow("旧 turn の session がありません、または未対応です");
     readProvider(session);
@@ -296,7 +429,6 @@ function migrateSnapshot(
   });
   const requestRows = readRows("delegation_requests");
   const requests = new Map<string, JsonValue>();
-  const delegations = readRows("delegations");
   const delegationById = new Map(delegations.map((row) => [String(row.id), row]));
   migrateRows("delegation_requests", requestRows, (row) => {
     const id = String(row.delegation_id);

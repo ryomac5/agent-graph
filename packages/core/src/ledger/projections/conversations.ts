@@ -53,7 +53,8 @@ export function projectConversations(
   (fact) => [fact.source.startsWith("host-") ? 1 : 0]);
   const tasksById = new Map(tasks.map((task) => [task.id, task]));
   // 差分反映の索引が渡された場合や名前が確定済みの場合は、本文を再投影しない。
-  const needsProvisionalNames = names === undefined && rows.some(conversation => conversation.type !== "unattended"
+  const needsProvisionalNames = names === undefined && facts.some(fact => fact.kind.startsWith("message."))
+    && rows.some(conversation => conversation.type !== "unattended"
     && conversation.type !== "subagent" && !(conversation as ProjectedConversation).name
     && !tasksById.get(conversation.task_id ?? "")?.name);
   const provisionalNames = names ?? (needsProvisionalNames ? projectProvisionalNames(facts) : new Map<string, string>());

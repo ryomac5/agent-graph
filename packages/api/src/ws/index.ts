@@ -16,6 +16,7 @@ import type { RedactionRules } from "../../../core/src/ledger/redact.ts";
 import type { SettingsService } from "../settings/index.ts";
 
 export const DEFAULT_WS_PORT = 7421;
+const MAX_OPEN_CONVERSATIONS = 10;
 const MAX_FRAME_BYTES = 1024 * 1024;
 const MAX_BUFFERED_BYTES = 4 * MAX_FRAME_BYTES;
 export interface WebSocketOptions {
@@ -27,9 +28,9 @@ export interface WebSocketOptions {
 }
 
 export async function startWebSocketServer(service: ReturnType<typeof openObservationService>, options: WebSocketOptions = {}) {
-  const feed = new ProjectionFeed(service.dbPath, service.catchUp, options.patchRetention);
+  let feed!: ProjectionFeed;
   const token = createToken();
-  const clients = new Map<WebSocket, Set<string> | undefined>();
+  const clients = new Map<WebSocket, { tables?: Set<string>; conversations: Set<string> }>();
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
   function send(socket: WebSocket, message: unknown): void {
     if (socket.readyState !== WebSocket.OPEN) return;
@@ -37,11 +38,13 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
     socket.send(JSON.stringify(message));
   }
   function sendPatch(socket: WebSocket, patch: ProjectionPatch): void {
-    const tables = clients.get(socket);
-    send(socket, tables ? { ...patch, changes: Object.fromEntries(Object.entries(patch.changes)
-      .filter(([table]) => tables.has(table))) } : patch);
+    const subscription = clients.get(socket)!;
+    const scoped = feed.scopePatch(patch, subscription.conversations);
+    send(socket, subscription.tables ? { ...scoped, changes: Object.fromEntries(Object.entries(scoped.changes)
+      .filter(([table]) => subscription.tables!.has(table))) } : scoped);
   }
   function refresh(): void {
+    if (!feed) return;
     const update = feed.refresh();
     if (!update) return;
     for (const socket of clients.keys()) {
@@ -53,7 +56,10 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
   }
   const runner = new RunnerClient(options.runnerPath ?? runnerSocketPath(), (event) => {
     if ("seq" in event) pollObservation(refresh);
-    else for (const socket of clients.keys()) send(socket, { type: "delta", ...event.delta });
+    else for (const [socket, subscription] of clients) {
+      const conversation = feed.runConversation(event.delta.runId);
+      if (conversation && [...subscription.conversations].some(id => feed.conversationId(id) === conversation)) send(socket, { type: "delta", ...event.delta });
+    }
   });
   let port = options.port ?? DEFAULT_WS_PORT;
   const searchDb = new DatabaseSync(service.dbPath, { readOnly: true });
@@ -66,6 +72,18 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
     if (!authorize(request, port, token)) { response.writeHead(403).end(); return; }
     const path = readRequestUrl(request)?.pathname;
     if (path === "/api/search") { refresh(); search(request, response); return; }
+    if (request.method === "GET" && (path === "/conversation" || path === "/projection")) {
+      refresh();
+      const params = readRequestUrl(request)!.searchParams;
+      const id = params.get("id");
+      const table = params.get("table");
+      if (path === "/conversation" && !id || path === "/projection" && (!table || !(PROJECTION_TABLES as readonly string[]).includes(table) || ["messages", "message_memberships"].includes(table))) {
+        response.writeHead(400).end(); return;
+      }
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify(path === "/conversation" ? feed.conversation(id!, params.get("after") ?? "") : feed.list(table!, params.get("after") ?? "")));
+      return;
+    }
     if (request.method !== "GET" || path !== "/snapshot") { response.writeHead(404).end(); return; }
     refresh();
     response.writeHead(200, { "Content-Type": "application/json" });
@@ -88,10 +106,12 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
       if (!message || typeof message !== "object" || Array.isArray(message)) { socket.close(1008, "Invalid message"); return; }
       if (message.type === "hello") {
         const tables = message.scope?.tables;
+        const conversations = message.scope?.conversations;
         if (!Number.isSafeInteger(message.seq) || message.seq < 0
           || message.generation !== undefined && (!Number.isSafeInteger(message.generation) || message.generation < 0)
           || tables !== undefined && (!Array.isArray(tables) || tables.some((table: unknown) =>
-            typeof table !== "string" || !(PROJECTION_TABLES as readonly string[]).includes(table)))) {
+            typeof table !== "string" || table !== "projects" && !(PROJECTION_TABLES as readonly string[]).includes(table)))
+          || conversations !== undefined && (!Array.isArray(conversations) || conversations.length > MAX_OPEN_CONVERSATIONS || conversations.some((id: unknown) => typeof id !== "string" || !id))) {
           socket.close(1008, "Invalid hello"); return;
         }
         refresh();
@@ -101,7 +121,7 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
           send(socket, { type: "resync", reason: "Patch retention exhausted or projection rebuilt" });
           return;
         }
-        clients.set(socket, tables === undefined ? undefined : new Set<string>(tables));
+        clients.set(socket, { tables: tables === undefined ? undefined : new Set<string>(tables), conversations: new Set<string>(conversations ?? []) });
         for (const patch of patches) sendPatch(socket, patch);
       } else if (message.type === "cmd" && clients.has(socket) && typeof message.cmd_id === "string"
         && message.cmd_id.length > 0 && typeof message.command === "string" && message.command.length > 0) {
@@ -131,12 +151,13 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
       server.once("error", reject);
       server.listen(port, "127.0.0.1", () => { server.off("error", reject); resolve(); });
     });
-  } catch (error) { runner.close(); feed.close(); searchDb.close(); wss.close(); throw error; }
+    feed = new ProjectionFeed(service.dbPath, service.catchUp, options.patchRetention);
+  } catch (error) { runner.close(); feed?.close(); searchDb.close(); wss.close(); server.close(); throw error; }
   port = (server.address() as { port: number }).port;
   searchOptions.port = port;
   const timer = setInterval(() => pollObservation(refresh), PROJECTION_POLL_MS);
   return {
-    url: `http://127.0.0.1:${port}`, wsUrl: `ws://127.0.0.1:${port}/ws`, token, runner,
+    url: `http://127.0.0.1:${port}`, wsUrl: `ws://127.0.0.1:${port}/ws`, token, runner, feed,
     resync() {
       for (const socket of clients.keys()) send(socket, { type: "resync", reason: "Projection rebuilt" });
       clients.clear();

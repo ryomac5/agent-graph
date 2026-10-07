@@ -30,6 +30,11 @@ function makeMessage(id: string): FactInput {
   return { source: "host-claude", source_event_id: id, source_ts: new Date().toISOString(), confidence: "confirmed",
     kind: "message.created", subject: `message:${id}`, payload: { provider: "claude", native_id: id, role: "assistant", version: 1, body: id, body_state: "stored" } };
 }
+// 発言は所属する会話を開いた画面にだけ届くので、所属の事実も合わせて作る。
+function makeMembership(id: string, conversationId: string): FactInput {
+  return { source: "host-claude", source_event_id: `${id}:membership`, source_ts: new Date().toISOString(), confidence: "confirmed",
+    kind: "message_membership.created", subject: `message_membership:${id}`, payload: { message_id: id, conversation_id: conversationId, active: true } };
+}
 
 test("api cmd starts a host; patches and durable events survive api restart and command replay", { timeout: 15_000 }, async (t) => {
   const directory = mkdtempSync(join(tmpdir(), "hosts-integration-"));
@@ -52,7 +57,8 @@ test("api cmd starts a host; patches and durable events survive api restart and 
       const messages: any[] = [];
       socket.on("message", (data: Buffer) => messages.push(JSON.parse(data.toString())));
       await new Promise<void>((resolve, reject) => { socket.once("open", resolve); socket.once("error", reject); });
-      socket.send(JSON.stringify({ type: "hello", ...snapshot }));
+      // 発言の差分は、開いている会話に限って届く。
+      socket.send(JSON.stringify({ type: "hello", ...snapshot, scope: { conversations: ["c1"] } }));
       await new Promise<void>((resolve) => { socket.once("pong", resolve); socket.ping(); });
       return { socket, messages, async command(command: string, payload: object, cmd_id = command) {
         socket.send(JSON.stringify({ type: "cmd", command, payload, cmd_id }));
@@ -71,6 +77,7 @@ test("api cmd starts a host; patches and durable events survive api restart and 
     assert.ok(projectEntityRecords<{ base_sha: string }>(ledger.readSince(0, 100), "run")[0].base_sha);
     await api!.close(); api = undefined; service!.close(); service = undefined;
     host.emit("r1", { type: "fact", fact: makeMessage("during-api-downtime") });
+    host.emit("r1", { type: "fact", fact: makeMembership("during-api-downtime", "c1") });
     host.emit("r1", { type: "state", state: "waiting_input" });
     await waitUntil(() => ledger.readSince(0, 100).some((fact) => fact.source_event_id === "during-api-downtime"));
     assert.equal(host.starts.length, 1);
@@ -79,15 +86,17 @@ test("api cmd starts a host; patches and durable events survive api restart and 
     await resumed.command("start", start, "stable");
     assert.equal(host.starts.length, 1);
     host.emit("r1", { type: "fact", fact: makeMessage("after-api-restart") });
+    host.emit("r1", { type: "fact", fact: makeMembership("after-api-restart", "c1") });
     await waitUntil(() => resumed.messages.some((message) => message.type === "patch"
       && message.changes.messages?.upsert.some((row: any) => row.id === createNativeId("claude", "after-api-restart"))));
     const feed = new ProjectionFeed(dbPath, service!.catchUp);
     const projection = feed.snapshot().projection;
-    assert.ok(projection.messages.some((message) => message.id === createNativeId("claude", "during-api-downtime")));
-    assert.equal(projection.messages.length, 2);
+    const conversation = feed.conversation("c1").projection;
+    assert.ok(conversation.messages.some((message) => message.id === createNativeId("claude", "during-api-downtime")));
+    assert.equal(conversation.messages.length, 2);
     assert.equal(projection.runs[0].state, "waiting_input");
     service!.rebuild(); assert.equal(feed.refresh(), "resync"); assert.deepEqual(feed.snapshot().projection, projection);
-    resumed.socket.send(JSON.stringify({ type: "hello", seq: feed.snapshot().seq, generation: feed.snapshot().generation }));
+    resumed.socket.send(JSON.stringify({ type: "hello", seq: feed.snapshot().seq, generation: feed.snapshot().generation, scope: { conversations: ["c1"] } }));
     await new Promise<void>((resolve) => { resumed.socket.once("pong", resolve); resumed.socket.ping(); });
     feed.close();
     await resumed.command("send", { runId: "r1", input: { text: "next" } });
@@ -109,21 +118,22 @@ test("message patches use native identity and restore downtime facts without soc
   let service = openObservationService({ dbPath });
   let feed = new ProjectionFeed(dbPath, service.catchUp);
   try {
-    ledger.append(makeMessage("before-api-restart"));
+    const opened = new Set(["c-feed"]);
+    ledger.append(makeMessage("before-api-restart")); ledger.append(makeMembership("before-api-restart", "c-feed"));
     const first = feed.refresh();
     assert.ok(first && first !== "resync");
-    assert.equal(first.changes.messages.upsert[0].id, createNativeId("claude", "before-api-restart"));
+    assert.equal(feed.scopePatch(first, opened).changes.messages.upsert[0].id, createNativeId("claude", "before-api-restart"));
     feed.close(); service.close();
-    ledger.append(makeMessage("during-api-downtime"));
+    ledger.append(makeMessage("during-api-downtime")); ledger.append(makeMembership("during-api-downtime", "c-feed"));
     service = openObservationService({ dbPath });
     feed = new ProjectionFeed(dbPath, service.catchUp);
-    assert.ok(feed.snapshot().projection.messages.some((row) => row.id === createNativeId("claude", "during-api-downtime")));
-    ledger.append(makeMessage("after-api-restart"));
+    assert.ok(feed.conversation("c-feed").projection.messages.some((row) => row.id === createNativeId("claude", "during-api-downtime")));
+    ledger.append(makeMessage("after-api-restart")); ledger.append(makeMembership("after-api-restart", "c-feed"));
     const patch = feed.refresh();
     assert.ok(patch && patch !== "resync");
-    assert.equal(patch.changes.messages.upsert[0].id, createNativeId("claude", "after-api-restart"));
+    assert.equal(feed.scopePatch(patch, opened).changes.messages.upsert[0].id, createNativeId("claude", "after-api-restart"));
     const projection = feed.snapshot().projection;
-    assert.equal(projection.messages.length, 3);
+    assert.equal(feed.conversation("c-feed").projection.messages.length, 3);
     service.rebuild();
     assert.equal(feed.refresh(), "resync");
     assert.deepEqual(feed.snapshot().projection, projection);

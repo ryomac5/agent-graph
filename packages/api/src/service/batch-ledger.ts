@@ -4,7 +4,7 @@ import { BUSY_TIMEOUT_MS, openLedger } from "../../../core/src/ledger/index.ts";
 import type { AppendResult, Fact, FactInput, Ledger } from "../../../core/src/ledger/index.ts";
 
 const STAGING_FACT_LIMIT = 4096;
-const BATCH_CACHE_KIB = 128 * 1024;
+const BATCH_CACHE_KIB = 64 * 1024;
 export interface BatchLedger extends Ledger {
   batch<T>(operation: () => T): T;
 }

@@ -7,7 +7,7 @@ import { getProjectName, resolveProjectId } from '../../lib/projects.ts';
 import { ActivityRow, providerName } from '../../components/ActivityRow.tsx';
 import { readBody, readText, selectActivities, orderActivities, summarizeChanges } from '../../components/activity.ts';
 import { CreateTaskForm, type CommandClient } from '../../components/CreateTaskForm.tsx';
-import { RelativeTime, useNow } from '../../components/RelativeTime.tsx';
+import { useNow } from '../../components/RelativeTime.tsx';
 import { Icon } from '../../components/Icon.tsx';
 import { FileNotices, FileTreePanel, FileViewerPanel, useFileExplorer } from '../files/FilesPage.tsx';
 import '../../components/activity.css';
@@ -109,7 +109,7 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
         <section className="workspace-tasks" aria-label={ja ? '作業' : 'Tasks'}>
           <header className="column-header"><h2>{ja ? '作業' : 'Tasks'}</h2><span className="count-pill">{items.length}</span></header>
           <div className="column-scroll">
-            {orderActivities(items).map(item => <ActivityRow key={item.id} variant="list" selected={item.id === selected?.id && !explorer.selectedPath} activity={item} now={now} language={language}
+            {orderActivities(items).map(item => <ActivityRow key={item.id} variant="compact" selected={item.id === selected?.id && !explorer.selectedPath} activity={item} now={now} language={language}
               onSelect={() => { setSelectedId(item.id); if (explorer.selectedPath) explorer.closeFile(); }}
               actions={item.run && item.managed && [...ACTIVE, 'idle', 'unknown'].includes(item.state)
                 ? <button className="btn btn-ghost btn-xs" aria-label={pending.includes(item.id) ? (ja ? '停止要求中' : 'Stop requested') : (ja ? '実行を停止' : 'Stop run')}
@@ -121,8 +121,7 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
         <section className="workspace-conversation" aria-label={ja ? '会話' : 'Conversation'}>
         {explorer.selectedPath ? <FileViewerPanel explorer={explorer} actions={<button className="btn btn-ghost btn-xs" onClick={explorer.closeFile}>
           <Icon name="x" size={12}/>{ja ? '会話に戻る' : 'Back to conversation'}</button>}/> : <>
-          {selected?.state === 'unknown' && <div className="banner banner-unknown"><Icon name="unknown" size={14}/>{ja ? '不明 — 最後の根拠' : 'Unknown — Last evidence'}: <RelativeTime value={readText(selected.run?.last_evidence_ts)} now={now} language={language}/>
-            {selected.conversationId && <Link className="btn btn-link btn-sm" to={`/c/${encodeURIComponent(selected.conversationId)}`}>{ja ? '根拠を確認' : 'Review evidence'}</Link>}</div>}
+          {/* 不明の根拠と時刻は、会話の見出しの Details に畳んで置く。 */}
           {conversation}
         </>}
         </section>

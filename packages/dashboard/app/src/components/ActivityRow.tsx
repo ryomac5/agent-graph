@@ -12,8 +12,9 @@ export function providerName(provider: string): string { return PROVIDER_NAMES[p
 export function AgentCell({ provider, model, effort, language = 'en' }: { provider: string; model: string; effort?: string; language?: Language }) {
   return <span className="agent-cell">
     {provider && <span className={`provider-mark provider-${provider}`}>{providerName(provider)}</span>}
+    {/* モデルが記録されていないときは provider だけを出す。記録なしの文言は行ごとに繰り返さない。 */}
     {model ? <span className="agent-model" title={model}>{model}</span>
-      : <span className="muted-text" title={language === 'ja' ? 'モデルの記録がありません' : 'No model recorded for this run'}>{language === 'ja' ? 'モデル未記録' : 'No model recorded'}</span>}
+      : !provider && <span className="muted-text" title={language === 'ja' ? 'エージェントの記録がありません' : 'No agent recorded for this run'}>—</span>}
     {effort && <span className="chip chip-quiet">{effort}</span>}
   </span>;
 }
@@ -33,7 +34,7 @@ export function readElapsed(activity: Activity, now: number): string {
 export function isStoppedState(state: string): boolean { return state === 'idle' || state === 'ended'; }
 
 export function ActivityRow({ activity, now, language = 'en', onSelect, selected = false, actions, variant = 'table', children }: {
-  activity: Activity; now: number; language?: Language; onSelect?: () => void; selected?: boolean; actions?: ReactNode; variant?: 'table' | 'list';
+  activity: Activity; now: number; language?: Language; onSelect?: () => void; selected?: boolean; actions?: ReactNode; variant?: 'table' | 'list' | 'compact';
   children?: ReactNode;
 }) {
   const ja = language === 'ja';
@@ -59,6 +60,13 @@ export function ActivityRow({ activity, now, language = 'en', onSelect, selected
     {activity.provisional && <span className="chip chip-dashed">{ja ? '仮の名前' : 'Provisional'}</span>}
   </div>;
   const summary = <p className="activity-excerpt">{excerpt ? readBody(excerpt.body) || readText(excerpt.body_state) : activity.excerpt || <span className="muted-text">{ja ? '発言はまだありません' : 'No messages yet'}</span>}</p>;
+  if (variant === 'compact') {
+    // 作業場の作業の列は 1 行に収め、会話に高さを渡す。
+    return <article className={`activity-line${activity.parentConversationId ? ' activity-child' : ''}${selected ? ' selected' : ''}${stopped ? ' is-stopped' : ''}`} aria-label={activity.name}>
+      {title}{summary}{badge}<AgentCell provider={activity.provider} model={activity.model} effort={activity.effort} language={language}/>
+      {actions && <div className="row-actions">{actions}</div>}
+    </article>;
+  }
   if (variant === 'list') {
     return <article className={`activity-item${activity.parentConversationId ? ' activity-child' : ''}${selected ? ' selected' : ''}${stopped ? ' is-stopped' : ''}`} aria-label={activity.name}>
       <div className="activity-item-head">{title}{actions && <div className="row-actions">{actions}</div>}</div>

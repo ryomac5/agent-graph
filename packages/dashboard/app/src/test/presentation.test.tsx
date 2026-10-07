@@ -255,6 +255,7 @@ it('shows one Unknown and a reason when external execution evidence is absent', 
   const row = screen.getByRole('article', { name: 'External conversation' });
   const badge = within(row).getByRole('link', { name: 'Unknown · Evidence' });
   expect(badge.textContent?.match(/Unknown/g)).toHaveLength(1);
-  expect([...badge.querySelectorAll('.state-detail')].map(detail => detail.textContent)).toEqual(['No evidence']);
+  // 一覧の不明は印だけを出し、理由は title に置く。
+  expect([...badge.querySelectorAll('.state-detail')].map(detail => detail.textContent)).toEqual([]);
   expect(badge.title).toBe('Unknown · No evidence confirming execution state');
 });

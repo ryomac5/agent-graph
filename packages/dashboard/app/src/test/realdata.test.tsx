@@ -44,7 +44,7 @@ it('uses only registered display names in the sidebar for ten thousand conversat
   expect(sidebar.textContent).not.toMatch(/hash|Old project/);
   expect(document.querySelectorAll('.activity-row').length).toBeLessThanOrEqual(200);
 });
-it('puts running, waiting and recent activity first in each project and loads stopped tasks fifty rows at a time', () => {
+it('shows running, waiting and the last 24 hours in each project and opens older tasks a hundred rows at a time', () => {
   const target = createLargeStore();
   act(() => target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: {
     runs: { remove: [], upsert: [{ id: 'run-9999', conversation_id: 'conversation-9999', state: 'running' },
@@ -52,19 +52,20 @@ it('puts running, waiting and recent activity first in each project and loads st
     conversations: { remove: [], upsert: [{ ...target.getSnapshot().projection.conversations[9997], last_message_ts: NOW }] },
   } }));
   render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
-  // 9999 は登録したプロジェクト、9998 と 9997 は Other に属する。
+  // 9999 は登録したプロジェクト、9998 と 9997 は Other に属する。古いものは最初に出さない。
   const real = screen.getByRole('region', { name: 'Real project' });
   const other = screen.getByRole('region', { name: 'Other' });
-  expect(within(real).getAllByRole('article')[0].getAttribute('aria-label')).toBe('Task 9999');
-  expect(within(other).getAllByRole('article').slice(0, 2).map(row => row.getAttribute('aria-label'))).toEqual(['Task 9998', 'Task 9997']);
-  expect(within(real).getAllByRole('article')[0].classList.contains('is-stopped')).toBe(false);
-  expect(within(real).getAllByRole('article')[1].classList.contains('is-stopped')).toBe(true);
+  expect(within(real).getAllByRole('article').map(row => row.getAttribute('aria-label'))).toEqual(['Task 9999']);
+  expect(within(other).getAllByRole('article').map(row => row.getAttribute('aria-label'))).toEqual(['Task 9998', 'Task 9997']);
+  // 待ちは薄くせず、直近に止まったものは薄く出す。
+  expect(within(other).getAllByRole('article').map(row => row.classList.contains('is-stopped'))).toEqual([false, true]);
   // 動いている区画を上に出す。
   expect(screen.getAllByRole('region').filter(region => region.classList.contains('project-section')).map(region => region.getAttribute('aria-label')))
     .toEqual(['Real project', 'Other']);
-  expect(within(real).getAllByRole('article')).toHaveLength(20);
-  fireEvent.click(within(real).getByRole('button', { name: 'Show 50 more stopped tasks' }));
-  expect(within(real).getAllByRole('article')).toHaveLength(70);
+  fireEvent.click(within(real).getByRole('button', { name: 'Show 100 older' }));
+  const rows = within(real).getAllByRole('article');
+  expect(rows).toHaveLength(101);
+  expect(rows[1].classList.contains('is-stopped')).toBe(true);
 });
 it('limits even ten thousand recent conversations to two hundred rows on first render', () => {
   const target = createLargeStore();
@@ -73,8 +74,8 @@ it('limits even ten thousand recent conversations to two hundred rows on first r
     conversations: state.projection.conversations.map(row => ({ ...row, last_message_ts: NOW })),
   } });
   render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
-  expect(document.querySelectorAll('.activity-row').length).toBeLessThanOrEqual(200);
-  expect(screen.getAllByRole('button', { name: 'Show 50 more stopped tasks' }).length).toBeGreaterThan(0);
+  expect(document.querySelectorAll('.activity-row').length).toBe(200);
+  expect(screen.getAllByRole('button', { name: 'Show 100 more' }).length).toBeGreaterThan(0);
 });
 it.each(['/tmp/test', '/private/tmp/test', '/var/folders/xx/test', '/private/var/folders/xx/test', '/Users/test/.cache/agent-graph/worktrees/test'])('hides temporary conversations under %s until requested', root => {
   const target = createStore();
@@ -101,7 +102,8 @@ it('keeps a worktree attached to its registered main project visible', () => {
   const row = screen.getByRole('article', { name: 'Feature worktree' });
   expect(row.textContent?.match(/Unknown/g)).toHaveLength(1);
   const badge = within(row).getByRole('link', { name: 'Unknown · Evidence' });
-  expect([...badge.querySelectorAll('.state-detail')].map(detail => detail.textContent)).toEqual(['No evidence']);
+  // 一覧の不明は印だけを出し、理由は title に置く。
+  expect([...badge.querySelectorAll('.state-detail')].map(detail => detail.textContent)).toEqual([]);
   expect(badge.title).toBe('Unknown · No evidence confirming execution state');
 });
 function createConversationStore() {

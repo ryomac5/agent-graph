@@ -36,3 +36,6 @@
 .delegation-graph .react-flow__controls-button { background: var(--surface); color: var(--text); border-color: var(--border); }
 .delegation-graph .react-flow__controls-button svg { fill: currentColor; }
 .delegation-graph .react-flow__controls-button:hover { background: var(--surface-hover); }
+.delegation-graph-pane { display: flex; flex-direction: column; min-width: 0; }
+.delegation-graph-caption { margin: 0; padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--border); font-size: var(--text-sm); color: var(--text-2); }
+.delegation-graph-caption strong { color: var(--text); }

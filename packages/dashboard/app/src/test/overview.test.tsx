@@ -11,6 +11,7 @@ import { ChangesPage } from '../pages/changes/ChangesPage.tsx';
 import { selectActivities } from '../components/activity.ts';
 import { buildOverview } from '../components/overview.ts';
 import { summarizeDelegation } from '../components/DelegationLines.tsx';
+import { untitledLabel } from '../lib/format.ts';
 
 vi.mock('@xyflow/react', () => ({
   ReactFlow: ({ nodes }: { nodes: { id: string; data: { node: { label: string } } }[] }) => <div>{nodes.map(node => <span key={node.id}>{node.data.node.label}</span>)}</div>,
@@ -142,4 +143,67 @@ it('filters Tree, workspace and Changes by a display-name route through the proj
   expect(screen.getByRole('button', { name: 'Comment on a.ts new line 1' })).toBeTruthy();
   expect(screen.queryByText(/foreign/)).toBeNull();
   fireEvent.click(screen.getByRole('link', { name: 'Tree' }));
+});
+
+it('turns reason codes into readable English everywhere and keeps them out of list rows', async () => {
+  const { reasonText } = await import('../lib/reasons.ts');
+  expect(reasonText('unconfirmed_end_evidence')).toBe('No end recorded');
+  expect(reasonText('missing_turn_evidence')).toBe('No turn evidence');
+  expect(reasonText('legacy ended inference: process_exit')).toBe('Ended by process exit (legacy)');
+  expect(reasonText('some_new_code')).toBe('Some new code');
+  expect(reasonText('Observation interrupted')).toBe('Observation interrupted');
+  const target = setup({ runs: [...projection().runs!.filter(run => run.id !== 'lonely:1'),
+    { id: 'lonely:1', conversation_id: 'lonely', generation: 1, state: 'unknown', reason: 'legacy ended inference: process_exit', last_evidence_ts: EARLIER }] });
+  render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
+  fireEvent.click(screen.getByRole('button', { name: 'External conversations' }));
+  const badge = within(screen.getByRole('article', { name: 'Unrelated terminal' })).getByRole('link', { name: 'Unknown · Evidence' });
+  expect(badge.textContent).toBe('Unknown');
+  expect(badge.title).toContain('Ended by process exit (legacy)');
+  expect(document.body.textContent).not.toContain('legacy ended inference');
+});
+
+it('roots the tree only at tasks that delegated, names untitled conversations and folds repeated runs into attempts', () => {
+  const state = setup({
+    conversations: [...projection().conversations!, { id: 'solo', provider: 'claude', origin: 'managed', type: 'interactive', name: null }],
+    runs: [...projection().runs!, { id: 'solo:1', conversation_id: 'solo', generation: 1, state: 'ended', started_ts: '2026-10-07T01:46:00' },
+      { id: 'root:2', conversation_id: 'root', generation: 2, state: 'running', last_evidence_ts: NOW }],
+  }).getSnapshot();
+  const tree = buildDelegationTree(state, 'agent-graph');
+  // 委譲のない作業は根にしない。
+  expect(tree.roots).toEqual(['conversation:root']);
+  expect(buildDelegationTree(state).nodes.some(node => node.conversationId === 'solo')).toBe(false);
+  // 実行が 2 つ以上の作業だけ、自身の実行を試行として並べる。
+  const root = tree.nodes.find(node => node.id === 'conversation:root')!;
+  expect(root.children.map(id => tree.nodes.find(node => node.id === id)!.label).sort()).toEqual(['Attempt 1', 'Attempt 2', 'Implement the overview']);
+  expect(untitledLabel('claude', '2020-01-02T10:46:00')).toMatch(/^Claude · Jan 2, 10:46$/);
+  expect(untitledLabel('codex', undefined)).toBe('Codex');
+});
+
+it('shows one task subtree in the graph, defaults to the active one and switches on selection', () => {
+  const target = setup({
+    conversations: [...projection().conversations!, { id: 'second', provider: 'codex', origin: 'managed', type: 'interactive', name: 'Second task', project: HASH },
+      { id: 'second-child', provider: 'claude', origin: 'managed', type: 'interactive', name: 'Second child' }],
+    runs: [...projection().runs!, { id: 'second:1', conversation_id: 'second', generation: 1, state: 'ended', ended_ts: EARLIER },
+      { id: 'second-child:1', conversation_id: 'second-child', generation: 1, state: 'ended', ended_ts: EARLIER }],
+    delegations: [...projection().delegations!, { id: 'later', request_id: 'later', role: 'review', title: 'Second review', state: 'done', attempt: 1, project: HASH,
+      parent: JSON.stringify({ confidence: 'confirmed', conversation_id: 'second' }), attempts: JSON.stringify([{ attempt: 1, run_id: 'second-child:1', state: 'done' }]) }],
+  });
+  render(<MemoryRouter><TreePage project="agent-graph" target={target}/></MemoryRouter>);
+  const graph = screen.getByLabelText('Delegation graph');
+  // 既定は動いている作業の部分木である。全体を 1 列に並べない。
+  expect(within(graph).getByText('Implement the overview')).toBeTruthy();
+  expect(within(graph).queryByText('Second review')).toBeNull();
+  fireEvent.click(within(screen.getByRole('region', { name: 'Delegation tree' })).getByRole('button', { name: 'Second review' }));
+  expect(within(graph).getByText('Second review')).toBeTruthy();
+  expect(within(graph).queryByText('Implement the overview')).toBeNull();
+  expect(screen.getByText('Second task', { selector: 'strong' })).toBeTruthy();
+});
+
+it('lists workspace tasks as single short lines and keeps the unknown evidence out of a separate banner', () => {
+  vi.stubGlobal('innerWidth', 1024);
+  const target = setup({ runs: [{ id: 'lonely:1', conversation_id: 'lonely', generation: 1, state: 'unknown', reason: 'unconfirmed_end_evidence', last_evidence_ts: EARLIER }] });
+  render(<MemoryRouter><WorkspacePage project="agent-graph" target={target} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: false })) }}/></MemoryRouter>);
+  const tasks = screen.getByRole('region', { name: 'Tasks' });
+  expect(tasks.querySelectorAll('.activity-line').length).toBe(within(tasks).getAllByRole('article').length);
+  expect(screen.queryByText(/Unknown — Last evidence/)).toBeNull();
 });

@@ -57,7 +57,7 @@ export function DelegationGraph({ tree, selected, onSelect, language = 'en' }: {
   elements.nodes = elements.nodes.map(node => ({ ...node, data: { ...node.data, onSelect } }));
   return <div className="delegation-graph" aria-label={language === 'ja' ? '委譲グラフ' : 'Delegation graph'}>
     <ReactFlow {...elements} colorMode={colorMode} nodeTypes={nodeTypes} onNodeClick={(_event, node) => onSelect(node.id)}
-      nodesDraggable={false} nodesConnectable={false} fitView minZoom={0.15} maxZoom={2}>
+      nodesDraggable={false} nodesConnectable={false} fitView fitViewOptions={{ maxZoom: 1 }} minZoom={0.15} maxZoom={2}>
       <Background/><Controls showInteractive={false}/>
     </ReactFlow>
   </div>;

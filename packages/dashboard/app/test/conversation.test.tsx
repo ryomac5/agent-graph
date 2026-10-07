@@ -187,13 +187,16 @@ it('shows unknown reason, last evidence, timestamp and a dashed state with evide
   await waitModels();
   const status = screen.getByRole('link', { name: 'Unknown · Evidence' });
   expect(status.className).toContain('status-unknown');
-  expect(status.textContent).toContain('Process check denied');
+  // 見出しの印には理由を出さず、title と Details に置く。
+  expect(status.textContent).not.toContain('Process check denied');
+  expect(status.title).toContain('Process check denied');
   expect(status.getAttribute('href')).toBe('#conversation-details');
   expect(screen.queryByRole('region', { name: 'Details' })).toBeNull();
   // 状態の印を押すと Details が開き、根拠と時刻を見せる。
   fireEvent.click(status);
   const details = screen.getByRole('region', { name: 'Details' });
   expect(details.textContent).toContain('disconnect');
+  expect(details.textContent).toContain('Process check denied');
   expect(details.querySelector('time')?.getAttribute('datetime')).toBe('2026-10-07T01:23:00Z');
 });
 

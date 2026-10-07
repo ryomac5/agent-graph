@@ -1,6 +1,6 @@
 import { decodeStoredValue, readObject, readText } from '../../components/activity.ts';
 import type { ExecutionState } from '../../components/StateBadge.tsx';
-import { conversationName, readModel, runLabel } from '../../lib/format.ts';
+import { conversationName, readModel, runLabel, untitledLabel } from '../../lib/format.ts';
 import { createProjectMatcher } from '../../lib/projects.ts';
 import type { Row, ScreenState } from '../../lib/store.ts';
 
@@ -53,7 +53,7 @@ export function buildDelegationTree(state: ScreenState, project?: string): Deleg
     const id = readText(c.id);
     const latest = latestRuns.get(id);
     nodes.set(`conversation:${id}`, { id: `conversation:${id}`, kind: 'conversation',
-      label: conversationName(state, id) || 'Untitled conversation', conversationId: id,
+      label: conversationName(state, id) || untitledLabel(c.provider, latest?.started_ts ?? c.last_message_ts), conversationId: id,
       // 根は作業である。外の端末から起こした作業は、その会話を根にする。
       role: readText(c.task_id) ? 'Task' : c.origin === 'observed' ? 'Terminal conversation' : 'Conversation', provider: readText(c.provider), model: readText(c.model) || readModel(latest).model || readText(latest?.model),
       state: readText(latest?.state) || 'unknown', attempts: [], children: [] });
@@ -215,6 +215,25 @@ export function buildDelegationTree(state: ScreenState, project?: string): Deleg
   for (const node of nodes.values()) {
     if (node.kind === 'conversation' && node.children.length === 0 && latestRuns.has(node.conversationId ?? '')) nodes.delete(node.id);
   }
+  // 作業の自身の実行が 1 つだけなら、実行の節を作業の節に畳む。2 つ以上のときだけ試行として並べる。
+  for (const node of [...nodes.values()]) {
+    if (node.kind !== 'conversation') continue;
+    const own = node.children.map(id => nodes.get(id)!).filter(child => child && child.kind === 'run' && !child.delegation
+      && child.conversationId === node.conversationId && child.role === 'Execution')
+      .sort((a, b) => Number(a.run?.generation ?? 0) - Number(b.run?.generation ?? 0));
+    if (own.length === 1) {
+      const [run] = own;
+      node.children = [...node.children.filter(id => id !== run.id), ...run.children];
+      for (const child of run.children) parents.set(child, node.id);
+      parents.delete(run.id);
+      Object.assign(node, { run: run.run, state: run.state, model: node.model || run.model, cost: run.cost });
+      nodes.delete(run.id);
+      for (let index = edges.length - 1; index >= 0; index--) {
+        if (edges[index].target === run.id) edges.splice(index, 1);
+        else if (edges[index].source === run.id) edges[index] = { ...edges[index], source: node.id };
+      }
+    } else own.forEach((run, index) => { run.label = `Attempt ${index + 1}`; });
+  }
   let visible = new Set(nodes.keys());
   if (project) {
     // 経路のプロジェクトは表示名でも識別子でも受け、作業と会話と委譲と実行のどれかが結ぶプロジェクトで絞る。
@@ -233,11 +252,6 @@ export function buildDelegationTree(state: ScreenState, project?: string): Deleg
       while (parent) { visible.add(parent); parent = parents.get(parent); }
     }
   }
-  // 木の根は作業である。名前のある作業と管理する会話と、委譲を起こした会話だけを根にし、委譲のない外の会話は木に出さない。
-  const isWork = (node: TreeNode): boolean => {
-    const c = conversationsById.get(node.conversationId ?? '');
-    return Boolean(readText(c?.task_id)) || c?.origin === 'managed' || Boolean(node.delegation);
-  };
   const delegates = (id: string, root: string | undefined, seen = new Set<string>()): boolean => {
     if (seen.has(id)) return false;
     seen.add(id);
@@ -247,7 +261,10 @@ export function buildDelegationTree(state: ScreenState, project?: string): Deleg
     });
   };
   for (const node of [...nodes.values()]) {
-    if (parents.has(node.id) || unresolved.has(node.id) || isWork(node) || delegates(node.id, node.conversationId)) continue;
+    // 委譲か子の実行を 1 つ以上持つ作業だけを根にする。委譲のない作業は木に出さない。
+    // 親が未確定の委譲の候補の起点も、委譲を起こした作業として残す。
+    if (parents.has(node.id) || unresolved.has(node.id) || delegates(node.id, node.conversationId)
+      || edges.some(edge => edge.kind === 'candidate' && edge.source === node.id)) continue;
     const drop = [node.id];
     for (let index = 0; index < drop.length; index++) drop.push(...(nodes.get(drop[index])?.children ?? []));
     for (const id of drop) visible.delete(id);
@@ -257,4 +274,46 @@ export function buildDelegationTree(state: ScreenState, project?: string): Deleg
   return { nodes: ordered, edges: edges.filter(e => visible.has(e.source) && visible.has(e.target)),
     roots: ordered.filter(n => !parents.has(n.id) && !unresolved.has(n.id)).map(n => n.id),
     unresolved: [...unresolved].filter(id => visible.has(id)).sort() };
+}
+
+/** 節が属する根を返す。親が未確定の枝は、その枝の先頭を根とする。 */
+export function rootOf(tree: DelegationTree, id: string): string | undefined {
+  const parents = new Map<string, string>();
+  for (const node of tree.nodes) for (const child of node.children) parents.set(child, node.id);
+  let current = id;
+  const seen = new Set<string>();
+  while (parents.has(current) && !seen.has(current)) { seen.add(current); current = parents.get(current)!; }
+  return tree.nodes.some(node => node.id === current) ? current : undefined;
+}
+
+function latestTime(node: TreeNode): number {
+  return Math.max(Date.parse(String(node.run?.last_evidence_ts ?? '')) || 0, Date.parse(String(node.run?.ended_ts ?? '')) || 0,
+    Date.parse(String(node.run?.started_ts ?? '')) || 0);
+}
+/**
+ * グラフに出す 1 つの作業の部分木を返す。全体を 1 列に縮めず、選んだ作業だけを読める大きさで出す。
+ * 指定がなければ、動いている節を含む作業を優先し、次に最後の根拠が新しい作業を選ぶ。
+ */
+export function focusSubtree(tree: DelegationTree, focus?: string): { root?: string; tree: DelegationTree } {
+  const byId = new Map(tree.nodes.map(node => [node.id, node]));
+  const collect = (id: string) => {
+    const ids: string[] = [];
+    for (let index = 0, queue = [id]; index < queue.length; index++) {
+      if (ids.includes(queue[index])) continue;
+      ids.push(queue[index]);
+      queue.push(...(byId.get(queue[index])?.children ?? []));
+    }
+    return ids;
+  };
+  const candidates = [...tree.roots, ...tree.unresolved];
+  const score = (root: string) => {
+    const members = collect(root).map(id => byId.get(id)!).filter(Boolean);
+    return [Number(members.some(node => ACTIVE_EXECUTION_STATES.includes(toExecutionState(node.state)))), Math.max(0, ...members.map(latestTime))];
+  };
+  const root = focus && byId.has(focus) ? focus
+    : candidates.map(id => ({ id, score: score(id) })).sort((a, b) => b.score[0] - a.score[0] || b.score[1] - a.score[1])[0]?.id;
+  if (!root) return { tree: { nodes: [], roots: [], unresolved: [], edges: [] } };
+  const members = new Set(collect(root));
+  return { root, tree: { nodes: tree.nodes.filter(node => members.has(node.id)), roots: [root], unresolved: [],
+    edges: tree.edges.filter(edge => members.has(edge.source) && members.has(edge.target)) } };
 }

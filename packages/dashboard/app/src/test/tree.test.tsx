@@ -81,8 +81,10 @@ it('places observed provider delegations under the parent execution and respects
     { id: 'native', type: 'delegated', active: true, from_id: 'codex', to_id: 'claude', confidence: 'confirmed', title: 'Native child' },
   ] }).getSnapshot();
   const tree = buildDelegationTree(state);
-  expect(tree.nodes.find(n => n.id === 'run:codex:1')!.children).toEqual(['run:claude:1']);
-  expect(tree.edges.find(e => e.id === 'relation:native')!.title).toBe('Native child');
+  // 実行が 1 つだけの作業は、実行の節を作業の節に畳む。
+  expect(tree.nodes.find(n => n.id === 'run:codex:1')).toBeUndefined();
+  expect(tree.nodes.find(n => n.id === 'conversation:codex')).toMatchObject({ children: ['run:claude:1'], state: 'failed' });
+  expect(tree.edges.find(e => e.id === 'relation:native')).toMatchObject({ title: 'Native child', source: 'conversation:codex' });
   const corrected = fixture().getSnapshot();
   corrected.projection.relations![0]!.to_id = 'claude';
   corrected.projection.relations = corrected.projection.relations!.slice(0, 1);

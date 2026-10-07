@@ -10,6 +10,8 @@ import { dictionaries } from '../../lib/i18n.ts';
 import { approvalOutcome, approvalReasonText, type ApprovalOutcome, conversationName, decisionLabel, evidenceLabel, formatClock, formatSeconds, isPositiveDecision, readApprovalRequest, readModel, runLabel, worktreeLabel } from '../../lib/format.ts';
 import { AppLink } from '../../components/AppLink.tsx';
 import { StateBadge } from '../../components/StateBadge.tsx';
+import { reasonText } from '../../lib/reasons.ts';
+import { RelativeTime } from '../../components/RelativeTime.tsx';
 import { Icon } from '../../components/Icon.tsx';
 import { Fields } from '../../components/Fields.tsx';
 import { ApprovalRequestView, OutcomeChip, OutcomeIcon } from '../../components/ApprovalRequest.tsx';
@@ -317,6 +319,8 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
           {external && <div><dt>{t('access')}</dt><dd className="meta-item"><Icon name="lock" size={14}/><span>{t('readOnly')}</span></dd></div>}
           <div><dt>{t('historyFormat')}</dt><dd className="meta-item"><span className="mono">{historyFormat || t('unknown')}</span>
             {!supported && <span className="chip chip-quiet">{t('handoffUnsupported')}</span>}</dd></div>
+          {reasonText(run?.cause ?? run?.reason) && <div><dt>{t('reason')}</dt><dd>{reasonText(run?.cause ?? run?.reason)}</dd></div>}
+          {readText(run?.last_evidence_ts) && <div><dt>{t('lastEvidence')}</dt><dd><RelativeTime value={readText(run?.last_evidence_ts)} now={now} language={language}/></dd></div>}
           <div className="conv-evidence"><dt>{t('evidence')}</dt><dd>
             {evidence !== undefined && evidence !== null ? <Fields value={readObject(evidence)} empty={evidenceLabel(evidence) || t('noRun')}/> : <span className="muted-text">{t('noRun')}</span>}
             {readText(run?.last_evidence_ts) && <TimeStamp value={readText(run?.last_evidence_ts)} fallback=""/>}</dd></div>

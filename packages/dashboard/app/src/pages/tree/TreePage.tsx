@@ -5,7 +5,7 @@ import { DelegationGraph } from '../../components/graph/DelegationGraph.tsx';
 import type { Language } from '../../lib/i18n.ts';
 import { store, useScreenStore, type ScreenStore } from '../../lib/store.ts';
 import type { ConversationClient } from '../conversation/ConversationPage.tsx';
-import { buildDelegationTree, type TreeNode } from './model.ts';
+import { buildDelegationTree, focusSubtree, rootOf, type TreeNode } from './model.ts';
 import { NodeSummary } from './NodeSummary.tsx';
 import './tree.css';
 
@@ -17,6 +17,10 @@ export function TreePage({ project, target = store, client, language = 'en' }: {
   const state = useScreenStore(target);
   const tree = useMemo(() => buildDelegationTree(state, projectId), [state, projectId]);
   const [selected, setSelected] = useState<string>();
+  const [focused, setFocused] = useState<string>();
+  // グラフは 1 つの作業の部分木だけを出す。既定は動いている作業、なければ最近の作業にする。
+  const graph = useMemo(() => focusSubtree(tree, focused ?? (selected && rootOf(tree, selected))), [tree, focused, selected]);
+  const select = (id: string) => { setSelected(id); setFocused(rootOf(tree, id)); };
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
   const ja = language === 'ja';
@@ -38,7 +42,7 @@ export function TreePage({ project, target = store, client, language = 'en' }: {
     return <li key={id}>
       {edge && <p className="delegation-edge-label">{edge.title} · {edge.confidence}</p>}
       <div className={`delegation-tree-card ${selected === id ? 'is-selected' : ''} ${node.state === 'unknown' ? 'is-unknown' : ''}`}>
-        <button className="delegation-select" aria-pressed={selected === id} onClick={() => setSelected(id)}>{node.label}</button>
+        <button className="delegation-select" aria-pressed={selected === id} onClick={() => select(id)}>{node.label}</button>
         <NodeSummary node={node} language={language}/>
       </div>
       {node.children.length > 0 && <ul>{node.children.map(renderBranch)}</ul>}
@@ -60,7 +64,11 @@ export function TreePage({ project, target = store, client, language = 'en' }: {
             <ul>{tree.unresolved.map(renderBranch)}</ul>
           </section>}
         </section>
-        <DelegationGraph tree={tree} selected={selected} onSelect={setSelected} language={language}/>
+        <div className="delegation-graph-pane">
+          {graph.root && <p className="delegation-graph-caption">{ja ? '表示中の作業' : 'Showing'} · <strong>{byId.get(graph.root)?.label}</strong>
+            {tree.roots.length + tree.unresolved.length > 1 && <span className="muted-text"> · {ja ? '左の木で作業を選ぶと切り替わります' : 'Select a task in the tree to switch'}</span>}</p>}
+          <DelegationGraph tree={graph.tree} selected={selected} onSelect={select} language={language}/>
+        </div>
       </div>
       <section className="delegation-detail" id="delegation-evidence" aria-label={ja ? '選択した節' : 'Selected node'}>
         {current ? <>

@@ -15,8 +15,15 @@ import { useNow } from '../../components/RelativeTime.tsx';
 import { Icon } from '../../components/Icon.tsx';
 import '../../components/activity.css';
 
-const PROJECT_PAGE_SIZE = 20;
 const FOLD_PAGE_SIZE = 50;
+const OLDER_PAGE_SIZE = 100;
+const INITIAL_ROW_LIMIT = 200;
+const RECENT_WINDOW_MS = 24 * 60 * 60 * 1000;
+/** 動いているもの、承認と入力の待ち、直近 24 時間のものは最初から出す。時刻のないものは古いと決められないので出す。 */
+function isCurrent(item: WorkItem, now: number): boolean {
+  const time = Date.parse(item.activity.lastActivity ?? '');
+  return item.active || !Number.isFinite(time) || time >= now - RECENT_WINDOW_MS;
+}
 
 export function TableHead({ language = 'en' }: { language?: Language }) {
   const ja = language === 'ja';
@@ -50,16 +57,17 @@ function WorkRows({ items, now, language, actions }: { items: WorkItem[]; now: n
     })}</div>;
 }
 
-function ProjectSection({ group, state, now, language, filtered }: {
-  group: ProjectGroup; state: ScreenState; now: number; language: Language; filtered: boolean;
+function ProjectSection({ group, state, now, language, filtered, initial }: {
+  group: ProjectGroup; state: ScreenState; now: number; language: Language; filtered: boolean; initial: number;
 }) {
   const ja = language === 'ja';
-  const [limit, setLimit] = useState(PROJECT_PAGE_SIZE);
+  const [extra, setExtra] = useState(0);
   const name = getProjectName(state, group.id);
-  // 動いているものと待ちは常に出し、止まっているものは新しい順に区切って出す。
-  const active = group.items.filter(item => item.active).length;
-  const shown = group.items.slice(0, Math.max(limit, active));
+  // 行は動いているもの、待ち、新しい順に並ぶ。最初は直近のものだけを出し、古いものはボタンで開く。
+  const shown = group.items.slice(0, initial + extra);
   const rest = group.items.length - shown.length;
+  const next = Math.min(OLDER_PAGE_SIZE, rest);
+  const older = rest > 0 && !isCurrent(group.items[shown.length], now);
   return <section className="activity-group project-section" aria-label={name}>
     <header className="section-header project-section-header">
       <h2><Link className="project-heading" to={`/p/${encodeURIComponent(group.id)}`}><Icon name="folder" size={15}/><span className="project-name truncate">{name}</span></Link>
@@ -69,8 +77,8 @@ function ProjectSection({ group, state, now, language, filtered }: {
       {group.id !== OTHER_PROJECT && <Link className="btn btn-ghost btn-sm" to={`/p/${encodeURIComponent(group.id)}?create=1`}><Icon name="plus" size={14}/>{ja ? '作業を作る' : 'Create task'}</Link>}
     </header>
     {shown.length > 0 && <div className="table-group"><WorkRows items={shown} now={now} language={language}/></div>}
-    {rest > 0 && <button className="btn btn-secondary btn-sm show-more" onClick={() => setLimit(value => value + FOLD_PAGE_SIZE)}>
-      {ja ? `止まっている作業をさらに ${Math.min(FOLD_PAGE_SIZE, rest)} 件表示` : `Show ${Math.min(FOLD_PAGE_SIZE, rest)} more stopped tasks`}</button>}
+    {rest > 0 && <button className="btn btn-secondary btn-sm show-more" onClick={() => setExtra(value => value + OLDER_PAGE_SIZE)}>
+      {older ? (ja ? `古い ${next} 件を表示` : `Show ${next} older`) : (ja ? `さらに ${next} 件を表示` : `Show ${next} more`)}</button>}
     {group.unlinked.length > 0 && <div className="unlinked-delegations">
       <DelegationFold lines={group.unlinked} language={language}
         label={ja ? '親が未確定の委譲' : `${countAllDelegations(group.unlinked) === 1 ? 'delegation' : 'delegations'} without a confirmed parent`}/>
@@ -122,7 +130,15 @@ export function HomePage({ target = store, client, language = 'en' }: { target?:
     && (!provider || item.provider === provider) && (!project || item.project === project)), tree),
   [state, tree, activities, status, provider, project]);
   const projects = [...getRegisteredProjects(state).map(row => String(row.id)), OTHER_PROJECT];
-  const visible = [...overview.projects.flatMap(group => group.items.slice(0, PROJECT_PAGE_SIZE)), ...overview.external.slice(0, FOLD_PAGE_SIZE)].map(item => item.activity);
+  // 最初に描く行は全区画で 200 行までにする。動いているものと直近のものから順に割り当てる。
+  const initial = new Map<string, number>();
+  let budget = INITIAL_ROW_LIMIT;
+  for (const group of overview.projects) {
+    const count = Math.min(budget, group.items.filter(item => isCurrent(item, now)).length);
+    initial.set(group.id, count);
+    budget -= count;
+  }
+  const visible = [...overview.projects.flatMap(group => group.items.slice(0, initial.get(group.id))), ...overview.external.slice(0, FOLD_PAGE_SIZE)].map(item => item.activity);
   useProvisionalNames(state, target, visible, client);
   const ja = language === 'ja';
   const filtered = Boolean(status || provider || project);
@@ -145,7 +161,7 @@ export function HomePage({ target = store, client, language = 'en' }: { target?:
       <label className="inline-field"><input type="checkbox" checked={showTemporary} onChange={event => setShowTemporary(event.target.checked)}/>Show temporary</label>
       <button className="btn btn-ghost btn-sm" disabled={!filtered} onClick={() => { setStatus(''); setProvider(''); setProject(''); }}>{ja ? '解除' : 'Clear filters'}</button>
     </div>
-    {overview.projects.map(group => <ProjectSection key={group.id} group={group} state={state} now={now} language={language} filtered={filtered}/>)}
+    {overview.projects.map(group => <ProjectSection key={group.id} group={group} state={state} now={now} language={language} filtered={filtered} initial={initial.get(group.id) ?? 0}/>)}
     {!overview.projects.length && <section className="activity-group" aria-label={ja ? 'プロジェクト' : 'Projects'}>
       <p className="empty-row">{filtered ? (ja ? '該当する作業はありません' : 'No matching activity') : (ja ? '作業はまだありません' : 'No tasks yet')}</p></section>}
     <FoldSection title={ja ? '外の会話' : 'External conversations'} description={ja ? '外のターミナルで始まった会話。引き継ぐまで読み取り専用' : 'Observed from other terminals; read-only until taken over'}

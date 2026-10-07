@@ -2,6 +2,7 @@ import { AppLink } from './AppLink.tsx';
 import type { ReactNode } from 'react';
 import { dictionaries, type Language } from '../lib/i18n.ts';
 import { Icon } from './Icon.tsx';
+import { reasonText } from '../lib/reasons.ts';
 
 export type ExecutionState = 'starting' | 'running' | 'waiting_approval' | 'waiting_input' | 'idle' | 'ended' | 'failed' | 'unknown';
 interface StateBadgeProps {
@@ -12,13 +13,15 @@ interface StateBadgeProps {
   evidenceTime?: ReactNode;
   reason?: string;
   elapsed?: string;
-  /** 会話の見出しでは根拠と時刻も並べる。一覧では印と短い理由だけを 1 行で出す。 */
+  /** 詳しい表示では根拠と時刻と理由も並べる。一覧では印だけを 1 行で出し、理由は title に置く。 */
   detailed?: boolean;
 }
 // 状態は色だけに頼らず、印と文字で示す。不明は破線の枠と印で示す。
 export function StateBadge({ state, language = 'en', evidenceUrl, evidence, evidenceTime, reason, elapsed, detailed = false }: StateBadgeProps) {
   const t = dictionaries[language];
   evidence = state === 'unknown' && evidence && /unknown/i.test(evidence) ? undefined : evidence;
+  // 理由の符号は人が読む文に置き換える。不明の理由は一覧の行では出さず、title と Details に置く。
+  reason = reasonText(reason) || undefined;
   reason = reason === 'Unknown' || reason === t.unknown ? undefined : reason;
   if (state === 'unknown' && reason) reason = reason.replace(/\bunknown\b/gi, 'unavailable');
   const fullReason = state === 'unknown' && !reason ? (language === 'ja' ? '実行の状態を確認できる根拠がありません' : 'No evidence confirming execution state') : reason;
@@ -32,6 +35,6 @@ export function StateBadge({ state, language = 'en', evidenceUrl, evidence, evid
     {['starting', 'running', 'waiting_approval', 'waiting_input'].includes(state) && elapsed && <span className="state-detail">{elapsed}</span>}
     {(state === 'ended' || detailed && state === 'unknown') && evidence && <span className="state-detail">{evidence}</span>}
     {detailed && state === 'unknown' && evidenceTime && <span className="state-detail">{evidenceTime}</span>}
-    {['unknown', 'failed'].includes(state) && reason && <span className="state-detail">{reason}</span>}
+    {(state === 'failed' || detailed && state === 'unknown') && reason && <span className="state-detail">{reason}</span>}
   </AppLink>;
 }

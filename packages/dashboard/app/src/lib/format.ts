@@ -71,11 +71,24 @@ export function conversationName(state: ScreenState, conversationId: string, pre
   return preference === 'conversation' || conversation.type === 'subagent' ? name || taskName || provisional : taskName || name || provisional;
 }
 
+const PROVIDER_LABELS: Record<string, string> = { claude: 'Claude', codex: 'Codex' };
+/** 名前のない会話は、provider と始まりの時刻で呼ぶ。例: Claude · 10:46。今日でなければ日付も添える。 */
+export function untitledLabel(provider: unknown, time: unknown): string {
+  const who = PROVIDER_LABELS[text(provider)] ?? (text(provider) || 'Conversation');
+  const date = typeof time === 'string' ? new Date(time) : undefined;
+  if (!date || !Number.isFinite(date.getTime())) return who;
+  const today = new Date().toDateString() === date.toDateString();
+  const clock = date.toLocaleString('en-US', today ? { hour: '2-digit', minute: '2-digit', hour12: false }
+    : { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+  return `${who} · ${clock}`;
+}
+
 /** 実行は会話の名前と世代で呼ぶ。 */
 export function runLabel(state: ScreenState, runId: unknown): string {
   const run = state.projection.runs?.find(row => row.id === runId);
   if (!run) return 'Unknown run';
-  const name = conversationName(state, text(run.conversation_id)) || 'Untitled conversation';
+  const conversation = state.projection.conversations?.find(row => row.id === run.conversation_id);
+  const name = conversationName(state, text(run.conversation_id)) || untitledLabel(conversation?.provider, run.started_ts ?? conversation?.last_message_ts);
   return run.generation === undefined || run.generation === null ? name : `${name} · Run ${String(run.generation)}`;
 }
 

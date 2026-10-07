@@ -58,7 +58,9 @@ it('groups managed tasks by project and keeps external, unattended and unsupport
   expect(within(implement).getByText('1 file · +2 −1')).toBeTruthy();
   // 記録のないモデルと成果物は Unknown と書かず、記録なしと示す。
   const review = screen.getByRole('article', { name: 'Review UI' });
-  expect(within(review).getByText('No model recorded')).toBeTruthy();
+  // モデルが記録されていないときは provider だけを出し、記録なしの文言を行ごとに繰り返さない。
+  expect(within(review).getByText('Claude')).toBeTruthy();
+  expect(within(review).queryByText('No model recorded')).toBeNull();
   expect(within(review).queryByText('Unknown')).toBeNull();
   expect(screen.queryByRole('link', { name: 'Build the API.' })).toBeNull();
 });
@@ -81,9 +83,9 @@ it('shows unknown with last evidence, exact time, relative time and reason, with
   openFolds('External conversations');
   const row = screen.getByRole('article', { name: 'Investigate latency.' });
   const evidence = within(row).getByRole('link', { name: 'Unknown · Evidence' });
-  // 一覧の不明は印と理由だけを 1 行で出し、根拠は title に残す。
+  // 一覧の不明は印だけを 1 行で出し、根拠と理由は title に残す。
   expect(evidence.textContent?.match(/Unknown/g)).toHaveLength(1);
-  expect([...evidence.querySelectorAll('.state-detail')].map(detail => detail.textContent)).toEqual(['Observation interrupted']);
+  expect([...evidence.querySelectorAll('.state-detail')].map(detail => detail.textContent)).toEqual([]);
   expect(evidence.title).toBe('Unknown · disconnect · Observation interrupted');
   expect(evidence.className).toContain('status-unknown');
   expect(evidence.getAttribute('href')).toBe('/c/external');

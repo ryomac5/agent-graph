@@ -173,7 +173,15 @@ it('supports named keys and treats Shift+? as the help key', () => {
   expect(() => validateBindings({ unknown: 'x' })).toThrow('Invalid');
 });
 it('selects delegation tree rows with j and k', async () => {
-  mount('/p/demo/tree'); await act(async () => {});
+  const { target } = mount('/p/demo/tree');
+  // 木には委譲を起こした作業だけが出る。
+  act(() => target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: {
+    conversations: { remove: [], upsert: [{ id: 'child', provider: 'codex', origin: 'managed', name: 'Child' }] },
+    runs: { remove: [], upsert: [{ id: 'child:1', conversation_id: 'child', state: 'running', generation: 1 }] },
+    delegations: { remove: [], upsert: [{ id: 'd', request_id: 'd', title: 'Child work', role: 'implement', state: 'running', attempt: 1,
+      parent: JSON.stringify({ confidence: 'confirmed', conversation_id: 'c' }), attempts: JSON.stringify([{ attempt: 1, run_id: 'child:1' }]) }] },
+  } }));
+  await act(async () => {});
   press('j');
   expect(document.activeElement?.classList.contains('delegation-select')).toBe(true);
   expect(document.activeElement?.getAttribute('aria-pressed')).toBe('true');

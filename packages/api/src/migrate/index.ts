@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { backup, DatabaseSync } from "node:sqlite";
 import type { SQLInputValue } from "node:sqlite";
-import { createRepositoryId } from "../../../core/src/ledger/index.ts";
+import { resolveProjectLocation, toProjectPayload } from "../../../core/src/ledger/repository.ts";
+import type { GitRunner, ProjectLocation } from "../../../core/src/ledger/repository.ts";
 import type { AppendResult, Confidence, Fact, FactInput, FactKind, FactPayloads, JsonValue, Ledger, Provider } from "../../../core/src/ledger/index.ts";
 import type { BatchLedger } from "../service/batch-ledger.ts";
 
@@ -28,6 +28,9 @@ export interface MigrationOptions {
   /** 各 DB の追記が確定した後に、まとめて投影を反映する。 */
   afterDatabase?: () => void;
   batch?: <T>(operation: () => T) => T;
+  /** 一時の場所の判定に使う置き場。省略時は切り替えの導入と同じ既定を使う。 */
+  temporaryRoots?: readonly string[];
+  git?: GitRunner;
 }
 
 function readLatestVersions(ledger: Ledger): Map<string, LegacyVersion> {
@@ -71,17 +74,6 @@ function readProvider(row: Row): Provider {
   if (client === "claude" || client === "codex") return client;
   throw new UnsupportedRow(`未対応の旧 client: ${client}`);
 }
-function resolveRepository(root: string): string {
-  // 実在するリポジトリでは作業ツリーも git 共通ディレクトリで同一視する。
-  try {
-    const common = execFileSync("git", ["-C", root, "rev-parse", "--path-format=absolute", "--git-common-dir"],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-    return createRepositoryId(realpathSync(common));
-  } catch {
-    // 消えた旧リポジトリは推定の git パスを確定 ID にせず、旧パスの名前空間に残す。
-    return hash(JSON.stringify(["legacy-repository", root]));
-  }
-}
 
 function appendFact(ledger: Ledger, input: FactInput): AppendResult {
   try {
@@ -100,6 +92,12 @@ export async function migrateLegacyDatabases(
   const report: MigrationReport = { databases: 0, rows: {}, facts: {}, unsupported: 0, errors: [], unknown: 0, inferred: 0 };
   const versions = readLatestVersions(ledger);
   const seenPaths = new Set<string>();
+  const locations = new Map<string, ProjectLocation>();
+  // 同じパスは 1 回だけ git に問い合わせる。判定は導入の登録と同じ関数で行う。
+  const locate = (root: string) => {
+    if (!locations.has(root)) locations.set(root, resolveProjectLocation(root, { temporaryRoots: options.temporaryRoots, git: options.git }));
+    return locations.get(root)!;
+  };
   for (const inputPath of [...new Set(paths.map((value) => resolve(value)))].sort()) {
     let db: DatabaseSync | undefined;
     let readingInput = true;
@@ -131,7 +129,7 @@ export async function migrateLegacyDatabases(
         try {
           // 各取り込みは専用の複製を読む。保存した最新のバックアップとは分ける。
           const batch = options.batch ?? (ledger as Partial<BatchLedger>).batch ?? ((operation) => operation());
-          batch(() => migrateSnapshot(snapshot, ledger, report, versions, path));
+          batch(() => migrateSnapshot(snapshot, ledger, report, versions, path, locate));
           options.afterDatabase?.();
         } finally {
           snapshot.close();
@@ -153,7 +151,10 @@ export async function migrateLegacyDatabases(
   return report;
 }
 
-function migrateSnapshot(db: DatabaseSync, ledger: Ledger, report: MigrationReport, versions: Map<string, LegacyVersion>, path: string): void {
+function migrateSnapshot(
+  db: DatabaseSync, ledger: Ledger, report: MigrationReport, versions: Map<string, LegacyVersion>, path: string,
+  locate: (root: string) => ProjectLocation,
+): void {
   const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => String(row.name)));
   function readRows(table: string): Row[] {
     if (!tables.has(table)) return [];
@@ -164,7 +165,8 @@ function migrateSnapshot(db: DatabaseSync, ledger: Ledger, report: MigrationRepo
   const repos = readRows("repos");
   const sessions = readRows("sessions");
   const sessionById = new Map(sessions.map((row) => [String(row.id), row]));
-  const projects = new Map(repos.map((row) => [String(row.key), resolveRepository(String(row.root_path))]));
+  const locations = new Map(repos.map((row) => [String(row.key), locate(String(row.root_path))]));
+  const projects = new Map([...locations].map(([key, location]) => [key, location.repository_id]));
   // DB の置き場が変わっても、repo key と旧行の主キーから同じ識別子を作る。
   const namespace = JSON.stringify(repos.map((row) => String(row.key)).sort());
   function identify(entity: string, id: string): string {
@@ -212,11 +214,10 @@ function migrateSnapshot(db: DatabaseSync, ledger: Ledger, report: MigrationRepo
   function conversationId(id: string): string { return identify("conversation", id); }
   function runId(id: string): string { return identify("run", id); }
   for (const row of repos) {
-    const repository_id = projects.get(String(row.key))!;
-    emit("repos", String(row.key), "project.created", `project:${repository_id}`, {
-      repository_id, root_path: String(row.root_path), display_name: String(row.name),
-      name_prefix: String(row.name), state: "registered",
-    });
+    // 作業ツリーの行も本体のプロジェクトとして写す。表示名は本体のディレクトリ名で、行の名前で上書きしない。
+    // 一時の場所と消えたリポジトリは登録せず、その会話は観測した会話として残す。
+    const payload = toProjectPayload(locations.get(String(row.key))!);
+    emit("repos", String(row.key), "project.created", `project:${payload.repository_id}`, payload);
   }
   migrateRows("sessions", sessions, (row) => {
     const id = String(row.id);

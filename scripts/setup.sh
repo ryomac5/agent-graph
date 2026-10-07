@@ -3,8 +3,8 @@ set -euo pipefail
 
 for agent_graph_arg in "$@"; do
   case "$agent_graph_arg" in
-    --dry-run|--doctor|--skip-login) ;;
-    *) echo "不明なオプション: $agent_graph_arg（--dry-run / --doctor / --skip-login）" >&2; exit 1 ;;
+    --dry-run|--doctor|--skip-login|--v2|--rollback-v1) ;;
+    *) echo "不明なオプション: $agent_graph_arg（--dry-run / --doctor / --skip-login / --v2 / --rollback-v1）" >&2; exit 1 ;;
   esac
 done
 if [[ "$(uname -s)" != Darwin ]]; then

@@ -1,5 +1,5 @@
 import { basename, resolve } from "node:path";
-import { classifyClaudeRecord, createNativeId, projectConversations } from "../../../../core/src/ledger/index.ts";
+import { classifyClaudeRecord, createNativeId, projectConversations, TURN_RULE_VERSION } from "../../../../core/src/ledger/index.ts";
 import type { AppendResult, Fact, FactInput, Ledger, RunPayload } from "../../../../core/src/ledger/index.ts";
 import { readAppendOnlyFile, type FileLine } from "../files.ts";
 import { defaultLocationResolver, type LocationResolver, type ObservedLocation } from "../location.ts";
@@ -112,7 +112,7 @@ export function observeClaudeContext(ledger: Ledger, path: string, options: Clau
     if (states.get(target.subject) === evidence.state) continue;
     states.set(target.subject, evidence.state);
     append({ ...base, kind: "run.state_changed", subject: target.subject as `run:${string}`,
-      source_event_id: `turn:${id}:${String(row.uuid ?? line.cursor.offset)}`,
+      source_event_id: `turn:v${TURN_RULE_VERSION}:${id}:${String(row.uuid ?? line.cursor.offset)}`,
       payload: { conversation_id: id, generation: target.generation, state: evidence.state,
         last_evidence: { kind: evidence.kind, turn_id: evidence.turn_id ?? null }, last_evidence_ts: timestamp,
         ...(evidence.model ? { model: evidence.model } : {}) } });

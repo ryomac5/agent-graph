@@ -6,6 +6,11 @@ import type { Fact, JsonValue, RunPayload, RunState } from "./facts.ts";
  * - 根拠のターンが止まったら idle にする
  * - ended は観測の記録の終わりの印だけで決め、時間からは推定しない
  */
+/**
+ * 状態の規則の版。規則を変えて同じ記録の行の読み方が変わるときに上げる。
+ * 台帳は追記だけなので、行の事実の識別子に版を入れ、新しい読み方を新しい事実として足す。
+ */
+export const TURN_RULE_VERSION = 2;
 export type TurnEvidenceKind =
   | "turn_started" | "tool_call" | "tool_result" | "request_approval"
   | "turn_completed" | "turn_interrupted" | "thread_status";

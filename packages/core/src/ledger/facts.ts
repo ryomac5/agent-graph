@@ -155,6 +155,7 @@ export interface MessageMembershipPayload {
   active: boolean;
 }
 export interface EntityPayloads {
+  setting: { store: string; fields: string[]; origin: "api" | "file"; revision: string };
   project: ProjectPayload;
   observation: UnsupportedObservationPayload;
   task: TaskPayload;
@@ -174,7 +175,7 @@ export type EntityKind = keyof EntityPayloads;
 export const ENTITY_KINDS = [
   "task", "conversation", "relation", "run", "connection", "message", "delegation",
   "artifact", "alias", "approval", "finding", "message_membership",
-  "project", "observation",
+  "project", "observation", "setting",
 ] as const satisfies readonly EntityKind[];
 
 // 訂正は同じ実体の部分変更として表し、取り消す事実を必須にする。
@@ -185,6 +186,7 @@ export type FactPayloads = {
 } & {
   [E in Exclude<EntityKind, "observation"> as `${E}.corrected`]: Partial<EntityPayloads[E]>;
 } & {
+  "setting.changed": EntityPayloads["setting"];
   "project.state_changed": Pick<ProjectPayload, "state">;
   "observation.unsupported": UnsupportedObservationPayload;
   "task.state_changed": Pick<TaskPayload, "state">;

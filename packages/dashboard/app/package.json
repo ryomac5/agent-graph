@@ -1,0 +1,6 @@
+{
+  "name": "@agent-graph/dashboard-app",
+  "private": true,
+  "type": "module",
+  "workspaces": []
+}

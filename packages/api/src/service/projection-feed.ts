@@ -1,10 +1,13 @@
 import { DatabaseSync } from "node:sqlite";
 import { PROJECTION_TABLES, type ProjectionState } from "../../../core/src/ledger/rebuild.ts";
+import type { Fact } from "../../../core/src/ledger/facts.ts";
+import { createScreenIdentities, type ScreenIdentities } from './screen-identities.ts';
 
 export type ProjectionRows = Record<string, Record<string, unknown>[]>;
 export interface ProjectionPatch {
   type: "patch"; from_seq: number; seq: number; generation: number;
   changes: Record<string, { upsert: Record<string, unknown>[]; remove: string[] }>;
+  identities?: ScreenIdentities;
 }
 const PATCH_RETENTION = 1000;
 export class ProjectionFeed {
@@ -16,6 +19,7 @@ export class ProjectionFeed {
   private floor: number;
   private limit: number;
   private requiresGeneration: boolean;
+  private identities: ScreenIdentities = { conversations: {}, runs: {} };
   constructor(path: string, catchUp: () => ProjectionState, limit = PATCH_RETENTION) {
     if (!Number.isSafeInteger(limit) || limit < 1) throw new RangeError("Invalid patch retention");
     this.state = catchUp();
@@ -28,6 +32,9 @@ export class ProjectionFeed {
     this.floor = this.state.last_seq;
   }
   private readRows(): ProjectionRows {
+    const facts = this.db.prepare("SELECT * FROM facts WHERE kind LIKE 'conversation.%' OR kind = 'run.created' ORDER BY seq").all()
+      .map(row => ({ ...row, payload: row.payload === null ? null : JSON.parse(String(row.payload)) } as Fact));
+    this.identities = createScreenIdentities(facts);
     return Object.fromEntries(PROJECTION_TABLES.map((table) => [table, this.db.prepare(`SELECT * FROM ${table} ORDER BY id`).all()]));
   }
   refresh(): ProjectionPatch | "resync" | undefined {
@@ -43,7 +50,7 @@ export class ProjectionFeed {
       return "resync";
     }
     const patch: ProjectionPatch = { type: "patch", from_seq: this.state.last_seq,
-      seq: state.last_seq, generation: state.generation, changes: {} };
+      seq: state.last_seq, generation: state.generation, changes: {}, identities: this.identities };
     for (const table of PROJECTION_TABLES) {
       const previous = new Map(this.rows[table].map((row) => [String(row.id), row]));
       const upsert = rows[table].filter((row) => JSON.stringify(previous.get(String(row.id))) !== JSON.stringify(row));
@@ -64,6 +71,6 @@ export class ProjectionFeed {
     // バッチ途中からの再送は冪等な upsert/remove で最終状態へ収束する。
     return this.history.filter((patch) => patch.seq > seq);
   }
-  snapshot() { return { seq: this.state.last_seq, generation: this.state.generation, projection: this.rows }; }
+  snapshot() { return { seq: this.state.last_seq, generation: this.state.generation, projection: this.rows, identities: this.identities }; }
   close(): void { this.db.close(); }
 }

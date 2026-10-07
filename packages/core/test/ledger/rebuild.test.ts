@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import type { TestContext } from "node:test";
-import { applyIncremental, createFactId, openLedger, project, PROJECTION_TABLES, rebuild } from "../../src/ledger/index.ts";
+import { applyIncremental, createFactId, openLedger, project, PROJECTION_TABLES, rebuild, SCHEMA_VERSION } from "../../src/ledger/index.ts";
 import type { Fact, FactInput } from "../../src/ledger/index.ts";
 
 const SAMPLES = new URL("../samples/", import.meta.url);
@@ -382,13 +382,15 @@ test("版 1 の台帳に索引を移行し、既存事実と続きの投影を�
   const legacy = new DatabaseSync(path);
   legacy.exec("DROP TABLE fact_projection_dependencies; DROP INDEX facts_subject_seq");
   legacy.exec("DROP TABLE conversation_name_candidates; DROP TABLE message_name_inputs; DROP INDEX membership_message; ALTER TABLE conversations DROP COLUMN name; ALTER TABLE conversations DROP COLUMN name_is_provisional");
+  for (const [table, column] of [["messages", "source_ts"], ["messages", "source_event_id"], ["messages", "source"], ["messages", "confidence"],
+    ["runs", "launch"], ["runs", "cwd"], ["runs", "branch"], ["approvals", "requested_ts"]]) legacy.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
   legacy.prepare("UPDATE schema_version SET version = ?").run(1);
   legacy.close();
   const migrated = openLedger(path, { storageScope: "full_diff" });
   const projection = new DatabaseSync(path);
   t.after(() => { projection.close(); migrated.close(); rmSync(directory, { recursive: true }); });
   assert.deepEqual(migrated.readSince(0, Number.MAX_SAFE_INTEGER), originalFacts);
-  assert.equal(projection.prepare("SELECT version FROM schema_version WHERE id = 1").get()!.version, 2);
+  assert.equal(projection.prepare("SELECT version FROM schema_version WHERE id = 1").get()!.version, SCHEMA_VERSION);
   assert.deepEqual(readTables(projection), originalTables);
   assert.deepEqual(applyIncremental(projection, state.last_seq), state);
   migrated.append({ ...BASE, source_event_id: "migration-update", source_ts: "2026-01-02T00:00:00Z",
@@ -511,4 +513,36 @@ test("仮名候補の同時刻の Unicode 識別子も純粋な投影と同じ�
   const incremental = readTables(database);
   rebuild(database);
   assert.deepEqual(readTables(database), incremental);
+});
+
+test("画面が読む発言の時刻と出所、実行の起動設定と作業ツリー、承認の要求時刻を投影の列に残す", (t) => {
+  const { writer, database } = openTestLedger(t);
+  const host = { source: "host-claude" as const, confidence: "confirmed" as const };
+  const inputs: FactInput[] = [
+    { ...host, source_event_id: "run", source_ts: "2026-01-01T00:00:00Z", kind: "run.created", subject: "run:r",
+      payload: { conversation_id: "c", generation: 1, state: "starting" } },
+    { ...host, source_event_id: "tree", source_ts: "2026-01-01T00:00:01Z", kind: "run.updated", subject: "run:r",
+      payload: { generation: 1, cwd: "/repo/tree", branch: "main", worktree_id: "w" } },
+    { ...host, source_event_id: "launch", source_ts: "2026-01-01T00:00:02Z", kind: "run.updated", subject: "run:r",
+      // runner の supervisor と同じく、起動の設定は run.updated の launch に載る。
+      payload: { generation: 1, launch: { cwd: "/repo/tree", model: { model: "m", effort: "high" } } } } as FactInput,
+    { ...host, source_event_id: "message", source_ts: "2026-01-01T00:00:03Z", kind: "message.created", subject: "message:m",
+      payload: { provider: "claude", native_id: "m", version: 1, role: "assistant", body: "Hello", body_state: "stored" } },
+    { ...host, source_event_id: "approval", source_ts: "2026-01-01T00:00:04Z", kind: "approval.created", subject: "approval:a",
+      payload: { run_id: "r", request_id: "q", state: "pending" } },
+  ];
+  // 差分の投影と全件の再構築が、同じ列の値を出す。
+  for (const input of inputs) { writer.append(input); applyIncremental(database, Number(database.prepare("SELECT last_seq FROM projection_state").get()!.last_seq)); }
+  const incremental = readTables(database);
+  rebuild(database);
+  assert.deepEqual(readTables(database), incremental);
+  const run = incremental.runs.find((row) => row.id === "c:1")!;
+  assert.deepEqual(JSON.parse(String(run.launch)), { cwd: "/repo/tree", model: { effort: "high", model: "m" } });
+  assert.equal(run.cwd, "/repo/tree");
+  assert.equal(run.branch, "main");
+  const message = incremental.messages[0];
+  assert.equal(message.source_ts, "2026-01-01T00:00:03Z");
+  assert.equal(message.source, "host-claude");
+  assert.equal(message.confidence, "confirmed");
+  assert.equal(incremental.approvals[0].requested_ts, "2026-01-01T00:00:04Z");
 });

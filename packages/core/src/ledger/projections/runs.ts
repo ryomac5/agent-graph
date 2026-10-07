@@ -10,7 +10,8 @@ export type EndEvidence =
   | { kind: "process_check"; succeeded: boolean; matches: boolean; pid: number; start_fingerprint: string }
   | { kind: "user_correction" };
 
-export interface RunProjection extends RunPayload { id: string }
+// launch は runner が記録する起動の設定で、cwd と model と effort を持つ。
+export interface RunProjection extends RunPayload { id: string; launch?: JsonValue }
 
 function readObject(value: JsonValue | undefined): { [key: string]: JsonValue } | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value : undefined;
@@ -57,10 +58,12 @@ export function projectRuns(facts: readonly Fact[]): RunProjection[] {
       id: `${conversationId}:${generation}`, conversation_id: conversationId, generation, state: "unknown",
       reason: "missing_state_evidence",
     };
-    for (const field of ["started_ts", "base_sha", "pid", "start_fingerprint", "repository_id", "worktree_id"] as const) {
+    for (const field of ["started_ts", "base_sha", "pid", "start_fingerprint", "repository_id", "worktree_id", "cwd", "branch"] as const) {
       const value = payload[field];
       if (value !== undefined) Object.assign(run, { [field]: value });
     }
+    const launch = (fact.payload as { launch?: JsonValue }).launch;
+    if (launch !== undefined) run.launch = launch;
     const evidence = readObject(payload.end_evidence);
     const terminal = run.state === "ended" || run.state === "failed";
     if (payload.state && !terminal) {

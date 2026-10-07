@@ -67,6 +67,9 @@ export interface RunPayload {
   start_fingerprint?: string;
   repository_id?: string;
   worktree_id?: string;
+  // 作業ツリーの場所と枝。runner が起動時に記録する。
+  cwd?: string;
+  branch?: string;
 }
 export interface ConnectionPayload {
   run_id: string;

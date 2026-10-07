@@ -1,0 +1,46 @@
+import type { Language } from '../../lib/i18n.ts';
+
+const text = {
+  en: {
+    conversation: 'Conversation', unknown: 'Unknown', source: 'Source', confidence: 'Confidence', streaming: 'Streaming', toolOutput: 'Tool output',
+    show: 'Show full message', hide: 'Show first 10 lines', approval: 'Approval request', unavailable: 'Message unavailable',
+    omitted: 'Message omitted by retention or storage policy', missing: 'Missing messages', timeUnknown: 'Time unknown',
+    continued: 'Continuation', forked: 'Branch', compacted: 'Compaction', adopted: 'Handoff', evidence: 'Evidence',
+    model: 'Model', effort: 'Effort', worktree: 'Worktree', coverage: 'Observation coverage', noRun: 'No run evidence available',
+    readOnly: 'External conversation · Read-only', unsupported: 'Unsupported history format; handoff unavailable',
+    input: 'Message', send: 'Send', shortcut: 'Send with ⌘ Enter', interrupt: 'Interrupt', apply: 'Apply model and effort',
+    nextTurn: 'Codex model and effort changes apply from the next turn.', activeCodex: 'Codex controls are available after the active turn ends.',
+    claudeEffort: 'Live Claude effort changes are not supported by the runner.', fork: 'Branch conversation', handoff: 'Take over conversation',
+    stopped: 'Have you stopped the external terminal?', confirm: 'Yes, resume here', branchInstead: 'No, continue in a branch', cancel: 'Cancel',
+    cwd: 'Working directory', empty: 'No messages observed yet', pending: 'Waiting for command acknowledgement',
+    failed: 'Command failed', noModels: 'No models available', chooseModel: 'Choose a model', noConversation: 'Conversation not found',
+    elapsed: 'Elapsed', waiting: 'Waiting', noCoverage: 'Coverage not provided', launchReady: 'Choose a model and working directory to branch or take over.',
+    user: 'User', assistant: 'Assistant', defaultEffort: 'Default effort', applyShort: 'Apply', branchShort: 'Branch', takeOverShort: 'Take over',
+    noModel: 'No model recorded', managedCoverage: 'Live from runner', observedCoverage: 'Observed history', toolInput: 'Input', toolResult: 'Output',
+    noOutput: 'No output recorded', placeholder: 'Message the agent…', readOnlyPlaceholder: 'Read-only. Take over to continue here.', sendHint: '⌘ Enter to send',
+    noWorktree: 'No worktree recorded', thinking: 'Thinking', resolved: 'Resolved', expired: 'Expired', stale: 'Stale', pendingState: 'Pending',
+    answered: 'Answered', allowed: 'Allowed', denied: 'Denied',
+  },
+  ja: {
+    conversation: '会話', unknown: '不明', source: '出所', confidence: '確度', streaming: '出力中', toolOutput: '道具の出力',
+    show: '全文を開く', hide: '最初の10行を表示', approval: '承認の要求', unavailable: '発言を取得できません',
+    omitted: '保持・保存の方針により発言本文がありません', missing: '発言の欠落', timeUnknown: '時刻不明',
+    continued: '継続', forked: '分岐', compacted: '圧縮', adopted: '引き継ぎ', evidence: '根拠',
+    model: 'モデル', effort: 'effort', worktree: '作業ツリー', coverage: '観測の範囲', noRun: '実行の根拠がありません',
+    readOnly: '外の会話 · 読み取り専用', unsupported: '履歴形式が未対応のため引き継げません',
+    input: '入力', send: '送信', shortcut: '⌘ Enter で送信', interrupt: '中断', apply: 'モデルとeffortを適用',
+    nextTurn: 'Codex のモデルとeffortの変更は次のターンから効きます。', activeCodex: 'Codex の操作は実行中のターンが終わると使えます。',
+    claudeEffort: 'runner は Claude 実行中のeffort変更に対応していません。', fork: '会話を分岐', handoff: '会話を引き継ぐ',
+    stopped: '外のターミナルを止めましたか？', confirm: 'はい、ここで再開', branchInstead: 'いいえ、分岐して続ける', cancel: 'キャンセル',
+    cwd: '作業ディレクトリ', empty: 'まだ発言が観測されていません', pending: '操作の受理を確認中',
+    failed: '操作に失敗しました', noModels: '利用できるモデルがありません', chooseModel: 'モデルを選択', noConversation: '会話が見つかりません',
+    elapsed: '経過', waiting: '待ち時間', noCoverage: '観測範囲が未提供です', launchReady: '分岐・引き継ぎにはモデルと作業ディレクトリを指定してください。',
+    user: '利用者', assistant: 'エージェント', defaultEffort: '既定のeffort', applyShort: '適用', branchShort: '分岐', takeOverShort: '引き継ぐ',
+    noModel: 'モデル未記録', managedCoverage: 'runner から直接', observedCoverage: '観測した履歴', toolInput: '入力', toolResult: '出力',
+    noOutput: '出力の記録はありません', placeholder: 'エージェントへの指示…', readOnlyPlaceholder: '読み取り専用です。続けるには引き継いでください。', sendHint: '⌘ Enter で送信',
+    noWorktree: '作業ツリーの記録なし', thinking: '思考', resolved: '解決済み', expired: '期限切れ', stale: '無効', pendingState: '待ち',
+    answered: '回答済み', allowed: '許可', denied: '拒否',
+  },
+};
+export type ConversationText = keyof typeof text.en;
+export function translate(language: Language, key: ConversationText): string { return text[language][key]; }

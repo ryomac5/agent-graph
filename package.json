@@ -9,7 +9,7 @@
   "packageManager": "pnpm@10.34.5",
   "scripts": {
     "test": "pnpm -r test",
-    "typecheck": "tsc -p packages/core --noEmit && tsc -p packages/api --noEmit && tsc -p packages/runner --noEmit && tsc -p packages/daemon --noEmit && tsc -p packages/dashboard --noEmit && tsc -p packages/adapters --noEmit && tsc -p packages/planner --noEmit && tsc -p scripts --noEmit",
+    "typecheck": "tsc -p packages/core --noEmit && tsc -p packages/api --noEmit && tsc -p packages/runner --noEmit && tsc -p packages/daemon --noEmit && tsc -p packages/dashboard --noEmit && tsc -p packages/adapters --noEmit && tsc -p packages/planner --noEmit && tsc -p scripts --noEmit && tsc -p packages/dashboard/app --noEmit",
     "daemon": "node packages/daemon/src/main.ts"
   },
   "devDependencies": {

@@ -8,6 +8,7 @@ export interface LaunchdOptions {
   plistDir: string;
   nodePath: string;
   daemonPath: string;
+  args?: string[];
   logDir: string;
   env?: Record<string, string | undefined>;
   label?: string;
@@ -42,7 +43,9 @@ export function renderLaunchdPlist(options: Omit<LaunchdOptions, "plistDir" | "u
   const env = { ...options.env, PATH: options.env?.PATH ?? process.env.PATH ?? "" };
   const variables = Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined)
     .map(([key, value]) => `    <key>${escapeXml(key)}</key><string>${escapeXml(value)}</string>`).join("\n");
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n  <key>Label</key><string>${escapeXml(label)}</string>\n  <key>ProgramArguments</key><array><string>${escapeXml(options.nodePath)}</string><string>${escapeXml(options.daemonPath)}</string></array>\n  <key>RunAtLoad</key><true/>\n  <key>KeepAlive</key><true/>\n  <key>StandardOutPath</key><string>${escapeXml(join(options.logDir, "daemon.stdout.log"))}</string>\n  <key>StandardErrorPath</key><string>${escapeXml(join(options.logDir, "daemon.stderr.log"))}</string>\n  <key>EnvironmentVariables</key><dict>\n${variables}\n  </dict>\n</dict>\n</plist>\n`;
+  const argumentsXml = [options.nodePath, options.daemonPath, ...(options.args ?? [])]
+    .map((value) => `<string>${escapeXml(value)}</string>`).join("");
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n  <key>Label</key><string>${escapeXml(label)}</string>\n  <key>ProgramArguments</key><array>${argumentsXml}</array>\n  <key>RunAtLoad</key><true/>\n  <key>KeepAlive</key><true/>\n  <key>StandardOutPath</key><string>${escapeXml(join(options.logDir, "daemon.stdout.log"))}</string>\n  <key>StandardErrorPath</key><string>${escapeXml(join(options.logDir, "daemon.stderr.log"))}</string>\n  <key>EnvironmentVariables</key><dict>\n${variables}\n  </dict>\n</dict>\n</plist>\n`;
 }
 
 export function installLaunchd(options: LaunchdOptions): void {

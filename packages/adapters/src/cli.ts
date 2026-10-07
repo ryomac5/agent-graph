@@ -8,6 +8,7 @@ import { installCodexConfig, mergeCodexConfig, removeCodexConfig, renderCodexOve
 import { installLaunchd, renderInstallCommands, renderLaunchdPlist, renderUninstallCommands, uninstallLaunchd } from "./launchd.ts";
 import { generateMarketplace, renderMarketplace } from "./marketplace.ts";
 import { setupAgentGraph } from "./setup.ts";
+import { setupAgentGraphV2 } from "./setup-v2.ts";
 
 const shimPath = fileURLToPath(new URL("../../daemon/src/shim.ts", import.meta.url));
 const daemonPath = fileURLToPath(new URL("../../daemon/src/main.ts", import.meta.url));
@@ -22,10 +23,16 @@ if (relayIndex !== -1) {
   relay = value;
   args.splice(relayIndex, 2);
 }
-if (args.includes("--setup")) {
-  const unknown = args.find((flag) => !["--setup", "--dry-run", "--doctor", "--skip-login"].includes(flag));
+if (args.includes("--setup") || args.includes("--v2") || args.includes("--rollback-v1") || args.includes("--doctor")) {
+  const unknown = args.find((flag) => !["--setup", "--dry-run", "--doctor", "--skip-login", "--v2", "--rollback-v1"].includes(flag));
   if (unknown) throw new Error(`Unknown option: ${unknown}`);
-  try { await setupAgentGraph({ dryRun: args.includes("--dry-run"), doctor: args.includes("--doctor"), authenticate: !args.includes("--skip-login") }); }
+  if (args.includes("--v2") && args.includes("--rollback-v1")) throw new Error("--v2 and --rollback-v1 are mutually exclusive");
+  try {
+    const options = { dryRun: args.includes("--dry-run"), doctor: args.includes("--doctor"), authenticate: !args.includes("--skip-login") };
+    if (args.includes("--v2") || args.includes("--rollback-v1")) await setupAgentGraphV2({ ...options, rollbackV1: args.includes("--rollback-v1") });
+    else if (options.doctor) await setupAgentGraphV2(options);
+    else await setupAgentGraph(options);
+  }
   catch (error) { process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; }
 } else {
 const dryRun = args.includes("--dry-run");

@@ -1,0 +1,218 @@
+[
+  {
+    "seq": 1,
+    "fact_id": "fc9903d989b4ccd7fa88f535b03d7a9a745945e45b1b0235465087581749bfd5",
+    "source": "host-codex",
+    "source_event_id": "parent",
+    "kind": "conversation.created",
+    "subject": "conversation:parent",
+    "payload": {
+      "history_format": "jsonl",
+      "native_id": "parent",
+      "origin": "managed",
+      "provider": "codex",
+      "type": "interactive"
+    },
+    "payload_hash": "7ecc8ca83d7887d7f5429d28cbac03c25c4c0b1936aab951fcf0d0a97cb9d22b",
+    "source_ts": "2026-01-01T00:00:00Z",
+    "observed_ts": "2026-10-07T02:41:41.279Z",
+    "schema_version": 1,
+    "cursor": null,
+    "confidence": "confirmed",
+    "supersedes": null
+  },
+  {
+    "seq": 2,
+    "fact_id": "f2c7ae0d4fc08a8386c3937387d25cb9536c9a671139c4219d61c8dbca0fe227",
+    "source": "host-codex",
+    "source_event_id": "run-parent",
+    "kind": "run.created",
+    "subject": "run:parent",
+    "payload": {
+      "conversation_id": "parent",
+      "cwd": "/tmp/s14",
+      "generation": 1,
+      "state": "running"
+    },
+    "payload_hash": "7020c2c8ded6606ee03c54768ad8aea48f0fb5f295866a5e9ceb8d22bc29516a",
+    "source_ts": "2026-01-01T00:00:01Z",
+    "observed_ts": "2026-10-07T02:41:41.281Z",
+    "schema_version": 1,
+    "cursor": null,
+    "confidence": "confirmed",
+    "supersedes": null
+  },
+  {
+    "seq": 3,
+    "fact_id": "5927f8620607a8136dd28662ccd455e903bb308740328a0ac25b4bff4f57184d",
+    "source": "host-codex",
+    "source_event_id": "wrong",
+    "kind": "conversation.created",
+    "subject": "conversation:wrong",
+    "payload": {
+      "history_format": "jsonl",
+      "native_id": "wrong",
+      "origin": "managed",
+      "provider": "codex",
+      "type": "interactive"
+    },
+    "payload_hash": "6f0baa3d9e1569917c830543fbb9b4c7c0e8554331f3bd1dab0ec70a71b0f944",
+    "source_ts": "2026-01-01T00:00:02Z",
+    "observed_ts": "2026-10-07T02:41:41.281Z",
+    "schema_version": 1,
+    "cursor": null,
+    "confidence": "confirmed",
+    "supersedes": null
+  },
+  {
+    "seq": 4,
+    "fact_id": "4d175cf648a56a2c7260dfa5d0c58975055437eedaddae225e3f880170cda8f1",
+    "source": "host-codex",
+    "source_event_id": "run-wrong",
+    "kind": "run.created",
+    "subject": "run:wrong",
+    "payload": {
+      "conversation_id": "wrong",
+      "cwd": "/tmp/s14",
+      "generation": 1,
+      "state": "running"
+    },
+    "payload_hash": "a289673a751cda9b729a5be7de0cc511684d288ba7c72829f7fc1bd07b967939",
+    "source_ts": "2026-01-01T00:00:03Z",
+    "observed_ts": "2026-10-07T02:41:41.282Z",
+    "schema_version": 1,
+    "cursor": null,
+    "confidence": "confirmed",
+    "supersedes": null
+  },
+  {
+    "seq": 5,
+    "fact_id": "0a6489d967d6c72b3dd8809f013efb28550942d1df1d3692289a20b08022b4ab",
+    "source": "host-codex",
+    "source_event_id": "correct",
+    "kind": "conversation.created",
+    "subject": "conversation:correct",
+    "payload": {
+      "history_format": "jsonl",
+      "native_id": "correct",
+      "origin": "managed",
+      "provider": "codex",
+      "type": "interactive"
+    },
+    "payload_hash": "4d52bc48d220f63f050ddeacf9874b8e556030696ff394ce888e98d7885e4306",
+    "source_ts": "2026-01-01T00:00:04Z",
+    "observed_ts": "2026-10-07T02:41:41.282Z",
+    "schema_version": 1,
+    "cursor": null,
+    "confidence": "confirmed",
+    "supersedes": null
+  },
+  {
+    "seq": 6,
+    "fact_id": "b8cb5d2e99c067ae09f1117668acda8e1f6eabe4cbcedbfa7cbf5b51a550f6fa",
+    "source": "host-codex",
+    "source_event_id": "run-correct",
+    "kind": "run.created",
+    "subject": "run:correct",
+    "payload": {
+      "conversation_id": "correct",
+      "cwd": "/tmp/s14",
+      "generation": 1,
+      "state": "running"
+    },
+    "payload_hash": "1fd149b76972699530982e0719411184bfa54570d5ffa5962707c713ced35c1f",
+    "source_ts": "2026-01-01T00:00:05Z",
+    "observed_ts": "2026-10-07T02:41:41.283Z",
+    "schema_version": 1,
+    "cursor": null,
+    "confidence": "confirmed",
+    "supersedes": null
+  },
+  {
+    "seq": 7,
+    "fact_id": "5980d3a482dfa6aa69d0b3a8238347bdf83cc3f76c602576a5141397efb47951",
+    "source": "host-codex",
+    "source_event_id": "relation",
+    "kind": "relation.created",
+    "subject": "relation:merged",
+    "payload": {
+      "active": true,
+      "confidence": "inferred",
+      "evidence": {
+        "request_id": "s14"
+      },
+      "from_id": "parent",
+      "to_id": "wrong",
+      "type": "delegated"
+    },
+    "payload_hash": "37b6e6754650300288cf437d94fc7de5457fc30241ee734905072506d76e4abc",
+    "source_ts": "2026-01-01T00:00:06Z",
+    "observed_ts": "2026-10-07T02:41:41.283Z",
+    "schema_version": 1,
+    "cursor": null,
+    "confidence": "confirmed",
+    "supersedes": null
+  },
+  {
+    "seq": 8,
+    "fact_id": "f33205944c4b7799da3788907329640cc613ff8d73b04187222cc36a7ad3c863",
+    "source": "host-codex",
+    "source_event_id": "message",
+    "kind": "message.created",
+    "subject": "message:reply",
+    "payload": {
+      "body": "[redacted reply]",
+      "body_state": "stored",
+      "native_id": "reply",
+      "provider": "codex",
+      "role": "assistant",
+      "version": 1
+    },
+    "payload_hash": "258cb7a0127f13f7183d0b15b5b6fa216bd27bd1580c14db80bc5d43449e1212",
+    "source_ts": "2026-01-01T00:00:07Z",
+    "observed_ts": "2026-10-07T02:41:41.284Z",
+    "schema_version": 1,
+    "cursor": null,
+    "confidence": "confirmed",
+    "supersedes": null
+  },
+  {
+    "seq": 9,
+    "fact_id": "5beb2d334271f51518c070378979b87b9df19aa67aab5f7e66a4fa689d98c764",
+    "source": "host-codex",
+    "source_event_id": "membership",
+    "kind": "message_membership.created",
+    "subject": "message_membership:reply",
+    "payload": {
+      "active": true,
+      "conversation_id": "correct",
+      "message_id": "reply"
+    },
+    "payload_hash": "39a7f9feb0b45067a63e672b54587dc2f77e41148a5aa79725d07f591a8788c2",
+    "source_ts": "2026-01-01T00:00:08Z",
+    "observed_ts": "2026-10-07T02:41:41.286Z",
+    "schema_version": 1,
+    "cursor": null,
+    "confidence": "confirmed",
+    "supersedes": null
+  },
+  {
+    "seq": 10,
+    "fact_id": "cd9066261f0f9ac5dd92064b5f0e3852a522a43bd480d734f60d20462d2504ba",
+    "source": "ui",
+    "source_event_id": "correction",
+    "kind": "relation.corrected",
+    "subject": "relation:merged",
+    "payload": {
+      "confidence": "confirmed",
+      "to_id": "correct"
+    },
+    "payload_hash": "abb313f86f6f65a4b5ec95c11f9b306100241659eb0a68d5e70b6513be019dad",
+    "source_ts": "2026-01-01T00:00:09Z",
+    "observed_ts": "2026-10-07T02:41:41.286Z",
+    "schema_version": 1,
+    "cursor": null,
+    "confidence": "confirmed",
+    "supersedes": "5980d3a482dfa6aa69d0b3a8238347bdf83cc3f76c602576a5141397efb47951"
+  }
+]

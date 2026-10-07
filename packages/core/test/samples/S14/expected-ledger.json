@@ -1,0 +1,42 @@
+[
+  {
+    "kind": "conversation.created",
+    "subject": "conversation:parent"
+  },
+  {
+    "kind": "run.created",
+    "subject": "run:parent"
+  },
+  {
+    "kind": "conversation.created",
+    "subject": "conversation:wrong"
+  },
+  {
+    "kind": "run.created",
+    "subject": "run:wrong"
+  },
+  {
+    "kind": "conversation.created",
+    "subject": "conversation:correct"
+  },
+  {
+    "kind": "run.created",
+    "subject": "run:correct"
+  },
+  {
+    "kind": "relation.created",
+    "subject": "relation:merged"
+  },
+  {
+    "kind": "message.created",
+    "subject": "message:reply"
+  },
+  {
+    "kind": "message_membership.created",
+    "subject": "message_membership:reply"
+  },
+  {
+    "kind": "relation.corrected",
+    "subject": "relation:merged"
+  }
+]

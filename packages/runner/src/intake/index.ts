@@ -5,13 +5,14 @@ import { loadPolicy } from "../../../core/src/assign/policy.ts";
 import { runAcceptance } from "../../../core/src/accept/run.ts";
 import type { Assignment, DelegateResult } from "../../../core/src/delegate/types.ts";
 import { fingerprintRequest, retryStatus, transitionStatus, validateRequest, type IntakeRequest, type IntakeStatus } from "../../../core/src/intake/index.ts";
-import type { ArtifactPayload, ConversationPayload, Fact, FactInput, JsonValue, RunPayload } from "../../../core/src/ledger/facts.ts";
+import type { ArtifactPayload, ConversationPayload, Fact, FactInput, FindingPayload, JsonValue, RunPayload } from "../../../core/src/ledger/facts.ts";
 import type { Ledger } from "../../../core/src/ledger/ledger.ts";
 import { projectDelegations, projectEntityRecords } from "../../../core/src/ledger/projections/delegations.ts";
 import type { RunnerRuntime } from "../runtime.ts";
 import type { RunnerEvent, SocketRequest } from "../socket.ts";
 import type { WorktreeRecord } from "../worktree.ts";
 import type { StartRequest } from "../host/contract.ts";
+import { ReviewFlow } from "../review/index.ts";
 import { buildReviewPrompt, parseReviewResult, REVIEW_OUTPUT_SCHEMA } from "./review.ts";
 
 function json(value: unknown): JsonValue { return JSON.parse(JSON.stringify(value)) as JsonValue; }
@@ -23,6 +24,7 @@ export interface IntakeOptions {
   decision?: DecisionInput;
   cwd?: string;
   publish?: (event: RunnerEvent) => void;
+  reviewBlobDirectory?: string;
 }
 
 export class Intake {
@@ -40,9 +42,18 @@ export class Intake {
   private delegations?: ReturnType<typeof projectDelegations>;
   private originsDirty = false;
   private lastTimestamp = 0;
+  readonly review: ReviewFlow;
+  private reviewTimer: NodeJS.Timeout;
   constructor(ledger: Ledger, runtime: RunnerRuntime, options: IntakeOptions = {}) {
     this.ledger = ledger; this.runtime = runtime; this.options = options;
     this.decision = options.decision ?? { policy: loadPolicy(), quota: () => undefined, performance: () => undefined };
+    this.review = new ReviewFlow(ledger, runtime, this.decision, options.publish, options.reviewBlobDirectory, (runId) => this.finishRun(runId), () => this.facts());
+    this.reviewTimer = setInterval(() => {
+      if (this.cachedRecords<FindingPayload>("finding").some((finding) => finding.state === "sent")) {
+        void this.review.reconcile().catch((error: unknown) => { console.error("Review reconciliation failed", error); });
+      }
+    }, TURN_CHECK_INTERVAL_MS);
+    this.reviewTimer.unref();
   }
   private facts(): Fact[] {
     for (;;) {
@@ -65,6 +76,9 @@ export class Intake {
   }
   private records<P extends object>(entity: string): (Partial<P> & { id: string })[] {
     this.facts();
+    return this.cachedRecords<P>(entity);
+  }
+  private cachedRecords<P extends object>(entity: string): (Partial<P> & { id: string })[] {
     let records = this.entityRecords.get(entity);
     if (!records) {
       records = projectEntityRecords(this.entityFacts.get(entity) ?? [], entity);
@@ -317,6 +331,7 @@ export class Intake {
           })() : undefined;
         const subject = `relation:intake:${JSON.stringify([d.request_id, attempt.attempt])}` as const;
         const confidence = parent ? "confirmed" : "unknown";
+        if (facts.some((f) => f.subject === subject && f.kind === "relation.corrected")) continue;
         const previous = facts.findLast((f) => f.subject === subject);
         if (previous?.confidence === confidence && previous.payload && "from_id" in previous.payload && previous.payload.from_id === parent) continue;
         this.write(previous ? "relation.updated" : "relation.created", subject, { type: "delegated", from_id: parent,
@@ -343,6 +358,7 @@ export class Intake {
     }
   }
   command(request: SocketRequest): JsonValue | Promise<JsonValue> {
+    if (request.command.startsWith("review.")) return this.review.command(request);
     const p = request.payload as Record<string, JsonValue> | undefined;
     if (request.command === "intake.submit") return json(this.submit(p));
     if (request.command === "intake.list") return json(this.list());
@@ -354,10 +370,12 @@ export class Intake {
   }
   async close(): Promise<void> {
     this.closing = true;
+    clearInterval(this.reviewTimer);
     for (const task of this.scheduled.values()) clearImmediate(task);
     this.scheduled.clear();
     await Promise.allSettled(this.launches);
     await this.runtime.close();
+    await this.review.close();
     await Promise.allSettled(this.tasks.values());
   }
 }

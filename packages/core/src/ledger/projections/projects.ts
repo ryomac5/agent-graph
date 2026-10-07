@@ -10,8 +10,25 @@ export function createRepositoryId(realCommonDirectory: string): string {
   return createHash("sha256").update(realCommonDirectory).digest("hex");
 }
 
+function directoryName(path: string): string {
+  return path.replace(/[\\/]+$/, "").split(/[\\/]/).at(-1) || path;
+}
+
+// 利用者が明示した名前は、画面からの事実と、作成の後の変更と訂正にだけある。
+function isExplicitName(fact: Fact): boolean {
+  return fact.source === "ui" || !fact.kind.endsWith(".created");
+}
+
 export function projectProjects(facts: readonly Fact[]): ProjectedProject[] {
-  return projectEntities(facts, "project", (payload, id) => payload.repository_id ?? id);
+  // 自動の作成は名前を本体のディレクトリ名に揃える。事実の並びで名前が変わらない。
+  const normalized = facts.map((fact) => {
+    if (fact.kind !== "project.created" || isExplicitName(fact) || !fact.payload?.root_path) return fact;
+    const name = directoryName(fact.payload.root_path);
+    return { ...fact, payload: { ...fact.payload, display_name: name, name_prefix: name } } as Fact;
+  });
+  // 画面からの登録は自動の作成より優先する。
+  return projectEntities(normalized, "project", (payload, id) => payload.repository_id ?? id,
+    (fact) => [fact.source === "ui" ? 1 : 0]);
 }
 
 export interface UnsupportedObservationProjection {

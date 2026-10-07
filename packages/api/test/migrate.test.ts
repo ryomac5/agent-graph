@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -367,4 +367,94 @@ test("CLI は読めない DB を誤り一覧へ入れ、planner と未知 client
   assert.deepEqual(runMigration(), report);
   assert.deepEqual(ledger.readSince(0, 1000), facts);
   assert.deepEqual(readFileSync(path), original);
+});
+
+function createRepositories(t: TestContext) {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "agent-graph-migrate-repos-")));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const git = (...args: string[]) => spawnSync("git", args, { encoding: "utf8" });
+  const main = join(dir, "projects/agent-graph");
+  const store = join(dir, "cache/agent-graph/worktrees");
+  const scratch = join(dir, "scratch");
+  mkdirSync(main, { recursive: true });
+  git("init", "--quiet", main);
+  git("-C", main, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false",
+    "commit", "--quiet", "--allow-empty", "-m", "fixture");
+  const worktrees = ["A1", "W1", "Z1"].map((name) => join(store, "agent-graph-1234/graph", name));
+  for (const worktree of worktrees) assert.equal(git("-C", main, "worktree", "add", "--quiet", "--detach", worktree).status, 0);
+  const temporary = join(scratch, "codexpick.xPbN");
+  mkdirSync(temporary, { recursive: true });
+  git("init", "--quiet", temporary);
+  const rows: [string, string, string][] = [
+    ["agent-graph", main, "agent-graph"], ...worktrees.map((path, index) => [`wt-${index}`, path, path.split("/").at(-1)!] as [string, string, string]),
+    ["codexpick", temporary, "codexpick.xPbN"], ["deleted", join(dir, "deleted"), "deleted"],
+  ];
+  function createLegacy(name: string, order: [string, string, string][]): string {
+    const path = join(dir, `${name}.db`);
+    const db = new DatabaseSync(path);
+    for (const migration of migrations) db.exec(migration.sql);
+    for (const row of order) db.prepare("INSERT INTO repos VALUES (?, ?, ?)").run(...row);
+    for (const [key] of order) {
+      db.prepare(`INSERT INTO sessions (id, repo_key, name, client, trace_id, started_at, status)
+        VALUES (?, ?, ?, 'codex', 'trace', ?, 'running')`).run(`session-${key}`, key, `${key}-1`, TS);
+    }
+    db.close();
+    return path;
+  }
+  return { dir, main, temporaryRoots: [scratch, store], rows, createLegacy };
+}
+
+test("作業ツリーの行は本体のプロジェクトに写し、表示名は本体の名前で行の順序に依存しない", async (t) => {
+  const f = createRepositories(t);
+  const results = [];
+  for (const [name, order] of [["forward", f.rows], ["reverse", [...f.rows].reverse()]] as const) {
+    const ledger = openLedger(":memory:");
+    t.after(() => ledger.close());
+    const path = f.createLegacy(name, [...order]);
+    await migrateLegacyDatabases([path], ledger, { temporaryRoots: f.temporaryRoots });
+    const facts = ledger.readSince(0, 1000);
+    const projection = project(facts);
+    const registered = projection.projects.filter((entry) => entry.state === "registered");
+    assert.equal(registered.length, 1);
+    assert.equal(registered[0].display_name, "agent-graph");
+    assert.equal(registered[0].name_prefix, "agent-graph");
+    assert.equal(registered[0].root_path, f.main);
+    // 作業ツリーの行の事実も本体の名前と場所を持つ。
+    const created = facts.filter((entry) => entry.subject === `project:${registered[0].id}`);
+    assert.equal(created.length, 4);
+    for (const fact of created) {
+      assert.ok(fact.kind === "project.created");
+      assert.equal(fact.payload?.display_name, "agent-graph");
+      assert.equal(fact.payload?.root_path, f.main);
+    }
+    const temporary = projection.projects.find((entry) => entry.display_name === "codexpick.xPbN")!;
+    assert.equal(temporary.state, "unregistered");
+    assert.equal(projection.projects.find((entry) => entry.display_name === "deleted")?.state, "unregistered");
+    // 登録しないリポジトリの会話も、観測した会話として残す。
+    assert.equal(projection.conversations.length, f.rows.length);
+    assert.ok(projection.conversations.every((conversation) => conversation.origin === "observed"));
+    assert.ok(projection.tasks.some((task) => task.project === temporary.id));
+    results.push(projection.projects);
+  }
+  assert.deepEqual(results[0], results[1]);
+});
+
+test("旧い移行が作業ツリーの名前で写した台帳も、再移行で本体の名前に訂正し、2 回目は増えない", async (t) => {
+  const f = createRepositories(t);
+  const ledger = openLedger(":memory:");
+  t.after(() => ledger.close());
+  const path = f.createLegacy("stale", f.rows);
+  // 旧い移行と同じく、各行のパスと名前のまま登録した状態を作る。
+  await migrateLegacyDatabases([path], ledger, { temporaryRoots: [], git: (args) => {
+    const result = spawnSync("git", args, { encoding: "utf8" });
+    return args.includes("worktree") ? { status: result.status ?? 1, stdout: `worktree ${args[1]}\n` } : { status: result.status ?? 1, stdout: result.stdout };
+  } });
+  const stale = project(ledger.readSince(0, 1000)).projects;
+  assert.ok(stale.filter((entry) => entry.state === "registered").length >= 2);
+  await migrateLegacyDatabases([path], ledger, { temporaryRoots: f.temporaryRoots });
+  const facts = ledger.readSince(0, 1000);
+  const registered = project(facts).projects.filter((entry) => entry.state === "registered");
+  assert.deepEqual(registered.map((entry) => [entry.display_name, entry.root_path]), [["agent-graph", f.main]]);
+  await migrateLegacyDatabases([path], ledger, { temporaryRoots: f.temporaryRoots });
+  assert.equal(ledger.readSince(0, 1000).length, facts.length);
 });

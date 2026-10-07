@@ -147,6 +147,9 @@ test("実行は旧 daemon を外して移行し通常プロジェクトを登録
   assert.ok(bootout < migrate && migrate < bootstrap);
   const registered = readProjects(f.state).projects.filter((project) => project.state === "registered");
   assert.equal(registered.length, 1); assert.equal(registered[0].root_path, f.repo);
+  assert.equal(registered[0].display_name, "main");
+  // 移行と導入の登録が同じ判定を共有するので、導入は訂正の事実を足さない。
+  assert.ok(readProjects(f.state).facts.filter((fact) => fact.kind.startsWith("project.")).every((fact) => fact.source === "legacy"));
   assert.ok(readProjects(f.state).projects.some((project) => project.root_path === f.temporary && project.state === "unregistered"));
   const config = readFileSync(f.configPath, "utf8");
   assert.equal(config.split("[mcp_servers.agent-graph]").length, 2);

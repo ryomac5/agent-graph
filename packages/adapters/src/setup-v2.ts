@@ -1,8 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { installCodexConfig, mergeCodexConfig } from "./codex-config.ts";
@@ -10,6 +9,7 @@ import { renderLaunchdPlist, type LaunchdOptions } from "./launchd.ts";
 import { generateMarketplace, renderMarketplace } from "./marketplace.ts";
 import { findExecutable, type CommandResult, type SetupOptions } from "./setup.ts";
 import type { ProjectPayload } from "../../core/src/ledger/facts.ts";
+import { defaultTemporaryRoots, normalizeTemporaryRoots, resolveProjectLocation, toProjectPayload } from "../../core/src/ledger/repository.ts";
 
 const DAEMON = "dev.agent-graph.daemon";
 const RUNNER = "dev.agent-graph.runner";
@@ -25,10 +25,6 @@ export interface SetupV2Options extends SetupOptions {
 
 function readOptional(path: string): string {
   return existsSync(path) ? readFileSync(path, "utf8") : "";
-}
-
-function hash(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
 }
 
 function listLegacyDatabases(state: string): string[] {
@@ -48,20 +44,12 @@ function listProjectDecisions(paths: string[], temporaryRoots: string[], run: No
     }
     const db = new DatabaseSync(dryRun ? `${pathToFileURL(path).href}?immutable=1` : path, { readOnly: true });
     try {
-      for (const row of db.prepare("SELECT root_path, name FROM repos ORDER BY root_path").all()) {
-        const root = String(row.root_path);
-        const commonResult = run("git", ["-C", root, "rev-parse", "--path-format=absolute", "--git-common-dir"]);
-        const gitResult = run("git", ["-C", root, "rev-parse", "--absolute-git-dir"]);
-        const common = commonResult.status === 0 ? realpathSync(commonResult.stdout.trim()) : undefined;
-        const repository_id = common ? hash(common) : hash(JSON.stringify(["legacy-repository", root]));
-        const actualRoot = existsSync(root) ? realpathSync(root) : resolve(root);
-        const temporary = temporaryRoots.some((directory) => actualRoot === directory || actualRoot.startsWith(directory + sep));
-        const worktree = common && gitResult.status === 0 && realpathSync(gitResult.stdout.trim()) !== common;
-        const registered = Boolean(common && !temporary && !worktree);
-        const previous = decisions.get(repository_id);
-        if (previous?.state === "registered") continue;
-        decisions.set(repository_id, { repository_id, root_path: actualRoot, display_name: String(row.name),
-          name_prefix: String(row.name), state: registered ? "registered" : "unregistered" });
+      for (const row of db.prepare("SELECT root_path FROM repos ORDER BY root_path").all()) {
+        // 移行と同じ関数で判定する。作業ツリーは本体に寄り、一時の場所と消えたリポジトリは登録しない。
+        const location = toProjectPayload(resolveProjectLocation(String(row.root_path), {
+          temporaryRoots, git: (args) => run("git", args),
+        }));
+        decisions.set(location.repository_id, location);
       }
     } finally { db.close(); }
   }
@@ -185,8 +173,7 @@ export async function setupAgentGraphV2(options: SetupV2Options = {}): Promise<{
     throw new Error("runner の設定が変わっています。実行の終了後に runner を停止して再実行してください。");
   }
   const legacyPaths = rollback ? [] : listLegacyDatabases(state);
-  const temporaryRoots = (options.temporaryRoots ?? [env.TMPDIR || tmpdir(), "/tmp", "/private/tmp", "/var/folders", "/private/var/folders"])
-    .map((path) => existsSync(path) ? realpathSync(path) : resolve(path));
+  const temporaryRoots = normalizeTemporaryRoots(options.temporaryRoots ?? defaultTemporaryRoots(env, home));
   const projects = options.dryRun ? listProjectDecisions(legacyPaths, temporaryRoots, run, true, log) : [];
   const act = (description: string, action: () => void) => { log(description); if (!options.dryRun) action(); };
   const stop = (label: string) => act(`launchctl bootout ${domain}/${label}; launchd 登録を外す`, () => {
@@ -218,7 +205,8 @@ export async function setupAgentGraphV2(options: SetupV2Options = {}): Promise<{
     });
     stop(DAEMON);
     for (const path of legacyPaths) act(`api migrate --from ${path} --db ${dbPath}`, () => {
-      const result = checked(nodePath, [apiPath, "migrate", "--from", path, "--db", dbPath]);
+      const result = checked(nodePath, [apiPath, "migrate", "--from", path, "--db", dbPath,
+        ...temporaryRoots.flatMap((directory) => ["--temporary-root", directory])]);
       const report = JSON.parse(result.stdout);
       if (report.errors?.length) throw new Error(`旧 DB の移行に失敗しました: ${JSON.stringify(report.errors)}`);
       log(result.stdout.trim());

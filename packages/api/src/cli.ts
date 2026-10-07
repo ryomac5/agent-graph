@@ -11,7 +11,7 @@ import { runWatchCli, WATCH_HELP } from "./watch/index.ts";
 
 import { DEFAULT_DASHBOARD_PORT, startStaticServer } from "./static/index.ts";
 
-const HELP = "Usage: agent-graph-api ingest --once | migrate --from <path> | rebuild | serve [--db <path>] [--port <port>] [--dashboard-port <port>] [--runner-socket <path>] [--no-observe]" + "\n" + WATCH_HELP;
+const HELP = "Usage: agent-graph-api ingest --once | migrate --from <path> [--temporary-root <path>]... | rebuild | serve [--db <path>] [--port <port>] [--dashboard-port <port>] [--runner-socket <path>] [--no-observe]" + "\n" + WATCH_HELP;
 
 function listDatabases(path: string, excludedPaths: Set<string>): string[] {
   if (statSync(path).isFile()) return excludedPaths.has(realpathSync(path)) ? [] : [path];
@@ -35,16 +35,18 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
   let runnerPath: string | undefined;
   let once = false;
   let observe = true;
+  const temporaryRoots: string[] = [];
   for (let index = 0; index < flags.length; index += 1) {
     const flag = flags[index];
     if (flag === "--no-observe" && command === "serve") { observe = false; continue; }
     if (flag === "--once" && command === "ingest") { once = true; continue; }
-    if (!["--db", "--db-path", "--state-dir", "--from", "--port", "--dashboard-port", "--runner-socket"].includes(flag)) throw new TypeError(`Unknown option: ${flag}`);
+    if (!["--db", "--db-path", "--state-dir", "--from", "--port", "--dashboard-port", "--runner-socket", "--temporary-root"].includes(flag)) throw new TypeError(`Unknown option: ${flag}`);
     const value = flags[++index];
     if (!value || value.startsWith("--")) throw new TypeError(`Missing value for ${flag}`);
     if (flag === "--db" || flag === "--db-path") dbPath = resolve(value);
     else if (flag === "--state-dir") dbPath = join(resolve(value), "agent-graph.db");
     else if (flag === "--from" && command === "migrate") from = resolve(value);
+    else if (flag === "--temporary-root" && command === "migrate") temporaryRoots.push(resolve(value));
     else if (flag === "--runner-socket" && command === "serve") runnerPath = resolve(value);
     else if ((flag === "--port" || flag === "--dashboard-port") && command === "serve") {
       const parsed = Number(value);
@@ -65,6 +67,7 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
       if (paths.length === 0) throw new TypeError("No legacy databases found");
       const report = await migrateLegacyDatabases(paths, service.ledger, {
         backupDirectory: join(service.dbPath + ".migration-backups"), afterDatabase: service.catchUp, batch: service.batch,
+        ...(temporaryRoots.length ? { temporaryRoots } : {}),
       });
       console.log(JSON.stringify(report));
     } else {

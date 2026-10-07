@@ -10,11 +10,19 @@ import { ProjectionFeed, type ProjectionPatch } from "../service/projection-feed
 import { RunnerClient, runnerSocketPath } from "../runner-client.ts";
 import { authorize, createToken, readRequestUrl } from "./security.ts";
 import { createSearchHandler } from "../search/index.ts";
+import { createFilesApi, handleFilesCommand } from "../files/index.ts";
+import { FILE_COMMANDS } from "./contract.ts";
+import type { RedactionRules } from "../../../core/src/ledger/redact.ts";
 
 export const DEFAULT_WS_PORT = 7421;
 const MAX_FRAME_BYTES = 1024 * 1024;
 const MAX_BUFFERED_BYTES = 4 * MAX_FRAME_BYTES;
-export interface WebSocketOptions { port?: number; runnerPath?: string; patchRetention?: number }
+export interface WebSocketOptions {
+  port?: number;
+  runnerPath?: string;
+  patchRetention?: number;
+  readRedactionRules?: () => RedactionRules;
+}
 
 export async function startWebSocketServer(service: ReturnType<typeof openObservationService>, options: WebSocketOptions = {}) {
   const feed = new ProjectionFeed(service.dbPath, service.catchUp, options.patchRetention);
@@ -50,6 +58,7 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
   searchDb.exec("PRAGMA busy_timeout = 5000");
   const searchOptions = { port, token };
   const search = createSearchHandler(searchDb, searchOptions);
+  const files = createFilesApi(searchDb, options.readRedactionRules);
   const server = createServer((request, response) => {
     response.setHeader("Cache-Control", "no-store");
     if (!authorize(request, port, token)) { response.writeHead(403).end(); return; }
@@ -94,6 +103,16 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
         for (const patch of patches) sendPatch(socket, patch);
       } else if (message.type === "cmd" && clients.has(socket) && typeof message.cmd_id === "string"
         && message.cmd_id.length > 0 && typeof message.command === "string" && message.command.length > 0) {
+        if ((FILE_COMMANDS as readonly string[]).includes(message.command)) {
+          refresh();
+          void handleFilesCommand(files, message.command, message.payload).then((result) => {
+            send(socket, { type: "ack", cmd_id: message.cmd_id, ok: true, result });
+          }, () => {
+            // Git の stderr やファイルの内容を失敗の応答へ複製しない。
+            send(socket, { type: "ack", cmd_id: message.cmd_id, ok: false, error: "Files request failed" });
+          });
+          return;
+        }
         void runner.request(forwardScreenCommand(message)).then((result) => {
           const { type, ...ack } = result;
           send(socket, { type: "ack", ...ack });

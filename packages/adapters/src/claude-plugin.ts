@@ -27,7 +27,7 @@ export function renderClaudePlugin(options: ClaudePluginOptions): Record<string,
     ".mcp.json": json({ mcpServers: { "agent-graph": {
       command: options.nodePath, args: [selectShim(options)], env: { AGENT_GRAPH_CLIENT: "claude" },
     } } }),
-    "hooks/hooks.json": json({ hooks: Object.fromEntries(HOOK_COMMANDS.map(([event, args, matcher]) => [event, [hook(args, matcher)]])) }),
+    "hooks/hooks.json": json({ hooks: Object.fromEntries(HOOK_COMMANDS.map(([event, args, matcher]) => [event, [hook(options.relay === "v2" ? "" : args, matcher)]])) }),
     "recommended-settings.json": json({ permissions: { deny: ["Bash(sudo *)", "Bash(git push *)"] } }),
   };
 }

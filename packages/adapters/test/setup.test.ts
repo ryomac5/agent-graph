@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -174,17 +173,13 @@ test("稼働中の委譲がある場合はサービス設定の変更より先�
   const f = createFixture(t);
   await setupAgentGraph(f.options);
   f.options.env = { PATH: f.bin, AGENT_GRAPH_PORT: "7421" };
-  const server = createServer((req, res) => {
-    res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify(req.url === "/api/overview" ? { projects: [{ key: "project" }] } : {
+  t.mock.method(globalThis, "fetch", async (input: string) => {
+    const url = new URL(input);
+    assert.equal(url.origin, "http://127.0.0.1:7420");
+    return Response.json(url.pathname === "/api/overview" ? { projects: [{ key: "project" }] } : {
       sessions: [], graphs: [{ nodes: [{ kind: "task", status: "running" }] }],
-    }));
+    });
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => server.close());
-  const address = server.address();
-  assert.ok(address && typeof address !== "string");
-  f.options.wait = async () => `http://127.0.0.1:${address.port}/`;
   f.calls.length = 0;
   await assert.rejects(setupAgentGraph(f.options), /実行中の委譲/);
   assert.ok(f.calls.every((call) => call[1] !== "bootout" && call[1] !== "bootstrap"));
@@ -199,20 +194,19 @@ test("macOS以外と相対パスの設定は変更前に拒否する", async (t)
 
 test("起動確認はログ末尾のURLとHTTP APIを確認する", async (t) => {
   const f = createFixture(t);
-  const server = createServer((_req, res) => {
-    res.setHeader("Content-Type", "application/json");
-    res.end('{"projects":[]}');
+  const url = "http://127.0.0.1:7420/";
+  const requests: string[] = [];
+  t.mock.method(globalThis, "fetch", async (input: string, init: RequestInit) => {
+    requests.push(input);
+    assert.ok(init.signal instanceof AbortSignal);
+    return Response.json({ projects: [] });
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => server.close());
-  const address = server.address();
-  assert.ok(address && typeof address !== "string");
-  const url = `http://127.0.0.1:${address.port}/`;
   const logDir = join(f.home, ".local", "state", "agent-graph", "run");
   mkdirSync(logDir, { recursive: true });
   writeFileSync(join(logDir, "daemon.log"), `dashboard http://127.0.0.1:1/\n${"x".repeat(100_000)}\ndashboard ${url}\n`);
   const result = await setupAgentGraph({ ...f.options, wait: undefined });
   assert.equal(result.url, url);
+  assert.deepEqual(requests, [`${url}api/overview`]);
 });
 
 test("シェルのdry-runはNodeが不足してもインストールしない", (t) => {

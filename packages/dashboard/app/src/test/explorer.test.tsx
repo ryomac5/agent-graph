@@ -101,7 +101,7 @@ describe('Files explorer', () => {
     expect(screen.queryByRole('link', { name: 'Files' })).toBeNull();
     expect(within(screen.getByRole('navigation', { name: 'Project' })).getAllByRole('link').map(link => link.textContent)).toEqual(['Project', 'Tree', 'Changes']);
     expect(screen.queryByRole('region', { name: 'File viewer' })).toBeNull();
-    expect(screen.getByRole('region', { name: 'Tasks' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Root conversations' })).toBeTruthy();
   });
 
   it('keeps the Files column on the left, collapses it at 1024 pixels and opens it on request', async () => {

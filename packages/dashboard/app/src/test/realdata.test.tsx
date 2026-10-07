@@ -30,7 +30,7 @@ function createLargeStore() {
       history_format: 'legacy', project, message_count: 10, last_message_excerpt: 'Saved message excerpt', last_message_ts: OLD });
     runs.push({ id: `run-${index}`, conversation_id: `conversation-${index}`, state: 'ended', generation: 1, ended_ts: OLD });
   }
-  target.setSnapshot({ seq: 1, generation: 0, projection: { conversations, tasks, runs,
+  target.setSnapshot({ seq: 1, generation: 0, projection: { conversations, tasks, runs, roots: conversations.map((row, index) => ({ id: row.id, name: row.name, project: index % 3 === 0 ? 'registered-hash' : 'other', state: 'ended', last_activity_ts: OLD, conversation_ids: [String(row.id)], running_children: 0, total_children: 0 })),
     projects: [{ id: 'registered-hash', display_name: 'Real project', root_path: '/projects/main', state: 'registered' },
       { id: 'hidden-hash', display_name: 'Old project', root_path: '/missing/repo', state: 'unregistered' }],
   } });
@@ -44,69 +44,28 @@ it('uses only registered display names in the sidebar for ten thousand conversat
   expect(sidebar.textContent).not.toMatch(/hash|Old project/);
   expect(document.querySelectorAll('.activity-row').length).toBeLessThanOrEqual(200);
 });
-it('shows running, waiting and the last 24 hours in each project and opens older tasks a hundred rows at a time', () => {
-  const target = createLargeStore();
-  act(() => target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: {
-    runs: { remove: [], upsert: [{ id: 'run-9999', conversation_id: 'conversation-9999', state: 'running' },
-      { id: 'run-9998', conversation_id: 'conversation-9998', state: 'waiting_input' }] },
-    conversations: { remove: [], upsert: [{ ...target.getSnapshot().projection.conversations[9997], last_message_ts: NOW }] },
-  } }));
-  render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
-  // 9999 は登録したプロジェクト、9998 と 9997 は Other に属する。古いものは最初に出さない。
-  const real = screen.getByRole('region', { name: 'Real project' });
-  const other = screen.getByRole('region', { name: 'Other' });
-  expect(within(real).getAllByRole('article').map(row => row.getAttribute('aria-label'))).toEqual(['Task 9999']);
-  expect(within(other).getAllByRole('article').map(row => row.getAttribute('aria-label'))).toEqual(['Task 9998', 'Task 9997']);
-  // 待ちは薄くせず、直近に止まったものは薄く出す。
-  expect(within(other).getAllByRole('article').map(row => row.classList.contains('is-stopped'))).toEqual([false, true]);
-  // 動いている区画を上に出す。
-  expect(screen.getAllByRole('region').filter(region => region.classList.contains('project-section')).map(region => region.getAttribute('aria-label')))
-    .toEqual(['Real project', 'Other']);
-  fireEvent.click(within(real).getByRole('button', { name: 'Show 100 older' }));
-  const rows = within(real).getAllByRole('article');
-  expect(rows).toHaveLength(101);
-  expect(rows[1].classList.contains('is-stopped')).toBe(true);
-});
-it('limits even ten thousand recent conversations to two hundred rows on first render', () => {
-  const target = createLargeStore();
-  const state = target.getSnapshot();
-  target.setSnapshot({ ...state, projection: { ...state.projection,
-    conversations: state.projection.conversations.map(row => ({ ...row, last_message_ts: NOW })),
-  } });
-  render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
-  expect(document.querySelectorAll('.activity-row').length).toBe(200);
-  expect(screen.getAllByRole('button', { name: 'Show 100 more' }).length).toBeGreaterThan(0);
-});
-it.each(['/tmp/test', '/private/tmp/test', '/var/folders/xx/test', '/private/var/folders/xx/test', '/Users/test/.cache/agent-graph/worktrees/test'])('hides temporary conversations under %s until requested', root => {
-  const target = createStore();
-  target.setSnapshot({ seq: 1, generation: 0, projection: {
-    projects: [{ id: 'temporary', root_path: root, state: 'unregistered' }],
-    conversations: [{ id: 'c', project: 'temporary', name: 'Temporary fixture', provider: 'codex', origin: 'observed' }],
-  } });
-  render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
-  fireEvent.click(screen.getByRole('button', { name: 'External conversations' }));
-  expect(screen.queryByRole('article', { name: 'Temporary fixture' })).toBeNull();
-  fireEvent.click(screen.getByRole('checkbox', { name: 'Show temporary' }));
-  expect(screen.getByRole('article', { name: 'Temporary fixture' })).toBeTruthy();
-  expect(isTemporaryPath('/tmp-project/main')).toBe(false);
-});
-it('keeps a worktree attached to its registered main project visible', () => {
-  const target = createStore();
-  target.setSnapshot({ seq: 1, generation: 0, projection: {
-    projects: [{ id: 'main', display_name: 'Main', root_path: '/projects/main', state: 'registered' }],
-    conversations: [{ id: 'c', project: 'main', name: 'Feature worktree', origin: 'observed' }],
-    runs: [{ id: 'r', conversation_id: 'c', cwd: '/tmp/feature-worktree', state: 'unknown' }],
-  } });
-  render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
-  fireEvent.click(screen.getByRole('button', { name: 'External conversations' }));
-  const row = screen.getByRole('article', { name: 'Feature worktree' });
-  expect(row.textContent?.match(/Unknown/g)).toHaveLength(1);
-  const badge = within(row).getByRole('link', { name: 'Unknown · Evidence' });
-  // 一覧の不明は印だけを出し、理由は title に置く。
-  expect([...badge.querySelectorAll('.state-detail')].map(detail => detail.textContent)).toEqual([]);
-  expect(badge.title).toBe('Unknown · No evidence confirming execution state');
-});
-function createConversationStore() {
+it('shows at most five roots per project with running roots first', () => {
+ const target = createLargeStore(); const snapshot = target.getSnapshot();
+ target.setSnapshot({ ...snapshot, projection: { ...snapshot.projection, roots: snapshot.projection.roots.map((row, index) => ({ ...row, state: index === 9999 ? 'running' : index === 9998 ? 'waiting_input' : 'ended', last_activity_ts: index === 9998 ? NOW : OLD })) } });
+ render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
+ const real = screen.getByRole('region', { name: 'Real project' }); const other = screen.getByRole('region', { name: 'Other' });
+ expect(real.querySelectorAll('.root-row')).toHaveLength(5); expect(other.querySelectorAll('.root-row')).toHaveLength(5);
+ expect(real.querySelector('.root-row')!.textContent).toContain('Task 9999'); expect(other.querySelector('.root-row')!.textContent).toContain('Task 9998');
+ expect(within(real).getByRole('link', { name: 'View all root conversations' })).toBeTruthy();
+});it('limits ten thousand projected roots to five per project on the overview', () => {
+ render(<MemoryRouter><HomePage target={createLargeStore()}/></MemoryRouter>);
+ expect(document.querySelectorAll('.root-row')).toHaveLength(10); expect(screen.getAllByRole('link', { name: 'View all root conversations' })).toHaveLength(2);
+});it.each(['/tmp/test', '/private/tmp/test', '/var/folders/xx/test', '/private/var/folders/xx/test', '/Users/test/.cache/agent-graph/worktrees/test'])('does not invent roots from conversations under %s', root => {
+ const target = createStore(); target.setSnapshot({ seq: 1, generation: 0, projection: { projects: [{ id: 'temporary', root_path: root, state: 'unregistered' }], conversations: [{ id: 'c', project: 'temporary', name: 'Temporary fixture', provider: 'codex', origin: 'observed' }], roots: [] } });
+ render(<MemoryRouter><HomePage target={target}/></MemoryRouter>); expect(screen.queryByText('Temporary fixture')).toBeNull(); expect(screen.getByText('No root conversations yet')).toBeTruthy(); expect(isTemporaryPath('/tmp-project/main')).toBe(false);
+});it('keeps projected roots attached to their registered main project visible', () => {
+ const target = createStore(); target.setSnapshot({ seq: 1, generation: 0, projection: {
+ projects: [{ id: 'main', display_name: 'Main', root_path: '/projects/main', state: 'registered' }],
+ roots: [{ id: 'c', name: 'Feature worktree', project: 'main', state: 'unknown', last_activity_ts: null, conversation_ids: ['c'], running_children: 0, total_children: 0 }],
+ conversations: [{ id: 'c', project: 'main', origin: 'observed' }], runs: [{ id: 'r', conversation_id: 'c', cwd: '/tmp/feature-worktree', state: 'unknown' }] } });
+ render(<MemoryRouter><HomePage target={target}/></MemoryRouter>); const row = within(screen.getByRole('region', { name: 'Main' })).getByRole('link', { name: /Feature worktree/ });
+ expect(row.querySelector('.root-state')!.textContent).toBe('unknown'); expect(row.textContent).toContain('Activity unknown');
+});function createConversationStore() {
   const target = createStore();
   target.setSnapshot({ seq: 1, generation: 0, projection: {
     projects: [{ id: 'p', display_name: 'Product', root_path: '/projects/product', state: 'registered' }],
@@ -148,46 +107,20 @@ it('shows a conversation fetch failure and retries successfully', async () => {
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Retry' })));
   expect(screen.queryByRole('alert')).toBeNull();
 });
-it('loads metadata after the snapshot page without overwriting a newer live row', async () => {
-  const target = createStore();
-  target.setSnapshot({ seq: 1, generation: 0, projection: {
-    projects: [{ id: 'p', display_name: 'Product', state: 'registered' }], conversations: [],
-  }, pages: { conversations: { total: 2, next: 'c0' } } });
-  vi.stubGlobal('fetch', vi.fn(async (url: URL) => {
-    expect(url.pathname).toBe('/projection');
-    expect(url.searchParams.get('table')).toBe('conversations');
-    target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: {
-      conversations: { remove: [], upsert: [{ id: 'c1', name: 'Live title', project: 'p' }] },
-    } });
-    return { ok: true, json: async () => ({ generation: 0, rows: [{ id: 'c1', name: 'Old title', project: 'p' },
-      { id: 'c2', name: 'Second page', project: 'p' }], next: null }) };
-  }));
-  render(<MemoryRouter><App target={target}/></MemoryRouter>);
-  await screen.findByRole('article', { name: 'Second page' });
-  expect(screen.getByRole('article', { name: 'Live title' })).toBeTruthy();
-  expect(screen.queryByRole('article', { name: 'Old title' })).toBeNull();
-});
-it('shows an unnamed conversation by provider and start time without fetching bodies to derive a name', async () => {
-  const target = createConversationStore();
-  const projection = target.getSnapshot().projection;
-  const started = new Date(2026, 0, 5, 10, 46).toISOString();
-  target.setSnapshot({ ...target.getSnapshot(), projection: { ...projection,
-    tasks: [{ ...projection.tasks[0], name: 'Untitled task' }],
-    conversations: [{ ...projection.conversations[0], name: null, name_is_provisional: false,
-      first_request_excerpt: 'Fix the product.', last_message_excerpt: 'Latest assistant reply' }],
-    runs: [{ ...projection.runs[0], started_ts: started }],
-  } });
-  const fetcher = vi.fn();
-  vi.stubGlobal('fetch', fetcher);
-  render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
-  // 24 時間より前の作業は「Show older」で開く。
-  fireEvent.click(screen.getByRole('button', { name: 'Show 1 older' }));
-  const row = screen.getByRole('article', { name: 'Codex · Jan 5 10:46' });
-  expect(within(row).getByRole('link', { name: 'Codex · Jan 5 10:46' }).title).toBe('Fix the product.');
-  expect(screen.queryByRole('article', { name: /Untitled task|Latest assistant reply|New conversation/ })).toBeNull();
-  expect(fetcher).not.toHaveBeenCalled();
-});
-it('loads the exact old search message with at most two hundred surrounding messages', async () => {
+it('loads roots after the snapshot page without overwriting a newer live root', async () => {
+ const target = createStore(); const root = { id: 'c1', name: 'Old title', project: 'p', state: 'idle', last_activity_ts: null, conversation_ids: ['c1'], running_children: 0, total_children: 0 };
+ target.setSnapshot({ seq: 1, generation: 0, projection: { projects: [{ id: 'p', display_name: 'Product', state: 'registered' }], roots: [] }, pages: { roots: { total: 2, next: 'c0' } } });
+ vi.stubGlobal('fetch', vi.fn(async (url: URL) => { expect(url.pathname).toBe('/projection'); expect(url.searchParams.get('table')).toBe('roots');
+ target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: { roots: { remove: [], upsert: [{ ...root, name: 'Live title' }] } } });
+ return { ok: true, json: async () => ({ generation: 0, rows: [root, { ...root, id: 'c2', name: 'Second page', conversation_ids: ['c2'] }], next: null }) }; }));
+ render(<MemoryRouter><App target={target}/></MemoryRouter>);
+ await screen.findByRole('link', { name: /Second page/ }); expect(screen.getByRole('link', { name: /Live title/ })).toBeTruthy(); expect(screen.queryByRole('link', { name: /Old title/ })).toBeNull();
+});it('uses the root projection name without fetching conversation bodies', () => {
+ const target = createConversationStore(); const snapshot = target.getSnapshot();
+ target.setSnapshot({ ...snapshot, projection: { ...snapshot.projection, roots: [{ id: 'c', name: 'agent-graph-001', project: 'p', state: 'unknown', last_activity_ts: null, conversation_ids: ['c'], running_children: 0, total_children: 0 }] } });
+ const fetcher = vi.fn(); vi.stubGlobal('fetch', fetcher); render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
+ expect(screen.getByRole('link', { name: /agent-graph-001/ })).toBeTruthy(); expect(fetcher).not.toHaveBeenCalled();
+});it('loads the exact old search message with at most two hundred surrounding messages', async () => {
   const rows = Array.from({ length: 600 }, (_, index) => ({ id: `m${String(index).padStart(3, '0')}`,
     body: `Body ${index}`, role: 'user', source_ts: new Date(Date.parse(OLD) + index * 1000).toISOString() }));
   const page = await loadConversationWindow('c', new AbortController().signal, undefined, 'm250', async path => {

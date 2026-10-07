@@ -1,3 +1,4 @@
+import { projectRoots } from './root-fixture.ts';
 import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
@@ -62,6 +63,7 @@ function projection(extra: Record<string, Row[]> = {}): Record<string, Row[]> {
 function setup(extra: Record<string, Row[]> = {}) {
   const target = createStore();
   target.setSnapshot({ seq: 1, generation: 1, projection: projection(extra) });
+  projectRoots(target, ['root', 'lonely', 'old-terminal'].filter(id => target.getSnapshot().projection.conversations.some(row => row.id === id)));
   target.setConnection('connected');
   return target;
 }
@@ -80,6 +82,7 @@ it('resolves a route by display name, id or place and matches Other by the absen
 
 it('builds the Overview per project with the delegation tree under the task that started it', () => {
   const state = setup().getSnapshot();
+  state.projection.relations = [];
   const overview = buildOverview(state, selectActivities(state), buildDelegationTree(state));
   const project = overview.projects.find(group => group.id === HASH)!;
   // 外の端末から起こした作業はその会話を根にし、委譲で起きた会話は行にしない。
@@ -96,86 +99,36 @@ it('builds the Overview per project with the delegation tree under the task that
   expect(overview.unattended).toHaveLength(1);
 });
 
-it('shows active terminals above tasks and keeps older terminals folded', () => {
-  render(<MemoryRouter><HomePage target={setup()}/></MemoryRouter>);
-  const section = screen.getByRole('region', { name: 'agent-graph' });
-  const row = within(section).getByRole('article', { name: 'Terminal root' });
-  const fold = row.querySelector('details.delegation-fold') as HTMLDetailsElement;
-  expect(fold.open).toBe(true);
-  expect(fold.querySelector('summary')!.textContent).toBe('2 delegations · 1 active');
-  expect(within(row).getByRole('link', { name: 'Codex gpt-6.1-sol · implement · running · 2 attempts' }).getAttribute('href')).toBe('/c/child');
-  expect(within(row).getByText('Implement the overview')).toBeTruthy();
-  expect(within(row).getByText('Review the overview').closest('li')!.classList.contains('is-stopped')).toBe(true);
-  expect(within(section).queryByRole('article', { name: 'Codex child' })).toBeNull();
-  expect(section.querySelector('.section-count')!.textContent).toBe('2 running');
-  // 動いている外の会話はプロジェクトの先頭に出し、古い外の会話は畳んで残す。
-  const external = screen.getByRole('region', { name: 'External conversations' });
-  expect(within(external).queryByRole('article')).toBeNull();
-  expect(within(external).queryByText('running')).toBeNull();
-  const current = within(section).getByRole('article', { name: 'Unrelated terminal' });
-  expect(within(current).getByText('Terminal')).toBeTruthy();
-  expect(section.querySelector('article')).toBe(current);
-  fireEvent.click(within(external).getByRole('button', { name: 'External conversations' }));
-  expect(within(external).getByRole('article', { name: 'Old terminal' })).toBeTruthy();
-  const other = screen.getByRole('region', { name: 'dotfiles' });
-  expect(other.querySelector('.delegation-fold summary')!.textContent).toBe('1 delegation without a confirmed parent');
-  expect(within(other).getByText('Codex gpt-kit · implement · failed · 1 attempt')).toBeTruthy();
-  // 動いている作業の行には、経過と最後の根拠の時刻を添える。
-  expect(within(row).getByText(/Last evidence/)).toBeTruthy();
+it('shows roots and only their running descendants on the overview', () => {
+ render(<MemoryRouter><HomePage target={setup()}/></MemoryRouter>);
+ const section = screen.getByRole('region', { name: 'agent-graph' });
+ expect(section.querySelector('.root-row')!.textContent).toContain('Unrelated terminal');
+ expect(within(section).getByRole('link', { name: /Terminal root/ })).toBeTruthy();
+ expect(within(section).getByRole('button', { name: 'Codex gpt-6.1-sol · implement · running' })).toBeTruthy();
+ expect(within(section).queryByText('Review the overview')).toBeNull(); expect(screen.queryByText('External conversations')).toBeNull();
+ expect(screen.getByText('Unattended').closest('details')!.open).toBe(false);
 });
-
-it('filters Tree, workspace and Changes by a display-name route through the projects projection', () => {
-  const target = setup({
-    artifacts: [{ id: 'artifact', run_id: 'child:2', version: 1, repository_id: HASH, patch_hash: 'h',
-      diff: 'diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-old\n+new\n' },
-    { id: 'foreign', run_id: 'probe:1', version: 1, repository_id: 'other-hash', patch_hash: 'f', diff: '' }],
-  });
-  const tree = buildDelegationTree(target.getSnapshot(), 'agent-graph');
-  expect(tree.roots).toEqual(['conversation:root']);
-  expect(tree.nodes.find(node => node.id === 'conversation:root')!.role).toBe('Terminal conversation');
-  expect(buildDelegationTree(target.getSnapshot(), 'dotfiles').unresolved).toEqual(['run:kit:missing']);
-  render(<MemoryRouter><TreePage project="agent-graph" target={target}/></MemoryRouter>);
-  expect(screen.queryByText('No delegations yet')).toBeNull();
-  expect(within(screen.getByRole('region', { name: 'Delegation tree' })).getByRole('button', { name: 'Implement the overview' })).toBeTruthy();
-  cleanup();
-  vi.stubGlobal('innerWidth', 1024);
-  render(<MemoryRouter><WorkspacePage project="agent-graph" target={target} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: false })) }}/></MemoryRouter>);
-  expect(screen.getByRole('heading', { name: 'agent-graph' })).toBeTruthy();
-  // Show temporary は見出しの外に浮かせず、一覧と同じく絞り込みの行に置く。
-  const filters = screen.getByRole('group', { name: 'Filters' });
-  expect(filters.closest('.workspace-header')).toBeTruthy();
-  expect(within(filters).getByRole('checkbox', { name: 'Show temporary' })).toBeTruthy();
-  expect(within(screen.getByRole('region', { name: 'Tasks' })).getAllByRole('article').map(row => row.getAttribute('aria-label'))).toContain('Terminal root');
-  cleanup();
-  render(<MemoryRouter><ChangesPage project="agent-graph" target={target} client={{ command: vi.fn() }}/></MemoryRouter>);
-  expect(screen.getByRole('button', { name: 'Comment on a.ts new line 1' })).toBeTruthy();
-  expect(screen.queryByText(/foreign/)).toBeNull();
-  fireEvent.click(screen.getByRole('link', { name: 'Tree' }));
+it('filters root views and Changes by a display-name route', () => {
+ const target = setup({ artifacts: [{ id: 'artifact', run_id: 'child:2', version: 1, repository_id: HASH, patch_hash: 'h', diff: 'diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-old\n+new\n' }, { id: 'foreign', run_id: 'probe:1', version: 1, repository_id: 'other-hash', patch_hash: 'f', diff: '' }] });
+ render(<MemoryRouter><TreePage project="agent-graph" target={target}/></MemoryRouter>);
+ expect(screen.queryByLabelText('Delegation graph')).toBeNull(); fireEvent.click(screen.getByRole('button', { name: /Terminal root/ }));
+ expect(within(screen.getByRole('region', { name: 'Delegation tree' })).getByText('Implement the overview')).toBeTruthy(); cleanup();
+ vi.stubGlobal('innerWidth', 1024); render(<MemoryRouter><WorkspacePage project="agent-graph" target={target} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: true })) }}/></MemoryRouter>);
+ expect(screen.getByRole('heading', { name: 'agent-graph' })).toBeTruthy(); expect(within(screen.getByRole('region', { name: 'Root conversations' })).getByRole('button', { name: /Terminal root/ })).toBeTruthy(); cleanup();
+ render(<MemoryRouter><ChangesPage project="agent-graph" target={target} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: true })) }}/></MemoryRouter>); expect(screen.getByRole('button', { name: 'Comment on a.ts new line 1' })).toBeTruthy(); expect(screen.queryByText(/foreign/)).toBeNull();
 });
-
-it('turns reason codes into readable English everywhere and keeps them out of list rows', async () => {
-  const { reasonText } = await import('../lib/reasons.ts');
-  expect(reasonText('unconfirmed_end_evidence')).toBe('No end recorded');
-  expect(reasonText('missing_turn_evidence')).toBe('No turn evidence');
-  expect(reasonText('legacy ended inference: process_exit')).toBe('Ended by process exit (legacy)');
-  expect(reasonText('some_new_code')).toBe('Some new code');
-  expect(reasonText('Observation interrupted')).toBe('Observation interrupted');
-  const target = setup({ runs: [...projection().runs!.filter(run => run.id !== 'lonely:1'),
-    { id: 'lonely:1', conversation_id: 'lonely', generation: 1, state: 'unknown', reason: 'legacy ended inference: process_exit', last_evidence_ts: EARLIER }] });
-  render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
-  fireEvent.click(screen.getByRole('button', { name: 'External conversations' }));
-  const badge = within(screen.getByRole('article', { name: 'Unrelated terminal' })).getByRole('link', { name: 'Unknown · Evidence' });
-  expect(badge.textContent).toBe('Unknown');
-  expect(badge.title).toContain('Ended by process exit (legacy)');
-  expect(document.body.textContent).not.toContain('legacy ended inference');
+it('keeps reason codes out of root rows and translates evidence reasons', async () => {
+ const { reasonText } = await import('../lib/reasons.ts'); expect(reasonText('unconfirmed_end_evidence')).toBe('No end recorded'); expect(reasonText('missing_turn_evidence')).toBe('No turn evidence'); expect(reasonText('legacy ended inference: process_exit')).toBe('Ended by process exit (legacy)'); expect(reasonText('some_new_code')).toBe('Some new code'); expect(reasonText('Observation interrupted')).toBe('Observation interrupted');
+ const target = setup({ runs: [...projection().runs!.filter(run => run.id !== 'lonely:1'), { id: 'lonely:1', conversation_id: 'lonely', generation: 1, state: 'unknown', reason: 'legacy ended inference: process_exit', last_evidence_ts: EARLIER }] });
+ render(<MemoryRouter><HomePage target={target}/></MemoryRouter>); const row = screen.getByRole('link', { name: /Unrelated terminal/ }); expect(row.querySelector('.root-state')!.textContent).toBe('unknown'); expect(document.body.textContent).not.toContain('legacy ended inference');
 });
-
 it('roots the tree only at tasks that delegated, names untitled conversations and folds repeated runs into attempts', () => {
   const state = setup({
     conversations: [...projection().conversations!, { id: 'solo', provider: 'claude', origin: 'managed', type: 'interactive', name: null }],
     runs: [...projection().runs!, { id: 'solo:1', conversation_id: 'solo', generation: 1, state: 'ended', started_ts: '2026-10-07T01:46:00' },
       { id: 'root:2', conversation_id: 'root', generation: 2, state: 'running', last_evidence_ts: NOW }],
   }).getSnapshot();
+  state.projection.relations = [];
   const tree = buildDelegationTree(state, 'agent-graph');
   // 委譲のない作業は根にしない。
   expect(tree.roots).toEqual(['conversation:root']);
@@ -190,56 +143,21 @@ it('roots the tree only at tasks that delegated, names untitled conversations an
   expect(conversationTitle({ provider: 'codex' }, undefined)).toBe('Codex');
 });
 
-it('shows one task subtree in the graph, defaults to the active one and switches on selection', () => {
-  const target = setup({
-    conversations: [...projection().conversations!, { id: 'second', provider: 'codex', origin: 'managed', type: 'interactive', name: 'Second task', project: HASH },
-      { id: 'second-child', provider: 'claude', origin: 'managed', type: 'interactive', name: 'Second child' }],
-    runs: [...projection().runs!, { id: 'second:1', conversation_id: 'second', generation: 1, state: 'ended', ended_ts: EARLIER },
-      { id: 'second-child:1', conversation_id: 'second-child', generation: 1, state: 'ended', ended_ts: EARLIER }],
-    delegations: [...projection().delegations!, { id: 'later', request_id: 'later', role: 'review', title: 'Second review', state: 'done', attempt: 1, project: HASH,
-      parent: JSON.stringify({ confidence: 'confirmed', conversation_id: 'second' }), attempts: JSON.stringify([{ attempt: 1, run_id: 'second-child:1', state: 'done' }]) }],
-  });
-  render(<MemoryRouter><TreePage project="agent-graph" target={target}/></MemoryRouter>);
-  const graph = screen.getByLabelText('Delegation graph');
-  // 既定は動いている作業の部分木である。全体を 1 列に並べない。
-  expect(within(graph).getByText('Implement the overview')).toBeTruthy();
-  expect(within(graph).queryByText('Second review')).toBeNull();
-  fireEvent.click(within(screen.getByRole('region', { name: 'Delegation tree' })).getByRole('button', { name: 'Second review' }));
-  expect(within(graph).getByText('Second review')).toBeTruthy();
-  expect(within(graph).queryByText('Implement the overview')).toBeNull();
-  expect(screen.getByText('Second task', { selector: 'strong' })).toBeTruthy();
+it('shows no graph before root selection and switches between root trees', () => {
+ const target = setup(); const snapshot = target.getSnapshot(); target.setSnapshot({ ...snapshot, projection: { ...snapshot.projection,
+ roots: [...snapshot.projection.roots, { id: 'second', name: 'Second root', project: HASH, state: 'ended', last_activity_ts: EARLIER, conversation_ids: ['second'], running_children: 0, total_children: 1 }],
+ conversations: [...snapshot.projection.conversations, { id: 'second-child', provider: 'claude', state: 'ended' }],
+ relations: [...snapshot.projection.relations, { id: 'second-child-edge', type: 'delegated', from_id: 'second', to_id: 'second-child', evidence: { agentType: 'review', description: 'Second review' } }] } });
+ render(<MemoryRouter><TreePage project="agent-graph" target={target}/></MemoryRouter>);
+ expect(screen.queryByLabelText('Delegation graph')).toBeNull(); fireEvent.click(screen.getByRole('button', { name: /Terminal root/ }));
+ expect(within(screen.getByLabelText('Delegation graph')).getByText('Codex gpt-6.1-sol · implement · running')).toBeTruthy();
+ fireEvent.click(screen.getByRole('button', { name: /Second root/ })); expect(within(screen.getByLabelText('Delegation graph')).queryByText('Codex gpt-6.1-sol · implement · running')).toBeNull(); expect(screen.getByText('Second review')).toBeTruthy();
 });
-
-it('lists workspace tasks as single short lines and keeps the unknown evidence out of a separate banner', () => {
-  vi.stubGlobal('innerWidth', 1024);
-  const target = setup({ runs: [{ id: 'lonely:1', conversation_id: 'lonely', generation: 1, state: 'unknown', reason: 'unconfirmed_end_evidence', last_evidence_ts: EARLIER }] });
-  render(<MemoryRouter><WorkspacePage project="agent-graph" target={target} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: false })) }}/></MemoryRouter>);
-  const tasks = screen.getByRole('region', { name: 'Tasks' });
-  expect(tasks.querySelectorAll('.activity-line').length).toBe(within(tasks).getAllByRole('article').length);
-  expect(screen.queryByText(/Unknown — Last evidence/)).toBeNull();
+it('lists projected roots with child counts and keeps unknown evidence out of a separate banner', () => {
+ vi.stubGlobal('innerWidth', 1024); render(<MemoryRouter><WorkspacePage project="agent-graph" target={setup()} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: true })) }}/></MemoryRouter>);
+ const roots = screen.getByRole('region', { name: 'Root conversations' }); expect(roots.querySelectorAll('.root-row')).toHaveLength(3); expect(within(roots).getByText('1 running · 2 total')).toBeTruthy(); expect(screen.queryByText(/Unknown — Last evidence/)).toBeNull();
 });
-
-it('places terminals active or within one hour in the project and workspace, keeping older terminals folded', () => {
-  const now = Date.now();
-  const target = setup({ conversations: [
-    { id: 'active', name: 'Active terminal', origin: 'observed', type: 'interactive', provider: 'claude', project: HASH },
-    { id: 'recent', name: 'Recent terminal', origin: 'observed', type: 'interactive', provider: 'claude', project: HASH },
-    { id: 'old', name: 'Older terminal', origin: 'observed', type: 'interactive', provider: 'claude', project: HASH },
-  ], runs: [
-    { id: 'active:1', conversation_id: 'active', state: 'running', last_evidence_ts: EARLIER },
-    { id: 'recent:1', conversation_id: 'recent', state: 'idle', last_evidence_ts: new Date(now - RECENT_TERMINAL_WINDOW_MS).toISOString() },
-    { id: 'old:1', conversation_id: 'old', state: 'idle', last_evidence_ts: new Date(now - RECENT_TERMINAL_WINDOW_MS - 1).toISOString() },
-  ], delegations: [] });
-  const state = target.getSnapshot();
-  const overview = buildOverview(state, selectActivities(state), buildDelegationTree(state), now);
-  expect(overview.projects.find(group => group.id === HASH)!.items.map(item => item.activity.name)).toEqual(['Active terminal', 'Recent terminal']);
-  expect(overview.external.map(item => item.activity.name)).toEqual(['Older terminal']);
-  // 作業場でも同じ境界を使う。描画にかかった時間で境界を跨がないよう時計を固定する。
-  vi.spyOn(Date, 'now').mockReturnValue(now);
-  render(<MemoryRouter><WorkspacePage project="agent-graph" target={target} client={{ command: async () => ({ type: 'ack', cmd_id: 'test', ok: true }) }}/></MemoryRouter>);
-  const tasks = screen.getByRole('region', { name: 'Tasks' });
-  expect(within(tasks).getByRole('article', { name: 'Active terminal' })).toBeTruthy();
-  expect(within(tasks).getByRole('article', { name: 'Recent terminal' })).toBeTruthy();
-  expect(within(tasks).queryByRole('article', { name: 'Older terminal' })).toBeNull();
-  expect(within(tasks).getAllByText('Terminal')).toHaveLength(2);
+it('lists old roots as well as current roots without listing unrelated child conversations', () => {
+ vi.stubGlobal('innerWidth', 1024); render(<MemoryRouter><WorkspacePage project="agent-graph" target={setup()} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: true })) }}/></MemoryRouter>);
+ const roots = screen.getByRole('region', { name: 'Root conversations' }); expect(within(roots).getByRole('button', { name: /Unrelated terminal/ })).toBeTruthy(); expect(within(roots).getByRole('button', { name: /Old terminal/ })).toBeTruthy(); expect(within(roots).queryByText('Codex child')).toBeNull();
 });

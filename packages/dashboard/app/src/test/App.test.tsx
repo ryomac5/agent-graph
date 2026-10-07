@@ -52,6 +52,7 @@ it('shares live activity, approval counts, commands and notices across all stage
   const client = { command: vi.fn(async (_command: string, _payload?: unknown) => ({ type: 'ack' as const, cmd_id: 'cmd', ok: true, result: [] })) };
   target.setSnapshot({ seq: 1, generation: 0, projection: {
     projects: [{ id: '/repo/demo', display_name: 'demo', root_path: '/repo/demo', state: 'registered' }],
+    roots: [{ id: 'c', name: 'Console conversation', project: '/repo/demo', state: 'running', last_activity_ts: null, conversation_ids: ['c'], running_children: 0, total_children: 0 }],
     tasks: [{ id: 't', name: 'Build console', project: '/repo/demo' }],
     conversations: [{ id: 'c', task_id: 't', name: 'Console conversation', origin: 'managed', provider: 'claude' }],
     runs: [{ id: 'r', conversation_id: 'c', state: 'running', generation: 1 }],
@@ -67,7 +68,7 @@ it('shares live activity, approval counts, commands and notices across all stage
   expect(screen.getByRole('heading', { name: 'demo' })).toBeTruthy();
   expect(screen.getByText('Project workspace')).toBeTruthy();
   expect(screen.getByRole('textbox', { name: 'Message' })).toBeTruthy();
-  fireEvent.click(within(screen.getByRole('region', { name: 'Tasks' })).getByRole('link', { name: 'Running · Evidence' }));
+  fireEvent.click(within(screen.getByRole('region', { name: 'Root conversations' })).getByRole('button', { name: /Console conversation/ }));
   expect(screen.getByRole('heading', { name: 'Console conversation' })).toBeTruthy();
   fireEvent.click(screen.getByRole('link', { name: 'Pending approvals1' }));
   expect(screen.getByRole('heading', { name: 'Approval inbox' })).toBeTruthy();
@@ -81,10 +82,11 @@ it('shares live activity, approval counts, commands and notices across all stage
   expect(screen.getByRole('link', { name: 'Pending approvals0' })).toBeTruthy();
 });
 
-it('opens the selected run from the workspace Changes summary and sends review commands', async () => {
+it('opens Changes from the root workspace and sends review commands', async () => {
   const target = createStore();
   target.setSnapshot({ seq: 1, generation: 0, projection: {
     projects: [{ id: '/repo', display_name: 'repo', root_path: '/repo', state: 'registered' }],
+    roots: [{ id: 'c', name: 'Review task', project: '/repo', state: 'ended', last_activity_ts: null, conversation_ids: ['c'], running_children: 0, total_children: 0 }],
     tasks: [{ id: 'task', name: 'Review task', project: '/repo' }],
     conversations: [{ id: 'c', task_id: 'task', origin: 'managed', provider: 'codex' }],
     runs: [{ id: 'r', conversation_id: 'c', state: 'ended', generation: 1 }],
@@ -93,8 +95,8 @@ it('opens the selected run from the workspace Changes summary and sends review c
   target.setConnection('connected');
   const client = { command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'approve', ok: true })) };
   render(<MemoryRouter initialEntries={['/p/%2Frepo']}><App target={target} client={client}/></MemoryRouter>);
-  const link = screen.getByRole('link', { name: 'Open Changes' });
-  expect(link.getAttribute('href')).toBe('/p/%2Frepo/changes?run=r');
+  const link = within(screen.getByRole('navigation', { name: 'Project' })).getByRole('link', { name: 'Changes' });
+  expect(link.getAttribute('href')).toBe('/p/%2Frepo/changes');
   fireEvent.click(link);
   expect(screen.getByRole('button', { name: 'Comment on code.txt new line 1' })).toBeTruthy();
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Approve' })));

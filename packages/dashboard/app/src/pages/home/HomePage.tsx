@@ -1,172 +1,60 @@
+import { useMemo, useState } from 'react';
+import { Link, useNavigate } from 'react-router';
 import type { ConversationClient } from '../conversation/ConversationPage.tsx';
-import { useId, useMemo, useState, type ReactNode } from 'react';
-import { Link } from 'react-router';
-import { store, useScreenStore, type ScreenState, type ScreenStore } from '../../lib/store.ts';
-import { dictionaries, type Language } from '../../lib/i18n.ts';
-import { projectLabel } from '../../lib/format.ts';
-import { getRegisteredProjects, getProjectName, OTHER_PROJECT } from '../../lib/projects.ts';
-import { ActivityRow, providerName } from '../../components/ActivityRow.tsx';
-import { executionStates, selectActivities, orderActivities, type Activity } from '../../components/activity.ts';
-import { buildOverview, countActiveDelegations, countAllDelegations, type ProjectGroup, type WorkItem } from '../../components/overview.ts';
-import { DelegationFold } from '../../components/DelegationLines.tsx';
-import { buildDelegationTree } from '../tree/model.ts';
-import { useNow } from '../../components/RelativeTime.tsx';
-import { Icon } from '../../components/Icon.tsx';
+import { store, useScreenStore, type ScreenStore } from '../../lib/store.ts';
+import type { Language } from '../../lib/i18n.ts';
+import { getProjectName } from '../../lib/projects.ts';
+import { selectRoots, useRootIndex, buildRootTree } from '../../lib/roots.ts';
+import { readAttempts } from '../tree/model.ts';
+import { RootList, RootTree } from '../../components/RootViews.tsx';
 import '../../components/activity.css';
 
-const FOLD_PAGE_SIZE = 50;
-const OLDER_PAGE_SIZE = 100;
-const INITIAL_ROW_LIMIT = 200;
-const RECENT_WINDOW_MS = 24 * 60 * 60 * 1000;
-/** 動いているもの、承認と入力の待ち、直近 24 時間のものは最初から出す。時刻のないものは古いと決められないので出す。 */
-function isCurrent(item: WorkItem, now: number): boolean {
-  const time = Date.parse(item.activity.lastActivity ?? '');
-  return item.active || !Number.isFinite(time) || time >= now - RECENT_WINDOW_MS;
-}
-
-export function TableHead({ language = 'en' }: { language?: Language }) {
-  const ja = language === 'ja';
-  return <div className="table-head" aria-hidden="true"><span>{ja ? '名前' : 'Name'}</span><span>{ja ? '状態' : 'State'}</span>
-    <span>{ja ? 'エージェント' : 'Agent'}</span><span className="numeric">{ja ? '経過' : 'Elapsed'}</span><span className="numeric">{ja ? '変更' : 'Changes'}</span><span/></div>;
-}
-export function ProjectName({ path, link = true }: { path: string; link?: boolean }) {
-  const label = projectLabel(path);
-  const content = <><Icon name="folder" size={15}/><span className="project-name truncate">{label.name}</span>{label.detail && <span className="project-path truncate">{label.detail}</span>}</>;
-  return link && path ? <Link className="project-heading" to={`/p/${encodeURIComponent(path)}`} title={label.full}>{content}</Link>
-    : <span className="project-heading" title={label.full}>{content}</span>;
-}
-
-function Counts({ running, waiting, language }: { running: number; waiting: number; language: Language }) {
-  const ja = language === 'ja';
-  if (!running && !waiting) return null;
-  return <span className="section-counts">
-    {running > 0 && <span className="section-count is-running"><strong className="numeric">{running}</strong> {ja ? '実行中' : 'running'}</span>}
-    {waiting > 0 && <span className="section-count is-waiting"><strong className="numeric">{waiting}</strong> {ja ? '待ち' : 'waiting'}</span>}
-  </span>;
-}
-
-function WorkRows({ items, now, language, actions }: { items: WorkItem[]; now: number; language: Language; actions?: (item: Activity) => ReactNode }) {
-  const delegations = new Map(items.map(item => [item.activity.id, item.delegations]));
-  return <div className="table" role="presentation"><TableHead language={language}/>
-    {orderActivities(items.map(item => item.activity)).map(activity => {
-      const lines = delegations.get(activity.id) ?? [];
-      return <ActivityRow key={activity.id} activity={activity} now={now} language={language} actions={actions?.(activity)}>
-        {lines.length > 0 ? <DelegationFold lines={lines} language={language}/> : undefined}
-      </ActivityRow>;
-    })}</div>;
-}
-
-function ProjectSection({ group, state, now, language, filtered, initial }: {
-  group: ProjectGroup; state: ScreenState; now: number; language: Language; filtered: boolean; initial: number;
-}) {
-  const ja = language === 'ja';
-  const [extra, setExtra] = useState(0);
-  const name = getProjectName(state, group.id);
-  // 行は動いているもの、待ち、新しい順に並ぶ。最初は直近のものだけを出し、古いものはボタンで開く。
-  const shown = group.items.slice(0, initial + extra);
-  const rest = group.items.length - shown.length;
-  const next = Math.min(OLDER_PAGE_SIZE, rest);
-  const older = rest > 0 && !isCurrent(group.items[shown.length], now);
-  return <section className="activity-group project-section" aria-label={name}>
-    <header className="section-header project-section-header">
-      <h2><Link className="project-heading" to={`/p/${encodeURIComponent(group.id)}`}><Icon name="folder" size={15}/><span className="project-name truncate">{name}</span></Link>
-        <span className="count-pill">{group.items.length}</span></h2>
-      <Counts running={group.running} waiting={group.waiting} language={language}/>
-      <span className="spacer"/>
-      {group.id !== OTHER_PROJECT && <Link className="btn btn-ghost btn-sm" to={`/p/${encodeURIComponent(group.id)}?create=1`}><Icon name="plus" size={14}/>{ja ? '作業を作る' : 'Create task'}</Link>}
-    </header>
-    {shown.length > 0 && <div className="table-group"><WorkRows items={shown} now={now} language={language}/></div>}
-    {rest > 0 && <button className="btn btn-secondary btn-sm show-more" onClick={() => setExtra(value => value + OLDER_PAGE_SIZE)}>
-      {older ? (ja ? `古い ${next} 件を表示` : `Show ${next} older`) : (ja ? `さらに ${next} 件を表示` : `Show ${next} more`)}</button>}
-    {group.unlinked.length > 0 && <div className="unlinked-delegations">
-      <DelegationFold lines={group.unlinked} language={language}
-        label={ja ? '親が未確定の委譲' : `${countAllDelegations(group.unlinked) === 1 ? 'delegation' : 'delegations'} without a confirmed parent`}/>
-    </div>}
-    {!group.items.length && !group.unlinked.length && <p className="empty-row">{filtered ? (ja ? '該当する作業はありません' : 'No matching activity') : (ja ? 'まだありません' : 'Nothing here yet')}</p>}
-  </section>;
-}
-
-/** 外の会話と無人実行は、既定で畳んで件数だけを見せる。開いたときだけ行を描く。 */
-function FoldSection({ title, description, items, now, language, actions }: {
-  title: string; description: string; items: WorkItem[]; now: number; language: Language; actions?: (item: Activity) => ReactNode;
-}) {
-  const ja = language === 'ja';
-  const [open, setOpen] = useState(false);
-  const [limit, setLimit] = useState(FOLD_PAGE_SIZE);
-  const running = items.filter(item => ['starting', 'running'].includes(item.activity.state)).length
-    + items.reduce((total, item) => total + countActiveDelegations(item.delegations), 0);
-  const waiting = items.filter(item => ['waiting_approval', 'waiting_input'].includes(item.activity.state)).length;
-  const id = useId();
-  return <section className={`activity-group fold-section${open ? ' is-open' : ''}`} aria-label={title}>
-    <header className="section-header fold-header">
-      <h2><button className="fold-toggle" aria-expanded={open} aria-controls={id} onClick={() => setOpen(value => !value)}>
-        <Icon name={open ? 'chevronDown' : 'chevronRight'} size={14}/>{title}</button><span className="count-pill">{items.length}</span></h2>
-      <Counts running={running} waiting={waiting} language={language}/>
-      <p>{description}</p>
-    </header>
-    <div id={id} hidden={!open}>
-      {open && <>
-        {items.length > 0 ? <div className="table-group"><WorkRows items={items.slice(0, limit)} now={now} language={language} actions={actions}/></div>
-          : <p className="empty-row">{ja ? 'まだありません' : 'Nothing here yet'}</p>}
-        {items.length > limit && <button className="btn btn-secondary btn-sm show-more" onClick={() => setLimit(value => value + FOLD_PAGE_SIZE)}>
-          {ja ? `さらに ${Math.min(FOLD_PAGE_SIZE, items.length - limit)} 件を表示` : `Show ${Math.min(FOLD_PAGE_SIZE, items.length - limit)} more`}</button>}
-      </>}
-    </div>
-  </section>;
-}
-
-export function HomePage({ target = store, client, language = 'en' }: { target?: ScreenStore; client?: ConversationClient; language?: Language }) {
+const PROJECT_ROOT_LIMIT = 5;
+export function HomePage({ target = store }: { target?: ScreenStore; client?: ConversationClient; language?: Language }) {
+  const navigate = useNavigate();
   const state = useScreenStore(target);
-  const now = useNow();
-  const [status, setStatus] = useState('');
-  const [provider, setProvider] = useState('');
-  const [project, setProject] = useState('');
-  const [showTemporary, setShowTemporary] = useState(false);
-  const all = useMemo(() => selectActivities(state), [state]);
-  const tree = useMemo(() => buildDelegationTree(state), [state]);
-  const activities = useMemo(() => all.filter(item => showTemporary || !item.temporary), [all, showTemporary]);
-  const overview = useMemo(() => buildOverview(state, activities.filter(item => (!status || item.state === status)
-    && (!provider || item.provider === provider) && (!project || item.project === project)), tree, now),
-  [state, tree, activities, status, provider, project, now]);
-  const projects = [...getRegisteredProjects(state).map(row => String(row.id)), OTHER_PROJECT];
-  // 最初に描く行は全区画で 200 行までにする。動いているものと直近のものから順に割り当てる。
-  const initial = new Map<string, number>();
-  let budget = INITIAL_ROW_LIMIT;
-  for (const group of overview.projects) {
-    const count = Math.min(budget, group.items.filter(item => isCurrent(item, now)).length);
-    initial.set(group.id, count);
-    budget -= count;
+  const roots = useMemo(() => selectRoots(state), [state.projection.roots]);
+  const index = useRootIndex(state);
+  const groups = useMemo(() => {
+    const groups = new Map<string, typeof roots>();
+    for (const root of roots) {
+      const project = root.project ?? 'other';
+      if (!groups.has(project)) groups.set(project, []);
+      groups.get(project)!.push(root);
+    }
+    return groups;
+  }, [roots]);
+  const trees = useMemo(() => new Map([...groups.values()].flatMap(items => items.slice(0, PROJECT_ROOT_LIMIT))
+    .map(root => [root.id, buildRootTree(root, index)])), [groups, index]);
+  const [unattendedOpen, setUnattendedOpen] = useState(false);
+  const linked = new Set<string>();
+  function markLinked(id: string) {
+    if (linked.has(id)) return;
+    linked.add(id);
+    for (const relation of index.children.get(id) ?? []) markLinked(String(relation.to_id));
   }
-  const ja = language === 'ja';
-  const filtered = Boolean(status || provider || project);
-  const count = (states: string[]) => activities.filter(item => states.includes(item.state)).length;
-  const summary = [[count(['starting', 'running']), ja ? '実行中' : 'running'], [count(['waiting_approval', 'waiting_input']), ja ? '待ち' : 'waiting'],
-    [count(['unknown']), ja ? '不明' : 'unknown']] as const;
-  const conversationActions = (item: Activity) => item.conversationId && <>
-    {item.section === 'external' && <Link className="btn btn-secondary btn-sm" to={`/c/${encodeURIComponent(item.conversationId)}?adopt=1`}>{ja ? '引き継ぐ' : 'Take over'}</Link>}
-    {item.state === 'unknown' ? <Link className="btn btn-ghost btn-sm" to={`/c/${encodeURIComponent(item.conversationId)}`}>{ja ? '根拠を確認' : 'Review evidence'}</Link>
-      : <Link className="btn btn-ghost btn-sm" to={`/c/${encodeURIComponent(item.conversationId)}`}>{ja ? '会話を開く' : 'Open conversation'}</Link>}
-  </>;
-  return <div className="page">
-    <header className="page-header"><div className="page-title"><h1>{ja ? '一覧' : 'Overview'}</h1>
-      <p className="page-subtitle">{summary.map(([value, label]) => <span key={label}><strong className="numeric">{value}</strong> {label}</span>)}</p></div></header>
-    <div className="toolbar" role="group" aria-label={ja ? '絞り込み' : 'Filters'}>
-      <Icon name="filter" size={14} className="toolbar-icon"/>
-      <label className="inline-field">{ja ? '状態' : 'State'}<select value={status} onChange={event => setStatus(event.target.value)}><option value="">{ja ? 'すべての状態' : 'All states'}</option>{executionStates.map(value => <option key={value} value={value}>{value === 'starting' ? (ja ? '起動中' : 'Starting') : dictionaries[language][value]}</option>)}</select></label>
-      <label className="inline-field">Provider<select value={provider} onChange={event => setProvider(event.target.value)}><option value="">{ja ? 'すべて' : 'All providers'}</option>{[...new Set(activities.map(item => item.provider))].filter(Boolean).sort().map(value => <option key={value} value={value}>{providerName(value)}</option>)}</select></label>
-      <label className="inline-field">{ja ? 'プロジェクト' : 'Project'}<select value={project} onChange={event => setProject(event.target.value)}><option value="">{ja ? 'すべてのプロジェクト' : 'All projects'}</option>{projects.filter(Boolean).map(value => <option key={value} value={value} title={getProjectName(state, value)}>{getProjectName(state, value)}</option>)}</select></label>
-      <label className="inline-field"><input type="checkbox" checked={showTemporary} onChange={event => setShowTemporary(event.target.checked)}/>Show temporary</label>
-      <button className="btn btn-ghost btn-sm" disabled={!filtered} onClick={() => { setStatus(''); setProvider(''); setProject(''); }}>{ja ? '解除' : 'Clear filters'}</button>
-    </div>
-    {overview.projects.map(group => <ProjectSection key={group.id} group={group} state={state} now={now} language={language} filtered={filtered} initial={initial.get(group.id) ?? 0}/>)}
-    {!overview.projects.length && <section className="activity-group" aria-label={ja ? 'プロジェクト' : 'Projects'}>
-      <p className="empty-row">{filtered ? (ja ? '該当する作業はありません' : 'No matching activity') : (ja ? '作業はまだありません' : 'No tasks yet')}</p></section>}
-    <FoldSection title={ja ? '外の会話' : 'External conversations'} description={ja ? '外のターミナルで始まった会話。引き継ぐまで読み取り専用' : 'Observed from other terminals; read-only until taken over'}
-      items={overview.external} now={now} language={language} actions={conversationActions}/>
-    <FoldSection title={ja ? '無人実行' : 'Unattended runs'} description={ja ? '名前のない自動の実行' : 'Automated runs without a conversation name'}
-      items={overview.unattended} now={now} language={language} actions={conversationActions}/>
-    <FoldSection title={ja ? '形式未対応の会話' : 'Unsupported conversations'} description={ja ? '履歴の形式に未対応' : 'History format not supported yet'}
-      items={overview.unsupported} now={now} language={language} actions={conversationActions}/>
+  for (const root of roots) {
+    for (const id of root.conversation_ids) markLinked(id);
+    for (const delegation of index.delegations.get(root.id) ?? []) {
+      if (delegation.conversation_id) markLinked(String(delegation.conversation_id));
+      for (const attempt of readAttempts(delegation)) {
+        const conversation = index.runsById.get(String(attempt.run_id))?.conversation_id;
+        if (conversation) markLinked(String(conversation));
+      }
+    }
+  }
+  const unattended = [...index.conversations.values()].filter(row => row.type === 'unattended' && !linked.has(String(row.id)));
+  return <div className="page home-page"><header className="page-header"><div className="page-title"><h1>Overview</h1><p className="muted-text">Root conversations and their running agents</p></div></header>
+    {[...groups].map(([project, items]) => <section className="activity-group project-section" aria-label={getProjectName(state, project)} key={project}>
+      <header className="section-header"><h2><Link to={`/p/${encodeURIComponent(project)}`}>{getProjectName(state, project)}</Link></h2></header>
+      {items.slice(0, PROJECT_ROOT_LIMIT).map(root => <div key={root.id}><RootList roots={[root]}/><RootTree tree={trees.get(root.id)!} runningOnly onSelect={node => {
+        if (node.conversationId) navigate(`/p/${encodeURIComponent(project)}?root=${encodeURIComponent(root.id)}&child=${encodeURIComponent(node.conversationId)}`);
+      }}/></div>)}
+      {items.length > PROJECT_ROOT_LIMIT && <Link className="btn btn-link" to={`/p/${encodeURIComponent(project)}`}>View all root conversations</Link>}
+    </section>)}
+    {!roots.length && <p className="empty-row">No root conversations yet</p>}
+    <details className="activity-group" open={unattendedOpen}><summary onClick={event => { event.preventDefault(); setUnattendedOpen(value => !value); }}>Unattended <span className="count-pill">{unattended.length}</span></summary>
+      {unattendedOpen && unattended.map(row => <Link className="root-row" key={String(row.id)} to={`/c/${encodeURIComponent(String(row.id))}`}>{String(row.name || 'Unattended run')} · {String(index.runs.get(String(row.id))?.state ?? row.state ?? 'unknown')}</Link>)}
+    </details>
   </div>;
 }
-export default HomePage;

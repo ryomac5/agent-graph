@@ -1,3 +1,4 @@
+import { projectRoots } from './root-fixture.ts';
 import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
@@ -42,6 +43,7 @@ function fixture(extra: Record<string, Row[]> = {}) {
       { id: 'second', type: 'delegated', active: true, from_id: 'codex', to_id: 'claude', confidence: 'confirmed', evidence: { request_id: 'review', attempt: 1, parent_run_id: 'codex:1' } },
     ], ...extra,
   } });
+  projectRoots(target, ['origin']);
   target.setConnection('connected');
   return target;
 }
@@ -108,13 +110,14 @@ it('synchronizes selections, shows navigation and attempt history, and sends the
   const target = fixture();
   const command = vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'retry', ok: true }));
   render(<MemoryRouter><TreePage project={PROJECT} target={target} client={{ command }}/></MemoryRouter>);
+  fireEvent.click(screen.getByRole('button', { name: /Terminal.*unknown|Terminal.*running|Terminal.*idle/ }));
   const left = screen.getByRole('region', { name: 'Delegation tree' });
   const graph = screen.getByLabelText('Delegation graph');
-  fireEvent.click(within(left).getByRole('button', { name: 'Implement code' }));
-  expect(within(graph).getByRole('button', { name: 'Implement code' }).getAttribute('aria-pressed')).toBe('true');
+  fireEvent.click(within(left).getByRole('button', { name: /^Codex.*implement/  }));
+  expect(within(graph).getByRole('button', { name: /^Codex.*implement/ }).getAttribute('aria-pressed')).toBe('true');
   const detail = screen.getByRole('region', { name: 'Selected node' });
   const actions = within(detail.querySelector<HTMLElement>('.delegation-actions')!);
-  expect(actions.getByRole('link', { name: 'Open conversation' }).getAttribute('href')).toBe('/c/codex');
+  expect(actions.getByRole('link', { name: 'Open conversation' }).getAttribute('href')).toBe('/p/%2Frepo?root=origin&child=codex');
   expect(actions.getByRole('link', { name: 'Changes' }).getAttribute('href')).toBe('/p/%2Frepo/changes?run=codex%3A1');
   const history = within(detail).getByText('Attempt history').closest('details')!;
   expect(history.open).toBe(false);
@@ -123,8 +126,8 @@ it('synchronizes selections, shows navigation and attempt history, and sends the
   expect(within(history).getByText('Attempt 1 · failed')).toBeTruthy();
   fireEvent.click(within(detail).getByRole('button', { name: 'Retry delegation' }));
   await waitFor(() => expect(command).toHaveBeenCalledWith('intake.retry', { requestId: 'implementation' }));
-  fireEvent.click(within(graph).getByRole('button', { name: 'Review code' }));
-  expect(within(left).getByRole('button', { name: 'Review code' }).getAttribute('aria-pressed')).toBe('true');
+  fireEvent.click(within(graph).getByRole('button', { name: /^Claude.*review/  }));
+  expect(within(left).getByRole('button', { name: /^Claude.*review/ }).getAttribute('aria-pressed')).toBe('true');
 });
 it('groups retry executions in one delegation node and reports retry errors', async () => {
   const target = fixture();
@@ -144,7 +147,8 @@ it('groups retry executions in one delegation node and reports retry errors', as
   expect(tree.nodes.find(n => n.id === 'run:codex:2')!.attempts.map(attempt => attempt.run_id)).toEqual(['codex:1', 'codex:2']);
   const command = vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'retry', ok: false, error: 'Runner unavailable' }));
   render(<MemoryRouter><TreePage project={PROJECT} target={target} client={{ command }}/></MemoryRouter>);
-  fireEvent.click(within(screen.getByRole('region', { name: 'Delegation tree' })).getByRole('button', { name: 'Implement code' }));
+  fireEvent.click(screen.getByRole('button', { name: /Terminal.*unknown|Terminal.*running|Terminal.*idle/ }));
+  fireEvent.click(within(screen.getByRole('region', { name: 'Delegation tree' })).getByRole('button', { name: /^Codex.*implement/ }));
   const detail = screen.getByRole('region', { name: 'Selected node' });
   expect(within(detail).getByText('Attempt 2 · failed')).toBeTruthy();
   fireEvent.click(within(detail).getByRole('button', { name: 'Retry delegation' }));
@@ -174,9 +178,10 @@ it('keeps a resumed delegated conversation under its origin with two attempts an
     ['conversation:origin', 'run:codex:2'], ['run:codex:2', 'run:claude:1'],
   ]);
   render(<MemoryRouter><TreePage project={PROJECT} target={target}/></MemoryRouter>);
+  fireEvent.click(screen.getByRole('button', { name: /Terminal.*unknown|Terminal.*running|Terminal.*idle/ }));
   const left = screen.getByRole('region', { name: 'Delegation tree' });
-  expect(within(left).getAllByRole('button', { name: 'Implement code' })).toHaveLength(1);
-  fireEvent.click(within(left).getByRole('button', { name: 'Implement code' }));
+  expect(within(left).getAllByRole('button', { name: /^Codex.*implement/ })).toHaveLength(1);
+  fireEvent.click(within(left).getByRole('button', { name: /^Codex.*implement/ }));
   const detail = screen.getByRole('region', { name: 'Selected node' });
   fireEvent.click(within(detail).getByText('Attempt history'));
   expect(within(detail).getByText('Attempt 1 · failed')).toBeTruthy();
@@ -228,16 +233,13 @@ it('combines resume generations and intake retries without repeating recorded ex
   expect(node.children).toEqual(['run:claude:1']);
   expect(tree.nodes.some(node => node.id === 'conversation:codex' || node.id === 'conversation:retry')).toBe(false);
 });
-it('filters other projects, renders unresolved branches and disables retry while disconnected', () => {
-  const target = fixture({ relations: [] });
-  target.setConnection('runner_unavailable');
-  expect(buildDelegationTree(target.getSnapshot(), '/elsewhere').nodes).toEqual([]);
-  render(<MemoryRouter><TreePage project={PROJECT} target={target} client={{ command: vi.fn() }}/></MemoryRouter>);
-  const branch = screen.getByRole('region', { name: 'Unconfirmed parent' });
-  fireEvent.click(within(branch).getByRole('button', { name: 'Implement code' }));
-  expect((screen.getByRole('button', { name: 'Retry delegation' }) as HTMLButtonElement).disabled).toBe(true);
+it('keeps delegations with unconfirmed parents out of the selected root tree while disconnected', () => {
+ const target = fixture({ relations: [] }); target.setConnection('runner_unavailable');
+ target.getSnapshot().projection.delegations.forEach(row => { row.root_id = null; }); target.getSnapshot().projection.relations = [];
+ expect(buildDelegationTree(target.getSnapshot(), '/elsewhere').nodes).toEqual([]);
+ render(<MemoryRouter><TreePage project={PROJECT} target={target} client={{ command: vi.fn() }}/></MemoryRouter>);
+ fireEvent.click(screen.getByRole('button', { name: /Terminal.*unknown/ })); expect(screen.getByText('No delegations yet')).toBeTruthy(); expect(screen.queryByRole('button', { name: 'Retry delegation' })).toBeNull();
 });
-
 it('nests review_of in the original execution direction with a readable reviewer label', () => {
   const state = fixture().getSnapshot();
   state.projection.relations = [state.projection.relations[0], { id: 'review-of', type: 'review_of', active: true,

@@ -115,3 +115,16 @@ export function summarizeApproval(value: unknown): string {
   const detail = request.command ?? (request.file ? splitPath(request.file).at(-1) : '') ?? request.summary;
   return detail ? `${request.tool}: ${detail}` : request.tool;
 }
+
+const PENDING_STATES = new Set(['pending', 'requested', 'waiting', 'waiting_approval']);
+export type ApprovalOutcome = 'pending' | 'answered' | 'allowed' | 'denied' | 'expired' | 'stale' | 'resolved';
+/** 承認の結果を 1 つの語に決める。期限切れと無効は回答より優先し、回答があれば許可か拒否かで分ける。 */
+export function approvalOutcome(row: Row, answered = false): ApprovalOutcome {
+  const state = text(row.state);
+  if (state === 'expired') return 'expired';
+  if (state === 'stale') return 'stale';
+  const decision = text(row.decision);
+  if (decision) return isPositiveDecision(decision) ? 'allowed' : 'denied';
+  if (PENDING_STATES.has(state)) return answered ? 'answered' : 'pending';
+  return 'resolved';
+}

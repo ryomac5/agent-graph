@@ -1,6 +1,7 @@
-import { readApprovalRequest, splitPath } from '../lib/format.ts';
+import { approvalOutcome, readApprovalRequest, splitPath, type ApprovalOutcome } from '../lib/format.ts';
+import type { Row } from '../lib/store.ts';
 import { Fields } from './Fields.tsx';
-import { Icon } from './Icon.tsx';
+import { Icon, type IconName } from './Icon.tsx';
 
 export function DiffView({ diff, label = 'Expanded file diff' }: { diff: string; label?: string }) {
   const lines = diff.split('\n');
@@ -19,4 +20,20 @@ export function ApprovalRequestView({ request, compact = false }: { request: unk
     {parsed.command === undefined && parsed.diff === undefined && parsed.fields.length > 0 && <Fields value={Object.fromEntries(parsed.fields)}/>}
     {parsed.command === undefined && parsed.diff === undefined && parsed.fields.length === 0 && !parsed.file && <p className="muted-text">Request content unavailable.</p>}
   </div>;
+}
+
+// 結果ごとの印。許可はチェック、拒否はばつ、期限切れは時計、待ちは注意の印にする。
+export const OUTCOME_ICONS: Record<ApprovalOutcome, IconName> = {
+  pending: 'alert', answered: 'alert', allowed: 'check', denied: 'x', expired: 'clock', stale: 'alert', resolved: 'dot',
+};
+export const OUTCOME_LABELS: Record<ApprovalOutcome, string> = {
+  pending: 'Pending', answered: 'Answered', allowed: 'Allowed', denied: 'Denied', expired: 'Expired', stale: 'Stale', resolved: 'Resolved',
+};
+export function OutcomeIcon({ outcome, size = 14 }: { outcome: ApprovalOutcome; size?: number }) {
+  return <Icon name={OUTCOME_ICONS[outcome]} size={size} className={`outcome-icon outcome-${outcome}`} data-outcome={outcome}/>;
+}
+/** 承認の結果の札。印と文字と色を同じ規則で出す。 */
+export function OutcomeChip({ row, answered = false, label }: { row: Row; answered?: boolean; label?: (outcome: ApprovalOutcome) => string }) {
+  const outcome = approvalOutcome(row, answered);
+  return <span className={`chip outcome-chip outcome-${outcome}`} data-outcome={outcome}><OutcomeIcon outcome={outcome} size={12}/>{label?.(outcome) ?? OUTCOME_LABELS[outcome]}</span>;
 }

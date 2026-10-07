@@ -1,12 +1,13 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { App } from '../App.tsx';
 import { createStore, type Row } from '../lib/store.ts';
-import { evidenceLabel, projectLabel, readApprovalRequest, runLabel, summarizeApproval, worktreeLabel } from '../lib/format.ts';
+import { approvalOutcome, evidenceLabel, projectLabel, readApprovalRequest, runLabel, summarizeApproval, worktreeLabel } from '../lib/format.ts';
 import { ConversationPage } from '../pages/conversation/ConversationPage.tsx';
 import { Inbox } from '../pages/inbox/Inbox.tsx';
 import { selectTimeline } from '../components/conversation/model.ts';
+import { Notifications } from '../components/notifications/Notifications.tsx';
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 const REPO = '/var/folders/07/abc/T/agent-graph-ui-x/repo';
@@ -104,4 +105,72 @@ it('shows the repository name in the sidebar with the path as secondary text', (
   expect(link.getAttribute('title')).toBe(REPO);
   expect(within(link).getByText('repo')).toBeTruthy();
   expect(within(link).getByText('…/T/agent-graph-ui-x')).toBeTruthy();
+});
+
+// 結果ごとの印の名前。Icon の線の組の中で、許可はチェック、拒否はばつ、期限切れは時計、待ちは注意の印になる。
+const OUTCOME_PATHS = { allowed: 'm5 12.5 4.5 4.5L19 7.5', denied: 'M6.5 6.5l11 11M17.5 6.5l-11 11', expired: 'M12 7.5V12l3 2', pending: 'M12 9.5v4M12 17h.01' };
+function iconPath(element: Element) { return [...element.querySelectorAll('path')].map(path => path.getAttribute('d')).join(' '); }
+function approvalRows(): Row[] {
+  const base = { run_id: RUN, conversation_id: CONVERSATION, available_decisions: ['allow', 'deny'], request: { name: 'Bash', input: { command: 'npm test' } } };
+  return [
+    { ...base, id: 'allowed', state: 'resolved', decision: 'allow', requested_ts: '2026-10-07T01:00:03Z' },
+    { ...base, id: 'denied', state: 'resolved', decision: 'deny', requested_ts: '2026-10-07T01:00:04Z' },
+    { ...base, id: 'declined', state: 'resolved', decision: 'decline', requested_ts: '2026-10-07T01:00:05Z' },
+    { ...base, id: 'expired', state: 'expired', reason: 'restart', requested_ts: '2026-10-07T01:00:06Z' },
+    { ...base, id: 'pending', state: 'pending', requested_ts: '2026-10-07T01:00:07Z' },
+  ];
+}
+
+it('decides one outcome per approval: expiry first, then the answered decision, then pending', () => {
+  expect(approvalRows().map(row => approvalOutcome(row))).toEqual(['allowed', 'denied', 'denied', 'expired', 'pending']);
+  expect(approvalOutcome({ state: 'pending' }, true)).toBe('answered');
+  expect(approvalOutcome({ state: 'stale', decision: 'accept' })).toBe('stale');
+  expect(approvalOutcome({ state: 'resolved' })).toBe('resolved');
+});
+
+it('marks conversation approval cards with a check, a cross, a clock or an alert by outcome and colours them alike', () => {
+  const target = createStore();
+  target.setSnapshot({ seq: 1, generation: 1, projection: projection({ approvals: approvalRows() }) });
+  target.setConnection('connected');
+  render(<MemoryRouter><ConversationPage conversationId={CONVERSATION} target={target} client={client}/></MemoryRouter>);
+  const cards = screen.getAllByRole('article', { name: 'Approval request' });
+  const expected = [['allowed', 'Allowed'], ['denied', 'Denied'], ['denied', 'Denied'], ['expired', 'Expired'], ['pending', 'Pending']] as const;
+  cards.forEach((card, index) => {
+    const [outcome, label] = expected[index]!;
+    const icon = card.querySelector('header > svg')!;
+    expect(icon.getAttribute('class')).toContain(`outcome-${outcome}`);
+    expect(iconPath(icon)).toContain(OUTCOME_PATHS[outcome]);
+    const chip = card.querySelector('.outcome-chip')!;
+    expect(chip.textContent).toBe(label);
+    expect(chip.className).toContain(`outcome-${outcome}`);
+    expect(iconPath(chip.querySelector('svg')!)).toContain(OUTCOME_PATHS[outcome]);
+  });
+  // 拒否の札に許可の印を使わない。
+  for (const card of cards.filter(card => card.dataset.outcome === 'denied')) expect(iconPath(card)).not.toContain(OUTCOME_PATHS.allowed);
+});
+
+it('uses the same outcome marks in the inbox expired list and in notifications', () => {
+  const target = createStore();
+  target.setSnapshot({ seq: 1, generation: 1, projection: projection({ approvals: approvalRows() }) });
+  target.setConnection('connected');
+  const view = render(<MemoryRouter><Inbox target={target} client={client}/></MemoryRouter>);
+  const expired = screen.getByRole('list', { name: 'Expired approvals' }).querySelector('li')!;
+  const chip = expired.querySelector('.outcome-chip')!;
+  expect(chip.textContent).toBe('Expired');
+  expect(iconPath(chip)).toContain(OUTCOME_PATHS.expired);
+  view.unmount();
+
+  const notices = createStore();
+  notices.setSnapshot({ seq: 1, generation: 1, projection: projection({ approvals: [] }) });
+  render(<MemoryRouter><Notifications target={notices} client={client}/></MemoryRouter>);
+  const rows = approvalRows();
+  // 待ちとして届いた通知が、後から結果に変わる。
+  act(() => notices.setSnapshot({ seq: 2, generation: 1, projection: projection({ approvals: rows.map(row => ({ ...row, state: 'pending', decision: undefined })) }) }));
+  act(() => notices.setSnapshot({ seq: 3, generation: 1, projection: projection({ approvals: rows }) }));
+  for (const [id, outcome, text] of [['allowed', 'allowed', 'Approval allowed'], ['denied', 'denied', 'Approval denied'], ['expired', 'expired', 'Approval expired']] as const) {
+    const line = [...document.querySelectorAll<HTMLElement>('.approval-outcome')].find(element => element.closest('li')?.textContent?.includes(text))!;
+    expect(line.dataset.outcome, id).toBe(outcome);
+    expect(line.textContent).toBe(text);
+    expect(iconPath(line)).toContain(OUTCOME_PATHS[outcome]);
+  }
 });

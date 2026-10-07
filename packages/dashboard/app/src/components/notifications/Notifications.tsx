@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { AppLink } from '../AppLink.tsx';
 import { Icon, type IconName } from '../Icon.tsx';
-import { formatClock } from '../../lib/format.ts';
+import { approvalOutcome, formatClock } from '../../lib/format.ts';
+import { OUTCOME_LABELS, OutcomeIcon } from '../ApprovalRequest.tsx';
 import { dictionaries, type Language } from '../../lib/i18n.ts';
 import { store, useScreenStore, type ScreenStore, type ScreenState } from '../../lib/store.ts';
 import { ApprovalActions, ApprovalDetails } from '../../pages/inbox/Inbox.tsx';
@@ -84,7 +85,7 @@ export function Notifications({ client, target = store, initiallyOpen = true, co
           {notice.conversationId && !approval && <AppLink className="btn btn-link btn-sm" to={`/c/${encodeURIComponent(notice.conversationId)}`}>Evidence</AppLink>}
           {approval && <><ApprovalDetails row={approval} state={state} compact/>
             {isPending(approval) ? <ApprovalActions row={approval} client={client}/>
-              : <p className="status-line">Approval {String(approval.state)}</p>}</>}
+              : <p className="status-line approval-outcome" data-outcome={approvalOutcome(approval)}><OutcomeIcon outcome={approvalOutcome(approval)}/>{`Approval ${OUTCOME_LABELS[approvalOutcome(approval)].toLowerCase()}`}</p>}</>}
         </li>;
       })}</ol>
     </section>}

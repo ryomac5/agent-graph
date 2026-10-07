@@ -65,10 +65,10 @@
 .timeline-approval { display: grid; gap: var(--space-2); min-width: 0; margin-left: 40px; padding: var(--space-3); background: var(--surface); border: 1px solid var(--attention-border); border-radius: var(--radius-md); box-shadow: var(--shadow-sm); }
 .timeline-approval > header { display: flex; align-items: center; gap: var(--space-2); min-width: 0; font-size: var(--text-sm); white-space: nowrap; }
 .timeline-approval > header .truncate { flex: 0 1 auto; }
-.timeline-approval > header > .icon { color: var(--attention); }
 .timeline-approval > header time, .timeline-approval > header .muted-text { color: var(--text-3); font-size: var(--text-xs); }
 .timeline-approval.is-settled { border-color: var(--border); box-shadow: none; }
-.timeline-approval.is-settled > header > .icon { color: var(--success); }
+.timeline-approval.outcome-denied { border-color: var(--danger-border); box-shadow: none; }
+.timeline-approval.outcome-expired { border-style: dashed; border-color: var(--unknown); }
 .timeline-approval.is-settled .approval-request { opacity: .75; }
 .timeline-boundary { display: flex; align-items: center; gap: var(--space-3); color: var(--text-3); font-size: var(--text-xs); }
 .timeline-boundary::before, .timeline-boundary::after { content: ''; flex: 1; border-top: 1px solid var(--border-strong); }

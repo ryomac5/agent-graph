@@ -245,3 +245,14 @@ details[open] > summary .caret { transform: rotate(90deg); }
 
 @media (max-width: 1279px) { :root { --sidebar-width: 216px; } .page { padding: var(--space-5) var(--space-6) var(--space-8); } }
 @media (max-width: 760px) { .app-shell { grid-template-columns: minmax(0, 1fr); } .sidebar { display: none; } .page { padding: var(--space-4); } }
+
+/* 承認の結果。許可は成功の色、拒否は警告の色、期限切れは不明と同じ破線、待ちは注意の色にする。 */
+.outcome-icon.outcome-allowed { color: var(--success); }
+.outcome-icon.outcome-denied, .outcome-icon.outcome-stale { color: var(--danger); }
+.outcome-icon.outcome-expired, .outcome-icon.outcome-resolved { color: var(--unknown); }
+.outcome-icon.outcome-pending, .outcome-icon.outcome-answered { color: var(--attention); }
+.outcome-chip.outcome-allowed { background: var(--success-soft); color: var(--success); border-color: transparent; }
+.outcome-chip.outcome-denied, .outcome-chip.outcome-stale { background: var(--danger-soft); color: var(--danger); border-color: var(--danger-border); }
+.outcome-chip.outcome-expired { background: transparent; color: var(--unknown); border-style: dashed; border-color: var(--unknown); }
+.outcome-chip.outcome-pending, .outcome-chip.outcome-answered { background: var(--attention-soft); color: var(--attention); border-color: var(--attention-border); }
+.outcome-chip .outcome-icon { color: inherit; }

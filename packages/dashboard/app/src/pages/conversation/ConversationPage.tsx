@@ -4,12 +4,12 @@ import type { Ack, createClient } from '../../lib/client.ts';
 import { store, useScreenStore, type Row, type ScreenState, type ScreenStore } from '../../lib/store.ts';
 import type { Language } from '../../lib/i18n.ts';
 import { dictionaries } from '../../lib/i18n.ts';
-import { conversationName, decisionLabel, evidenceLabel, formatClock, formatSeconds, isPositiveDecision, readApprovalRequest, readModel, runLabel, worktreeLabel } from '../../lib/format.ts';
+import { approvalOutcome, type ApprovalOutcome, conversationName, decisionLabel, evidenceLabel, formatClock, formatSeconds, isPositiveDecision, readApprovalRequest, readModel, runLabel, worktreeLabel } from '../../lib/format.ts';
 import { AppLink } from '../../components/AppLink.tsx';
 import { StateBadge } from '../../components/StateBadge.tsx';
 import { Icon } from '../../components/Icon.tsx';
 import { Fields } from '../../components/Fields.tsx';
-import { ApprovalRequestView } from '../../components/ApprovalRequest.tsx';
+import { ApprovalRequestView, OutcomeChip, OutcomeIcon } from '../../components/ApprovalRequest.tsx';
 import { providerName } from '../../components/ActivityRow.tsx';
 import { executionStates } from '../../components/activity.ts';
 import { Message } from '../../components/conversation/Message.tsx';
@@ -47,14 +47,13 @@ function ApprovalCard({ entry, t, disabled, answered, onAnswer }: {
   const request = readApprovalRequest(row.request);
   const state = readText(row.state);
   const pending = PENDING_APPROVALS.includes(state);
-  const decision = readText(row.decision);
-  const outcome = decision ? (isPositiveDecision(decision) ? t('allowed') : t('denied')) : state === 'expired' ? t('expired') : state === 'stale' ? t('stale')
-    : pending ? (answered ? t('answered') : t('pendingState')) : t('resolved');
+  const outcome = approvalOutcome(row, answered);
+  const labels: Record<ApprovalOutcome, ConversationText> = { pending: 'pendingState', answered: 'answered', allowed: 'allowed', denied: 'denied', expired: 'expired', stale: 'stale', resolved: 'resolved' };
   const decisions = Array.isArray(row.available_decisions) ? row.available_decisions.filter((value): value is string => typeof value === 'string') : [];
-  return <article className={`timeline-approval ${pending ? 'is-pending' : 'is-settled'}`} aria-label={t('approval')}>
-    <header><Icon name={pending ? 'alert' : 'check'} size={14}/><strong>{t('approval')}</strong><span className="tool-name">{request.tool}</span>
+  return <article className={`timeline-approval ${pending ? 'is-pending' : 'is-settled'} outcome-${outcome}`} aria-label={t('approval')} data-outcome={outcome}>
+    <header><OutcomeIcon outcome={outcome}/><strong>{t('approval')}</strong><span className="tool-name">{request.tool}</span>
       {request.summary && <span className="truncate muted-text">{request.summary}</span>}
-      <span className="spacer"/><span className={`chip ${pending ? 'chip-attention' : 'chip-quiet'}`}>{outcome}</span>
+      <span className="spacer"/><OutcomeChip row={row} answered={answered} label={value => t(labels[value])}/>
       <TimeStamp value={entry.time} fallback={t('timeUnknown')}/></header>
     <ApprovalRequestView request={row.request} compact/>
     {readText(row.reason) && <p className="muted-text">{readText(row.reason)}</p>}

@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { useParams } from 'react-router';
+import { useParams, useSearchParams } from 'react-router';
 import { AppLink } from '../../components/AppLink.tsx';
 import { Icon } from '../../components/Icon.tsx';
 import { AttributionBadge, DiffView } from '../../components/diff/DiffView.tsx';
@@ -31,7 +31,13 @@ function Verification({ value }: { value: unknown }) {
 export function ChangesPage({ client, target = store, project, artifactId }: ChangesPageProps) {
   const params = useParams();
   const state = useScreenStore(target);
-  const artifacts = selectArtifacts(state, project ?? params.project);
+  const [search] = useSearchParams();
+  const projectId = project ?? params.project;
+  const allArtifacts = selectArtifacts(state, projectId);
+  const runId = search.get('run');
+  const runArtifacts = allArtifacts.filter(row => row.run_id === runId);
+  const related = new Set(runArtifacts.flatMap(row => [...collectVersionFamily(allArtifacts, readText(row.id))]));
+  const artifacts = runId ? allArtifacts.filter(row => related.has(readText(row.id))) : allArtifacts;
   const [chosenId, setChosenId] = useState(artifactId ?? '');
   const artifact = artifacts.find(row => row.id === chosenId) ?? artifacts.findLast(row => !artifacts.some(next => next.previous_artifact_id === row.id)) ?? artifacts.at(-1);
   const id = readText(artifact?.id);
@@ -85,6 +91,11 @@ export function ChangesPage({ client, target = store, project, artifactId }: Cha
         <button className="btn btn-secondary btn-sm" disabled={!enabled || obsolete} onClick={() => void command('review.reverify', { artifactId: id })}><Icon name="play" size={14}/>Reverify</button>
         <button className="btn btn-secondary btn-allow btn-sm" disabled={!enabled || obsolete || approvals.some(row => row.state === 'approved' && row.patch_hash === artifact?.patch_hash)}
           onClick={() => void command('review.approve', { artifactId: id })}><Icon name="check" size={14}/>Approve</button></div></header>
+    {projectId && <nav className="tabs" aria-label="Project">
+      <AppLink to={`/p/${encodeURIComponent(projectId)}`}>Project</AppLink>
+      <AppLink to={`/p/${encodeURIComponent(projectId)}/tree`}>Tree</AppLink>
+      <AppLink to={`/p/${encodeURIComponent(projectId)}/changes`} aria-current="page">Changes</AppLink>
+    </nav>}
     {error && <p role="alert" className="banner banner-danger">{error}</p>}
     {notice && <p role="status" className="muted-text">{notice}</p>}
     <div className="toolbar changes-toolbar"><label className="inline-field">Version<select value={id} disabled={busy || !artifact} onChange={event => selectVersion(event.target.value)}>

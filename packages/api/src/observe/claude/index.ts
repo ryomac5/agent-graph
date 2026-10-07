@@ -1,5 +1,5 @@
-import { readdirSync } from "node:fs";
-import { basename, join, resolve, sep } from "node:path";
+import { readdirSync, readFileSync } from "node:fs";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import { createNativeId, projectConversations, serializeValue } from "../../../../core/src/ledger/index.ts";
 import type { AppendResult, ConversationPayload, FactInput, JsonValue, Ledger, UnsupportedObservationPayload } from "../../../../core/src/ledger/index.ts";
@@ -99,6 +99,20 @@ export function observeClaudeFile(ledger: Ledger, path: string, options: ClaudeO
     if (appended.status === "appended") result.appended += 1;
     else if (appended.status === "duplicate") result.duplicates += 1;
     else result.conflicts.push(appended);
+  }
+  // 親は行の sessionId ではなく、子の記録を置いたディレクトリから確定する。
+  if (subagent && basename(dirname(absolutePath)) === "subagents") {
+    const parent = createNativeId("claude", basename(dirname(dirname(absolutePath))));
+    const eventId = `subagent-parent:${id}`;
+    if (!existing.some(fact => fact.source_event_id === eventId && fact.source === "transcript-claude")) {
+      let metadata: Row = {};
+      try { metadata = parseRow(readFileSync(absolutePath.replace(/\.jsonl$/, ".meta.json"), "utf8")) ?? {}; }
+      catch (error) { if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error; }
+      append({ source: "transcript-claude", source_event_id: eventId, source_ts: validRows.find(row => typeof row.timestamp === "string")?.timestamp as string ?? previous?.created_ts ?? observedTs,
+        observed_ts: observedTs, confidence: "confirmed", kind: "relation.created", subject: `relation:${eventId}`,
+        payload: { type: "delegated", from_id: parent, to_id: id, active: true, confidence: "confirmed",
+          evidence: { toolUseId: metadata.toolUseId ?? null, description: metadata.description ?? null, agentType: metadata.agentType ?? null } } });
+    }
   }
   const unsupported = new Map<string, UnsupportedInput>();
   const knownUnsupported = new Set(existing.filter((fact) => fact.source === "transcript-claude"

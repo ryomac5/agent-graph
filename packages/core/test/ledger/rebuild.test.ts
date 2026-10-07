@@ -122,6 +122,7 @@ const TS = "2026-01-01T00:00:00Z";
 const BASE = { source: "host-codex", source_ts: TS, confidence: "confirmed" } as const;
 
 // 版 7 で足した列。版 6 以前の台帳を再現するときに落とす。
+const VERSION_8_COLUMNS = [["conversations", "kit_name"], ["conversations", "created_ts"], ["delegations", "kit"]] as const;
 const VERSION_7_COLUMNS = [["conversations", "cwd"], ["conversations", "repository_id"], ["runs", "model"], ["runs", "effort"],
   ["delegations", "repository_id"], ["delegations", "parent"], ["delegations", "provider"], ["delegations", "model"]] as const;
 
@@ -388,7 +389,7 @@ test("版 1 の台帳に索引を移行し、既存事実と続きの投影を�
   legacy.exec("DROP TABLE conversation_name_candidates; DROP TABLE message_name_inputs; DROP INDEX membership_message; ALTER TABLE conversations DROP COLUMN name; ALTER TABLE conversations DROP COLUMN name_is_provisional; ALTER TABLE conversations DROP COLUMN first_request_excerpt");
   for (const [table, column] of [["messages", "source_ts"], ["messages", "source_event_id"], ["messages", "source"], ["messages", "confidence"],
     ["runs", "launch"], ["runs", "cwd"], ["runs", "branch"], ["approvals", "requested_ts"],
-    ...VERSION_7_COLUMNS]) legacy.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
+    ...VERSION_7_COLUMNS, ...VERSION_8_COLUMNS]) legacy.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
   legacy.prepare("UPDATE schema_version SET version = ?").run(1);
   legacy.close();
   const migrated = openLedger(path, { storageScope: "full_diff" });
@@ -438,7 +439,7 @@ test("版 4 の台帳を開くと、名前の規則を既存の発言に当て�
     UPDATE conversations SET name = '<permissions instructions>' WHERE id = '["codex","c"]';
     ALTER TABLE conversations DROP COLUMN first_request_excerpt; UPDATE schema_version SET version = 4;`);
   // 版 7 の列も落とし、版 4 から 5、6、7 を順に通す。版の更新を記録して順序も確かめる。
-  for (const [table, column] of VERSION_7_COLUMNS) legacy.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
+  for (const [table, column] of [...VERSION_7_COLUMNS, ...VERSION_8_COLUMNS]) legacy.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
   legacy.exec(`CREATE TABLE migration_steps (version INTEGER NOT NULL);
     CREATE TRIGGER record_migration AFTER UPDATE OF version ON schema_version
     BEGIN INSERT INTO migration_steps VALUES (NEW.version); END;`);
@@ -447,7 +448,7 @@ test("版 4 の台帳を開くと、名前の規則を既存の発言に当て�
   const projection = new DatabaseSync(path);
   t.after(() => { projection.close(); migrated.close(); rmSync(directory, { recursive: true }); });
   assert.equal(projection.prepare("SELECT version FROM schema_version WHERE id = 1").get()!.version, SCHEMA_VERSION);
-  assert.deepEqual(projection.prepare("SELECT version FROM migration_steps ORDER BY rowid").all().map(row => row.version), [5, 6, 7]);
+  assert.deepEqual(projection.prepare("SELECT version FROM migration_steps ORDER BY rowid").all().map(row => row.version), [5, 6, 7, 8]);
   assert.deepEqual(projection.prepare("SELECT id, name, name_is_provisional, first_request_excerpt FROM conversations ORDER BY id").all()
     .map((row) => ({ ...row })), [
     { id: '["codex","c"]', name: "会話の名前を直す。", name_is_provisional: 1, first_request_excerpt: "会話の名前を直す。" },
@@ -456,7 +457,7 @@ test("版 4 の台帳を開くと、名前の規則を既存の発言に当て�
   assert.deepEqual(readTables(projection), expected);
 });
 
-test("版 6 の台帳は版 7 の移行だけを通し、会話の名前の当て直しを繰り返さない", (t) => {
+test("版 6 の台帳は版 7 と版 8 の移行だけを通し、会話の名前の当て直しを繰り返さない", (t) => {
   const { writer, database } = openTestLedger(t);
   for (const input of ALL_ENTITIES) writer.append(input);
   writer.append({ ...BASE, source_event_id: "v5-location", kind: "conversation.updated", subject: "conversation:c",
@@ -474,7 +475,7 @@ test("版 6 の台帳は版 7 の移行だけを通し、会話の名前の当�
   // 版 6 までの移行は名前の索引を作り直す。走れば消える印を索引に置き、版 7 の列だけを落とす。
   legacy.exec(`INSERT INTO message_name_inputs VALUES ('sentinel', 0, '00', 'sentinel', '00');
     UPDATE schema_version SET version = 6;`);
-  for (const [table, column] of VERSION_7_COLUMNS) legacy.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
+  for (const [table, column] of [...VERSION_7_COLUMNS, ...VERSION_8_COLUMNS]) legacy.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
   legacy.exec(`CREATE TABLE migration_steps (version INTEGER NOT NULL);
     CREATE TRIGGER record_migration AFTER UPDATE OF version ON schema_version
     BEGIN INSERT INTO migration_steps VALUES (NEW.version); END;`);
@@ -482,9 +483,9 @@ test("版 6 の台帳は版 7 の移行だけを通し、会話の名前の当�
   const migrated = openLedger(path, { storageScope: "full_diff" });
   const projection = new DatabaseSync(path);
   t.after(() => { projection.close(); migrated.close(); rmSync(directory, { recursive: true }); });
-  assert.equal(SCHEMA_VERSION, 7);
-  assert.deepEqual(projection.prepare("SELECT version FROM migration_steps ORDER BY rowid").all().map(row => row.version), [7]);
-  assert.equal(projection.prepare("SELECT version FROM schema_version WHERE id = 1").get()!.version, 7);
+  assert.equal(SCHEMA_VERSION, 8);
+  assert.deepEqual(projection.prepare("SELECT version FROM migration_steps ORDER BY rowid").all().map(row => row.version), [7, 8]);
+  assert.equal(projection.prepare("SELECT version FROM schema_version WHERE id = 1").get()!.version, 8);
   assert.equal(projection.prepare("SELECT count(*) AS count FROM message_name_inputs WHERE id = 'sentinel'").get()!.count, 1);
   assert.deepEqual({ ...projection.prepare("SELECT cwd, repository_id FROM conversations").get() },
     { cwd: "/repo", repository_id: "repo" });

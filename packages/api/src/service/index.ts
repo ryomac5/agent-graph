@@ -264,7 +264,7 @@ export function openObservationService(options: ObservationOptions = {}) {
   function needsClaudeContext(path: string): boolean {
     if (contextAttempted.has(path)) return false;
     contextAttempted.add(path);
-    return !readLocated().has(`transcript-claude:${claudeLocationEventId(claudeConversationId(path))}`);
+    return path.includes("/subagents/") || !readLocated().has(`transcript-claude:${claudeLocationEventId(claudeConversationId(path))}`);
   }
   function needsCodexLocation(path: string): boolean {
     const nativeId = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i.exec(basename(path))?.[1];

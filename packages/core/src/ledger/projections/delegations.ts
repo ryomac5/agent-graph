@@ -15,6 +15,8 @@ export interface DelegationAttempt {
 export interface DelegationProjection extends Partial<DelegationPayload> {
   id: string;
   request_id: string;
+  root_id?: string | null;
+  kit?: JsonValue;
   state: DelegationPayload["state"];
   attempt: number;
   attempts: DelegationAttempt[];

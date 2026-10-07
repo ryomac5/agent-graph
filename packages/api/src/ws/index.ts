@@ -77,7 +77,7 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
       const params = readRequestUrl(request)!.searchParams;
       const id = params.get("id");
       const table = params.get("table");
-      if (path === "/conversation" && !id || path === "/projection" && (!table || !(PROJECTION_TABLES as readonly string[]).includes(table) || ["messages", "message_memberships"].includes(table))) {
+      if (path === "/conversation" && !id || path === "/projection" && (!table || table !== "roots" && !(PROJECTION_TABLES as readonly string[]).includes(table) || ["messages", "message_memberships"].includes(table))) {
         response.writeHead(400).end(); return;
       }
       response.writeHead(200, { "Content-Type": "application/json" });
@@ -110,7 +110,7 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
         if (!Number.isSafeInteger(message.seq) || message.seq < 0
           || message.generation !== undefined && (!Number.isSafeInteger(message.generation) || message.generation < 0)
           || tables !== undefined && (!Array.isArray(tables) || tables.some((table: unknown) =>
-            typeof table !== "string" || table !== "projects" && !(PROJECTION_TABLES as readonly string[]).includes(table)))
+            typeof table !== "string" || table !== "projects" && table !== "roots" && !(PROJECTION_TABLES as readonly string[]).includes(table)))
           || conversations !== undefined && (!Array.isArray(conversations) || conversations.length > MAX_OPEN_CONVERSATIONS || conversations.some((id: unknown) => typeof id !== "string" || !id))) {
           socket.close(1008, "Invalid hello"); return;
         }

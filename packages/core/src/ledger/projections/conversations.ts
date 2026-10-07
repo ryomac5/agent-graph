@@ -9,6 +9,7 @@ import type { ProjectedEntity, ProjectedRelation } from "./relations.ts";
 
 export type ProjectedConversation = ProjectedEntity<"conversation"> & {
   name: string | null;
+  created_ts: string | null;
   name_is_provisional: boolean;
   first_request_excerpt: string | null;
 };
@@ -153,6 +154,13 @@ export function projectConversations(
   const rows = projectEntities(facts, "conversation", (payload, id) =>
     payload.provider && payload.native_id ? createNativeId(payload.provider, payload.native_id) : id,
   (fact) => [fact.source.startsWith("host-") ? 1 : 0]);
+  const created = new Map<string, string>();
+  for (const fact of facts) {
+    if (fact.kind !== "conversation.created") continue;
+    const payload = fact.payload as { provider?: string; native_id?: string } | null;
+    const id = payload?.provider && payload.native_id ? createNativeId(payload.provider, payload.native_id) : fact.subject.slice(13);
+    if (!created.has(id) || fact.source_ts < created.get(id)!) created.set(id, fact.source_ts);
+  }
   const tasksById = new Map(tasks.map((task) => [task.id, task]));
   // 差分反映の索引が渡された場合は、本文を再投影しない。依頼の抜粋は無人実行や名前の確定した会話にも付ける。
   const provisionalNames = names ?? (facts.some(fact => fact.kind.startsWith("message"))
@@ -165,7 +173,7 @@ export function projectConversations(
     const unattended = conversation.type === "unattended";
     const name = unattended ? provisionalName
       : conversation.type === "subagent" ? explicitName ?? task?.name ?? null : task?.name ?? explicitName ?? provisionalName;
-    return { ...conversation, name, name_is_provisional: name !== null && (unattended || !explicitName && !task?.name),
+    return { ...conversation, name, created_ts: created.get(conversation.id) ?? null, name_is_provisional: name !== null && (unattended || !explicitName && !task?.name),
       first_request_excerpt: provisionalName };
   });
   const relations = projectRelations(facts);

@@ -41,6 +41,12 @@ export function observeClaudeHistories(ledger: Ledger, directory: string, facts:
       conversations.set(id, history);
       continue;
     }
+    const child = (fact.payload as { to_id?: string } | null)?.to_id;
+    if (fact.kind.startsWith("relation.") && typeof child === "string") {
+      const history = conversations.get(child) ?? [];
+      history.push(fact); conversations.set(child, history);
+      continue;
+    }
     if (!fact.kind.startsWith("conversation.")) continue;
     const id = identities.get(fact.subject) ?? fact.subject.slice("conversation:".length);
     const history = conversations.get(id) ?? [];
@@ -57,7 +63,7 @@ export function observeClaudeHistories(ledger: Ledger, directory: string, facts:
       readSince: (seq, limit) => history.filter((fact) => fact.seq > seq).slice(0, limit),
       append(input) {
         const result = ledger.append(input);
-        if (result.status === "appended" && (input.kind.startsWith("conversation.") || input.kind.startsWith("run."))) {
+        if (result.status === "appended" && (input.kind.startsWith("conversation.") || input.kind.startsWith("run.") || input.kind.startsWith("relation."))) {
           history.push({ ...input, seq: result.seq, fact_id: result.fact_id } as Fact);
         }
         return result;

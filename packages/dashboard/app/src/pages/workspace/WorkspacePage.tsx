@@ -68,8 +68,6 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
     {selected?.conversationId && <Link className="btn btn-link btn-sm" to={`/c/${encodeURIComponent(selected.conversationId)}`}>{ja ? '会話を開く' : 'Open conversation'}</Link>}
   </div>;
   return <div className={`workspace${filesOpen ? ' files-open' : ' files-collapsed'}`}>
-    <label className="inline-field"><input type="checkbox" checked={showTemporary} onChange={event => setShowTemporary(event.target.checked)}/>Show temporary</label>
-    {allItems.length > limit && <button className="btn" onClick={() => setLimit(value => value + TASK_PAGE_SIZE)}>Load more tasks</button>}
     <header className="workspace-header">
       <div className="page-title"><p className="eyebrow">{ja ? 'プロジェクトの作業場' : 'Project workspace'}</p>
         <h1 className="truncate" title={label.full}><Icon name="folder" size={18}/>{label.name}</h1>
@@ -80,7 +78,9 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
         <div><dt>{ja ? '利用枠' : 'Quota'}</dt><dd><span className="muted-text" title={ja ? 'provider から利用枠の報告がありません' : 'Providers have not reported usage limits'}>{ja ? '報告なし' : 'Not reported'}</span></dd></div>
         <div><dt>{ja ? '実行中' : 'Active'}</dt><dd className="numeric">{activeCount} {ja ? '件' : activeCount === 1 ? 'run' : 'runs'}</dd></div>
       </dl>
-      <div className="workspace-actions">
+      {/* 絞り込みは一覧と同じく、見出しの操作の行に置く。 */}
+      <div className="workspace-actions" role="group" aria-label={ja ? '絞り込み' : 'Filters'}>
+        <label className="inline-field"><input type="checkbox" checked={showTemporary} onChange={event => setShowTemporary(event.target.checked)}/>Show temporary</label>
         <label className="inline-field">{ja ? '並べ替え' : 'Sort tasks'}<select className="select-sm" value={order} onChange={event => setOrder(event.target.value)}><option value="name">{ja ? '名前' : 'Name'}</option><option value="state">{ja ? '状態' : 'State'}</option></select></label>
         <button className="btn btn-sm btn-secondary" onClick={() => setCreating(value => !value)} aria-expanded={creating}><Icon name="plus" size={14}/>{ja ? '作業を作る' : 'Create task'}</button>
       </div>
@@ -115,6 +115,7 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
                 ? <button className="btn btn-ghost btn-xs" aria-label={pending.includes(item.id) ? (ja ? '停止要求中' : 'Stop requested') : (ja ? '実行を停止' : 'Stop run')}
                   title={ja ? '実行を停止' : 'Stop run'} disabled={!available || pending.includes(item.id)} onClick={() => void stop(item.id)}><Icon name="stop" size={12}/>{ja ? '停止' : 'Stop'}</button> : undefined}/>)}
             {!items.length && <p className="empty-row">{ja ? '作業はまだありません' : 'No tasks yet'}</p>}
+            {allItems.length > limit && <button className="btn btn-secondary btn-sm" onClick={() => setLimit(value => value + TASK_PAGE_SIZE)}>Load more tasks</button>}
           </div>
         </section>
         <section className="workspace-conversation" aria-label={ja ? '会話' : 'Conversation'}>

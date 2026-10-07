@@ -20,6 +20,7 @@ const text = {
     noOutput: 'No output recorded', placeholder: 'Message the agent…', readOnlyPlaceholder: 'Read-only. Take over to continue here.', sendHint: '⌘ Enter to send',
     noWorktree: 'No worktree recorded', thinking: 'Thinking', resolved: 'Resolved', expired: 'Expired', stale: 'Stale', pendingState: 'Pending',
     answered: 'Answered', allowed: 'Allowed', denied: 'Denied',
+    details: 'Details', historyFormat: 'History format', access: 'Access', parentAgent: 'Parent agent', handoffUnsupported: 'Handoff not supported',
   },
   ja: {
     conversation: '会話', unknown: '不明', source: '出所', confidence: '確度', streaming: '出力中', toolOutput: '道具の出力',
@@ -40,6 +41,7 @@ const text = {
     noOutput: '出力の記録はありません', placeholder: 'エージェントへの指示…', readOnlyPlaceholder: '読み取り専用です。続けるには引き継いでください。', sendHint: '⌘ Enter で送信',
     noWorktree: '作業ツリーの記録なし', thinking: '思考', resolved: '解決済み', expired: '期限切れ', stale: '無効', pendingState: '待ち',
     answered: '回答済み', allowed: '許可', denied: '拒否',
+    details: '詳細', historyFormat: '履歴の形式', access: '操作', parentAgent: '親のエージェント', handoffUnsupported: '引き継ぎ未対応',
   },
 };
 export type ConversationText = keyof typeof text.en;

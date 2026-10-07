@@ -132,6 +132,10 @@ it('filters Tree, workspace and Changes by a display-name route through the proj
   vi.stubGlobal('innerWidth', 1024);
   render(<MemoryRouter><WorkspacePage project="agent-graph" target={target} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: false })) }}/></MemoryRouter>);
   expect(screen.getByRole('heading', { name: 'agent-graph' })).toBeTruthy();
+  // Show temporary は見出しの外に浮かせず、一覧と同じく絞り込みの行に置く。
+  const filters = screen.getByRole('group', { name: 'Filters' });
+  expect(filters.closest('.workspace-header')).toBeTruthy();
+  expect(within(filters).getByRole('checkbox', { name: 'Show temporary' })).toBeTruthy();
   expect(within(screen.getByRole('region', { name: 'Tasks' })).getAllByRole('article').map(row => row.getAttribute('aria-label'))).toContain('Terminal root');
   cleanup();
   render(<MemoryRouter><ChangesPage project="agent-graph" target={target} client={{ command: vi.fn() }}/></MemoryRouter>);

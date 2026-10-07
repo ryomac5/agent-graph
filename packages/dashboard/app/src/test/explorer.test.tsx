@@ -205,7 +205,9 @@ describe('Files explorer', () => {
     const { client } = setup();
     await screen.findByRole('tree');
     fireEvent.click(row(item('README.md')));
-    const view = await screen.findByRole('region', { name: 'Contents of README.md' });
+    await screen.findByRole('region', { name: 'Contents of README.md' });
+    fireEvent.click(screen.getByRole('button', { name: 'Raw' }));
+    const view = screen.getByRole('region', { name: 'Contents of README.md' });
     expect(calls(client, 'files.read')).toEqual([{ projectId: 'repo-id', path: 'README.md' }]);
     expect([...view.querySelectorAll('.code-line-number')].map(cell => cell.textContent)).toEqual(['1', '2', '3']);
     expect(view.querySelector('.tok-heading')?.textContent).toBe('# Title');
@@ -216,6 +218,30 @@ describe('Files explorer', () => {
     expect(within(viewer).getByText('Markdown')).toBeTruthy();
     expect(within(viewer).getByText('3 lines')).toBeTruthy();
     expect(within(viewer).getByText('Modified')).toBeTruthy();
+  });
+
+  it('formats Markdown by default and switches to the raw text with Raw', async () => {
+    setup('?path=README.md');
+    const view = await screen.findByRole('region', { name: 'Contents of README.md' });
+    const group = screen.getByRole('group', { name: 'Markdown view' });
+    expect(within(group).getByRole('button', { name: 'Preview' }).getAttribute('aria-pressed')).toBe('true');
+    expect(within(view).getByRole('heading', { name: 'Title' })).toBeTruthy();
+    expect(view.querySelector('.md-inline-code')?.textContent).toBe('code');
+    expect(view.querySelector('.code-line-number')).toBeNull();
+    expect(view.textContent).not.toContain('# Title');
+    fireEvent.click(within(group).getByRole('button', { name: 'Raw' }));
+    expect(within(group).getByRole('button', { name: 'Raw' }).getAttribute('aria-pressed')).toBe('true');
+    const raw = screen.getByRole('region', { name: 'Contents of README.md' });
+    expect(raw.querySelector('.tok-heading')?.textContent).toBe('# Title');
+    expect(within(raw).queryByRole('heading')).toBeNull();
+    fireEvent.click(within(group).getByRole('button', { name: 'Preview' }));
+    expect(within(screen.getByRole('region', { name: 'Contents of README.md' })).getByRole('heading', { name: 'Title' })).toBeTruthy();
+  });
+
+  it('shows other text files as code without the Markdown switch', async () => {
+    setup('?path=src%2Fmain.ts');
+    await screen.findByRole('region', { name: 'Contents of src/main.ts' });
+    expect(screen.queryByRole('group', { name: 'Markdown view' })).toBeNull();
   });
 
   it('expands ancestors for a deep link and colours TypeScript', async () => {

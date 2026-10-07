@@ -20,3 +20,19 @@
 .delegation-attempts li { padding: var(--space-2) 0; }
 .delegation-attempts a { margin-left: var(--space-3); }
 @media (max-width: 760px) { .delegation-layout { grid-template-columns: minmax(0, 1fr); } .delegation-tree { border-right: 0; border-bottom: 1px solid var(--border); max-height: 400px; } .delegation-graph { height: 500px; } }
+
+.delegation-graph .react-flow {
+  --xy-background-color: var(--surface);
+  --xy-controls-button-background-color: var(--surface);
+  --xy-controls-button-background-color-hover: var(--surface-hover);
+  --xy-controls-button-color: var(--text);
+  --xy-controls-button-color-hover: var(--text);
+  --xy-controls-button-border-color: var(--border);
+  --xy-attribution-background-color: var(--surface);
+  --xy-background-pattern-color: var(--border-strong);
+  --xy-controls-box-shadow: 0 0 0 1px var(--border);
+}
+.delegation-graph .react-flow__attribution a { color: var(--text-3); }
+.delegation-graph .react-flow__controls-button { background: var(--surface); color: var(--text); border-color: var(--border); }
+.delegation-graph .react-flow__controls-button svg { fill: currentColor; }
+.delegation-graph .react-flow__controls-button:hover { background: var(--surface-hover); }

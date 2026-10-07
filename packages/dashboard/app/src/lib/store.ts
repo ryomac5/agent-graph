@@ -3,7 +3,7 @@ import { resolveProjection, resolveRow, type ScreenIdentities } from './identiti
 
 export type ConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'runner_unavailable';
 export type Row = Record<string, unknown>;
-export interface Snapshot { seq: number; generation: number; projection: Record<string, Row[]>; identities?: ScreenIdentities }
+export interface Snapshot { seq: number; generation: number; projection: Record<string, Row[]>; identities?: ScreenIdentities; pages?: Record<string, { total: number; next: string | null }> }
 export interface Patch { type: 'patch'; from_seq: number; seq: number; generation: number;
   changes: Record<string, { upsert: Row[]; remove: string[] }>; identities?: ScreenIdentities }
 export interface Delta { runId: string; text: string; conversationId?: string; messageId?: string; existingMessageIds?: string[] }
@@ -19,8 +19,24 @@ export function createStore() {
     getSnapshot: () => state,
     subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
     setConnection: (connection: ConnectionState) => update({ ...state, connection }),
-    setSnapshot: (snapshot: Snapshot) => update({ ...state, ...snapshot, projection: resolveProjection(snapshot.projection, snapshot.identities), deltas: {} }),
+    setSnapshot: (snapshot: Snapshot) => update({ ...state, ...snapshot, pages: snapshot.pages, projection: resolveProjection(snapshot.projection, snapshot.identities), deltas: {} }),
     clearDeltas: () => update({ ...state, deltas: {} }),
+    recordFirstRequest(id: string, excerpt: string) {
+      if (!excerpt) return;
+      update({ ...state, projection: { ...state.projection,
+        conversations: (state.projection.conversations ?? []).map(row => row.id === id ? { ...row, first_request_excerpt: excerpt } : row),
+      } });
+    },
+    mergeProjection(projection: Record<string, Row[]>, generation: number, identities = state.identities) {
+      if (generation !== state.generation) return;
+      const next = { ...state.projection };
+      for (const [table, incoming] of Object.entries(resolveProjection(projection, identities))) {
+        const rows = new Map((next[table] ?? []).map(row => [String(row.id), row]));
+        for (const row of incoming) if (!rows.has(String(row.id))) rows.set(String(row.id), row);
+        next[table] = [...rows.values()];
+      }
+      update({ ...state, projection: next });
+    },
     applyPatch(patch: Patch): boolean {
       if (patch.generation !== state.generation || patch.from_seq > state.seq) return false;
       if (patch.seq <= state.seq) return true;
@@ -32,7 +48,8 @@ export function createStore() {
         for (const id of change.remove) rows.delete(String(resolveRow(table, { id }, state.identities).id));
         for (const source of change.upsert) {
           const row = resolveRow(table, source, identities);
-          rows.set(String(row.id), row);
+          const firstRequest = table === 'conversations' ? rows.get(String(row.id))?.first_request_excerpt : undefined;
+          rows.set(String(row.id), firstRequest ? { ...row, first_request_excerpt: firstRequest } : row);
         }
         projection[table] = [...rows.values()];
 

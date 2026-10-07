@@ -1,3 +1,5 @@
+import { readTitle } from '../lib/format.ts';
+import { getRegisteredProjects, isTemporaryPath, OTHER_PROJECT } from '../lib/projects.ts';
 import type { Row, ScreenState } from '../lib/store.ts';
 import type { ExecutionState } from './StateBadge.tsx';
 import { readBody } from '../lib/message-body.ts';
@@ -7,7 +9,7 @@ export const executionStates: ExecutionState[] = ['starting', 'running', 'waitin
 export type ActivitySection = 'managed' | 'external' | 'unattended' | 'unsupported';
 export interface Activity {
   id: string; parentConversationId?: string; taskId?: string; conversationId?: string; project: string; name: string;
-  provisional: boolean; provider: string; model: string; effort: string; state: ExecutionState;
+  temporary?: boolean; lastActivity?: string; excerpt?: string; provisional: boolean; provider: string; model: string; effort: string; state: ExecutionState;
   section: ActivitySection; managed: boolean; run?: Row; messages: Row[]; artifacts: Row[];
 }
 export function readText(value: unknown): string {
@@ -39,6 +41,8 @@ function groupRows(rows: Row[], field: string): Map<string, Row[]> {
 }
 export function selectActivities(state: ScreenState, parallel = false): Activity[] {
   const p = state.projection;
+  const projects = new Map((p.projects ?? []).map(row => [readText(row.id), row]));
+  const registered = new Set(getRegisteredProjects(state).map(row => readText(row.id)));
   const tasks = new Map((p.tasks ?? []).map(row => [readText(row.id), row]));
   const messages = new Map((p.messages ?? []).map(row => [readText(row.id), row]));
   const memberships = groupRows((p.message_memberships ?? []).filter(row => row.active === 1 || row.active === true), 'conversation_id');
@@ -58,12 +62,14 @@ export function selectActivities(state: ScreenState, parallel = false): Activity
     const conversationId = readText(conversation.id);
     const taskId = readText(conversation.task_id);
     const task = tasks.get(taskId);
+    const projectId = readText(conversation.project) || readText(task?.project);
+    const project = projects.get(projectId);
     seenTasks.add(taskId);
     const history = (memberships.get(conversationId) ?? []).flatMap(link => {
       const message = messages.get(readText(link.message_id));
       return message ? [message] : [];
     }).sort((a, b) => readText(a.source_ts).localeCompare(readText(b.source_ts)) || readText(a.id).localeCompare(readText(b.id)));
-    const first = history.filter(row => row.role === 'user' || !row.role).map(row => readBody(row.body)).find(Boolean)?.trim().split(/(?<=[。.!?？！])|\n/u)[0];
+    const first = readText(conversation.first_request_excerpt) || history.filter(row => row.role === 'user' || !row.role).map(row => readBody(row.body)).find(Boolean)?.trim().split(/(?<=[。.!?？！])|\n/u)[0];
     const orderedRuns = [...(runs.get(conversationId) ?? [])].sort((a, b) => Number(b.generation ?? 0) - Number(a.generation ?? 0) || readText(b.started_ts).localeCompare(readText(a.started_ts)));
     const displayedRuns = parallel ? orderedRuns.filter(run => Number(run.generation ?? 0) === Number(orderedRuns[0]?.generation ?? 0)) : orderedRuns.slice(0, 1);
     for (const run of displayedRuns.length ? displayedRuns : [undefined]) {
@@ -71,14 +77,18 @@ export function selectActivities(state: ScreenState, parallel = false): Activity
       const launch = readObject(run?.launch);
       const rawState = readText(run?.state ?? task?.state);
       const format = readText(conversation.history_format);
+      const location = readText(project?.root_path) || readText(launch.cwd ?? run?.cwd ?? run?.worktree_path ?? conversation.cwd ?? conversation.root_path) || (projectId.startsWith('/') ? projectId : '');
       const unsupported = Boolean(format && !['jsonl', 'legacy', 'paginated'].includes(format))
-        || format === 'paginated' && conversation.origin === 'observed' && !history.some(message => message.body_state === 'stored' || readBody(message.body));
+        || format === 'paginated' && conversation.origin === 'observed' && !Number(conversation.message_count) && !history.some(message => message.body_state === 'stored' || readBody(message.body));
       const section: ActivitySection = unsupported ? 'unsupported'
         : conversation.type === 'unattended' ? 'unattended' : conversation.origin === 'observed' ? 'external' : 'managed';
       result.push({ id: readText(run?.id) || conversationId, taskId, conversationId,
-        project: readText(task?.project) || readText(conversation.project),
-        name: readText(task?.name) || readText(conversation.name) || first || 'Untitled conversation',
-        provisional: !readText(task?.name) && (!readText(conversation.name) || conversation.name_is_provisional === true || conversation.name_is_provisional === 1),
+        project: registered.has(projectId) ? projectId : OTHER_PROJECT,
+        temporary: project?.reason === 'temporary' || conversation.project_reason === 'temporary' || isTemporaryPath(location),
+        lastActivity: [conversation.last_message_ts, run?.last_evidence_ts, run?.ended_ts, run?.started_ts, conversation.created_ts].map(readText).filter(Boolean).sort().at(-1),
+        excerpt: readText(conversation.last_message_excerpt),
+        name: readTitle(task?.name) || readTitle(conversation.name) || first || readText(conversation.last_message_excerpt) || readText(task?.purpose) || 'New conversation',
+        provisional: !readTitle(task?.name) && (!readTitle(conversation.name) || conversation.name_is_provisional === true || conversation.name_is_provisional === 1),
         provider: readText(conversation.provider),
         // 起動の記録がない実行は、モデルを空にして画面に「記録なし」と出す。
         model: readText(assignment?.model) || readText(readObject(launch.model).model) || readText(conversation.model),
@@ -90,8 +100,8 @@ export function selectActivities(state: ScreenState, parallel = false): Activity
   }
   for (const [id, task] of tasks) {
     if (seenTasks.has(id)) continue;
-    result.push({ id, taskId: id, project: readText(task.project), name: readText(task.name) || readText(task.purpose) || 'Untitled task',
-      provisional: !task.name, provider: '', model: '', effort: '',
+    result.push({ id, taskId: id, project: registered.has(readText(task.project)) ? readText(task.project) : OTHER_PROJECT, temporary: isTemporaryPath(readText(projects.get(readText(task.project))?.root_path) || readText(task.project)), lastActivity: readText(task.updated_ts ?? task.created_ts), name: readTitle(task.name) || readText(task.purpose) || 'New task',
+      provisional: !readTitle(task.name), provider: '', model: '', effort: '',
       state: executionStates.includes(task.state as ExecutionState) ? task.state as ExecutionState : 'unknown',
       section: 'managed', managed: true, messages: [], artifacts: [] });
   }
@@ -104,6 +114,8 @@ export function selectActivities(state: ScreenState, parallel = false): Activity
       child.parentConversationId = parent.conversationId;
       child.taskId = parent.taskId;
       child.project = parent.project;
+      child.lastActivity = child.lastActivity || parent.lastActivity;
+      child.temporary = parent.temporary;
       child.name = `Review of ${parent.name}`;
       child.provisional = parent.provisional;
     }
@@ -132,12 +144,18 @@ export function summarizeChanges(artifacts: Row[]): string | undefined {
 export function orderActivities(items: Activity[]): Activity[] {
   const ordered: Activity[] = [];
   const visited = new Set<string>();
+  const conversations = new Set(items.map(item => item.conversationId));
+  const children = new Map<string, Activity[]>();
+  for (const item of items) if (item.parentConversationId) {
+    const group = children.get(item.parentConversationId) ?? [];
+    group.push(item); children.set(item.parentConversationId, group);
+  }
   function append(item: Activity) {
     if (visited.has(item.id)) return;
     visited.add(item.id); ordered.push(item);
-    if (item.conversationId) for (const child of items.filter(child => child.parentConversationId === item.conversationId)) append(child);
+    for (const child of children.get(item.conversationId ?? '') ?? []) append(child);
   }
-  for (const item of items.filter(item => !item.parentConversationId || !items.some(parent => parent.conversationId === item.parentConversationId))) append(item);
+  for (const item of items) if (!item.parentConversationId || !conversations.has(item.parentConversationId)) append(item);
   for (const item of items) append(item);
   return ordered;
 }

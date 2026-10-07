@@ -1,8 +1,9 @@
+import { useProvisionalNames } from '../../lib/provisional-names.ts';
 import { useState, type ReactNode } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { store, useScreenStore, type ScreenStore } from '../../lib/store.ts';
 import type { Language } from '../../lib/i18n.ts';
-import { projectLabel } from '../../lib/format.ts';
+import { getProjectName } from '../../lib/projects.ts';
 import { ActivityRow, providerName } from '../../components/ActivityRow.tsx';
 import { readBody, readText, selectActivities, orderActivities, summarizeChanges } from '../../components/activity.ts';
 import { CreateTaskForm, type CommandClient } from '../../components/CreateTaskForm.tsx';
@@ -10,6 +11,7 @@ import { RelativeTime, useNow } from '../../components/RelativeTime.tsx';
 import { Icon } from '../../components/Icon.tsx';
 import '../../components/activity.css';
 
+const TASK_PAGE_SIZE = 50;
 const ACTIVE = ['starting', 'running', 'waiting_approval', 'waiting_input'];
 export function WorkspacePage({ project: suppliedProject, target = store, client, language = 'en', renderConversation }: {
   project?: string; target?: ScreenStore; client: CommandClient; language?: Language; renderConversation?: (conversationId: string) => ReactNode;
@@ -25,12 +27,16 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
   const [order, setOrder] = useState('name');
   const [pending, setPending] = useState<string[]>([]);
   const [error, setError] = useState('');
-  const items = selectActivities(state, true).filter(item => item.project === project).sort((a, b) =>
+  const [showTemporary, setShowTemporary] = useState(false);
+  const [limit, setLimit] = useState(TASK_PAGE_SIZE);
+  const allItems = selectActivities(state, true).filter(item => item.project === project && (showTemporary || !item.temporary)).sort((a, b) =>
     order === 'state' ? a.state.localeCompare(b.state) || a.name.localeCompare(b.name) : a.name.localeCompare(b.name));
+  const items = allItems.slice(0, limit);
+  useProvisionalNames(state, target, items, client);
   const selected = items.find(item => item.id === selectedId) ?? items[0];
   const available = state.connection === 'connected';
   const activeCount = items.filter(item => ACTIVE.includes(item.state)).length;
-  const label = projectLabel(project);
+  const label = { name: getProjectName(state, project), full: getProjectName(state, project), detail: '' };
   const allocations = [...new Set(items.filter(item => item.provider || item.model).map(item => [providerName(item.provider), item.model].filter(Boolean).join(' · ')))];
   const changes = summarizeChanges(selected?.artifacts ?? []);
   async function stop(runId: string) {
@@ -43,6 +49,8 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
     finally { setPending(ids => ids.filter(id => id !== runId)); }
   }
   return <div className="workspace">
+    <label className="inline-field"><input type="checkbox" checked={showTemporary} onChange={event => setShowTemporary(event.target.checked)}/>Show temporary</label>
+    {allItems.length > limit && <button className="btn" onClick={() => setLimit(value => value + TASK_PAGE_SIZE)}>Load more tasks</button>}
     <header className="workspace-header">
       <div className="page-title"><p className="eyebrow">{ja ? 'プロジェクトの作業場' : 'Project workspace'}</p>
         <h1 className="truncate" title={label.full}><Icon name="folder" size={18}/>{label.name}</h1>

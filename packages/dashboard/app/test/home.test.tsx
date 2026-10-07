@@ -8,6 +8,7 @@ afterEach(cleanup);
 export function createActivityStore(): ScreenStore {
   const target = createStore();
   target.setSnapshot({ seq: 1, generation: 0, projection: {
+    projects: [{ id: '/repo/alpha', display_name: 'alpha', root_path: '/repo/alpha', state: 'registered' }, { id: '/repo/beta', display_name: 'beta', root_path: '/repo/beta', state: 'registered' }],
     tasks: [{ id: 't1', name: 'Implement API', project: '/repo/alpha', state: 'running' }, { id: 't2', name: 'Review UI', project: '/repo/beta', state: 'idle' }],
     conversations: [
       { id: 'c1', task_id: 't1', provider: 'codex', origin: 'managed', type: 'interactive', history_format: 'jsonl' },
@@ -30,11 +31,10 @@ export function createActivityStore(): ScreenStore {
 }
 it('groups managed tasks by project and keeps external, unattended and unsupported conversations in separate sections', () => {
   render(<MemoryRouter><HomePage target={createActivityStore()}/></MemoryRouter>);
-  expect(within(screen.getByRole('region', { name: '/repo/alpha' })).getByRole('article', { name: 'Implement API' })).toBeTruthy();
-  expect(within(screen.getByRole('region', { name: '/repo/beta' })).getByRole('article', { name: 'Review UI' })).toBeTruthy();
+  expect(within(screen.getByRole('region', { name: 'Active' })).getByRole('article', { name: 'Implement API' })).toBeTruthy();
+  expect(within(screen.getByRole('region', { name: 'History' })).getByRole('article', { name: 'Review UI' })).toBeTruthy();
   expect(within(screen.getByRole('region', { name: 'External conversations' })).getByRole('article', { name: 'Investigate latency.' })).toBeTruthy();
-  expect(within(screen.getByRole('region', { name: 'Unattended runs' })).getAllByRole('article')).toHaveLength(1);
-  expect(within(screen.getByRole('region', { name: 'Unsupported conversations' })).getAllByRole('article')).toHaveLength(1);
+  expect(within(screen.getByRole('region', { name: 'History' })).getAllByRole('article')).toHaveLength(3);
   expect(screen.getByRole('link', { name: 'Take over' }).getAttribute('href')).toBe('/c/external?adopt=1');
   const implement = screen.getByRole('article', { name: 'Implement API' });
   expect(within(implement).getByText('Codex')).toBeTruthy();
@@ -64,12 +64,12 @@ it('shows unknown with last evidence, exact time, relative time and reason, with
   render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
   const row = screen.getByRole('article', { name: 'Investigate latency.' });
   const evidence = within(row).getByRole('link', { name: 'Unknown · Evidence' });
-  expect(evidence.textContent).toContain('disconnect');
-  expect(evidence.querySelector('time')?.getAttribute('datetime')).toBe('2026-10-07T01:05:00Z');
-  expect(evidence.textContent).toContain('Observation interrupted');
+  // 一覧の不明は印と理由だけを 1 行で出し、根拠は title に残す。
+  expect(evidence.textContent?.match(/Unknown/g)).toHaveLength(1);
+  expect([...evidence.querySelectorAll('.state-detail')].map(detail => detail.textContent)).toEqual(['Observation interrupted']);
+  expect(evidence.title).toBe('Unknown · disconnect · Observation interrupted');
   expect(evidence.className).toContain('status-unknown');
   expect(evidence.getAttribute('href')).toBe('/c/external');
-  expect(row.querySelector('time')?.getAttribute('datetime')).toBe('2026-10-07T01:05:00Z');
   expect(within(screen.getByRole('article', { name: 'Implement API' })).getByRole('link', { name: 'Running · Evidence' })).toBeTruthy();
   act(() => target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: { runs: { upsert: [{ id: 'r1', conversation_id: 'c1', state: 'failed', cause: 'Build failed' }], remove: [] } } }));
   expect(screen.getByText('Build failed')).toBeTruthy();
@@ -99,5 +99,5 @@ it('decodes SQLite JSON bodies, evidence and assignment attempts from the actual
   expect(screen.getByText('Added the endpoint')).toBeTruthy();
   expect(screen.getByRole('article', { name: 'Investigate latency.' })).toBeTruthy();
   expect(screen.getByText('test-model')).toBeTruthy();
-  expect(screen.getByText('disconnect')).toBeTruthy();
+  expect(within(screen.getByRole('article', { name: 'Investigate latency.' })).getByRole('link', { name: 'Unknown · Evidence' }).title).toContain('disconnect');
 });

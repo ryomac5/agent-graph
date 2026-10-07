@@ -1,6 +1,6 @@
 import type { ScreenState, Row } from '../../lib/store.ts';
 import { getConversation, isPending, readText } from '../../pages/inbox/model.ts';
-import { evidenceLabel, summarizeApproval } from '../../lib/format.ts';
+import { approvalReasonText, evidenceLabel, summarizeApproval } from '../../lib/format.ts';
 
 export const NOTIFICATION_KINDS = ['approval', 'input', 'failed', 'completed', 'review_invalidated', 'daemon_fault', 'unknown'] as const;
 export type NotificationKind = typeof NOTIFICATION_KINDS[number];
@@ -34,7 +34,7 @@ export function collectNotifications(previous: ScreenState | undefined, next: Sc
   for (const row of next.projection.approvals ?? []) {
     const before = previous?.projection.approvals?.find(entry => entry.id === row.id);
     if (isPending(row) && (!before || !isPending(before))) add('approval', row, summarizeApproval(row.request), String(row.id));
-    if (row.state === 'stale' && before?.state !== 'stale') add('review_invalidated', row, readText(row.reason));
+    if (row.state === 'stale' && before?.state !== 'stale') add('review_invalidated', row, approvalReasonText(readText(row.reason)) || 'The patch changed after this request.');
   }
   for (const row of next.projection.runs ?? []) {
     const before = previous?.projection.runs?.find(entry => entry.id === row.id);

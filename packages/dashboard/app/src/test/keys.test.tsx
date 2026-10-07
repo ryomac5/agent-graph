@@ -16,6 +16,7 @@ function Location() { return <output data-testid="location">{useLocation().pathn
 function mount(path = '/') {
   const target = createStore();
   target.setSnapshot({ seq: 1, generation: 0, projection: {
+    projects: [{ id: 'demo', display_name: 'demo', root_path: '/projects/demo', state: 'registered' }],
     tasks: [{ id: 't', name: 'Task', project: 'demo' }],
     conversations: [{ id: 'c', task_id: 't', name: 'Build console', origin: 'managed', provider: 'claude' }],
     runs: [{ id: 'r', conversation_id: 'c', state: 'running', generation: 1 }],

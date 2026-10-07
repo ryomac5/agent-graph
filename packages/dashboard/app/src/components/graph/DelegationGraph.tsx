@@ -1,3 +1,4 @@
+import { useSyncExternalStore } from 'react';
 import { Background, Controls, Handle, Position, ReactFlow, type Edge, type Node, type NodeProps } from '@xyflow/react';
 import type { DelegationTree, TreeNode } from '../../pages/tree/model.ts';
 import { NodeSummary } from '../../pages/tree/NodeSummary.tsx';
@@ -19,6 +20,13 @@ const ROW_HEIGHT = 190;
 function readColorMode(): 'light' | 'dark' | 'system' {
   const theme = typeof document === 'undefined' ? undefined : document.documentElement.dataset.theme;
   return theme === 'light' || theme === 'dark' ? theme : 'system';
+}
+// 表示の切り替えは描画の後に data-theme へ書かれる。属性の変化を見て、グラフの操作の印の色も追わせる。
+function watchColorMode(notify: () => void): () => void {
+  if (typeof MutationObserver === 'undefined') return () => undefined;
+  const observer = new MutationObserver(notify);
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  return () => observer.disconnect();
 }
 export function createGraphElements(tree: DelegationTree, selected?: string, language: Language = 'en') {
   const byId = new Map(tree.nodes.map(n => [n.id, n]));
@@ -44,10 +52,11 @@ export function createGraphElements(tree: DelegationTree, selected?: string, lan
 export function DelegationGraph({ tree, selected, onSelect, language = 'en' }: {
   tree: DelegationTree; selected?: string; onSelect: (id: string) => void; language?: Language;
 }) {
+  const colorMode = useSyncExternalStore(watchColorMode, readColorMode, () => 'system' as const);
   const elements = createGraphElements(tree, selected, language);
   elements.nodes = elements.nodes.map(node => ({ ...node, data: { ...node.data, onSelect } }));
   return <div className="delegation-graph" aria-label={language === 'ja' ? '委譲グラフ' : 'Delegation graph'}>
-    <ReactFlow {...elements} colorMode={readColorMode()} nodeTypes={nodeTypes} onNodeClick={(_event, node) => onSelect(node.id)}
+    <ReactFlow {...elements} colorMode={colorMode} nodeTypes={nodeTypes} onNodeClick={(_event, node) => onSelect(node.id)}
       nodesDraggable={false} nodesConnectable={false} fitView minZoom={0.15} maxZoom={2}>
       <Background/><Controls showInteractive={false}/>
     </ReactFlow>

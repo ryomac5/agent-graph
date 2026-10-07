@@ -4,7 +4,7 @@ import { StateBadge, type ExecutionState } from '../../components/StateBadge.tsx
 import { ApprovalRequestView, OutcomeChip } from '../../components/ApprovalRequest.tsx';
 import { Icon } from '../../components/Icon.tsx';
 import { executionStates, readBody } from '../../components/activity.ts';
-import { evidenceLabel, formatSeconds, projectLabel, readApprovalRequest, runLabel } from '../../lib/format.ts';
+import { approvalReasonText, evidenceLabel, formatSeconds, projectLabel, readApprovalRequest, runLabel } from '../../lib/format.ts';
 import { store, useScreenStore, type Row, type ScreenState, type ScreenStore } from '../../lib/store.ts';
 import { answerApproval, APPROVAL_KEYS, getConversation, getDecision, getInbox, getRequestedTime, isPending, readText,
   type ApprovalAction, type CommandClient } from './model.ts';
@@ -155,7 +155,7 @@ export function Inbox({ client, target = store }: InboxProps) {
     {pending.length === 0 && <div className="empty-state"><Icon name="check" size={22}/><h2>No pending approvals</h2><p>Requests from Claude and Codex appear here as soon as an agent asks.</p></div>}
     {expired.length > 0 && <section className="expired-section" aria-label="Expired"><h2>Expired</h2><ol aria-label="Expired approvals" className="approval-list">{expired.map(row => <li key={String(row.id)} className="approval-row expired">
       <OutcomeChip row={row}/>
-      <div className="approval-main"><ApprovalDetails row={row} state={state}/>{readText(row.reason) && <p className="muted-text">{readText(row.reason)}</p>}</div>
+      <div className="approval-main"><ApprovalDetails row={row} state={state}/>{approvalReasonText(readText(row.reason)) && <p className="muted-text">{approvalReasonText(readText(row.reason))}</p>}</div>
       <div className="approval-side"><button className="btn btn-secondary btn-sm" disabled={busy || !getConversation(row, state)} onClick={() => void resume(row)}><Icon name="play" size={13}/>Resume run</button></div>
     </li>)}</ol></section>}
   </section>;

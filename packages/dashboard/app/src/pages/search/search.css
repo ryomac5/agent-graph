@@ -7,3 +7,6 @@
 .search-results dd { margin: 0; overflow-wrap: anywhere; }
 .search-results dt { font-weight: 600; }
 .search-results pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; max-height: 20rem; overflow: auto; }
+
+.search-excerpt { white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-height: 1.5; max-height: 4.5em; overflow: hidden; }
+.search-excerpt mark { color: var(--text); background: var(--accent-subtle, var(--surface-hover)); font-weight: 600; }

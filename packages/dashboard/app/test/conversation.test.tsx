@@ -1,11 +1,12 @@
-import { afterEach, expect, it, vi } from 'vitest';
+import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { ConversationPage, type ConversationClient } from '../src/pages/conversation/ConversationPage.tsx';
 import { createStore, type Row } from '../src/lib/store.ts';
 import type { Ack } from '../src/lib/client.ts';
 
-afterEach(cleanup);
+beforeEach(() => { vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ generation: 0, projection: { messages: [], message_memberships: [] }, next: null }) }))); });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 function setup({ provider = 'codex', origin = 'managed', status = 'idle', projection = {}, client: supplied }: {
   provider?: string; origin?: string; status?: string; projection?: Record<string, Row[]>; client?: ConversationClient;
 } = {}) {
@@ -171,7 +172,7 @@ it.each([true, false])('keeps external conversations read-only and confirms term
   fireEvent.click(within(dialog).getByRole('button', { name: confirmStopped ? 'Yes, resume here' : 'No, continue in a branch' }));
   await waitFor(() => expect(command).toHaveBeenCalledWith('adopt', { conversationId: 'c', cwd: '/workspace/demo',
     model: { model: 'model-a', effort: 'medium' }, input: { text: '' }, confirmStopped }));
-  expect((await screen.findByRole('link', { name: 'Conversation: adopted' })).getAttribute('href')).toBe('/c/adopted');
+  expect((await screen.findByRole('link', { name: 'Open the new conversation' })).getAttribute('href')).toBe('/c/adopted');
 });
 
 it('shows unknown reason, last evidence, timestamp and a dashed state with evidence access', async () => {

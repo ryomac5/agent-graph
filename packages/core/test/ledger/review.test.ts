@@ -150,3 +150,15 @@ test("行の写しは検証済みを自動判定しない", () => {
   assert.equal(remapFinding({ ...FINDING, state: "fixed" }, target, [context]).state, "fixed");
   assert.equal(remapFinding(FINDING, target, [context, context]).start_line, 7);
 });
+
+test("共有の成功結果は SHA が一つの実行に対応するときだけ推定となる", () => {
+  const evidence: GitAttributionEvidence = { run_id: "r1", repository_id: "repo", worktree_id: "tree", base_sha: "base",
+    head_sha: "head", dedicated_worktree: false, commit_result: { success: true, head_sha: "head" } };
+  assert.equal(classifyGitAttribution(ARTIFACT, [evidence]), "inferred");
+  const ambiguous = [evidence, { ...evidence, run_id: "r2" }];
+  assert.equal(classifyGitAttribution(ARTIFACT, ambiguous), "unknown");
+  assert.equal(projectArtifacts([createArtifact(1, "patch", { attribution: "inferred" })], ambiguous)[0].attribution, "unknown");
+  assert.equal(classifyGitAttribution(ARTIFACT, [{ ...evidence, external: true }]), "unknown");
+  assert.equal(classifyGitAttribution(ARTIFACT, [evidence, { ...evidence, run_id: "r2", external: true }]), "inferred");
+  assert.equal(classifyGitAttribution(ARTIFACT, [{ ...evidence, commit_result: { success: false, head_sha: "head" } }]), "unknown");
+});

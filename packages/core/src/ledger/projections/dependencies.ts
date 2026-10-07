@@ -8,7 +8,8 @@ export const PROJECTION_ENTITIES = {
   runs: ["run"],
   connections: ["connection"],
   messages: ["message"],
-  delegations: ["delegation", "run", "conversation"],
+  // 委譲のプロジェクトは、登録したプロジェクトの本体の場所と前置きから決める。
+  delegations: ["delegation", "run", "conversation", "project"],
   artifacts: ["artifact"],
   aliases: ["alias"],
   approvals: ["approval", "artifact", "run"],
@@ -82,7 +83,9 @@ export function collectProjectionDependencies(fact: Fact): ProjectionDependency[
       // 端点の部分変更でも同一の関係の候補をすべて含める。
       if (typeof payload.from_id === "string") share(`relation-from:${payload.from_id}`);
     }
+    if (entity === "project" && projection === "delegations") add("offers", "projects");
     if (entity === "delegation") {
+      add("needs", "projects");
       need("run", payload.parent_run_id);
       need("run", payload.run_id);
       if (typeof payload.request_id === "string") share(`request:${payload.request_id}`);

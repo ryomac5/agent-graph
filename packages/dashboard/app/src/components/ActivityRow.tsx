@@ -18,15 +18,35 @@ export function AgentCell({ provider, model, effort, language = 'en' }: { provid
   </span>;
 }
 
-export function ActivityRow({ activity, now, language = 'en', onSelect, selected = false, actions, variant = 'table' }: {
+const LIVE_STATES = ['starting', 'running', 'waiting_approval', 'waiting_input'];
+/**
+ * 経過は状態ごとに起点を変える。動いている間と待ちの間は、その状態の根拠の時刻から数える。
+ * 終わった実行は開始から終了まで、待機と不明は経過を出さない。
+ */
+export function readElapsed(activity: Activity, now: number): string {
+  const run = activity.run;
+  if (LIVE_STATES.includes(activity.state)) return formatDuration(run?.last_evidence_ts ?? run?.started_ts, undefined, now);
+  if (activity.state === 'ended' || activity.state === 'failed') return formatDuration(run?.started_ts, run?.ended_ts, now);
+  return 'Unknown';
+}
+/** 止まっている行は薄く出す。承認と入力の待ちと失敗と不明は薄くしない。 */
+export function isStoppedState(state: string): boolean { return state === 'idle' || state === 'ended'; }
+
+export function ActivityRow({ activity, now, language = 'en', onSelect, selected = false, actions, variant = 'table', children }: {
   activity: Activity; now: number; language?: Language; onSelect?: () => void; selected?: boolean; actions?: ReactNode; variant?: 'table' | 'list';
+  children?: ReactNode;
 }) {
   const ja = language === 'ja';
   const run = activity.run;
   const url = activity.conversationId ? `/c/${encodeURIComponent(activity.conversationId)}` : `/p/${encodeURIComponent(activity.project)}`;
-  const elapsed = formatDuration(run?.started_ts, run?.ended_ts, now);
-  const waiting = activity.state === 'waiting_approval' || activity.state === 'waiting_input';
-  const statusElapsed = waiting ? formatDuration(run?.last_evidence_ts, undefined, now) : elapsed;
+  const elapsed = readElapsed(activity, now);
+  const statusElapsed = elapsed;
+  // 実行中と待機の行には、最後の根拠の時刻を添える。実行中はターンの途中の最後の記録まで含め、止まったターンを見分けられるようにする。
+  const evidenceTs = activity.state === 'running' ? activity.lastActivity || readText(run?.last_evidence_ts)
+    : activity.state === 'idle' ? readText(run?.last_evidence_ts) : '';
+  const lastEvidence = evidenceTs
+    ? <span className="last-evidence">{ja ? '最後の根拠 ' : 'Last evidence '}<RelativeTime value={evidenceTs} now={now} language={language}/></span> : null;
+  const stopped = isStoppedState(activity.state);
   const excerpt = activity.messages.at(-1);
   const changes = summarizeChanges(activity.artifacts);
   const badge = <StateBadge state={activity.state} language={language} evidenceUrl={url}
@@ -40,18 +60,20 @@ export function ActivityRow({ activity, now, language = 'en', onSelect, selected
   </div>;
   const summary = <p className="activity-excerpt">{excerpt ? readBody(excerpt.body) || readText(excerpt.body_state) : activity.excerpt || <span className="muted-text">{ja ? '発言はまだありません' : 'No messages yet'}</span>}</p>;
   if (variant === 'list') {
-    return <article className={`activity-item${activity.parentConversationId ? ' activity-child' : ''}${selected ? ' selected' : ''}`} aria-label={activity.name}>
+    return <article className={`activity-item${activity.parentConversationId ? ' activity-child' : ''}${selected ? ' selected' : ''}${stopped ? ' is-stopped' : ''}`} aria-label={activity.name}>
       <div className="activity-item-head">{title}{actions && <div className="row-actions">{actions}</div>}</div>
-      <div className="activity-item-meta">{badge}<AgentCell provider={activity.provider} model={activity.model} effort={activity.effort} language={language}/></div>
+      <div className="activity-item-meta">{badge}<AgentCell provider={activity.provider} model={activity.model} effort={activity.effort} language={language}/>{lastEvidence}</div>
       {summary}
+      {children}
     </article>;
   }
-  return <article className={`activity-row${activity.parentConversationId ? ' activity-child' : ''}`} aria-label={activity.name}>
+  return <article className={`activity-row${activity.parentConversationId ? ' activity-child' : ''}${stopped ? ' is-stopped' : ''}`} aria-label={activity.name}>
     <div className="cell cell-name">{title}{summary}</div>
-    <div className="cell cell-state">{badge}</div>
+    <div className="cell cell-state">{badge}{lastEvidence}</div>
     <div className="cell cell-agent"><AgentCell provider={activity.provider} model={activity.model} effort={activity.effort} language={language}/></div>
     <div className="cell cell-elapsed numeric" title={ja ? '経過' : 'Elapsed'}>{elapsed === 'Unknown' ? <span className="muted-text">—</span> : elapsed}</div>
     <div className="cell cell-changes numeric">{changes ?? <span className="muted-text" title={ja ? '成果物はまだありません' : 'No artifact recorded yet'}>—</span>}</div>
     <div className="cell cell-actions">{actions}</div>
+    {children && <div className="cell cell-delegations">{children}</div>}
   </article>;
 }

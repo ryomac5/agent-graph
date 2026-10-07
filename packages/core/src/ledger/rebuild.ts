@@ -48,7 +48,7 @@ function prepare(ledger: DatabaseSync, sql: string): StatementSync {
 const JSON_COLUMNS = new Set([
   "evidence", "end_evidence", "last_evidence", "tool_output",
   "accept", "scope", "constraints", "result", "attempts", "untracked",
-  "verification", "commits", "available_decisions", "request", "launch",
+  "verification", "commits", "available_decisions", "request", "launch", "parent",
 ]);
 
 export interface ProjectionState {

@@ -1,8 +1,10 @@
 import { homedir } from "node:os";
 import { basename, join, normalize, sep } from "node:path";
 import { createNativeId } from "../../../../core/src/ledger/projections/relations.ts";
+import { classifyCodexRecord, readCodexTurnModel } from "../../../../core/src/ledger/turns.ts";
 import type { AppendResult, Fact, FactInput, JsonValue, Ledger, RunState } from "../../../../core/src/ledger/index.ts";
-import { rolloutReader } from "./files.ts";
+import { readSessionMeta, rolloutReader } from "./files.ts";
+import { defaultLocationResolver, type LocationResolver } from "../location.ts";
 import type { RolloutLine, RolloutReader } from "./files.ts";
 
 export interface CodexObservationOptions {
@@ -11,6 +13,11 @@ export interface CodexObservationOptions {
   observedTs?: string;
   batch?: <T>(operation: () => T) => T;
   paths?: Set<string>;
+  locate?: LocationResolver;
+}
+/** 会話の場所の事実の識別。これがあれば、場所を読み終えている。 */
+export function codexLocationEventId(nativeId: string): string {
+  return `conversation:${nativeId}:location`;
 }
 type ObjectValue = { [key: string]: JsonValue };
 function readObject(value: unknown): ObjectValue {
@@ -54,6 +61,7 @@ interface ObservationIndex {
   stateGenerations: Map<string, number>;
   runs: Map<string, RunBoundary[]>;
   archivedRuns: Map<string, { sourceTs: string; offset: number; fileId?: string }>;
+  models: Map<string, string>;
 }
 
 function indexFact(index: ObservationIndex, fact: Fact | FactInput, factId: string): void {
@@ -78,6 +86,9 @@ function indexFact(index: ObservationIndex, fact: Fact | FactInput, factId: stri
       fileId: readText(evidence.file_id) });
     index.runs.set(fact.payload.conversation_id, starts);
   }
+  if (fact.source === "rollout-codex" && fact.kind === "run.updated" && typeof fact.payload?.model === "string") {
+    index.models.set(fact.subject, JSON.stringify([fact.payload.model, fact.payload.effort ?? null]));
+  }
   if (fact.kind === "run.state_changed" && readObject(fact.payload?.end_evidence).kind === "archived") {
     const evidence = readObject(fact.payload?.last_evidence);
     index.archivedRuns.set(fact.subject, { sourceTs: fact.source_ts,
@@ -87,7 +98,7 @@ function indexFact(index: ObservationIndex, fact: Fact | FactInput, factId: stri
 
 function readIndex(ledger: Ledger): ObservationIndex {
   const index: ObservationIndex = { unsupported: new Map(), subjects: new Set(), placeholders: new Map(),
-    runs: new Map(), archivedRuns: new Map(), stateGenerations: new Map() };
+    runs: new Map(), archivedRuns: new Map(), stateGenerations: new Map(), models: new Map() };
   // 全台帳の読み取りと世代の整列は、走査全体で一度だけ行う。
   for (const fact of ledger.readSince(0, Number.MAX_SAFE_INTEGER)) indexFact(index, fact, fact.fact_id);
   for (const starts of index.runs.values()) starts.sort((a, b) => a.generation - b.generation);
@@ -283,24 +294,36 @@ function observeFile(ledger: Ledger, path: string, options: CodexObservationOpti
     }
     const method = readText(row.method);
     const eventType = readText(payload.type);
+    if (row.type === "turn_context" && id) {
+      // ターンの設定に書かれたモデルを、変わったときだけ実行に記録する。
+      const observed = readCodexTurnModel(row);
+      if (observed.model) {
+        ensureConversation(id, timestamp);
+        ensureRun(id, timestamp);
+        const generation = boundaries.get(id)!.findLast((start) => start.fileId !== fileId || start.offset <= line.offset)!.generation;
+        const subject = `run:${identifyConversation(id)}:${generation}` as const;
+        const signature = JSON.stringify([observed.model, observed.effort ?? null]);
+        if (index.models.get(subject) !== signature) {
+          append({ ...createBase(`${fileId}:${line.offset}:${line.hash}:${id}:model`, timestamp, line), kind: "run.updated", subject,
+            payload: { conversation_id: identifyConversation(id), generation, ...observed } });
+          index.models.set(subject, signature);
+        }
+      }
+      continue;
+    }
     const item = method === "item/completed" ? readObject(params.item) : row.type === "response_item" ? payload : row;
     if (IGNORED_RECORDS.has(String(row.type)) || (!method && IGNORED_ITEMS.has(String(row.type)))
       || (row.type === "event_msg" && IGNORED_EVENTS.has(eventType ?? "")) || IGNORED_METHODS.has(method ?? "")
       || ((row.type === "response_item" || method === "item/completed") && IGNORED_ITEMS.has(String(item.type)))
       || row.record_type === "state") continue;
     if (!id) { reportUnsupported(line, "Missing thread identifier"); continue; }
-    if (method === "turn/started" || (row.type === "event_msg" && eventType === "task_started")) {
-      changeState(id, "running", timestamp, line, { kind: "turn_started", turn_id: params.turnId ?? readObject(params.turn).id ?? payload.turn_id ?? null });
-    } else if (method === "turn/completed" || (row.type === "event_msg" && ["task_complete", "task_completed", "turn_aborted"].includes(eventType ?? ""))) {
-      changeState(id, "idle", timestamp, line, { kind: "turn_completed", turn_id: params.turnId ?? readObject(params.turn).id ?? payload.turn_id ?? null });
-    } else if (method === "thread/status/changed") {
-      const status = readObject(params.status);
-      const flags = Array.isArray(status.activeFlags) ? status.activeFlags : [];
-      const state = flags.includes("waitingOnApproval") ? "waiting_approval" : status.type === "active" ? "running"
-        : status.type === "idle" ? "idle" : "unknown";
-      changeState(id, state, timestamp, line, { kind: "thread_status", status });
-    } else if (method?.endsWith("/requestApproval") || (row.type === "event_msg" && eventType === "request_approval")) {
-      changeState(id, "waiting_approval", timestamp, line, { kind: "request_approval", request_id: row.id ?? payload.request_id ?? null });
+    // ターンの開始と終わりの読み替えは core の状態の規則に従う。
+    const turn = classifyCodexRecord(row as { [key: string]: JsonValue });
+    if (turn) {
+      const evidence: ObjectValue = turn.kind === "thread_status" ? { kind: turn.kind, status: readObject(params.status) }
+        : turn.kind === "request_approval" ? { kind: turn.kind, request_id: turn.turn_id ?? null }
+          : { kind: turn.kind, turn_id: turn.turn_id ?? null };
+      changeState(id, turn.state, timestamp, line, evidence);
     } else if (row.type === "response_item" || method === "item/completed" || row.type === "message") {
       if (item.type === "message" || item.type === "agentMessage" || item.type === "userMessage" || item.type === "agent_message") {
         createMessage(id, { ...item, role: item.role ?? (item.type === "userMessage" ? "user" : "assistant") }, timestamp, line);
@@ -349,6 +372,59 @@ function observeFile(ledger: Ledger, path: string, options: CodexObservationOpti
       subject: `run:${identifyConversation(nativeId)}:${generation}`, payload: { generation, state: "ended", ended_ts: timestamp,
         end_evidence: { kind: "archived", location: "archived_sessions" },
         last_evidence: { file_id: fileId, complete_bytes: file.completeBytes } } });
+  }
+  return results;
+}
+
+/**
+ * rollout の先頭のメタ行から開始の場所を読み、会話と最新の世代の実行をプロジェクトに結ぶ。
+ * 場所の事実は会話ごとに一度だけ追記し、メタに場所がない会話にも読み終えた印を残す。
+ */
+export function observeCodexLocations(ledger: Ledger, paths: Iterable<string>,
+  options: { observedTs?: string; locate?: LocationResolver; facts?: readonly Fact[] } = {}): AppendResult[] {
+  const located = new Set<string>();
+  const generations = new Map<string, number>();
+  // 取り込み済みのファイルは、メタの事実の cursor からファイル名と会話を結び、場所を読み終えた会話のファイルを開かない。
+  const files = new Map<string, string>();
+  for (const fact of options.facts ?? ledger.readSince(0, Number.MAX_SAFE_INTEGER)) {
+    if (fact.source === "rollout-codex" && fact.source_event_id.endsWith(":location")) located.add(fact.source_event_id);
+    if (fact.source === "rollout-codex" && (fact.kind === "conversation.created" || fact.kind === "conversation.corrected") && fact.cursor) {
+      const fileId = (JSON.parse(fact.cursor) as { file_id?: unknown }).file_id;
+      const nativeId = (fact.payload as { native_id?: unknown } | null)?.native_id;
+      if (typeof fileId === "string" && typeof nativeId === "string") files.set(fileId, nativeId);
+    }
+    if (fact.kind === "run.created" && fact.payload) {
+      const payload = fact.payload as { conversation_id?: string; generation?: number };
+      if (payload.conversation_id && typeof payload.generation === "number") {
+        generations.set(payload.conversation_id, Math.max(generations.get(payload.conversation_id) ?? 0, payload.generation));
+      }
+    }
+  }
+  const observedTs = options.observedTs ?? new Date().toISOString();
+  const results: AppendResult[] = [];
+  for (const path of paths) {
+    const known = files.get(basename(path));
+    if (known && located.has(codexLocationEventId(known))) continue;
+    let meta: ReturnType<typeof readSessionMeta>;
+    try { meta = readSessionMeta(path); }
+    catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") continue;
+      throw error;
+    }
+    const nativeId = meta?.id ?? /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i.exec(basename(path))?.[1];
+    if (!nativeId) continue;
+    const eventId = codexLocationEventId(nativeId);
+    if (located.has(eventId)) continue;
+    located.add(eventId);
+    const conversation = identifyConversation(nativeId);
+    const generation = generations.get(conversation) ?? 0;
+    const sourceTs = meta?.timestamp && Number.isFinite(Date.parse(meta.timestamp)) ? meta.timestamp : observedTs;
+    const location = meta?.cwd ? (options.locate ?? defaultLocationResolver)(meta.cwd) : undefined;
+    const base = { source: "rollout-codex" as const, source_ts: sourceTs, observed_ts: observedTs, confidence: "confirmed" as const, cursor: null };
+    results.push(ledger.append({ ...base, source_event_id: eventId, kind: "conversation.updated",
+      subject: `conversation:${conversation}`, payload: { ...location } }));
+    if (location && generation > 0) results.push(ledger.append({ ...base, source_event_id: `run:${nativeId}:${generation}:location`,
+      kind: "run.updated", subject: `run:${conversation}:${generation}`, payload: { conversation_id: conversation, generation, ...location } }));
   }
   return results;
 }

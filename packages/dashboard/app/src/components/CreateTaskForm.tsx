@@ -3,8 +3,8 @@ import type { Ack } from '../lib/client.ts';
 import type { Language } from '../lib/i18n.ts';
 
 export interface CommandClient { command(command: string, payload?: unknown, cmdId?: string): Promise<Ack> }
-export function CreateTaskForm({ project, client, disabled = false, language = 'en', onCancel }: {
-  project: string; client: CommandClient; disabled?: boolean; language?: Language; onCancel?: () => void;
+export function CreateTaskForm({ project, root, client, disabled = false, language = 'en', onCancel }: {
+  project: string; root?: string; client: CommandClient; disabled?: boolean; language?: Language; onCancel?: () => void;
 }) {
   const ja = language === 'ja';
   const [provider, setProvider] = useState('codex');
@@ -13,7 +13,8 @@ export function CreateTaskForm({ project, client, disabled = false, language = '
   const [agents, setAgents] = useState(1);
   const [title, setTitle] = useState('');
   const [task, setTask] = useState('');
-  const [cwd, setCwd] = useState(project.startsWith('/') ? project : '');
+  // プロジェクトの識別はハッシュなので、作業の場所の既定は本体の場所にする。
+  const [cwd, setCwd] = useState(root || (project.startsWith('/') ? project : ''));
   const [pending, setPending] = useState(false);
   const [result, setResult] = useState('');
   async function submit(event: FormEvent) {

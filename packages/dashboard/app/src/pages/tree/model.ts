@@ -1,12 +1,25 @@
 import { decodeStoredValue, readObject, readText } from '../../components/activity.ts';
+import type { ExecutionState } from '../../components/StateBadge.tsx';
 import { conversationName, readModel, runLabel } from '../../lib/format.ts';
+import { createProjectMatcher } from '../../lib/projects.ts';
 import type { Row, ScreenState } from '../../lib/store.ts';
 
 export interface TreeNode {
   id: string; kind: 'conversation' | 'run' | 'delegation'; label: string;
   conversationId?: string; run?: Row; delegation?: Row; attempts: Row[];
-  role: string; model: string; state: string; cost?: number; children: string[];
+  role: string; provider: string; model: string; state: string; cost?: number; children: string[];
 }
+const EXECUTION_STATES = new Set(['starting', 'running', 'waiting_approval', 'waiting_input', 'idle', 'ended', 'failed', 'unknown']);
+/** 委譲の状態を、実行の状態の語彙に寄せる。印と色は実行と同じ規則で出す。 */
+export function toExecutionState(state: string): ExecutionState {
+  if (EXECUTION_STATES.has(state)) return state as ExecutionState;
+  if (['assigned', 'verifying', 'reviewing'].includes(state)) return 'running';
+  if (['received', 'accepted'].includes(state)) return 'starting';
+  if (state === 'done' || state === 'interrupted') return 'ended';
+  if (state === 'denied') return 'failed';
+  return 'unknown';
+}
+export const ACTIVE_EXECUTION_STATES: readonly string[] = ['starting', 'running', 'waiting_approval', 'waiting_input'];
 export interface TreeEdge {
   id: string; source: string; target: string; title: string;
   confidence: string; kind: 'delegated' | 'dependency' | 'candidate';
@@ -29,16 +42,27 @@ export function buildDelegationTree(state: ScreenState, project?: string): Deleg
   const unresolved = new Set<string>();
   const runId = (id: string) => state.identities?.runs[id] ?? id;
   const conversationId = (id: string) => state.identities?.conversations[id] ?? id;
+  const conversationsById = new Map(conversations.map(row => [readText(row.id), row]));
+  const latestRuns = new Map<string, Row>();
+  for (const run of runs) {
+    const id = readText(run.conversation_id);
+    const latest = latestRuns.get(id);
+    if (!latest || Number(run.generation ?? 0) > Number(latest.generation ?? 0)) latestRuns.set(id, run);
+  }
   for (const c of conversations) {
     const id = readText(c.id);
+    const latest = latestRuns.get(id);
     nodes.set(`conversation:${id}`, { id: `conversation:${id}`, kind: 'conversation',
       label: conversationName(state, id) || 'Untitled conversation', conversationId: id,
-      role: 'Origin conversation', model: readText(c.model), state: 'unknown', attempts: [], children: [] });
+      // 根は作業である。外の端末から起こした作業は、その会話を根にする。
+      role: readText(c.task_id) ? 'Task' : c.origin === 'observed' ? 'Terminal conversation' : 'Conversation', provider: readText(c.provider), model: readText(c.model) || readModel(latest).model || readText(latest?.model),
+      state: readText(latest?.state) || 'unknown', attempts: [], children: [] });
   }
   for (const run of runs) {
     const id = `run:${readText(run.id)}`;
     nodes.set(id, { id, kind: 'run', label: runLabel(state, run.id), run,
-      conversationId: readText(run.conversation_id), role: 'Execution', model: readModel(run).model,
+      conversationId: readText(run.conversation_id), role: 'Execution',
+      provider: readText(conversationsById.get(readText(run.conversation_id))?.provider), model: readModel(run).model || readText(run.model),
       state: readText(run.state) || 'unknown', attempts: [], children: [],
       cost: typeof run.cost === 'number' ? run.cost : undefined });
   }
@@ -96,8 +120,10 @@ export function buildDelegationTree(state: ScreenState, project?: string): Deleg
     const resumed = latest && !recordedRuns.has(runId(readText(latest.run_id)));
     const node: TreeNode = { id, kind: existing?.kind ?? 'delegation', label: readText(d.title) || existing?.label || 'Untitled delegation',
       run: existing?.run, conversationId: existing?.conversationId, delegation: d, attempts,
-      role: readText(d.role) || 'Delegation', model: resumed ? readModel(existing?.run ?? {}).model || readText(assignment.model)
-        : readText(assignment.model) || existing?.model || '',
+      role: readText(d.role) || 'Delegation',
+      provider: readText(assignment.executor) || readText(assignment.provider) || readText(d.provider) || existing?.provider || '',
+      model: resumed ? readModel(existing?.run ?? {}).model || readText(assignment.model) || readText(d.model)
+        : readText(assignment.model) || readText(d.model) || existing?.model || '',
       state: resumed ? existing?.state || 'unknown' : readText(d.state) || existing?.state || 'unknown', cost: existing?.cost, children: [] };
     for (const attempt of attempts) {
       const key = runId(readText(attempt.run_id));
@@ -116,9 +142,9 @@ export function buildDelegationTree(state: ScreenState, project?: string): Deleg
     const direct = `run:${runId(raw)}`;
     if (nodes.has(direct)) return direct;
     const c = conversationId(raw);
-    const matches = runs.filter(r => r.conversation_id === c).sort((a, b) => Number(b.generation) - Number(a.generation));
-    const conversation = conversations.find(row => row.id === c);
-    if (matches.length && (child || conversation?.origin === 'managed')) return `run:${readText(matches[0]!.id)}`;
+    const latest = latestRuns.get(c);
+    const conversation = conversationsById.get(c);
+    if (latest && (child || conversation?.origin === 'managed')) return `run:${readText(latest.id)}`;
     return nodes.has(`conversation:${c}`) ? `conversation:${c}` : undefined;
   };
   for (const relation of p.relations ?? []) {
@@ -187,15 +213,17 @@ export function buildDelegationTree(state: ScreenState, project?: string): Deleg
   }
   for (const [child, parent] of parents) { nodes.get(parent)!.children.push(child); unresolved.delete(child); }
   for (const node of nodes.values()) {
-    if (node.kind === 'conversation' && node.children.length === 0
-      && runs.some(run => run.conversation_id === node.conversationId)) nodes.delete(node.id);
+    if (node.kind === 'conversation' && node.children.length === 0 && latestRuns.has(node.conversationId ?? '')) nodes.delete(node.id);
   }
   let visible = new Set(nodes.keys());
   if (project) {
-    const taskIds = new Set((p.tasks ?? []).filter(t => t.project === project).map(t => t.id));
+    // 経路のプロジェクトは表示名でも識別子でも受け、作業と会話と委譲と実行のどれかが結ぶプロジェクトで絞る。
+    const matches = createProjectMatcher(state, project);
+    const tasks = new Map((p.tasks ?? []).map(row => [readText(row.id), row]));
     visible = new Set([...nodes.values()].filter(n => {
-      const c = conversations.find(c => c.id === n.conversationId);
-      return c?.project === project || taskIds.has(c?.task_id) || n.delegation?.cwd === project || n.run?.cwd === project;
+      const c = conversationsById.get(n.conversationId ?? '');
+      return matches([c?.project, tasks.get(readText(c?.task_id))?.project, c?.repository_id, n.delegation?.project, n.delegation?.repository_id,
+        n.delegation?.cwd, n.run?.repository_id, n.run?.cwd]);
     }).map(n => n.id));
     for (const node of nodes.values()) {
       if (node.role === 'Reviewer' && visible.has(parents.get(node.id) ?? '')) visible.add(node.id);
@@ -204,6 +232,25 @@ export function buildDelegationTree(state: ScreenState, project?: string): Deleg
       let parent = parents.get(id);
       while (parent) { visible.add(parent); parent = parents.get(parent); }
     }
+  }
+  // 木の根は作業である。名前のある作業と管理する会話と、委譲を起こした会話だけを根にし、委譲のない外の会話は木に出さない。
+  const isWork = (node: TreeNode): boolean => {
+    const c = conversationsById.get(node.conversationId ?? '');
+    return Boolean(readText(c?.task_id)) || c?.origin === 'managed' || Boolean(node.delegation);
+  };
+  const delegates = (id: string, root: string | undefined, seen = new Set<string>()): boolean => {
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return (nodes.get(id)?.children ?? []).some(child => {
+      const node = nodes.get(child);
+      return Boolean(node && (node.delegation || node.conversationId !== root)) || delegates(child, root, seen);
+    });
+  };
+  for (const node of [...nodes.values()]) {
+    if (parents.has(node.id) || unresolved.has(node.id) || isWork(node) || delegates(node.id, node.conversationId)) continue;
+    const drop = [node.id];
+    for (let index = 0; index < drop.length; index++) drop.push(...(nodes.get(drop[index])?.children ?? []));
+    for (const id of drop) visible.delete(id);
   }
   const ordered = [...nodes.values()].filter(n => visible.has(n.id)).sort((a, b) => a.id.localeCompare(b.id));
   for (const node of ordered) node.children = node.children.filter(id => visible.has(id)).sort();

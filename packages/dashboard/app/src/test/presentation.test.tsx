@@ -229,7 +229,7 @@ it('groups reviewer conversation beneath its original task using review_of facts
     relations: [{ id: 'review-edge', type: 'review_of', active: 1, confidence: 'confirmed', from_id: review, to_id: CONVERSATION }],
   }) });
   const view = render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
-  const group = screen.getByRole('region', { name: 'Active' });
+  const group = screen.getByRole('region', { name: 'repo' });
   const rows = within(group).getAllByRole('article');
   expect(rows.map(row => row.getAttribute('aria-label'))).toEqual(['Browser fixture task', 'Review of Browser fixture task']);
   expect(rows[1].classList.contains('activity-child')).toBe(true);
@@ -248,6 +248,7 @@ it('shows one Unknown and a reason when external execution evidence is absent', 
     runs: [], tasks: [], messages: [], message_memberships: [], approvals: [],
   }) });
   render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
+  fireEvent.click(screen.getByRole('button', { name: 'External conversations' }));
   const row = screen.getByRole('article', { name: 'External conversation' });
   const badge = within(row).getByRole('link', { name: 'Unknown · Evidence' });
   expect(badge.textContent?.match(/Unknown/g)).toHaveLength(1);

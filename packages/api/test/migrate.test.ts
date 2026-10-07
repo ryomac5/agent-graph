@@ -63,7 +63,9 @@ test("旧行の規則を写し、二度の変換で件数・台帳・旧 DB の�
   assert.equal(first.rows.session_commands, undefined);
   assert.equal(first.unknown, 3);
   // core は legacy の explicit を終了の根拠として認めない。報告は変換時の件数である。
-  assert.equal(projection.runs.filter((run) => run.state === "unknown").length, 4);
+  // 旧 daemon の waiting はターンの根拠ではないので、状態の規則により不明になる。
+  assert.equal(projection.runs.filter((run) => run.state === "unknown").length, 5);
+  assert.equal(projection.runs.find((run) => run.reason === "missing_turn_evidence")?.state, "unknown");
   assert.equal(projection.runs.find((run) => run.reason === "unconfirmed_end_evidence")?.state, "unknown");
   assert.equal(first.inferred, 2);
   assert.ok(facts.every((fact) => fact.source === "legacy"));
@@ -197,7 +199,9 @@ test("版 1 の旧 DB では後から追加された表や列を要求しない"
   db.prepare("INSERT INTO sessions VALUES ('session', 'old', 'old-1', 'claude', 'trace', ?)").run(TS);
   const report = await migrateLegacyDatabases([path], ledger);
   assert.equal(report.rows.turns, undefined);
-  assert.equal(project(ledger.readSince(0, 100)).runs[0].state, "running");
+  // 旧 daemon の running は常駐の確認であり、ターンの根拠ではない。状態の規則により不明にする。
+  assert.equal(project(ledger.readSince(0, 100)).runs[0].state, "unknown");
+  assert.equal(project(ledger.readSince(0, 100)).runs[0].reason, "missing_turn_evidence");
   assert.deepEqual(await migrateLegacyDatabases([path], ledger), report);
 });
 

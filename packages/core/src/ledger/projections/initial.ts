@@ -41,7 +41,7 @@ export function projectInitial(facts: Fact[]) {
     ...projectInitialConversations(collect("task", "conversation", "relation"), messages),
     ...messages,
     runs: projectRuns(collect("run")), connections: projectConnections(collect("connection")),
-    delegations: projectDelegations(collect("delegation", "conversation", "run")),
+    delegations: projectDelegations(collect("delegation", "conversation", "run", "project")),
     artifacts: projectArtifacts(collect("artifact")), approvals: projectApprovals(collect("approval", "artifact", "run")),
     findings: projectFindings(collect("finding")),
   };

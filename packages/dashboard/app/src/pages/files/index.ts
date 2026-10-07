@@ -1,1 +1,1 @@
-export { FilesPage, default } from './FilesPage.tsx';
+export { FileNotices, FileTreePanel, FileViewerPanel, useFileExplorer, type FileExplorer } from './FilesPage.tsx';

@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import { useParams, useSearchParams } from 'react-router';
+import { useSearchParams } from 'react-router';
 import { AppLink } from '../../components/AppLink.tsx';
 import { Icon } from '../../components/Icon.tsx';
-import { projectLabel } from '../../lib/format.ts';
 import { store, useScreenStore, type ScreenStore } from '../../lib/store.ts';
 import { detectLanguage, highlightLines, LANGUAGE_NAMES, type Language } from './highlight.ts';
 import {
@@ -48,9 +47,12 @@ function CodeView({ path, content }: { path: string; content: string }) {
   </>;
 }
 
-export function FilesPage({ client, target = store, project: suppliedProject }: { client: FilesClient; target?: ScreenStore; project?: string }) {
-  const params = useParams();
-  const project = suppliedProject ?? params.project ?? '';
+export type FileExplorer = ReturnType<typeof useFileExplorer>;
+/**
+ * プロジェクトの作業ツリーの木と、選んだファイルの中身を読む。作業場の左の列と中央の表示が同じ状態を共有する。
+ * 選んだファイルと作業ツリーはアドレスの path と worktree に持ち、Changes からの移動でも同じ場所を開く。
+ */
+export function useFileExplorer({ client, target = store, project, enabled = true }: { client: FilesClient; target?: ScreenStore; project: string; enabled?: boolean }) {
   const state = useScreenStore(target);
   const projectId = resolveProjectId(state, project);
   const [search, setSearch] = useSearchParams();
@@ -62,15 +64,17 @@ export function FilesPage({ client, target = store, project: suppliedProject }: 
   const worktrees = trees.key === treesKey ? trees.value : { status: 'loading' as const };
 
   useEffect(() => {
+    // 畳んだ列では、開くまで作業ツリーとファイルを読まない。
+    if (!enabled) return;
     let cancelled = false;
     listWorktrees(client, { projectId }).then(result => { if (!cancelled) setTrees({ key: treesKey, value: { status: 'loaded', result } }); },
       error => { if (!cancelled) setTrees({ key: treesKey, value: { status: 'error', error: message(error) } }); });
     return () => { cancelled = true; };
-  }, [client, projectId, treesKey]);
+  }, [client, projectId, treesKey, enabled]);
 
   // 選んだ作業ツリーは一覧と照らしてから使う。実行の場所が作業ツリーの下でも、その作業ツリーを開く。
   const matched = wantedWorktree && worktrees.status === 'loaded' ? matchWorktree(worktrees.result.worktrees, wantedWorktree) : undefined;
-  const ready = !wantedWorktree || worktrees.status !== 'loading';
+  const ready = enabled && (!wantedWorktree || worktrees.status !== 'loading');
   const worktree = !wantedWorktree ? undefined : worktrees.status === 'error' ? wantedWorktree : matched?.path;
   const unknownWorktree = Boolean(wantedWorktree && worktrees.status === 'loaded' && !matched);
   const treeKey = JSON.stringify([projectId, worktree ?? '', revision]);
@@ -205,10 +209,10 @@ export function FilesPage({ client, target = store, project: suppliedProject }: 
     if (row.entry.kind === 'directory') { if (row.open) collapse(row.entry); else expand(row.entry); }
     else setParams(next => next.set('path', row.entry.path));
   }
-  function move(row?: TreeRow) {
+  function move(row?: TreeRow, focus = true) {
     if (!row) return;
     setFocusedPath(row.entry.path);
-    items.current.get(row.entry.path)?.focus();
+    if (focus) items.current.get(row.entry.path)?.focus();
   }
   function onKeyDown(event: KeyboardEvent<HTMLUListElement>) {
     const index = rows.findIndex(row => row.entry.path === current);
@@ -234,118 +238,123 @@ export function FilesPage({ client, target = store, project: suppliedProject }: 
     event.preventDefault();
   }
 
-  function renderLevel(path: string): ReactNode {
-    return rows.filter(row => row.parent === path).map(row => {
-      const { entry } = row;
-      const directory = dirs[entry.path];
-      const mark = primaryMark(entry.git);
-      const label = [entry.name, ...entry.git.map(item => GIT_MARKS[item].label.toLowerCase()), entry.kind === 'directory' && entry.changed ? 'contains changes' : '']
-        .filter(Boolean).join(', ');
-      return <li key={entry.path} role="treeitem" id={domId(entry.path)} aria-label={label} aria-level={row.depth} aria-setsize={row.setSize} aria-posinset={row.position}
-        aria-expanded={entry.kind === 'directory' ? row.open : undefined} aria-selected={entry.kind === 'file' ? entry.path === selectedPath : undefined}
-        tabIndex={entry.path === current ? 0 : -1} data-path={entry.path}
-        ref={element => { if (element) items.current.set(entry.path, element); else items.current.delete(entry.path); }}
-        onFocus={event => { if (event.target === event.currentTarget) setFocusedPath(entry.path); }}>
-        <div className={`tree-row${entry.path === selectedPath ? ' is-selected' : ''}${mark ? ` git-${mark}` : ''}`} style={{ paddingLeft: `calc(var(--space-2) + ${row.depth - 1} * 14px)` }}
-          title={entry.previousPath ? `${entry.path} (renamed from ${entry.previousPath})` : entry.path} onClick={() => activate(row)}>
-          {entry.kind === 'directory' ? <Icon className="tree-chevron" name={row.open ? 'chevronDown' : 'chevronRight'} size={12}/> : <span className="tree-chevron"/>}
-          <Icon className="tree-icon" name={entry.kind === 'directory' ? (row.open ? 'folderOpen' : 'folder') : 'file'} size={15}/>
-          <span className="tree-name truncate"><Highlighted name={entry.name} query={needle}/></span>
-          {entry.previousPath && <span className="tree-previous truncate">← {entry.previousPath.split('/').at(-1)}</span>}
-          {entry.kind === 'directory' ? entry.changed && <span className="tree-changed" title="Contains changes" aria-hidden="true"/> : <GitLetters git={entry.git}/>}
-        </div>
-        {row.open && <ul role="group">
-          {renderLevel(entry.path)}
-          {directory?.status === 'loading' && <li role="none" className="tree-status" style={{ paddingLeft: `calc(var(--space-2) + ${row.depth} * 14px + 20px)` }}>Loading…</li>}
-          {directory?.status === 'error' && <li role="none" className="tree-status tree-error" style={{ paddingLeft: `calc(var(--space-2) + ${row.depth} * 14px + 20px)` }}>{directory.error}</li>}
-          {directory?.status === 'loaded' && !directory.entries.length && <li role="none" className="tree-status" style={{ paddingLeft: `calc(var(--space-2) + ${row.depth} * 14px + 20px)` }}>Empty folder</li>}
-        </ul>}
-      </li>;
-    });
-  }
-
-  const label = projectLabel(project);
   const root = dirs[''];
-  const prefix = `/p/${encodeURIComponent(project)}`;
   const shown = file && file.key === treeKey && file.path === selectedPath ? file : undefined;
   const selectedEntry = rows.find(row => row.entry.path === selectedPath)?.entry
     ?? (dirs[parentPath(selectedPath)]?.status === 'loaded' ? (dirs[parentPath(selectedPath)] as { entries: FileEntry[] }).entries.find(entry => entry.path === selectedPath) : undefined);
-  const language: Language | undefined = detectLanguage(selectedPath);
   const worktreeValue = worktree ?? (worktrees.status === 'loaded' ? worktrees.result.worktree : '');
-  const lineCount = shown?.status === 'loaded' && shown.result.state === 'text' ? highlightLineCount(shown.result.content) : undefined;
   const offline = state.connection === 'connecting' || state.connection === 'reconnecting';
+  return { project, projectId, dirs, rows, current, needle, query, setQuery, selectedPath, selectedEntry, shown, root, worktrees, worktreeValue,
+    wantedWorktree, unknownWorktree, offline, items, onKeyDown, activate, move, setParams,
+    selectWorktree: (value: string) => setParams(next => next.set('worktree', value)),
+    closeFile: () => setParams(next => next.delete('path')),
+    refresh: () => { cache.current.clear(); setRevision(value => value + 1); } };
+}
 
-  return <div className="workspace explorer">
-    <header className="workspace-header">
-      <div className="page-title"><p className="eyebrow">Project workspace</p>
-        <h1 className="truncate" title={label.full}><Icon name="folder" size={18}/>{label.name}</h1>
-        {label.detail && <p className="project-path truncate" title={label.full}>{label.detail}</p>}</div>
-      <div className="workspace-actions">
-        <label className="inline-field"><Icon name="branch" size={14}/>Worktree
-          <select className="select-sm explorer-worktree" aria-label="Worktree" value={worktreeValue} disabled={worktrees.status !== 'loaded'}
-            onChange={event => setParams(next => next.set('worktree', event.target.value))}>
-            {worktrees.status === 'loaded' ? worktrees.result.worktrees.map(tree => <option key={tree.path} value={tree.path} title={tree.path}>{worktreeName(tree)}</option>)
-              : <option value={worktreeValue}>{worktrees.status === 'loading' ? 'Loading worktrees…' : 'Project root'}</option>}
-          </select></label>
-        <button className="btn btn-sm btn-secondary" onClick={() => { cache.current.clear(); setRevision(value => value + 1); }}><Icon name="clock" size={14}/>Refresh</button>
+function TreeLevel({ explorer, path }: { explorer: FileExplorer; path: string }): ReactNode {
+  const { rows, dirs, selectedPath, current, needle, items, activate, move } = explorer;
+  return rows.filter(row => row.parent === path).map(row => {
+    const { entry } = row;
+    const directory = dirs[entry.path];
+    const mark = primaryMark(entry.git);
+    const label = [entry.name, ...entry.git.map(item => GIT_MARKS[item].label.toLowerCase()), entry.kind === 'directory' && entry.changed ? 'contains changes' : '']
+      .filter(Boolean).join(', ');
+    return <li key={entry.path} role="treeitem" id={domId(entry.path)} aria-label={label} aria-level={row.depth} aria-setsize={row.setSize} aria-posinset={row.position}
+      aria-expanded={entry.kind === 'directory' ? row.open : undefined} aria-selected={entry.kind === 'file' ? entry.path === selectedPath : undefined}
+      tabIndex={entry.path === current ? 0 : -1} data-path={entry.path}
+      ref={element => { if (element) items.current.set(entry.path, element); else items.current.delete(entry.path); }}
+      onFocus={event => { if (event.target === event.currentTarget) move(row, false); }}>
+      <div className={`tree-row${entry.path === selectedPath ? ' is-selected' : ''}${mark ? ` git-${mark}` : ''}`} style={{ paddingLeft: `calc(var(--space-2) + ${row.depth - 1} * 14px)` }}
+        title={entry.previousPath ? `${entry.path} (renamed from ${entry.previousPath})` : entry.path} onClick={() => activate(row)}>
+        {entry.kind === 'directory' ? <Icon className="tree-chevron" name={row.open ? 'chevronDown' : 'chevronRight'} size={12}/> : <span className="tree-chevron"/>}
+        <Icon className="tree-icon" name={entry.kind === 'directory' ? (row.open ? 'folderOpen' : 'folder') : 'file'} size={15}/>
+        <span className="tree-name truncate"><Highlighted name={entry.name} query={needle}/></span>
+        {entry.previousPath && <span className="tree-previous truncate">← {entry.previousPath.split('/').at(-1)}</span>}
+        {entry.kind === 'directory' ? entry.changed && <span className="tree-changed" title="Contains changes" aria-hidden="true"/> : <GitLetters git={entry.git}/>}
       </div>
-    </header>
-    <nav className="tabs" aria-label="Project">
-      <AppLink to={prefix}>Project</AppLink>
-      <AppLink to={`${prefix}/tree`}>Tree</AppLink>
-      <AppLink to={`${prefix}/changes`}>Changes</AppLink>
-      <AppLink to={`${prefix}/files`} aria-current="page">Files</AppLink>
-    </nav>
-    {(offline || unknownWorktree || worktrees.status === 'error') && <div className="workspace-notices">
-      {offline && <p role="status" className="banner banner-unknown"><Icon name="unknown" size={14}/>Waiting for the connection. File requests are sent once connected.</p>}
-      {unknownWorktree && <p role="alert" className="banner banner-warning"><Icon name="alert" size={14}/>Worktree {wantedWorktree} is not part of this project. Showing the project root.</p>}
-      {worktrees.status === 'error' && <p role="alert" className="banner banner-danger"><Icon name="alert" size={14}/>Worktrees unavailable: {worktrees.error}</p>}
-    </div>}
-    <div className="explorer-columns">
-      <section className="explorer-tree" aria-label="Explorer">
-        <header className="column-header"><h2>Files</h2></header>
-        <div className="explorer-filter"><Icon name="filter" size={14}/>
-          <input className="input-sm" type="search" placeholder="Filter by name" aria-label="Filter files by name" value={query}
-            onChange={event => setQuery(event.target.value)}
-            onKeyDown={event => {
-              if (event.key === 'Escape') setQuery('');
-              else if (event.key === 'ArrowDown' && rows.length) { event.preventDefault(); move(rows.find(row => row.entry.path === current) ?? rows[0]); }
-            }}/></div>
-        {needle && <p className="explorer-hint muted-text">Matches in opened folders</p>}
-        <div className="explorer-scroll">
-          {root?.status === 'error' ? <p role="alert" className="banner banner-danger explorer-inline"><Icon name="alert" size={14}/>{root.error}</p>
-            : !root || root.status === 'loading' ? <p className="tree-status" role="status">Loading files…</p>
-              : !rows.length ? <p className="tree-status">{needle ? 'No matching names in opened folders' : 'No files'}</p>
-                : <ul role="tree" aria-label="Files" className="file-tree" onKeyDown={onKeyDown}>{renderLevel('')}</ul>}
-        </div>
-      </section>
-      <section className="explorer-viewer" aria-label="File viewer">
-        {!selectedPath ? <div className="empty-state"><Icon name="file" size={22}/><h2>No file selected</h2><p>Choose a file in the tree to view its contents.</p></div> : <>
-          <header className="viewer-header">
-            <nav className="viewer-path" aria-label="File path">{selectedPath.split('/').map((part, index, parts) => <span key={index} className={index === parts.length - 1 ? 'viewer-path-current' : undefined}>{part}</span>)}</nav>
-            <div className="viewer-meta">
-              {selectedEntry && selectedEntry.git.map(mark => <span key={mark} className={`chip git-chip git-${mark}`}>{GIT_MARKS[mark].label}</span>)}
-              {selectedEntry?.previousPath && <span className="chip" title={selectedEntry.previousPath}>From {selectedEntry.previousPath}</span>}
-              {shown?.status === 'loaded' && shown.result.state === 'text' && language && <span className="chip">{LANGUAGE_NAMES[language]}</span>}
-              {lineCount !== undefined && <span className="chip numeric">{lineCount} {lineCount === 1 ? 'line' : 'lines'}</span>}
-              {shown?.status === 'loaded' && <span className="chip numeric">{formatSize(shown.result.size)}</span>}
-            </div>
-          </header>
-          {!shown || shown.status === 'loading' ? <p className="tree-status viewer-status" role="status">Loading {selectedPath}…</p>
-            : shown.status === 'error' ? <p role="alert" className="banner banner-danger explorer-inline"><Icon name="alert" size={14}/>Could not open {selectedPath}: {shown.error}</p>
-              : shown.status === 'directory' ? <div className="empty-state"><Icon name="folder" size={22}/><h2>Folder</h2><p>Choose a file inside {selectedPath} to view it.</p></div>
-                : shown.status === 'deleted' ? <div className="empty-state"><Icon name="x" size={22}/><h2>Deleted file</h2><p>This file was deleted in the working tree.</p>
-                  <AppLink className="btn btn-secondary btn-sm" to={`${prefix}/changes`}><Icon name="diff" size={14}/>Open Changes</AppLink></div>
-                  : shown.result.state === 'binary' ? <div className="empty-state" role="status"><Icon name="file" size={22}/><h2>Binary file</h2><p>Binary content is not shown.</p>
-                    <p className="numeric">Size: {formatSize(shown.result.size)} ({shown.result.size.toLocaleString('en-US')} bytes)</p></div>
-                    : shown.result.state === 'too_large' ? <div className="empty-state" role="status"><Icon name="alert" size={22}/><h2>File too large to display</h2><p>Files over 1.0 MiB are not shown.</p>
-                      <p className="numeric">Size: {formatSize(shown.result.size)} ({shown.result.size.toLocaleString('en-US')} bytes)</p></div>
-                      : shown.result.content === '' ? <p className="tree-status viewer-status">Empty file</p>
-                        : <CodeView key={selectedPath} path={selectedPath} content={shown.result.content}/>}
-        </>}
-      </section>
+      {row.open && <ul role="group">
+        <TreeLevel explorer={explorer} path={entry.path}/>
+        {directory?.status === 'loading' && <li role="none" className="tree-status" style={{ paddingLeft: `calc(var(--space-2) + ${row.depth} * 14px + 20px)` }}>Loading…</li>}
+        {directory?.status === 'error' && <li role="none" className="tree-status tree-error" style={{ paddingLeft: `calc(var(--space-2) + ${row.depth} * 14px + 20px)` }}>{directory.error}</li>}
+        {directory?.status === 'loaded' && !directory.entries.length && <li role="none" className="tree-status" style={{ paddingLeft: `calc(var(--space-2) + ${row.depth} * 14px + 20px)` }}>Empty folder</li>}
+      </ul>}
+    </li>;
+  });
+}
+
+/** 作業ツリーの選択と、名前の絞り込みと、ファイルの木。作業場の左の列に置く。 */
+export function FileTreePanel({ explorer, actions }: { explorer: FileExplorer; actions?: ReactNode }) {
+  const { worktrees, worktreeValue, root, rows, needle, query, setQuery, current, move, onKeyDown } = explorer;
+  return <section className="explorer-tree" aria-label="Explorer">
+    <header className="column-header explorer-header"><h2>Files</h2><span className="spacer"/>
+      <button className="icon-button" aria-label="Refresh" title="Refresh" onClick={explorer.refresh}><Icon name="clock" size={14}/></button>
+      {actions}</header>
+    <div className="explorer-worktree-row"><Icon name="branch" size={14}/>
+      <select className="select-sm explorer-worktree" aria-label="Worktree" value={worktreeValue} disabled={worktrees.status !== 'loaded'}
+        onChange={event => explorer.selectWorktree(event.target.value)}>
+        {worktrees.status === 'loaded' ? worktrees.result.worktrees.map(tree => <option key={tree.path} value={tree.path} title={tree.path}>{worktreeName(tree)}</option>)
+          : <option value={worktreeValue}>{worktrees.status === 'loading' ? 'Loading worktrees…' : 'Project root'}</option>}
+      </select></div>
+    <div className="explorer-filter"><Icon name="filter" size={14}/>
+      <input className="input-sm" type="search" placeholder="Filter by name" aria-label="Filter files by name" value={query}
+        onChange={event => setQuery(event.target.value)}
+        onKeyDown={event => {
+          if (event.key === 'Escape') setQuery('');
+          else if (event.key === 'ArrowDown' && rows.length) { event.preventDefault(); move(rows.find(row => row.entry.path === current) ?? rows[0]); }
+        }}/></div>
+    {needle && <p className="explorer-hint muted-text">Matches in opened folders</p>}
+    <div className="explorer-scroll">
+      {root?.status === 'error' ? <p role="alert" className="banner banner-danger explorer-inline"><Icon name="alert" size={14}/>{root.error}</p>
+        : !root || root.status === 'loading' ? <p className="tree-status" role="status">Loading files…</p>
+          : !rows.length ? <p className="tree-status">{needle ? 'No matching names in opened folders' : 'No files'}</p>
+            : <ul role="tree" aria-label="Files" className="file-tree" onKeyDown={onKeyDown}><TreeLevel explorer={explorer} path=""/></ul>}
     </div>
+  </section>;
+}
+
+/** 作業ツリーの欠落と接続待ちを知らせる。 */
+export function FileNotices({ explorer }: { explorer: FileExplorer }) {
+  const { offline, unknownWorktree, wantedWorktree, worktrees } = explorer;
+  if (!offline && !unknownWorktree && worktrees.status !== 'error') return null;
+  return <div className="workspace-notices">
+    {offline && <p role="status" className="banner banner-unknown"><Icon name="unknown" size={14}/>Waiting for the connection. File requests are sent once connected.</p>}
+    {unknownWorktree && <p role="alert" className="banner banner-warning"><Icon name="alert" size={14}/>Worktree {wantedWorktree} is not part of this project. Showing the project root.</p>}
+    {worktrees.status === 'error' && <p role="alert" className="banner banner-danger"><Icon name="alert" size={14}/>Worktrees unavailable: {worktrees.error}</p>}
   </div>;
+}
+
+/** 選んだファイルの中身。作業場の中央に、会話の代わりに出す。 */
+export function FileViewerPanel({ explorer, actions }: { explorer: FileExplorer; actions?: ReactNode }) {
+  const { selectedPath, selectedEntry, shown, project } = explorer;
+  const prefix = `/p/${encodeURIComponent(project)}`;
+  const language: Language | undefined = detectLanguage(selectedPath);
+  const lineCount = shown?.status === 'loaded' && shown.result.state === 'text' ? highlightLineCount(shown.result.content) : undefined;
+  return <section className="explorer-viewer" aria-label="File viewer">
+    {!selectedPath ? <div className="empty-state"><Icon name="file" size={22}/><h2>No file selected</h2><p>Choose a file in the tree to view its contents.</p></div> : <>
+      <header className="viewer-header">
+        <nav className="viewer-path" aria-label="File path">{selectedPath.split('/').map((part, index, parts) => <span key={index} className={index === parts.length - 1 ? 'viewer-path-current' : undefined}>{part}</span>)}</nav>
+        <div className="viewer-meta">
+          {selectedEntry && selectedEntry.git.map(mark => <span key={mark} className={`chip git-chip git-${mark}`}>{GIT_MARKS[mark].label}</span>)}
+          {selectedEntry?.previousPath && <span className="chip" title={selectedEntry.previousPath}>From {selectedEntry.previousPath}</span>}
+          {shown?.status === 'loaded' && shown.result.state === 'text' && language && <span className="chip">{LANGUAGE_NAMES[language]}</span>}
+          {lineCount !== undefined && <span className="chip numeric">{lineCount} {lineCount === 1 ? 'line' : 'lines'}</span>}
+          {shown?.status === 'loaded' && <span className="chip numeric">{formatSize(shown.result.size)}</span>}
+          {actions}
+        </div>
+      </header>
+      {!shown || shown.status === 'loading' ? <p className="tree-status viewer-status" role="status">Loading {selectedPath}…</p>
+        : shown.status === 'error' ? <p role="alert" className="banner banner-danger explorer-inline"><Icon name="alert" size={14}/>Could not open {selectedPath}: {shown.error}</p>
+          : shown.status === 'directory' ? <div className="empty-state"><Icon name="folder" size={22}/><h2>Folder</h2><p>Choose a file inside {selectedPath} to view it.</p></div>
+            : shown.status === 'deleted' ? <div className="empty-state"><Icon name="x" size={22}/><h2>Deleted file</h2><p>This file was deleted in the working tree.</p>
+              <AppLink className="btn btn-secondary btn-sm" to={`${prefix}/changes`}><Icon name="diff" size={14}/>Open Changes</AppLink></div>
+              : shown.result.state === 'binary' ? <div className="empty-state" role="status"><Icon name="file" size={22}/><h2>Binary file</h2><p>Binary content is not shown.</p>
+                <p className="numeric">Size: {formatSize(shown.result.size)} ({shown.result.size.toLocaleString('en-US')} bytes)</p></div>
+                : shown.result.state === 'too_large' ? <div className="empty-state" role="status"><Icon name="alert" size={22}/><h2>File too large to display</h2><p>Files over 1.0 MiB are not shown.</p>
+                  <p className="numeric">Size: {formatSize(shown.result.size)} ({shown.result.size.toLocaleString('en-US')} bytes)</p></div>
+                  : shown.result.content === '' ? <p className="tree-status viewer-status">Empty file</p>
+                    : <CodeView key={selectedPath} path={selectedPath} content={shown.result.content}/>}
+    </>}
+  </section>;
 }
 
 function highlightLineCount(content: string): number {
@@ -354,4 +363,3 @@ function highlightLineCount(content: string): number {
   const count = text.split('\n').length;
   return text.endsWith('\n') ? count - 1 : count;
 }
-export default FilesPage;

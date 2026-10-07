@@ -10,7 +10,8 @@ import test, { before, after, type TestContext } from "node:test";
 import { WebSocket } from "ws";
 import type { Fact, Ledger } from "../../core/src/ledger/index.ts";
 import { observeClaudeFile } from "../src/observe/claude/index.ts";
-import { observeCodex } from "../src/observe/codex/index.ts";
+import { observeClaudeContext } from "../src/observe/claude/context.ts";
+import { observeCodex, observeCodexLocations } from "../src/observe/codex/index.ts";
 import { fileReadMetrics, readAppendOnlyFile } from "../src/observe/files.ts";
 import { openBatchLedger } from "../src/service/batch-ledger.ts";
 import { openObservationService } from "../src/service/index.ts";
@@ -116,9 +117,16 @@ test("worker の大量取り込み中も主スレッドの遅れは 100 ms 以�
   reference.batch(() => {
     // 各合成 Claude ファイルは独立した新規会話なので、既存履歴は空になる。
     const ledger: Ledger = { ...reference.ledger, readSince: () => [] };
-    for (let index = 0; index < CLAUDE_COUNT; index += 1) observeClaudeFile(ledger, join(f.claude, `claude-${index}.jsonl`));
+    // 形式読みに続けて、会話の場所とターンの根拠の部品も同じ行から読む。
+    for (let index = 0; index < CLAUDE_COUNT; index += 1) {
+      const path = join(f.claude, `claude-${index}.jsonl`);
+      const observation = observeClaudeFile(ledger, path);
+      observeClaudeContext(ledger, path, { lines: observation.lines, fromStart: true });
+    }
     observeCodex(reference.ledger, { codexHome: join(f.home, ".codex"), batch: reference.batch });
   });
+  reference.batch(() => observeCodexLocations(reference.ledger,
+    Array.from({ length: CODEX_COUNT }, (_, index) => join(f.codex, `rollout-${index}.jsonl`))));
   assert.deepEqual(normalizeFacts(facts), normalizeFacts(reference.ledger.readSince(0, Number.MAX_SAFE_INTEGER)));
 });
 
@@ -204,7 +212,8 @@ test("Codex の旧形式メタでも追記だけを読み、新しいディレ�
   mkdirSync(directory, { recursive: true });
   const path = join(directory, "rollout-legacy.jsonl");
   writeFileSync(path, JSON.stringify({ id: "legacy", timestamp: TS, source: "cli" }) + "\n");
-  assert.equal(service.ingestOnce().appended, 2);
+  // 会話と実行に加え、メタに場所がないことを読み終えた印を残す。
+  assert.equal(service.ingestOnce().appended, 3);
   let reads = 0;
   const read = fs.readFileSync;
   t.mock.method(fs, "readFileSync", (...args: Parameters<typeof fs.readFileSync>) => {
@@ -223,7 +232,8 @@ test("Codex の旧形式メタでも追記だけを読み、新しいディレ�
   const newDirectory = join(home, ".claude", "projects", "new-project", "nested");
   mkdirSync(newDirectory, { recursive: true });
   writeFileSync(join(newDirectory, "new-session.jsonl"), createMessage("new-message"));
-  assert.equal(service.ingestOnce().appended, 3);
+  // 発言と所属と会話に加え、場所の印と会話の記録の実行と最初のターンの根拠を足す。
+  assert.equal(service.ingestOnce().appended, 6);
   rmSync(join(newDirectory, "new-session.jsonl"));
   assert.equal(service.ingestOnce().appended, 0);
 });

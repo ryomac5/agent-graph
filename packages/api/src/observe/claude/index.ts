@@ -30,20 +30,20 @@ export interface ClaudeObservation extends FileRead {
   duplicates: number;
   conflicts: AppendResult[];
 }
-function readObject(value: JsonValue | undefined): Row | undefined {
+export function readObject(value: JsonValue | undefined): Row | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value : undefined;
 }
 function readString(value: JsonValue | undefined): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
-function parseRow(text: string): Row | undefined {
+export function parseRow(text: string): Row | undefined {
   try { return readObject(JSON.parse(text) as JsonValue); }
   catch (error) {
     if (!(error instanceof SyntaxError)) throw error;
     return undefined;
   }
 }
-function findUnsupportedReason(row: Row | undefined): string | undefined {
+export function findUnsupportedReason(row: Row | undefined): string | undefined {
   if (!row) return "Invalid JSON object";
   if (row.subtype !== undefined && !(row.type === "system"
     && (row.subtype === "compact_boundary" || IGNORED_SYSTEM_SUBTYPES.has(String(row.subtype))))) {

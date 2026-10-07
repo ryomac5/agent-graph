@@ -29,12 +29,27 @@ export function createActivityStore(): ScreenStore {
   target.setConnection('connected');
   return target;
 }
+// 外の会話と無人実行と形式未対応の区画は既定で畳まれている。行を確かめる試験では開く。
+export function openFolds(...names: string[]) {
+  for (const name of names) fireEvent.click(screen.getByRole('button', { name }));
+}
 it('groups managed tasks by project and keeps external, unattended and unsupported conversations in separate sections', () => {
   render(<MemoryRouter><HomePage target={createActivityStore()}/></MemoryRouter>);
-  expect(within(screen.getByRole('region', { name: 'Active' })).getByRole('article', { name: 'Implement API' })).toBeTruthy();
-  expect(within(screen.getByRole('region', { name: 'History' })).getByRole('article', { name: 'Review UI' })).toBeTruthy();
-  expect(within(screen.getByRole('region', { name: 'External conversations' })).getByRole('article', { name: 'Investigate latency.' })).toBeTruthy();
-  expect(within(screen.getByRole('region', { name: 'History' })).getAllByRole('article')).toHaveLength(3);
+  const alpha = screen.getByRole('region', { name: 'alpha' });
+  expect(within(alpha).getAllByRole('article').map(row => row.getAttribute('aria-label'))).toEqual(['Implement API']);
+  expect(within(alpha).getByText('running')).toBeTruthy();
+  const beta = screen.getByRole('region', { name: 'beta' });
+  expect(within(beta).getByRole('article', { name: 'Review UI' }).classList.contains('is-stopped')).toBe(true);
+  // 外の端末の会話と無人実行は畳み、件数だけを見せる。
+  const external = screen.getByRole('region', { name: 'External conversations' });
+  expect(within(external).queryByRole('article')).toBeNull();
+  expect(within(external).getByText('1').className).toContain('count-pill');
+  expect(screen.getByRole('button', { name: 'External conversations' }).getAttribute('aria-expanded')).toBe('false');
+  expect(within(screen.getByRole('region', { name: 'Unattended runs' })).queryByRole('article')).toBeNull();
+  openFolds('External conversations', 'Unattended runs', 'Unsupported conversations');
+  expect(within(external).getByRole('article', { name: 'Investigate latency.' })).toBeTruthy();
+  expect(within(screen.getByRole('region', { name: 'Unattended runs' })).getAllByRole('article')).toHaveLength(1);
+  expect(within(screen.getByRole('region', { name: 'Unsupported conversations' })).getAllByRole('article')).toHaveLength(1);
   expect(screen.getByRole('link', { name: 'Take over' }).getAttribute('href')).toBe('/c/external?adopt=1');
   const implement = screen.getByRole('article', { name: 'Implement API' });
   expect(within(implement).getByText('Codex')).toBeTruthy();
@@ -49,6 +64,7 @@ it('groups managed tasks by project and keeps external, unattended and unsupport
 });
 it('combines state, provider and project filters and can clear them', () => {
   render(<MemoryRouter><HomePage target={createActivityStore()}/></MemoryRouter>);
+  openFolds('External conversations', 'Unattended runs', 'Unsupported conversations');
   fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'claude' } });
   fireEvent.change(screen.getByLabelText('State'), { target: { value: 'unknown' } });
   fireEvent.change(screen.getByLabelText('Project'), { target: { value: '/repo/alpha' } });
@@ -62,6 +78,7 @@ it('combines state, provider and project filters and can clear them', () => {
 it('shows unknown with last evidence, exact time, relative time and reason, without inferring completion from elapsed time', () => {
   const target = createActivityStore();
   render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
+  openFolds('External conversations');
   const row = screen.getByRole('article', { name: 'Investigate latency.' });
   const evidence = within(row).getByRole('link', { name: 'Unknown · Evidence' });
   // 一覧の不明は印と理由だけを 1 行で出し、根拠は title に残す。
@@ -96,6 +113,7 @@ it('decodes SQLite JSON bodies, evidence and assignment attempts from the actual
   };
   target.setSnapshot({ seq: 1, generation: 0, projection });
   render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
+  openFolds('External conversations');
   expect(screen.getByText('Added the endpoint')).toBeTruthy();
   expect(screen.getByRole('article', { name: 'Investigate latency.' })).toBeTruthy();
   expect(screen.getByText('test-model')).toBeTruthy();

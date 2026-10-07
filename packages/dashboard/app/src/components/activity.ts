@@ -1,5 +1,5 @@
 import { readTitle } from '../lib/format.ts';
-import { getRegisteredProjects, isTemporaryPath, OTHER_PROJECT } from '../lib/projects.ts';
+import { getRegisteredProjects, isTemporaryPath, OTHER_PROJECT, resolveProjectId } from '../lib/projects.ts';
 import type { Row, ScreenState } from '../lib/store.ts';
 import type { ExecutionState } from './StateBadge.tsx';
 import { readBody } from '../lib/message-body.ts';
@@ -43,6 +43,14 @@ export function selectActivities(state: ScreenState, parallel = false): Activity
   const p = state.projection;
   const projects = new Map((p.projects ?? []).map(row => [readText(row.id), row]));
   const registered = new Set(getRegisteredProjects(state).map(row => readText(row.id)));
+  // 会話のプロジェクトは、作業、会話の開始の場所、実行の場所の順に、登録したプロジェクトへ結ぶ。
+  const placeIn = (candidates: unknown[]) => {
+    for (const value of candidates) {
+      const id = typeof value === 'string' && value ? resolveProjectId(state, value) : '';
+      if (registered.has(id)) return id;
+    }
+    return OTHER_PROJECT;
+  };
   const tasks = new Map((p.tasks ?? []).map(row => [readText(row.id), row]));
   const messages = new Map((p.messages ?? []).map(row => [readText(row.id), row]));
   const memberships = groupRows((p.message_memberships ?? []).filter(row => row.active === 1 || row.active === true), 'conversation_id');
@@ -62,15 +70,18 @@ export function selectActivities(state: ScreenState, parallel = false): Activity
     const conversationId = readText(conversation.id);
     const taskId = readText(conversation.task_id);
     const task = tasks.get(taskId);
-    const projectId = readText(conversation.project) || readText(task?.project);
+    const conversationRuns = runs.get(conversationId) ?? [];
+    const projectId = readText(conversation.project) || readText(task?.project) || readText(conversation.repository_id)
+      || readText(conversationRuns.find(run => readText(run.repository_id))?.repository_id);
     const project = projects.get(projectId);
+    const placed = placeIn([conversation.project, task?.project, conversation.repository_id, ...conversationRuns.map(run => run.repository_id)]);
     seenTasks.add(taskId);
     const history = (memberships.get(conversationId) ?? []).flatMap(link => {
       const message = messages.get(readText(link.message_id));
       return message ? [message] : [];
     }).sort((a, b) => readText(a.source_ts).localeCompare(readText(b.source_ts)) || readText(a.id).localeCompare(readText(b.id)));
     const first = readText(conversation.first_request_excerpt) || history.filter(row => row.role === 'user' || !row.role).map(row => readBody(row.body)).find(Boolean)?.trim().split(/(?<=[。.!?？！])|\n/u)[0];
-    const orderedRuns = [...(runs.get(conversationId) ?? [])].sort((a, b) => Number(b.generation ?? 0) - Number(a.generation ?? 0) || readText(b.started_ts).localeCompare(readText(a.started_ts)));
+    const orderedRuns = [...conversationRuns].sort((a, b) => Number(b.generation ?? 0) - Number(a.generation ?? 0) || readText(b.started_ts).localeCompare(readText(a.started_ts)));
     const displayedRuns = parallel ? orderedRuns.filter(run => Number(run.generation ?? 0) === Number(orderedRuns[0]?.generation ?? 0)) : orderedRuns.slice(0, 1);
     for (const run of displayedRuns.length ? displayedRuns : [undefined]) {
       const assignment = assigned.get(readText(run?.id));
@@ -83,7 +94,7 @@ export function selectActivities(state: ScreenState, parallel = false): Activity
       const section: ActivitySection = unsupported ? 'unsupported'
         : conversation.type === 'unattended' ? 'unattended' : conversation.origin === 'observed' ? 'external' : 'managed';
       result.push({ id: readText(run?.id) || conversationId, taskId, conversationId,
-        project: registered.has(projectId) ? projectId : OTHER_PROJECT,
+        project: placed,
         temporary: project?.reason === 'temporary' || conversation.project_reason === 'temporary' || isTemporaryPath(location),
         lastActivity: [conversation.last_message_ts, run?.last_evidence_ts, run?.ended_ts, run?.started_ts, conversation.created_ts].map(readText).filter(Boolean).sort().at(-1),
         excerpt: readText(conversation.last_message_excerpt),
@@ -100,7 +111,7 @@ export function selectActivities(state: ScreenState, parallel = false): Activity
   }
   for (const [id, task] of tasks) {
     if (seenTasks.has(id)) continue;
-    result.push({ id, taskId: id, project: registered.has(readText(task.project)) ? readText(task.project) : OTHER_PROJECT, temporary: isTemporaryPath(readText(projects.get(readText(task.project))?.root_path) || readText(task.project)), lastActivity: readText(task.updated_ts ?? task.created_ts), name: readTitle(task.name) || readText(task.purpose) || 'New task',
+    result.push({ id, taskId: id, project: placeIn([task.project]), temporary: isTemporaryPath(readText(projects.get(readText(task.project))?.root_path) || readText(task.project)), lastActivity: readText(task.updated_ts ?? task.created_ts), name: readTitle(task.name) || readText(task.purpose) || 'New task',
       provisional: !readTitle(task.name), provider: '', model: '', effort: '',
       state: executionStates.includes(task.state as ExecutionState) ? task.state as ExecutionState : 'unknown',
       section: 'managed', managed: true, messages: [], artifacts: [] });

@@ -106,7 +106,8 @@ export function ChangesPage({ client, target = store, project, artifactId }: Cha
   }
   const artifactRun = state.projection.runs?.find(row => row.id === artifact?.run_id);
   const runPlace = worktreeLabel(artifactRun)?.full;
-  const fileHref = projectId ? (path: string) => `/p/${encodeURIComponent(projectId)}/files?${new URLSearchParams({ path, ...(runPlace ? { worktree: runPlace } : {}) })}` : undefined;
+  // ファイルは作業場の左の列の木と中央の表示で開く。
+  const fileHref = projectId ? (path: string) => `/p/${encodeURIComponent(projectId)}?${new URLSearchParams({ path, ...(runPlace ? { worktree: runPlace } : {}) })}` : undefined;
   const comparisonFiles = compare && typeof compare.diff === 'string' && typeof artifact?.diff === 'string' ? comparePatches(compare.diff, patch) : undefined;
   return <section className="page changes-page" aria-label="Changes and review">
     <header className="page-header"><div className="page-title"><h1>Changes</h1><p className="page-subtitle">Review a fixed artifact version</p></div>
@@ -118,7 +119,6 @@ export function ChangesPage({ client, target = store, project, artifactId }: Cha
       <AppLink to={`/p/${encodeURIComponent(projectId)}`}>Project</AppLink>
       <AppLink to={`/p/${encodeURIComponent(projectId)}/tree`}>Tree</AppLink>
       <AppLink to={`/p/${encodeURIComponent(projectId)}/changes`} aria-current="page">Changes</AppLink>
-      <AppLink to={`/p/${encodeURIComponent(projectId)}/files`}>Files</AppLink>
     </nav>}
     {error && <p role="alert" className="banner banner-danger">{error}</p>}
     {notice?.artifactId === id && !hasReviewResult(state, notice.command, notice.result, notice.artifactId) && <p role="status" className="muted-text">Command accepted; waiting for the updated review.</p>}

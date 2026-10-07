@@ -1,0 +1,141 @@
+import { afterEach, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
+import { createStore, type Row } from '../lib/store.ts';
+import { createProjectMatcher, resolveProjectId } from '../lib/projects.ts';
+import { HomePage } from '../pages/home/HomePage.tsx';
+import { TreePage } from '../pages/tree/TreePage.tsx';
+import { buildDelegationTree } from '../pages/tree/model.ts';
+import { WorkspacePage } from '../pages/workspace/WorkspacePage.tsx';
+import { ChangesPage } from '../pages/changes/ChangesPage.tsx';
+import { selectActivities } from '../components/activity.ts';
+import { buildOverview } from '../components/overview.ts';
+import { summarizeDelegation } from '../components/DelegationLines.tsx';
+
+vi.mock('@xyflow/react', () => ({
+  ReactFlow: ({ nodes }: { nodes: { id: string; data: { node: { label: string } } }[] }) => <div>{nodes.map(node => <span key={node.id}>{node.data.node.label}</span>)}</div>,
+  Handle: () => null, Background: () => null, Controls: () => null, Position: { Left: 'left', Right: 'right' },
+}));
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+const HASH = '1e1eb3a5a3733554ff2741dd9174456e26a1b887216b1157d29d6903611c886b';
+const NOW = new Date().toISOString();
+const EARLIER = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+// 本番の台帳と同じ形。プロジェクトの識別はハッシュで、経路と表示は表示名を使う。
+function projection(extra: Record<string, Row[]> = {}): Record<string, Row[]> {
+  return {
+    projects: [{ id: HASH, display_name: 'agent-graph', root_path: '/Users/me/agent-graph', state: 'registered' },
+      { id: 'other-hash', display_name: 'dotfiles', root_path: '/Users/me/dotfiles', state: 'registered' }],
+    conversations: [
+      { id: 'root', provider: 'claude', origin: 'observed', type: 'interactive', name: 'Terminal root', project: HASH, last_message_ts: NOW },
+      { id: 'child', provider: 'codex', origin: 'managed', type: 'interactive', name: 'Codex child' },
+      { id: 'grandchild', provider: 'claude', origin: 'managed', type: 'interactive', name: 'Claude reviewer' },
+      { id: 'lonely', provider: 'claude', origin: 'observed', type: 'interactive', name: 'Unrelated terminal', project: HASH },
+      { id: 'probe', provider: 'claude', origin: 'observed', type: 'unattended', name: null },
+    ],
+    runs: [
+      { id: 'root:1', conversation_id: 'root', generation: 1, state: 'idle', last_evidence_ts: EARLIER, repository_id: HASH },
+      { id: 'child:1', conversation_id: 'child', generation: 1, state: 'running', last_evidence_ts: EARLIER, repository_id: HASH },
+      { id: 'child:2', conversation_id: 'child', generation: 2, state: 'running', last_evidence_ts: NOW, repository_id: HASH },
+      { id: 'grandchild:1', conversation_id: 'grandchild', generation: 1, state: 'ended', ended_ts: NOW, started_ts: EARLIER },
+      { id: 'lonely:1', conversation_id: 'lonely', generation: 1, state: 'running', last_evidence_ts: NOW },
+      { id: 'probe:1', conversation_id: 'probe', generation: 1, state: 'ended', ended_ts: NOW, started_ts: EARLIER },
+    ],
+    delegations: [
+      { id: 'implement', request_id: 'implement', role: 'implement', title: 'Implement the overview', state: 'running', attempt: 2, project: HASH,
+        provider: 'codex', model: 'gpt-6.1-sol', origin: JSON.stringify({ provider: 'claude', native_id: 'root' }),
+        parent: JSON.stringify({ confidence: 'confirmed', conversation_id: 'root' }),
+        attempts: JSON.stringify([{ attempt: 1, run_id: 'child:1', state: 'failed', assignment: { executor: 'codex', model: 'gpt-6.1-sol' } },
+          { attempt: 2, run_id: 'child:2', state: 'running', assignment: { executor: 'codex', model: 'gpt-6.1-sol' } }]) },
+      { id: 'review', request_id: 'review', role: 'review', title: 'Review the overview', state: 'done', attempt: 1, project: HASH, parent_run_id: 'child:2',
+        parent: JSON.stringify({ confidence: 'confirmed', run_id: 'child:2' }),
+        attempts: JSON.stringify([{ attempt: 1, run_id: 'grandchild:1', state: 'done', assignment: { executor: 'claude', model: 'claude-opus' } }]) },
+      { id: 'kit', request_id: 'kit', role: 'implement', title: 'Old kit task', state: 'failed', attempt: 1, project: 'other-hash', provider: 'codex', model: 'gpt-kit',
+        parent: JSON.stringify({ confidence: 'unknown' }), attempts: JSON.stringify([{ attempt: 1, run_id: 'kit:missing', state: 'failed' }]) },
+    ],
+    ...extra,
+  };
+}
+function setup(extra: Record<string, Row[]> = {}) {
+  const target = createStore();
+  target.setSnapshot({ seq: 1, generation: 1, projection: projection(extra) });
+  target.setConnection('connected');
+  return target;
+}
+
+it('resolves a route by display name, id or place and matches Other by the absence of a registered project', () => {
+  const state = setup().getSnapshot();
+  expect(resolveProjectId(state, 'agent-graph')).toBe(HASH);
+  expect(resolveProjectId(state, HASH)).toBe(HASH);
+  expect(resolveProjectId(state, '/Users/me/agent-graph')).toBe(HASH);
+  expect(resolveProjectId(state, 'unknown')).toBe('unknown');
+  expect(createProjectMatcher(state, 'agent-graph')([undefined, HASH])).toBe(true);
+  expect(createProjectMatcher(state, 'agent-graph')(['other-hash'])).toBe(false);
+  expect(createProjectMatcher(state, 'other')(['unregistered-hash', undefined])).toBe(true);
+  expect(createProjectMatcher(state, 'other')(['other-hash'])).toBe(false);
+});
+
+it('builds the Overview per project with the delegation tree under the task that started it', () => {
+  const state = setup().getSnapshot();
+  const overview = buildOverview(state, selectActivities(state), buildDelegationTree(state));
+  const project = overview.projects.find(group => group.id === HASH)!;
+  // 外の端末から起こした作業はその会話を根にし、委譲で起きた会話は行にしない。
+  expect(project.items.map(item => item.activity.name)).toEqual(['Terminal root']);
+  const [implement] = project.items[0].delegations;
+  expect(summarizeDelegation(implement)).toBe('Codex gpt-6.1-sol · implement · running · 2 attempts');
+  expect(implement.children.map(line => summarizeDelegation(line))).toEqual(['Claude claude-opus · review · done · 1 attempt']);
+  expect(project.items[0].active).toBe(true);
+  expect(project.running).toBe(1);
+  // 親が確定しない委譲は、その委譲のプロジェクトの別の枝に置く。
+  expect(overview.projects.find(group => group.id === 'other-hash')!.unlinked.map(line => line.node.label)).toEqual(['Old kit task']);
+  expect(overview.external.map(item => item.activity.name)).toEqual(['Unrelated terminal']);
+  expect(overview.unattended).toHaveLength(1);
+});
+
+it('shows each delegation as one readable line, opens active trees and keeps terminal conversations folded with counts', () => {
+  render(<MemoryRouter><HomePage target={setup()}/></MemoryRouter>);
+  const section = screen.getByRole('region', { name: 'agent-graph' });
+  const row = within(section).getByRole('article', { name: 'Terminal root' });
+  const fold = row.querySelector('details.delegation-fold') as HTMLDetailsElement;
+  expect(fold.open).toBe(true);
+  expect(fold.querySelector('summary')!.textContent).toBe('2 delegations · 1 active');
+  expect(within(row).getByRole('link', { name: 'Codex gpt-6.1-sol · implement · running · 2 attempts' }).getAttribute('href')).toBe('/c/child');
+  expect(within(row).getByText('Implement the overview')).toBeTruthy();
+  expect(within(row).getByText('Review the overview').closest('li')!.classList.contains('is-stopped')).toBe(true);
+  expect(within(section).queryByRole('article', { name: 'Codex child' })).toBeNull();
+  expect(section.querySelector('.section-count')!.textContent).toBe('1 running');
+  // 外の端末の会話は畳み、件数と動いている数だけを見せる。
+  const external = screen.getByRole('region', { name: 'External conversations' });
+  expect(within(external).queryByRole('article')).toBeNull();
+  expect(within(external).getByText('running').closest('.section-count')!.textContent).toBe('1 running');
+  const other = screen.getByRole('region', { name: 'dotfiles' });
+  expect(other.querySelector('.delegation-fold summary')!.textContent).toBe('1 delegation without a confirmed parent');
+  expect(within(other).getByText('Codex gpt-kit · implement · failed · 1 attempt')).toBeTruthy();
+  // 動いている作業の行には、経過と最後の根拠の時刻を添える。
+  expect(within(row).getByText(/Last evidence/)).toBeTruthy();
+});
+
+it('filters Tree, workspace and Changes by a display-name route through the projects projection', () => {
+  const target = setup({
+    artifacts: [{ id: 'artifact', run_id: 'child:2', version: 1, repository_id: HASH, patch_hash: 'h',
+      diff: 'diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-old\n+new\n' },
+    { id: 'foreign', run_id: 'probe:1', version: 1, repository_id: 'other-hash', patch_hash: 'f', diff: '' }],
+  });
+  const tree = buildDelegationTree(target.getSnapshot(), 'agent-graph');
+  expect(tree.roots).toEqual(['conversation:root']);
+  expect(tree.nodes.find(node => node.id === 'conversation:root')!.role).toBe('Terminal conversation');
+  expect(buildDelegationTree(target.getSnapshot(), 'dotfiles').unresolved).toEqual(['run:kit:missing']);
+  render(<MemoryRouter><TreePage project="agent-graph" target={target}/></MemoryRouter>);
+  expect(screen.queryByText('No delegations yet')).toBeNull();
+  expect(within(screen.getByRole('region', { name: 'Delegation tree' })).getByRole('button', { name: 'Implement the overview' })).toBeTruthy();
+  cleanup();
+  vi.stubGlobal('innerWidth', 1024);
+  render(<MemoryRouter><WorkspacePage project="agent-graph" target={target} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: false })) }}/></MemoryRouter>);
+  expect(screen.getByRole('heading', { name: 'agent-graph' })).toBeTruthy();
+  expect(within(screen.getByRole('region', { name: 'Tasks' })).getAllByRole('article').map(row => row.getAttribute('aria-label'))).toContain('Terminal root');
+  cleanup();
+  render(<MemoryRouter><ChangesPage project="agent-graph" target={target} client={{ command: vi.fn() }}/></MemoryRouter>);
+  expect(screen.getByRole('button', { name: 'Comment on a.ts new line 1' })).toBeTruthy();
+  expect(screen.queryByText(/foreign/)).toBeNull();
+  fireEvent.click(screen.getByRole('link', { name: 'Tree' }));
+});

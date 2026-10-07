@@ -383,7 +383,9 @@ test("版 1 の台帳に索引を移行し、既存事実と続きの投影を�
   legacy.exec("DROP TABLE fact_projection_dependencies; DROP INDEX facts_subject_seq");
   legacy.exec("DROP TABLE conversation_name_candidates; DROP TABLE message_name_inputs; DROP INDEX membership_message; ALTER TABLE conversations DROP COLUMN name; ALTER TABLE conversations DROP COLUMN name_is_provisional");
   for (const [table, column] of [["messages", "source_ts"], ["messages", "source_event_id"], ["messages", "source"], ["messages", "confidence"],
-    ["runs", "launch"], ["runs", "cwd"], ["runs", "branch"], ["approvals", "requested_ts"]]) legacy.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
+    ["runs", "launch"], ["runs", "cwd"], ["runs", "branch"], ["approvals", "requested_ts"],
+    ["conversations", "cwd"], ["conversations", "repository_id"], ["runs", "model"], ["runs", "effort"], ["delegations", "repository_id"], ["delegations", "parent"],
+    ["delegations", "provider"], ["delegations", "model"]]) legacy.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
   legacy.prepare("UPDATE schema_version SET version = ?").run(1);
   legacy.close();
   const migrated = openLedger(path, { storageScope: "full_diff" });

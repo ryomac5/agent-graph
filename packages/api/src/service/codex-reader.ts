@@ -14,7 +14,7 @@ export function createRolloutContext(lines: RolloutLine[]): RolloutLine[] {
     const row = readObject(line.value);
     if (row.type === "session_meta" || !row.type && typeof row.id === "string") {
       const meta = row.type === "session_meta" ? readObject(row.payload) : row;
-      const payload = Object.fromEntries(["id", "timestamp", "source", "history_mode", "cli_version", "parent_thread_id"]
+      const payload = Object.fromEntries(["id", "timestamp", "source", "history_mode", "cli_version", "parent_thread_id", "cwd"]
         .filter((key) => meta[key] !== undefined).map((key) => [key, meta[key]]));
       return { ...line, value: row.type === "session_meta" ? { type: row.type, timestamp: row.timestamp, payload } : payload };
     }

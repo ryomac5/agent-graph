@@ -42,6 +42,9 @@ export interface ConversationPayload {
   type: "interactive" | "unattended" | "subagent";
   history_format: "jsonl" | "legacy" | "paginated" | (string & {});
   task_id?: string;
+  // 観測した会話の開始の場所と、git の共通ディレクトリから決めたリポジトリ。
+  cwd?: string;
+  repository_id?: string;
 }
 export interface RelationPayload {
   type: RelationKind;
@@ -70,6 +73,9 @@ export interface RunPayload {
   // 作業ツリーの場所と枝。runner が起動時に記録する。
   cwd?: string;
   branch?: string;
+  // 観測の記録に書かれたモデルと effort。runner の起動の設定は launch に持つ。
+  model?: string;
+  effort?: string;
 }
 export interface ConnectionPayload {
   run_id: string;

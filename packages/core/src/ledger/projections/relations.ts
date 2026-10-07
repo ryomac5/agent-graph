@@ -14,10 +14,13 @@ export function compareText(left: string, right: string): number {
 export function createNativeId(provider: string, nativeId: string): string {
   return JSON.stringify([provider, nativeId]);
 }
-export function serializeValue(value: JsonValue): string {
+// 投影の中で組んだ値は未定義の欄を持ち得る。JSON と同じく、欄は省き、配列の要素は null にする。
+export function serializeValue(value: JsonValue | undefined): string {
+  if (value === undefined) return "null";
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(serializeValue).join(",")}]`;
-  return `{${Object.keys(value).sort(compareText).map((key) => `${JSON.stringify(key)}:${serializeValue(value[key])}`).join(",")}}`;
+  return `{${Object.keys(value).filter((key) => value[key] !== undefined).sort(compareText)
+    .map((key) => `${JSON.stringify(key)}:${serializeValue(value[key])}`).join(",")}}`;
 }
 
 // 部分訂正は元の未変更の列を継承する。元の事実そのものは競合候補から外す。

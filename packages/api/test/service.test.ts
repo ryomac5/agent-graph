@@ -165,7 +165,8 @@ test("4500 発言と 301 ファイルをまとめて投影し、空の送信待�
   const initialMs = performance.now() - started;
   t.diagnostic(`initial ingest: ${initialMs.toFixed(1)} ms`);
   assert.ok(initialMs < INITIAL_INGEST_LIMIT_MS, `initial ingest exceeded ${INITIAL_INGEST_LIMIT_MS} ms`);
-  assert.equal(report.appended, messages * 2 + BULK_FILE_COUNT + 1);
+  // 各会話は作成に加え、場所と会話の記録の実行と最初のターンの根拠を 1 件ずつ持つ。
+  assert.equal(report.appended, messages * 2 + (BULK_FILE_COUNT + 1) * 4);
   const before = f.read();
   const projection = readProjection(f.dbPath);
   assert.equal(projection.messages.length, messages);
@@ -213,7 +214,8 @@ test("一時 HOME の標本を CLI で二度取り込んでも増えず、停止
   writeFileSync(join(f.home, ".claude", "projects", "new-session.jsonl"), createClaudeMessage("service-new-session"));
   appendFileSync(join(codexDirectory, "rollout-exec.jsonl"), createCodexMessage("service-codex-added"));
   const next = f.run("ingest", "--once");
-  assert.equal(next.appended, 7);
+  // 新しい会話は、場所と会話の記録の実行と最初のターンの根拠も持つ。
+  assert.equal(next.appended, 10);
   assert.equal(next.unsupported, 0);
   assert.equal(f.run("ingest", "--once").appended, 0);
   const facts = f.read();
@@ -642,9 +644,10 @@ for (const live of [false, true]) {
       positions.push(Number(reader.prepare("SELECT last_seq FROM projection_state").get()!.last_seq));
       return result;
     };
-    assert.equal(service.ingestOnce().appended, 7);
-    assert.deepEqual(positions, [0, 0, 0, 0, 0, 0, 0]);
-    assert.equal(reader.prepare("SELECT last_seq FROM projection_state").get()!.last_seq, 7);
+    // 3 件の発言と所属、会話、場所、会話の記録の実行、最初のターンの根拠を 1 回の走査で追記する。
+    assert.equal(service.ingestOnce().appended, 10);
+    assert.deepEqual(positions, Array(10).fill(0));
+    assert.equal(reader.prepare("SELECT last_seq FROM projection_state").get()!.last_seq, 10);
     assert.equal(service.ingestOnce().appended, 0);
   });
 }

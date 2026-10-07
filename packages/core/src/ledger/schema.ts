@@ -4,12 +4,13 @@ import { projectConversations, encodeNameOrder, extractProvisionalName } from ".
 import { projectMessages } from "./projections/messages.ts";
 import { projectRuns } from "./projections/runs.ts";
 import { projectApprovals } from "./projections/approvals.ts";
+import { projectDelegations } from "./projections/delegations.ts";
 import { serializeValue } from "./projections/relations.ts";
 import type { Fact } from "./facts.ts";
 import { collectProjectionDependencies } from "./projections/dependencies.ts";
 import { initializeSearch, refreshSearch } from "./search.ts";
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 export const FACT_SCHEMA_VERSION = 1;
 export const FACTS_DDL = `CREATE TABLE facts (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -178,7 +179,39 @@ function migrateToVersion3(db: DatabaseSync): void {
   for (const row of projectApprovals(facts)) approval.run(row.requested_ts ?? null, row.id);
 }
 function migrateToVersion4(db: DatabaseSync): void { initializeSearch(db); refreshSearch(db); }
-const MIGRATIONS = [migrateToVersion1, migrateToVersion2, migrateToVersion3, migrateToVersion4] as const;
+// 会話と委譲をプロジェクトに結ぶ列と、観測したモデルの列を足す。値は投影の版の更新による再構築で入る。
+function migrateToVersion5(db: DatabaseSync): void {
+  db.exec(`ALTER TABLE conversations ADD COLUMN cwd TEXT;
+    ALTER TABLE conversations ADD COLUMN repository_id TEXT;
+    ALTER TABLE runs ADD COLUMN model TEXT;
+    ALTER TABLE runs ADD COLUMN effort TEXT;
+    ALTER TABLE delegations ADD COLUMN repository_id TEXT;
+    ALTER TABLE delegations ADD COLUMN parent TEXT;
+    ALTER TABLE delegations ADD COLUMN provider TEXT;
+    ALTER TABLE delegations ADD COLUMN model TEXT;`);
+  // 委譲の投影はプロジェクトの事実にも依存する。既存の事実の依存も同じ規則で足す。
+  db.exec(`INSERT OR IGNORE INTO fact_projection_dependencies
+      SELECT 'delegations', subject, 'needs', 'projects', seq FROM facts WHERE kind LIKE 'delegation.%';
+    INSERT OR IGNORE INTO fact_projection_dependencies
+      SELECT 'delegations', subject, 'offers', 'projects', seq FROM facts WHERE kind LIKE 'project.%';
+    INSERT OR IGNORE INTO fact_projection_dependencies
+      SELECT 'delegations', subject, 'offers', subject, seq FROM facts WHERE kind LIKE 'project.%';`);
+  // 反映済みの投影の行にも、同じ規則で新しい列の値を入れる。発言の本文は読まない。
+  const lastSeq = Number(db.prepare("SELECT last_seq FROM projection_state WHERE id = 1").get()!.last_seq);
+  const facts = db.prepare(`SELECT * FROM facts WHERE seq <= ? AND (kind LIKE 'conversation.%' OR kind LIKE 'task.%'
+    OR kind LIKE 'run.%' OR kind LIKE 'delegation.%' OR kind LIKE 'project.%')`).all(lastSeq).map((row) => ({
+    ...row, payload: row.payload === null ? null : JSON.parse(String(row.payload)),
+  } as Fact));
+  const conversation = db.prepare("UPDATE conversations SET cwd = ?, repository_id = ? WHERE id = ?");
+  for (const row of projectConversations(facts, new Map()).conversations) conversation.run(row.cwd ?? null, row.repository_id ?? null, row.id);
+  const run = db.prepare("UPDATE runs SET model = ?, effort = ? WHERE id = ?");
+  for (const row of projectRuns(facts)) run.run(row.model ?? null, row.effort ?? null, row.id);
+  const delegation = db.prepare("UPDATE delegations SET repository_id = ?, parent = ?, provider = ?, model = ? WHERE id = ?");
+  for (const row of projectDelegations(facts)) {
+    delegation.run(row.repository_id ?? null, serializeValue(row.parent), row.provider ?? null, row.model ?? null, row.id);
+  }
+}
+const MIGRATIONS = [migrateToVersion1, migrateToVersion2, migrateToVersion3, migrateToVersion4, migrateToVersion5] as const;
 
 export function initializeSchema(db: DatabaseSync): void {
   db.exec("BEGIN IMMEDIATE");

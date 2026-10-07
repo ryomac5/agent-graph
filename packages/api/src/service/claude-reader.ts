@@ -3,12 +3,14 @@ import { basename, join, resolve } from "node:path";
 import { createNativeId, projectEntities } from "../../../core/src/ledger/index.ts";
 import type { Fact, Ledger } from "../../../core/src/ledger/index.ts";
 import { observeClaudeFile } from "../observe/claude/index.ts";
+import { observeClaudeContext } from "../observe/claude/context.ts";
+import type { LocationResolver } from "../observe/location.ts";
 import type { ClaudeObservation } from "../observe/claude/index.ts";
 import type { FileCursor } from "../observe/files.ts";
 
 export function observeClaudeHistories(ledger: Ledger, directory: string, facts: Fact[],
   batch: <T>(operation: () => T) => T = (operation) => operation(),
-  paths?: string[], saved?: Map<string, FileCursor>): ClaudeObservation[] {
+  paths?: string[], saved?: Map<string, FileCursor>, locate?: LocationResolver): ClaudeObservation[] {
   const cursors = new Map<string, FileCursor>();
   const conversations = new Map<string, Fact[]>();
   const identities = new Map(projectEntities(facts, "conversation").map((conversation) => [
@@ -29,6 +31,16 @@ export function observeClaudeHistories(ledger: Ledger, directory: string, facts:
         conversations.set(id, history);
       }
     }
+    // 会話の記録と hook の実行は、ターンの根拠を結ぶ先と直前の状態を決めるのに使う。
+    if (fact.kind.startsWith("run.") && (fact.source === "transcript-claude" || fact.source === "hook")) {
+      const raw = (fact.payload as { conversation_id?: unknown } | null)?.conversation_id;
+      if (typeof raw !== "string") continue;
+      const id = identities.get(`conversation:${raw}`) ?? raw;
+      const history = conversations.get(id) ?? [];
+      history.push(fact);
+      conversations.set(id, history);
+      continue;
+    }
     if (!fact.kind.startsWith("conversation.")) continue;
     const id = identities.get(fact.subject) ?? fact.subject.slice("conversation:".length);
     const history = conversations.get(id) ?? [];
@@ -45,14 +57,23 @@ export function observeClaudeHistories(ledger: Ledger, directory: string, facts:
       readSince: (seq, limit) => history.filter((fact) => fact.seq > seq).slice(0, limit),
       append(input) {
         const result = ledger.append(input);
-        if (result.status === "appended" && input.kind.startsWith("conversation.")) {
+        if (result.status === "appended" && (input.kind.startsWith("conversation.") || input.kind.startsWith("run."))) {
           history.push({ ...input, seq: result.seq, fact_id: result.fact_id } as Fact);
         }
         return result;
       },
     };
     let result;
-    try { result = batch(() => observeClaudeFile(fileLedger, file, { cursor: saved?.get(resolve(file)) ?? cursors.get(resolve(file)) })); }
+    const start = saved?.get(resolve(file)) ?? cursors.get(resolve(file));
+    try {
+      result = batch(() => {
+        const observation = observeClaudeFile(fileLedger, file, { cursor: start });
+        // 発言の取り込みで読んだ行から、場所とターンの根拠を同じ取引で足す。
+        const context = observeClaudeContext(fileLedger, file, { lines: observation.lines,
+          fromStart: !start || observation.reset || start.offset === 0, ...(locate ? { locate } : {}) });
+        return { ...observation, conflicts: [...observation.conflicts, ...context.conflicts] };
+      });
+    }
     catch (error) {
       if (error instanceof Error && "code" in error && error.code === "ENOENT") return;
       throw error;

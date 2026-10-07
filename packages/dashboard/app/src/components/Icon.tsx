@@ -13,6 +13,7 @@ const PATHS = {
   fork: <><circle cx="6" cy="5.5" r="2"/><circle cx="18" cy="5.5" r="2"/><circle cx="12" cy="18.5" r="2"/><path d="M6 7.5v1.5a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3V7.5"/><path d="M12 12v4.5"/></>,
   chevronRight: <path d="m9.5 6 6 6-6 6"/>,
   chevronDown: <path d="m6 9.5 6 6 6-6"/>,
+  chevronLeft: <path d="m14.5 6-6 6 6 6"/>,
   terminal: <><path d="m5 7.5 4.5 4.5L5 16.5"/><path d="M12 17h7"/></>,
   tool: <path d="M14.7 6.3a4 4 0 0 0-5.4 5.2l-5.6 5.6a1.5 1.5 0 0 0 2.1 2.1l5.6-5.6a4 4 0 0 0 5.2-5.4l-2.5 2.5-2.1-.4-.4-2.1Z"/>,
   file: <><path d="M14 3.5H7a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8.5Z"/><path d="M14 3.5v5h5"/></>,

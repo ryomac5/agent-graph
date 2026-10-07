@@ -1,13 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
-import { FilesPage } from '../pages/files/FilesPage.tsx';
+import { WorkspacePage } from '../pages/workspace/WorkspacePage.tsx';
+import { App } from '../App.tsx';
 import { ChangesPage } from '../pages/changes/ChangesPage.tsx';
 import { detectLanguage, highlightLines, type Token } from '../pages/files/highlight.ts';
 import type { FileEntry, GitMark, ReadResult } from '../pages/files/model.ts';
 import { createStore } from '../lib/store.ts';
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 const ROOT = '/Users/me/repo';
 const FEATURE = '/Users/me/repo-feature';
@@ -58,13 +59,19 @@ function createClient() {
   }) };
 }
 function Location() { const location = useLocation(); return <output data-testid="location">{location.pathname}{location.search}</output>; }
-function setup(search = '') {
+function createTarget() {
   const target = createStore();
   target.setSnapshot({ seq: 1, generation: 1, projection: { projects: [{ id: 'repo-id', root_path: ROOT, display_name: 'repo', state: 'registered' }] } });
   target.setConnection('connected');
+  return target;
+}
+// Files の木は作業場の左の列にある。広い画面では既定で開く。
+function setup(search = '', width = 1280) {
+  vi.stubGlobal('innerWidth', width);
+  const target = createTarget();
   const client = createClient();
-  render(<MemoryRouter initialEntries={[`/p/${encodeURIComponent(ROOT)}/files${search}`]}><Routes>
-    <Route path="/p/:project/files" element={<><FilesPage target={target} client={client}/><Location/></>}/>
+  render(<MemoryRouter initialEntries={[`/p/${encodeURIComponent(ROOT)}${search}`]}><Routes>
+    <Route path="/p/:project" element={<><WorkspacePage target={target} client={client}/><Location/></>}/>
   </Routes></MemoryRouter>);
   return { client, target };
 }
@@ -90,8 +97,45 @@ describe('Files explorer', () => {
     expect(row(src).querySelector('.tree-icon')).toBeTruthy();
     expect(src.tabIndex).toBe(-1);
     expect(item('docs').tabIndex).toBe(0);
-    expect(screen.getByRole('link', { name: 'Files' }).getAttribute('aria-current')).toBe('page');
-    expect(screen.getByText('No file selected')).toBeTruthy();
+    // Files はタブではなく作業場の左の列に置く。ファイルを選ぶまでは中央に作業と会話を出す。
+    expect(screen.queryByRole('link', { name: 'Files' })).toBeNull();
+    expect(within(screen.getByRole('navigation', { name: 'Project' })).getAllByRole('link').map(link => link.textContent)).toEqual(['Project', 'Tree', 'Changes']);
+    expect(screen.queryByRole('region', { name: 'File viewer' })).toBeNull();
+    expect(screen.getByRole('region', { name: 'Tasks' })).toBeTruthy();
+  });
+
+  it('keeps the Files column on the left, collapses it at 1024 pixels and opens it on request', async () => {
+    const { client } = setup('', 1024);
+    expect(screen.queryByRole('tree', { name: 'Files' })).toBeNull();
+    expect(calls(client, 'files.list')).toEqual([]);
+    const columns = document.querySelector('.workspace-columns')!;
+    expect(columns.firstElementChild!.getAttribute('aria-label')).toBe('Files column');
+    fireEvent.click(screen.getByRole('button', { name: 'Show files' }));
+    await screen.findByRole('tree', { name: 'Files' });
+    expect(names()).toContain('README.md');
+    fireEvent.click(screen.getByRole('button', { name: 'Hide files' }));
+    expect(screen.queryByRole('tree', { name: 'Files' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Show files' })).toBeTruthy();
+  });
+
+  it('opens a deep link to a file even on a narrow screen and returns to the conversation', async () => {
+    setup('?path=README.md', 1024);
+    expect(await screen.findByRole('region', { name: 'Contents of README.md' })).toBeTruthy();
+    expect(screen.getByRole('tree', { name: 'Files' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Back to conversation' }));
+    expect(screen.queryByRole('region', { name: 'File viewer' })).toBeNull();
+    expect(location()).toBe(`/p/${encodeURIComponent(ROOT)}`);
+  });
+
+  it('moves the old Files route into the workspace with the same file and worktree', async () => {
+    vi.stubGlobal('innerWidth', 1024);
+    vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
+    const client = createClient();
+    render(<MemoryRouter initialEntries={[`/p/repo/files?path=README.md`]}><App target={createTarget()} client={client}/><Location/></MemoryRouter>);
+    expect(await screen.findByRole('region', { name: 'Contents of README.md' })).toBeTruthy();
+    expect(location()).toBe('/p/repo?path=README.md');
+    expect(screen.getByText('Project workspace')).toBeTruthy();
+    expect(calls(client, 'files.read')).toEqual([{ projectId: 'repo-id', path: 'README.md' }]);
   });
 
   it('loads each level only when a folder is expanded and hides it again on collapse', async () => {
@@ -154,7 +198,7 @@ describe('Files explorer', () => {
     expect(row(item('docs')).querySelector('.tree-changed')).toBeNull();
     fireEvent.click(row(item('gone.txt')));
     expect(await screen.findByText('Deleted file')).toBeTruthy();
-    expect(screen.getByRole('link', { name: /Open Changes/ }).getAttribute('href')).toBe(`/p/${encodeURIComponent(ROOT)}/changes`);
+    expect(within(screen.getByRole('region', { name: 'File viewer' })).getByRole('link', { name: /Open Changes/ }).getAttribute('href')).toBe(`/p/${encodeURIComponent(ROOT)}/changes`);
   });
 
   it('opens a file with line numbers and syntax colours and keeps the path in the address', async () => {
@@ -167,7 +211,7 @@ describe('Files explorer', () => {
     expect(view.querySelector('.tok-heading')?.textContent).toBe('# Title');
     expect(view.querySelector('.tok-code')?.textContent).toBe('`code`');
     expect(item('README.md').getAttribute('aria-selected')).toBe('true');
-    expect(location()).toBe(`/p/${encodeURIComponent(ROOT)}/files?path=README.md`);
+    expect(location()).toBe(`/p/${encodeURIComponent(ROOT)}?path=README.md`);
     const viewer = screen.getByRole('region', { name: 'File viewer' });
     expect(within(viewer).getByText('Markdown')).toBeTruthy();
     expect(within(viewer).getByText('3 lines')).toBeTruthy();
@@ -276,11 +320,12 @@ describe('Changes links into Files', () => {
       artifacts: [{ id: 'a1', run_id: 'r1', version: 1, repository_id: 'repo', patch_hash: 'h', attribution: 'confirmed', diff: patch }],
       runs: [{ id: 'r1', conversation_id: 'c1', cwd: FEATURE }] } });
     render(<MemoryRouter><ChangesPage target={target} client={{ command: vi.fn() }} project="repo"/></MemoryRouter>);
-    const expected = `/p/repo/files?path=src%2Fmain.ts&worktree=${encodeURIComponent(FEATURE)}`;
+    // ファイルは作業場の左の列の木で開く。Files のタブは無い。
+    const expected = `/p/repo?path=src%2Fmain.ts&worktree=${encodeURIComponent(FEATURE)}`;
     const links = screen.getAllByRole('link', { name: 'Open src/main.ts in Files' });
     expect(links).toHaveLength(2);
     for (const link of links) expect(link.getAttribute('href')).toBe(expected);
-    expect(screen.getByRole('link', { name: 'Files' }).getAttribute('href')).toBe('/p/repo/files');
+    expect(screen.queryByRole('link', { name: 'Files' })).toBeNull();
   });
 });
 

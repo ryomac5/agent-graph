@@ -26,8 +26,7 @@ const IDENTITY_BATCH_FACTS = 256;
 const LIST_TABLES = PROJECTION_TABLES.filter(table => table !== "messages" && table !== "message_memberships");
 const LIST_COLUMNS: Record<string, string> = {
   tasks: "id, name, project, state",
-  runs: "id, conversation_id, generation, state, started_ts, ended_ts, end_evidence, cause, last_evidence, last_evidence_ts, reason, repository_id, worktree_id",
-  delegations: "id, request_id, parent_run_id, role, title, attempt, state",
+  runs: "id, conversation_id, generation, state, started_ts, ended_ts, end_evidence, cause, last_evidence, last_evidence_ts, reason, repository_id, worktree_id, cwd, branch, launch, model, effort",
   artifacts: "id, run_id, version, repository_id, worktree_id, patch_hash, attribution, previous_artifact_id",
   approvals: "id, run_id, conversation_id, state, requested_ts",
   findings: "id, artifact_id, version, file, start_line, end_line, severity, state",
@@ -165,7 +164,9 @@ export class ProjectionFeed {
       this.registeredRepositories.set(location.repository_id, ids);
     }
     this.updateProjectReferences(this.prepare(`SELECT DISTINCT project FROM tasks WHERE project IS NOT NULL
-      UNION SELECT DISTINCT repository_id AS project FROM runs WHERE repository_id IS NOT NULL`).all().map(row => String(row.project)));
+      UNION SELECT DISTINCT repository_id AS project FROM runs WHERE repository_id IS NOT NULL
+      UNION SELECT DISTINCT repository_id AS project FROM conversations WHERE repository_id IS NOT NULL
+      UNION SELECT DISTINCT repository_id AS project FROM delegations WHERE repository_id IS NOT NULL`).all().map(row => String(row.project)));
     const resolved = this.prepare("SELECT * FROM api_project_resolution").all()
       .filter(row => previousReferences.get(String(row.id)) !== JSON.stringify(row)).map(row => String(row.id));
     return { upsert, remove: [...previous.keys()], resolved };
@@ -197,14 +198,23 @@ export class ProjectionFeed {
     const where = ids ? "WHERE t.id IN (SELECT value FROM json_each(?))" : "WHERE t.id > ?";
     const parameter = ids ? JSON.stringify(ids) : after;
     const limit = ids ? "" : `LIMIT ${LIST_PAGE_SIZE}`;
-    if (table === "conversations") return this.prepare(`SELECT t.id, t.provider, t.origin, t.type, t.task_id, substr(t.name, 1, ${NAME_LENGTH}) AS name,
+    if (table === "conversations") return this.prepare(`SELECT t.id, t.provider, t.origin, t.type, t.task_id, substr(t.name, 1, ${NAME_LENGTH}) AS name, t.cwd,
       r.project_id AS project, coalesce(r.state, 'unregistered') AS project_state,
       coalesce(s.message_count, 0) AS message_count, s.last_message_ts, coalesce(s.last_message_excerpt, '') AS last_message_excerpt
       FROM conversations t LEFT JOIN tasks task ON task.id = t.task_id
-      LEFT JOIN api_project_resolution r ON r.id = coalesce(task.project,
-        (SELECT repository_id FROM runs WHERE conversation_id = t.id OR conversation_id IN (
-          SELECT id FROM api_conversation_ids WHERE canonical_id = t.id) ORDER BY generation DESC LIMIT 1))
+      LEFT JOIN api_project_resolution r ON r.id = coalesce(task.project, t.repository_id,
+        (SELECT repository_id FROM runs WHERE (conversation_id = t.id OR conversation_id IN (
+          SELECT id FROM api_conversation_ids WHERE canonical_id = t.id)) AND repository_id IS NOT NULL ORDER BY generation DESC LIMIT 1))
       LEFT JOIN api_conversation_summaries s ON s.id = t.id ${where} ORDER BY t.id ${limit}`).all(parameter);
+    // 試行は画面が木と 1 行の要約に使う欄だけを配り、受け入れの出力や報告の本文は配らない。
+    if (table === "delegations") return this.prepare(`SELECT t.id, t.request_id, t.parent_run_id, t.role, t.title, t.attempt, t.state,
+      t.cwd, t.origin, t.parent, t.repository_id, t.provider, t.model, r.project_id AS project,
+      CASE WHEN json_valid(t.attempts) THEN (SELECT json_group_array(json_object('attempt', json_extract(a.value, '$.attempt'),
+        'state', json_extract(a.value, '$.state'), 'run_id', json_extract(a.value, '$.run_id'),
+        'assignment', json_object('model', json_extract(a.value, '$.assignment.model'), 'effort', json_extract(a.value, '$.assignment.effort'),
+          'executor', json_extract(a.value, '$.assignment.executor'), 'provider', json_extract(a.value, '$.assignment.provider'))))
+        FROM json_each(t.attempts) a) END AS attempts
+      FROM delegations t LEFT JOIN api_project_resolution r ON r.id = t.repository_id ${where} ORDER BY t.id ${limit}`).all(parameter);
     if (table === "tasks") return this.prepare(`SELECT t.id, substr(t.name, 1, ${NAME_LENGTH}) AS name, coalesce(r.project_id, t.project) AS project,
       coalesce(r.state, 'unregistered') AS project_state, t.state FROM tasks t
       LEFT JOIN api_project_resolution r ON r.id = t.project ${where} ORDER BY t.id ${limit}`).all(parameter);
@@ -245,10 +255,13 @@ export class ProjectionFeed {
         .all(JSON.stringify(projectChanges.resolved))) tasks.add(String(row.id));
       groups.set("tasks", tasks);
     }
-    if (!projectChanges && (groups.has("tasks") || groups.has("runs"))) this.updateProjectReferences(this.prepare(`
+    if (!projectChanges && ["tasks", "runs", "conversations", "delegations"].some(table => groups.has(table))) this.updateProjectReferences(this.prepare(`
       SELECT project FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND project IS NOT NULL
-      UNION SELECT repository_id AS project FROM runs WHERE id IN (SELECT value FROM json_each(?)) AND repository_id IS NOT NULL`)
-      .all(JSON.stringify([...groups.get("tasks") ?? []]), JSON.stringify([...groups.get("runs") ?? []])).map(row => String(row.project)));
+      UNION SELECT repository_id AS project FROM runs WHERE id IN (SELECT value FROM json_each(?)) AND repository_id IS NOT NULL
+      UNION SELECT repository_id AS project FROM conversations WHERE id IN (SELECT value FROM json_each(?)) AND repository_id IS NOT NULL
+      UNION SELECT repository_id AS project FROM delegations WHERE id IN (SELECT value FROM json_each(?)) AND repository_id IS NOT NULL`)
+      .all(...["tasks", "runs", "conversations", "delegations"].map(table => JSON.stringify([...groups.get(table) ?? []])))
+      .map(row => String(row.project)));
     const ids = groups.get("conversations") ?? new Set<string>();
     for (const id of conversations) ids.add(id);
     for (const row of this.prepare("SELECT conversation_id FROM runs WHERE id IN (SELECT value FROM json_each(?))")
@@ -262,6 +275,14 @@ export class ProjectionFeed {
       ids.add(this.conversationId(id));
     }
     if (groups.has("tasks")) for (const row of this.prepare("SELECT id FROM conversations WHERE task_id IN (SELECT value FROM json_each(?))").all(JSON.stringify([...groups.get("tasks")!]))) ids.add(String(row.id));
+    if (projectChanges?.resolved.length) {
+      for (const row of this.prepare("SELECT id FROM conversations WHERE repository_id IN (SELECT value FROM json_each(?))")
+        .all(JSON.stringify(projectChanges.resolved))) ids.add(String(row.id));
+      const delegations = groups.get("delegations") ?? new Set<string>();
+      for (const row of this.prepare("SELECT id FROM delegations WHERE repository_id IN (SELECT value FROM json_each(?))")
+        .all(JSON.stringify(projectChanges.resolved))) delegations.add(String(row.id));
+      if (delegations.size) groups.set("delegations", delegations);
+    }
     groups.set("conversations", ids);
     if (state.generation !== previous.generation || state.last_seq < previous.last_seq) {
       this.history = []; this.requiresGeneration = true; this.floor = state.last_seq;

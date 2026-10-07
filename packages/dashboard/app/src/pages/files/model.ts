@@ -1,5 +1,4 @@
 import type { Ack } from '../../lib/client.ts';
-import type { ScreenState } from '../../lib/store.ts';
 
 export type GitMark = 'modified' | 'added' | 'untracked' | 'deleted' | 'renamed';
 export interface FileEntry { name: string; path: string; kind: 'directory' | 'file'; git: GitMark[]; changed: boolean; previousPath?: string }
@@ -19,17 +18,22 @@ async function call<T>(client: FilesClient, command: string, request: FilesReque
   if (!ack.ok) throw new Error(ack.error ?? `${command} failed`);
   return ack.result as T;
 }
-export const listFiles = (client: FilesClient, request: FilesRequest) => call<ListResult>(client, 'files.list', request);
-export const readFile = (client: FilesClient, request: FilesRequest) => call<ReadResult>(client, 'files.read', request);
-export const listWorktrees = (client: FilesClient, request: FilesRequest) => call<WorktreesResult>(client, 'files.worktrees', request);
-
-/** 経路のプロジェクトは名前か場所か識別子なので、project 投影の識別子に揃える。 */
-export function resolveProjectId(state: ScreenState, project: string): string {
-  const rows = state.projection.projects ?? [];
-  const match = rows.find(row => row.id === project) ?? rows.find(row => row.root_path === project)
-    ?? rows.find(row => row.display_name === project || row.name_prefix === project);
-  return typeof match?.id === 'string' ? match.id : project;
+// 応答の形を確かめ、想定外の応答は読み込みの失敗として示す。
+function expect<T>(check: (value: Record<string, unknown>) => boolean) {
+  return (result: T): T => {
+    if (!result || typeof result !== 'object' || !check(result as Record<string, unknown>)) throw new Error('Unexpected response from the files service');
+    return result;
+  };
 }
+export const listFiles = (client: FilesClient, request: FilesRequest) => call<ListResult>(client, 'files.list', request)
+  .then(expect<ListResult>(value => Array.isArray(value.entries)));
+export const readFile = (client: FilesClient, request: FilesRequest) => call<ReadResult>(client, 'files.read', request)
+  .then(expect<ReadResult>(value => typeof value.state === 'string'));
+export const listWorktrees = (client: FilesClient, request: FilesRequest) => call<WorktreesResult>(client, 'files.worktrees', request)
+  .then(expect<WorktreesResult>(value => Array.isArray(value.worktrees)));
+
+// 経路のプロジェクトの解決は、作業場と Tree と Changes と同じ規則を使う。
+export { resolveProjectId } from '../../lib/projects.ts';
 
 /** 実行の場所が作業ツリーの下にあれば、その作業ツリーを選ぶ。 */
 export function matchWorktree(worktrees: Worktree[], wanted: string): Worktree | undefined {

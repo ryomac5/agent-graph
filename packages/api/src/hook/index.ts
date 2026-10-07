@@ -1,7 +1,9 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { classifyHookEvent } from "../../../core/src/ledger/index.ts";
 import type { FactInput, JsonValue, Ledger } from "../../../core/src/ledger/index.ts";
+import { defaultLocationResolver, type LocationResolver } from "../observe/location.ts";
 
 export const HOOK_REQUEST_TIMEOUT_MS = 5000;
 export const HOOK_PATH = "/hook-v2";
@@ -33,7 +35,7 @@ export function parseHookEvent(value: unknown): HookEvent {
   return event;
 }
 
-export function createHookFacts(event: HookEvent): FactInput[] {
+export function createHookFacts(event: HookEvent, locate: LocationResolver = defaultLocationResolver): FactInput[] {
   const source_event_id = JSON.stringify([event.session_id, event.generation, event.event_id]);
   const conversationId = `claude:${event.session_id}`;
   const runId = event.run_id ?? `${conversationId}:${event.generation}`;
@@ -54,13 +56,20 @@ export function createHookFacts(event: HookEvent): FactInput[] {
     payload: { conversation_id: conversationId, generation: event.generation,
       last_evidence: evidence, last_evidence_ts: event.source_ts } };
   if (event.hook_event_name === "SessionStart") {
+    // 開始の場所で会話と実行をプロジェクトに結ぶ。作業ツリーは本体のリポジトリになる。
+    const location = typeof event.input.cwd === "string" && event.input.cwd ? locate(event.input.cwd) : undefined;
+    const placed: FactInput[] = location ? [{ ...base, source_event_id: `${source_event_id}:location`, kind: "conversation.updated",
+      subject: `conversation:${conversationId}`, payload: { ...location } }] : [];
     return [conversation, { ...run, kind: "run.created", payload: { ...run.payload, conversation_id: conversationId,
-      generation: event.generation, state: "idle", started_ts: event.source_ts } }];
+      generation: event.generation, state: "idle", started_ts: event.source_ts, ...location } }, ...placed];
   } else if (event.hook_event_name === "SessionEnd") {
     run.payload = { ...run.payload, state: "ended", ended_ts: event.source_ts,
       end_evidence: { kind: "session_end", generation: event.generation } };
-  } else if (event.hook_event_name === "Stop") run.payload = { ...run.payload, state: "idle" };
-  else if (event.hook_event_name === "UserPromptSubmit") run.payload = { ...run.payload, state: "running" };
+  } else {
+    // ターンの開始と終わりの読み替えは core の状態の規則に従う。
+    const turn = classifyHookEvent(event.hook_event_name);
+    if (turn) run.payload = { ...run.payload, state: turn.state };
+  }
   return [conversation, run];
 }
 

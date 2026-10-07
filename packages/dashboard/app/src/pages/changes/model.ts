@@ -1,4 +1,4 @@
-import { getRegisteredProjects, OTHER_PROJECT } from '../../lib/projects.ts';
+import { createProjectMatcher } from '../../lib/projects.ts';
 import type { Row, ScreenState } from '../../lib/store.ts';
 import type { Attribution } from '../../components/diff/model.ts';
 
@@ -14,17 +14,18 @@ export function readObject(value: unknown): Row {
 export function readAttribution(value: unknown): Attribution {
   return value === 'confirmed' || value === 'inferred' || value === 'joint' ? value : 'unknown';
 }
+/** 経路のプロジェクトは表示名でも識別子でも受け、成果物、実行、会話、作業のどれかが結ぶプロジェクトで絞る。 */
 export function selectArtifacts(state: ScreenState, project?: string): Row[] {
+  const matches = project ? createProjectMatcher(state, project) : undefined;
+  const runs = new Map((state.projection.runs ?? []).map(row => [row.id, row]));
+  const conversations = new Map((state.projection.conversations ?? []).map(row => [row.id, row]));
+  const tasks = new Map((state.projection.tasks ?? []).map(row => [row.id, row]));
   return (state.projection.artifacts ?? []).filter(artifact => {
-    if (!project || artifact.repository_id === project) return true;
-    const run = state.projection.runs?.find(row => row.id === artifact.run_id);
-    const conversation = state.projection.conversations?.find(row => row.id === run?.conversation_id);
-    if (project === OTHER_PROJECT) {
-      const task = state.projection.tasks?.find(row => row.id === conversation?.task_id);
-      const id = conversation?.project ?? task?.project ?? artifact.repository_id;
-      return !getRegisteredProjects(state).some(row => row.id === id);
-    }
-    return state.projection.tasks?.some(row => row.id === conversation?.task_id && row.project === project);
+    if (!matches) return true;
+    const run = runs.get(artifact.run_id);
+    const conversation = conversations.get(run?.conversation_id);
+    const task = tasks.get(conversation?.task_id);
+    return matches([artifact.repository_id, run?.repository_id, conversation?.project, task?.project, conversation?.repository_id]);
   }).sort((a, b) => Number(a.version) - Number(b.version) || readText(a.id).localeCompare(readText(b.id)));
 }
 // 別タスクの承認を混ぜず、再開による run の変更も版の連鎖で追う。

@@ -1,4 +1,7 @@
 import type { DelegationPayload, Fact, FactPayloads, JsonValue } from "../facts.ts";
+import { isAbsolute } from "node:path";
+import { repoKey } from "../../paths.ts";
+import { projectProjects, type ProjectedProject } from "./projects.ts";
 
 export interface DelegationAttempt {
   attempt: number;
@@ -17,6 +20,48 @@ export interface DelegationProjection extends Partial<DelegationPayload> {
   attempts: DelegationAttempt[];
   parent: { confidence: "confirmed" | "unknown"; run_id?: string; conversation_id?: string };
   conflicts: string[];
+  // 委譲が属するプロジェクトのリポジトリ。試行の実行、依頼の場所、起動元、キットの記録の順で決める。
+  repository_id?: string;
+  // 最後に割り当てた実行者とモデル。割り当てがなければキットの記録のモデルを使う。
+  provider?: string;
+  model?: string;
+}
+
+function trimPath(path: string): string { return path.length > 1 ? path.replace(/[\\/]+$/, "") : path; }
+const WORKTREE_SEGMENT = /[\\/]agent-graph[\\/]worktrees[\\/]([^\\/]+)(?:[\\/]|$)/;
+/**
+ * 場所を含むプロジェクトのうち、最も深い本体の場所を持つものを返す。
+ * planner と runner の作業ツリーは <cache>/agent-graph/worktrees/<repoKey>/ に置くので、その鍵で本体に結ぶ。
+ */
+export function matchProjectPath(projects: readonly ProjectedProject[], path: string | undefined): string | undefined {
+  if (!path) return undefined;
+  const key = WORKTREE_SEGMENT.exec(path)?.[1];
+  if (key) {
+    const owners = new Set(projects.filter((project) => project.root_path && project.repository_id && isAbsolute(project.root_path)
+      && repoKey(trimPath(project.root_path)) === key).map((project) => project.repository_id!));
+    if (owners.size === 1) return [...owners][0];
+  }
+  const target = trimPath(path);
+  let best: ProjectedProject | undefined;
+  for (const project of projects) {
+    if (!project.root_path || !project.repository_id) continue;
+    const root = trimPath(project.root_path);
+    if (target !== root && !target.startsWith(`${root}/`)) continue;
+    if (!best || root.length > trimPath(best.root_path!).length
+      || root.length === trimPath(best.root_path!).length && project.id < best.id) best = project;
+  }
+  return best?.repository_id;
+}
+/** キットの会話の名前は <前置き>-<番号> である。前置きが一致するプロジェクトが 1 つのときだけ結ぶ。 */
+function matchProjectPrefix(projects: readonly ProjectedProject[], session: unknown): string | undefined {
+  if (typeof session !== "string") return undefined;
+  const prefix = /^(.+)-\d+$/.exec(session)?.[1];
+  const matches = new Set(projects.filter((project) => prefix && project.name_prefix === prefix && project.repository_id)
+    .map((project) => project.repository_id!));
+  return matches.size === 1 ? [...matches][0] : undefined;
+}
+function readRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
 // 訂正の部分変更は元の内容を引き継ぎ、取り消された事実自体は適用しない。
@@ -74,7 +119,9 @@ function selectRequest(payload: Partial<DelegationPayload>): Partial<DelegationP
 export function projectDelegations(facts: readonly Fact[]): DelegationProjection[] {
   const active = prepareProjectionFacts(facts);
   const conversations = projectEntityRecords<FactPayloads["conversation.created"]>(facts, "conversation");
-  const runs = new Set(projectEntityRecords<FactPayloads["run.created"]>(facts, "run").map((run) => run.id));
+  const runRecords = new Map(projectEntityRecords<FactPayloads["run.created"]>(facts, "run").map((run) => [run.id, run]));
+  const runs = new Set(runRecords.keys());
+  const projects = projectProjects(facts);
   const records = new Map<string, DelegationProjection>();
   const subjects = new Map<string, string>();
   const requests = new Map<string, string>();
@@ -134,6 +181,11 @@ export function projectDelegations(facts: readonly Fact[]): DelegationProjection
     for (const key of ["state", "run_id", "assignment", "verification", "review", "result"] as const) {
       if (payload[key] !== undefined) Object.assign(attempt, { [key]: payload[key] });
     }
+    const assignment = readRecord(payload.assignment);
+    if (typeof assignment.model === "string" && assignment.model) {
+      record.model = assignment.model;
+      if (typeof assignment.executor === "string" && assignment.executor) record.provider = assignment.executor;
+    }
   }
   for (const record of records.values()) {
     record.attempts.sort((left, right) => left.attempt - right.attempt);
@@ -142,6 +194,11 @@ export function projectDelegations(facts: readonly Fact[]): DelegationProjection
     record.state = latest?.state ?? "received";
     if (latest?.result !== undefined) record.result = latest.result;
     record.conflicts.sort();
+    const repository = locateDelegation(record);
+    if (repository) record.repository_id = repository;
+    const kit = readRecord((record as unknown as Record<string, unknown>).kit);
+    // キットの codex_start は Codex への依頼である。
+    if (!record.model && typeof kit.model === "string" && kit.model) { record.model = kit.model; record.provider ??= "codex"; }
     const requestFact = creations.find((fact) => (fact.payload as Partial<DelegationPayload> | null)?.request_id === record.request_id);
     if (requestFact?.confidence !== "confirmed") continue;
     if (record.parent_run_id) {
@@ -153,4 +210,19 @@ export function projectDelegations(facts: readonly Fact[]): DelegationProjection
     }
   }
   return [...records.values()].sort((left, right) => left.id.localeCompare(right.id));
+  function locateDelegation(record: DelegationProjection): string | undefined {
+    for (const attempt of [...record.attempts].reverse()) {
+      const repository = attempt.run_id ? runRecords.get(attempt.run_id)?.repository_id : undefined;
+      if (repository) return repository;
+    }
+    const kit = readRecord((record as unknown as Record<string, unknown>).kit);
+    const origin = record.origin;
+    const originConversation = origin ? conversations.find((conversation) => conversation.provider === origin.provider
+      && conversation.native_id === origin.native_id && conversation.repository_id) : undefined;
+    return matchProjectPath(projects, record.cwd)
+      ?? originConversation?.repository_id
+      ?? matchProjectPath(projects, typeof kit.file === "string" ? kit.file : undefined)
+      ?? (record.parent_run_id ? runRecords.get(record.parent_run_id)?.repository_id : undefined)
+      ?? matchProjectPrefix(projects, kit.session);
+  }
 }

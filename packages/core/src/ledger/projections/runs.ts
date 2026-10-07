@@ -1,5 +1,6 @@
 import type { Fact, JsonValue, RunPayload } from "../facts.ts";
 import { orderActiveFacts } from "./connections.ts";
+import { rejectUnobservedLiveState } from "../turns.ts";
 
 // ホストと観測側は、この構造を end_evidence に正規化して追記する。
 export type EndEvidence =
@@ -63,7 +64,7 @@ export function projectRuns(facts: readonly Fact[]): RunProjection[] {
       id: `${conversationId}:${generation}`, conversation_id: conversationId, generation, state: "unknown",
       reason: "missing_state_evidence",
     };
-    for (const field of ["started_ts", "base_sha", "pid", "start_fingerprint", "repository_id", "worktree_id", "cwd", "branch"] as const) {
+    for (const field of ["started_ts", "base_sha", "pid", "start_fingerprint", "repository_id", "worktree_id", "cwd", "branch", "model", "effort"] as const) {
       const value = payload[field];
       if (value !== undefined) Object.assign(run, { [field]: value });
     }
@@ -71,7 +72,12 @@ export function projectRuns(facts: readonly Fact[]): RunProjection[] {
     if (launch !== undefined) run.launch = launch;
     const evidence = readObject(payload.end_evidence);
     const terminal = run.state === "ended" || run.state === "failed";
-    if (payload.state && !terminal) {
+    // ターンの根拠のない live な状態は、状態の規則に従って不明にする。
+    const unobserved = rejectUnobservedLiveState(fact);
+    if (payload.state && !terminal && unobserved) {
+      run.state = "unknown";
+      run.reason = unobserved;
+    } else if (payload.state && !terminal) {
       if (payload.state === "ended" || payload.state === "failed") {
         if (evidence && confirmEnd(fact, run, evidence)) {
           const interrupted = fact.source === "host-claude" && evidence.kind === "host_exit"

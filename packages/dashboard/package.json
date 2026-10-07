@@ -3,7 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test \"test/**/*.test.ts\""
+    "test": "node --test \"test/**/*.test.ts\"",
+    "build:app": "vite build --configLoader native",
+    "dev:app": "vite --configLoader native",
+    "test:app": "vitest run --configLoader native"
   },
   "devDependencies": {
     "react": "19.3.0",

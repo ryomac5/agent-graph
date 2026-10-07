@@ -9,7 +9,9 @@ import { DEFAULT_WS_PORT, startWebSocketServer } from "./ws/index.ts";
 import { pollObservation } from "./service/poll.ts";
 import { runWatchCli, WATCH_HELP } from "./watch/index.ts";
 
-const HELP = "Usage: agent-graph-api ingest --once | migrate --from <path> | rebuild | serve [--db <path>] [--port <port>] [--runner-socket <path>] [--no-observe]" + "\n" + WATCH_HELP;
+import { DEFAULT_DASHBOARD_PORT, startStaticServer } from "./static/index.ts";
+
+const HELP = "Usage: agent-graph-api ingest --once | migrate --from <path> | rebuild | serve [--db <path>] [--port <port>] [--dashboard-port <port>] [--runner-socket <path>] [--no-observe]" + "\n" + WATCH_HELP;
 
 function listDatabases(path: string, excludedPaths: Set<string>): string[] {
   if (statSync(path).isFile()) return excludedPaths.has(realpathSync(path)) ? [] : [path];
@@ -29,6 +31,7 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
   let dbPath: string | undefined;
   let from: string | undefined;
   let port = DEFAULT_WS_PORT;
+  let dashboardPort = DEFAULT_DASHBOARD_PORT;
   let runnerPath: string | undefined;
   let once = false;
   let observe = true;
@@ -36,16 +39,18 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
     const flag = flags[index];
     if (flag === "--no-observe" && command === "serve") { observe = false; continue; }
     if (flag === "--once" && command === "ingest") { once = true; continue; }
-    if (!["--db", "--db-path", "--state-dir", "--from", "--port", "--runner-socket"].includes(flag)) throw new TypeError(`Unknown option: ${flag}`);
+    if (!["--db", "--db-path", "--state-dir", "--from", "--port", "--dashboard-port", "--runner-socket"].includes(flag)) throw new TypeError(`Unknown option: ${flag}`);
     const value = flags[++index];
     if (!value || value.startsWith("--")) throw new TypeError(`Missing value for ${flag}`);
     if (flag === "--db" || flag === "--db-path") dbPath = resolve(value);
     else if (flag === "--state-dir") dbPath = join(resolve(value), "agent-graph.db");
     else if (flag === "--from" && command === "migrate") from = resolve(value);
     else if (flag === "--runner-socket" && command === "serve") runnerPath = resolve(value);
-    else if (flag === "--port" && command === "serve") {
-      port = Number(value);
-      if (!Number.isSafeInteger(port) || port < 0 || port > 65535) throw new TypeError("Invalid port");
+    else if ((flag === "--port" || flag === "--dashboard-port") && command === "serve") {
+      const parsed = Number(value);
+      if (!Number.isSafeInteger(parsed) || parsed < 0 || parsed > 65535) throw new TypeError("Invalid port");
+      if (flag === "--dashboard-port") dashboardPort = parsed;
+      else port = parsed;
     } else throw new TypeError(`Option ${flag} is not available for ${command}`);
   }
   if (command === "ingest" && !once) throw new TypeError("ingest requires --once");
@@ -68,16 +73,18 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
       const endpoint = join(service.outbox, ".endpoint");
       let observationTimer: ReturnType<typeof setInterval> | undefined;
       let websocket: Awaited<ReturnType<typeof startWebSocketServer>> | undefined;
+      let dashboard: Awaited<ReturnType<typeof startStaticServer>> | undefined;
       let stop: () => void = () => {};
       try {
         websocket = await startWebSocketServer(service, { port, runnerPath });
+        dashboard = await startStaticServer({ port: dashboardPort, upstream: websocket });
         mkdirSync(service.outbox, { recursive: true, mode: 0o700 });
         const temporary = join(service.outbox, `.endpoint-${process.pid}.tmp`);
         const destination = JSON.stringify({ url: hook.url, token: hook.token });
         writeFileSync(temporary, destination, { mode: 0o600 });
         renameSync(temporary, endpoint);
         console.log(JSON.stringify({ ...report, hook_url: hook.url, hook_endpoint_file: endpoint, ws_url: websocket.wsUrl, snapshot_url: `${websocket.url}/snapshot`,
-          ws_token: websocket.token, db: service.dbPath }));
+          dashboard_url: dashboard.url, ws_token: websocket.token, db: service.dbPath }));
         await new Promise<void>((resolveStop, reject) => {
           stop = resolveStop;
           process.once("SIGINT", stop);
@@ -89,6 +96,7 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
         });
       } finally {
         clearInterval(observationTimer);
+        await dashboard?.close();
         await websocket?.close();
         process.removeListener("SIGINT", stop);
         process.removeListener("SIGTERM", stop);

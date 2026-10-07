@@ -46,6 +46,11 @@ function blockText(block: Row): string {
  */
 export function classifyClaudeRecord(row: Row): TurnEvidence | undefined {
   const turnId = readText(row.uuid) ?? null;
+  if (row.type === "attachment") {
+    // 子のエージェントが手を戻したときと、ターンが止まったときの hook の記録は、ターンの終わりの印である。
+    const hook = readText(readObject(row.attachment).hookEvent);
+    return hook === "SubagentStop" || hook === "Stop" ? { state: "idle", kind: "turn_completed", turn_id: turnId } : undefined;
+  }
   if (row.type === "system") {
     // ターンの所要時間の記録は、ターンが終わった印である。
     return row.subtype === "turn_duration" ? { state: "idle", kind: "turn_completed", turn_id: turnId } : undefined;
@@ -66,6 +71,10 @@ export function classifyClaudeRecord(row: Row): TurnEvidence | undefined {
   }
   const model = readText(message.model);
   const observed = model && model !== "<synthetic>" ? { model } : {};
+  // 子のエージェントは SubagentHandback で親へ結果を返して終わる。
+  if (content.some((block) => block.type === "tool_use" && block.name === "SubagentHandback")) {
+    return { state: "idle", kind: "turn_completed", turn_id: turnId, ...observed };
+  }
   if (content.some((block) => block.type === "tool_use" || block.type === "server_tool_use")) {
     return { state: "running", kind: "tool_call", turn_id: turnId, ...observed };
   }

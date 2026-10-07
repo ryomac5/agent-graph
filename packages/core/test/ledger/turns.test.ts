@@ -103,3 +103,11 @@ test("投影の中で組んだ値の未定義の欄は、JSON と同じく省く
   assert.equal(serializeValue(value), '{"attempt":1,"items":[null,2]}');
   assert.deepEqual(JSON.parse(serializeValue(value)), { attempt: 1, items: [null, 2] });
 });
+
+test("子のエージェントの SubagentHandback と、SubagentStop と Stop の hook の記録はターンの終わりである", () => {
+  assert.equal(classifyClaudeRecord({ type: "assistant", uuid: "a", message: { content: [{ type: "tool_use", name: "SubagentHandback", input: {} }] } })?.state, "idle");
+  assert.equal(classifyClaudeRecord({ type: "attachment", uuid: "b", attachment: { type: "hook_success", hookEvent: "SubagentStop" } })?.state, "idle");
+  assert.equal(classifyClaudeRecord({ type: "attachment", uuid: "c", attachment: { type: "hook_success", hookEvent: "Stop" } })?.state, "idle");
+  assert.equal(classifyClaudeRecord({ type: "attachment", uuid: "d", attachment: { type: "hook_success", hookEvent: "PostToolUse" } }), undefined);
+  assert.equal(classifyClaudeRecord({ type: "assistant", uuid: "e", message: { content: [{ type: "tool_use", name: "Bash", input: {} }] } })?.state, "running");
+});

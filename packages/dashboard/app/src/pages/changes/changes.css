@@ -50,10 +50,11 @@
 .git-commit-meta { color: var(--text-3); font-size: var(--text-xs); }
 .git-ref { flex-shrink: 0; max-width: 110px; overflow: hidden; text-overflow: ellipsis; padding: 0 5px; border: 1px solid var(--border-strong); border-radius: var(--radius-xs); background: var(--accent-soft); color: var(--accent-text); font-size: 10px; }
 .git-tag { background: var(--surface-2); color: var(--text-2); }
-.git-commit-list > li { display: flex; align-items: center; }
+.git-commit-list > li { position: relative; }
 .git-commit-list .git-commit-choice { flex: 1; min-width: 0; }
-.git-conversation-badges { display: grid; gap: 3px; padding-right: var(--space-2); max-width: 40%; max-height: 56px; overflow: auto; }
-.git-conversation-badge { max-width: 100%; cursor: pointer; }
+/* 会話の印は 2 行目の右に置き、1 行目の件名に幅を全部渡す。 */
+.git-conversation-badges { position: absolute; right: var(--space-2); bottom: 7px; display: flex; gap: 3px; max-width: 55%; overflow: hidden; }
+.git-conversation-badge { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .git-conversation-badge[aria-pressed='true'] { border-color: var(--accent); }
 .git-files-pane details > ul { padding-left: var(--space-3); }
 .git-files-pane summary { padding: 6px var(--space-3); color: var(--text-2); overflow-wrap: anywhere; cursor: pointer; }

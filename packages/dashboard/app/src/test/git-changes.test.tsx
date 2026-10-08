@@ -115,8 +115,9 @@ it.each(['en', 'ja'] as const)('shows conversation badges and toggles a URL filt
   const filter = language === 'en' ? 'Filter by conversation' : '会話で絞り込む';
   const rootBadge = await screen.findByRole('button', { name: `${filter}: agent-graph-20261001` });
   const childBadge = screen.getByRole('button', { name: `${filter}: Improve changes` });
-  expect(screen.getByRole('button', { name: /Root change/ }).textContent).toContain('agent-graph-20261001');
-  expect(screen.getByRole('button', { name: /Child change/ }).textContent).toContain('Improve changes');
+  // 会話の名前は件名の行ではなく、同じ行の 2 行目の印に出す。件名に幅を渡すためである。
+  expect(screen.getByRole('button', { name: /Root change/ }).closest('li')!.textContent).toContain('agent-graph-20261001');
+  expect(screen.getByRole('button', { name: /Child change/ }).closest('li')!.textContent).toContain('Improve changes');
   expect(screen.getByRole('button', { name: /Other change/ }).textContent).toContain('Other author');
   fireEvent.click(childBadge);
   expect(screen.queryByRole('button', { name: /Root change/ })).toBeNull();

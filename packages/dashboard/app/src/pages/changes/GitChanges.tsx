@@ -218,7 +218,7 @@ export function GitChanges({ client, projectId, worktree, enabled, language = 'e
           <button data-git-source className="git-commit-choice" aria-pressed={hash === value.hash} onClick={() => selectSource(value.hash)} title={value.subject}>
             <CommitLines row={graph.rows[index]} columns={graph.columns}/>
             <span className="git-commit-copy"><span className="git-commit-subject">{(value.branches ?? []).map(name => <span key={`branch:${name}`} className="git-ref">{name}</span>)}{(value.tags ?? []).map(name => <span key={`tag:${name}`} className="git-ref git-tag">{name}</span>)}<strong>{value.subject}</strong></span>
-              <span className="git-commit-meta">{value.shortHash} · {value.conversation_ids?.length ? value.conversation_ids.map(nameConversation).join(', ') : value.author} · <time dateTime={value.time} title={value.time}>{formatWhen(value.time)}</time></span></span>
+              <span className="git-commit-meta">{value.shortHash} · {value.conversation_ids?.length ? '' : `${value.author} · `}<time dateTime={value.time} title={value.time}>{formatWhen(value.time, language)}</time></span></span>
           </button>
           {!!value.conversation_ids?.length && <span className="git-conversation-badges">{value.conversation_ids.map(id =>
             <button key={id} className="git-ref git-conversation-badge" aria-label={`${w.filter}: ${nameConversation(id)}`} title={nameConversation(id)} aria-pressed={agent === id} onClick={() => toggleAgent(id)}>{nameConversation(id)}</button>)}</span>}

@@ -121,6 +121,53 @@ for (const sample of readdirSync(SAMPLES, { withFileTypes: true }).filter((entry
 const TS = "2026-01-01T00:00:00Z";
 const BASE = { source: "host-codex", source_ts: TS, confidence: "confirmed" } as const;
 
+test("キットの別名だけで名前を投影し、到着順・差分反映・版 8 からの移行で事実を増やさない", (t) => {
+  const conversation: FactInput = { ...BASE, source_event_id: "kit-conversation", kind: "conversation.created",
+    subject: 'conversation:["claude","kit-session"]',
+    payload: { provider: "claude", native_id: "kit-session", origin: "observed", type: "interactive" } };
+  const alias: FactInput = { ...BASE, source: "kit", source_event_id: "kit-alias", kind: "alias.created", subject: "alias:kit-alias",
+    payload: { entity_id: '["claude","kit-session"]', kind: "kit", name: "example-001" } };
+  for (const inputs of [[conversation, alias], [alias, conversation]]) {
+    const { writer, database } = openTestLedger(t);
+    let seq = 0;
+    for (const input of inputs) {
+      writer.append(input);
+      seq = applyIncremental(database, seq).last_seq;
+    }
+    assert.equal(database.prepare("SELECT kit_name FROM conversations").get()!.kit_name, "example-001");
+    const tables = readTables(database);
+    rebuild(database);
+    assert.deepEqual(readTables(database), tables);
+    const facts = writer.readSince(0, Number.MAX_SAFE_INTEGER);
+    assert.equal(facts.length, 2);
+    assert.deepEqual(project([...facts].reverse()), project(facts));
+
+    const directory = mkdtempSync(join(tmpdir(), "ledger-kit-v8-"));
+    const path = join(directory, "ledger.sqlite");
+    database.prepare("VACUUM INTO ?").run(path);
+    const legacy = new DatabaseSync(path);
+    legacy.exec(`UPDATE schema_version SET version = 8;
+      DELETE FROM fact_projection_dependencies WHERE projection = 'conversations' AND
+        (subject LIKE 'alias:%' OR key LIKE 'conversation-alias:%');
+      UPDATE conversations SET kit_name = NULL;
+      UPDATE projection_records SET data = json_remove(data, '$.kit_name') WHERE projection = 'conversations';`);
+    legacy.close();
+    const migrated = openLedger(path);
+    const projection = new DatabaseSync(path);
+    t.after(() => { projection.close(); migrated.close(); rmSync(directory, { recursive: true }); });
+    assert.deepEqual(migrated.readSince(0, Number.MAX_SAFE_INTEGER), facts);
+    assert.deepEqual(readTables(projection), tables);
+    assert.equal(JSON.parse(String(projection.prepare("SELECT data FROM projection_records WHERE projection = 'conversations'").get()!.data)).kit_name, "example-001");
+    migrated.append({ ...alias, source_event_id: "kit-new-name", subject: "alias:kit-new-name",
+      source_ts: "2026-01-02T00:00:00Z", payload: { ...alias.payload, name: "example-002" } });
+    applyIncremental(projection, seq);
+    assert.equal(projection.prepare("SELECT kit_name FROM conversations").get()!.kit_name, "example-002");
+    const updated = readTables(projection);
+    rebuild(projection);
+    assert.deepEqual(readTables(projection), updated);
+  }
+});
+
 // 版 7 で足した列。版 6 以前の台帳を再現するときに落とす。
 const VERSION_8_COLUMNS = [["conversations", "kit_name"], ["conversations", "created_ts"], ["delegations", "kit"]] as const;
 const VERSION_7_COLUMNS = [["conversations", "cwd"], ["conversations", "repository_id"], ["runs", "model"], ["runs", "effort"],
@@ -448,7 +495,7 @@ test("版 4 の台帳を開くと、名前の規則を既存の発言に当て�
   const projection = new DatabaseSync(path);
   t.after(() => { projection.close(); migrated.close(); rmSync(directory, { recursive: true }); });
   assert.equal(projection.prepare("SELECT version FROM schema_version WHERE id = 1").get()!.version, SCHEMA_VERSION);
-  assert.deepEqual(projection.prepare("SELECT version FROM migration_steps ORDER BY rowid").all().map(row => row.version), [5, 6, 7, 8]);
+  assert.deepEqual(projection.prepare("SELECT version FROM migration_steps ORDER BY rowid").all().map(row => row.version), [5, 6, 7, 8, 9]);
   assert.deepEqual(projection.prepare("SELECT id, name, name_is_provisional, first_request_excerpt FROM conversations ORDER BY id").all()
     .map((row) => ({ ...row })), [
     { id: '["codex","c"]', name: "会話の名前を直す。", name_is_provisional: 1, first_request_excerpt: "会話の名前を直す。" },
@@ -457,7 +504,7 @@ test("版 4 の台帳を開くと、名前の規則を既存の発言に当て�
   assert.deepEqual(readTables(projection), expected);
 });
 
-test("版 6 の台帳は版 7 と版 8 の移行だけを通し、会話の名前の当て直しを繰り返さない", (t) => {
+test("版 6 の台帳は版 7 以降の移行だけを通し、会話の名前の当て直しを繰り返さない", (t) => {
   const { writer, database } = openTestLedger(t);
   for (const input of ALL_ENTITIES) writer.append(input);
   writer.append({ ...BASE, source_event_id: "v5-location", kind: "conversation.updated", subject: "conversation:c",
@@ -483,9 +530,9 @@ test("版 6 の台帳は版 7 と版 8 の移行だけを通し、会話の名�
   const migrated = openLedger(path, { storageScope: "full_diff" });
   const projection = new DatabaseSync(path);
   t.after(() => { projection.close(); migrated.close(); rmSync(directory, { recursive: true }); });
-  assert.equal(SCHEMA_VERSION, 8);
-  assert.deepEqual(projection.prepare("SELECT version FROM migration_steps ORDER BY rowid").all().map(row => row.version), [7, 8]);
-  assert.equal(projection.prepare("SELECT version FROM schema_version WHERE id = 1").get()!.version, 8);
+  assert.equal(SCHEMA_VERSION, 9);
+  assert.deepEqual(projection.prepare("SELECT version FROM migration_steps ORDER BY rowid").all().map(row => row.version), [7, 8, 9]);
+  assert.equal(projection.prepare("SELECT version FROM schema_version WHERE id = 1").get()!.version, SCHEMA_VERSION);
   assert.equal(projection.prepare("SELECT count(*) AS count FROM message_name_inputs WHERE id = 'sentinel'").get()!.count, 1);
   assert.deepEqual({ ...projection.prepare("SELECT cwd, repository_id FROM conversations").get() },
     { cwd: "/repo", repository_id: "repo" });

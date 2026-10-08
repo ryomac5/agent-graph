@@ -23,7 +23,7 @@ export function projectInitial(facts: Fact[]) {
   const messages = projectMessages(collect("message", "message_membership", "conversation"));
   return {
     ...projectNames(collect("task", "alias")),
-    ...projectInitialConversations(collect("task", "conversation", "relation"), messages),
+    ...projectInitialConversations(collect("task", "conversation", "relation", "alias"), messages),
     ...messages,
     runs: projectRuns(collect("run")), connections: projectConnections(collect("connection")),
     delegations: projectDelegations(collect("delegation", "conversation", "run", "project")),

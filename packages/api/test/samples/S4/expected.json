@@ -3,7 +3,7 @@
     "conversation.created": 4,
     "message.created": 6,
     "message_membership.created": 8,
-    "relation.created": 1
+    "relation.created": 2
   },
   "conversations": [
     [
@@ -41,6 +41,11 @@
       "compacted",
       "parent",
       "parent"
+    ],
+    [
+      "delegated",
+      "parent",
+      "agent-helper"
     ]
   ],
   "initialFacts": [

@@ -3,7 +3,7 @@ import type { Fact } from "../facts.ts";
 export const PROJECTION_ENTITIES = {
   tasks: ["task"],
   // 会話の本体は会話と作業、仮名は索引付きの有効な発言候補に依存する。
-  conversations: ["conversation", "task"],
+  conversations: ["conversation", "task", "alias"],
   relations: ["relation", "conversation"],
   runs: ["run"],
   connections: ["connection"],
@@ -62,6 +62,13 @@ export function collectProjectionDependencies(fact: Fact): ProjectionDependency[
     }
     if (entity === "conversation" && projection === "conversations") {
       need("task", payload.task_id);
+      add("needs", `conversation-alias:${id}`);
+      if (typeof payload.provider === "string" && typeof payload.native_id === "string") {
+        add("needs", `conversation-alias:${JSON.stringify([payload.provider, payload.native_id])}`);
+      }
+    }
+    if (entity === "alias" && projection === "conversations" && typeof payload.entity_id === "string") {
+      add("offers", `conversation-alias:${payload.entity_id}`);
     }
     if (entity === "message" && projection === "message_memberships") {
       add("needs", `membership-message:${id}`);

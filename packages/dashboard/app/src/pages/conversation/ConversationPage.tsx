@@ -158,6 +158,8 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const [detailsOpen, setDetailsOpen] = useState(false);
   // 入力欄を使おうとするまでは、入力の準備に関わる注意を出さない。
   const [engaged, setEngaged] = useState(false);
+  // 端末の会話は見るだけで始め、利用者が続けると決めたときだけ入力欄を出す。
+  const [continueHere, setContinueHere] = useState(false);
   const [handoffBlocked, setHandoffBlocked] = useState(false);
   const external = conversation?.origin !== 'managed';
   const active = ACTIVE_STATES.includes(readText(run?.state));
@@ -359,6 +361,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
           reason={readText(run?.cause ?? run?.reason) || undefined} elapsed={elapsed ? `${t(status.startsWith('waiting') ? 'waiting' : 'elapsed')} ${elapsed}` : undefined}/>
         {provider && <span className="conv-agent truncate" title={[providerName(provider), shownModel].filter(Boolean).join(' · ')}>{agentName(provider, shownModel)}</span>}
         <span className="spacer"/>
+        {external && !continueHere && <button type="button" className="btn btn-ghost btn-sm" onClick={() => setContinueHere(true)}>Continue here</button>}
         <button type="button" className="btn btn-ghost btn-sm conv-details-toggle" aria-expanded={detailsOpen} aria-controls="conversation-details"
           onClick={() => setDetailsOpen(value => !value)}>{t('details')}<Icon name="chevronDown" size={14} className="caret"/></button>
       </div>
@@ -407,7 +410,8 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
       {deltas.map(([key, delta]) => <Message key={key} language={language} streaming sender={agentSender} showName={nameShown(agentSender)}
         row={{ id: delta.messageId ?? key, role: 'assistant', body: delta.text, body_state: 'stored' } satisfies Row}/>)}
     </div></div>
-    <footer className="composer" onFocusCapture={() => setEngaged(true)} onPointerDownCapture={() => setEngaged(true)}>
+    {/* 端末で動いている会話は見るだけである。Continue here を押したときだけ入力欄を出す。 */}
+    {(!external || continueHere) && <footer className="composer" onFocusCapture={() => setEngaged(true)} onPointerDownCapture={() => setEngaged(true)}>
       {(error || pending || nextConversation || modelsError && engaged || handoffBlocked) && <div className="composer-status">
         {error && <p role="alert" className="status-line danger"><Icon name="alert" size={14}/>{error}</p>}
         {pending && <p role="status" className="status-line">{t('pending')}</p>}
@@ -456,7 +460,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
         </div>
       </div>
       {(engaged && (!model || !cwd.trim()) || provider === 'codex') && <p className="composer-hint">{provider === 'codex' && <span>{t(hint)}</span>}{engaged && (!model || !cwd.trim()) && <span>{t('launchReady')}</span>}</p>}
-    </footer>
+    </footer>}
   </section>;
 }
 

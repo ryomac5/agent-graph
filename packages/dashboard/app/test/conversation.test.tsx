@@ -22,6 +22,9 @@ function setup({ provider = 'codex', origin = 'managed', status = 'idle', projec
     result: command === 'list_models' ? [{ model: 'model-a', displayName: 'Model A', effort: 'medium' }, { model: 'model-b', displayName: 'Model B', effort: 'low' }] : {} }));
   const client = supplied ?? { command };
   render(<MemoryRouter initialEntries={['/c/c']}><ConversationPage conversationId="c" target={store} client={client}/></MemoryRouter>);
+  // 端末の会話は、Continue here を押したときだけ入力欄が出る。
+  const continueHere = screen.queryByRole('button', { name: 'Continue here' });
+  if (continueHere) fireEvent.click(continueHere);
   return { store, command };
 }
 async function waitModels() { await screen.findByRole('option', { name: 'Model B' }); }
@@ -422,4 +425,16 @@ it('titles the conversation with the projected name and never derives it from me
   expect(document.querySelector('.conv-title')?.textContent).toBe('Codex · Jan 5 10:46');
   expect(screen.queryByRole('heading', { name: /multi_agent_role/ })).toBeNull();
   expect(store.getSnapshot().projection.conversations.map(row => row.name)).toEqual([null]);
+});
+
+it('端末の会話は見るだけで始め、Continue here を押すまで入力欄を出さない', () => {
+  const store = createStore();
+  store.setSnapshot({ seq: 1, generation: 0, projection: {
+    conversations: [{ id: 'c', name: 'Terminal', provider: 'claude', origin: 'observed', history_format: 'jsonl' }],
+    runs: [{ id: 'r', conversation_id: 'c', generation: 1, state: 'running', started_ts: '2026-10-07T00:00:00Z' }], messages: [], message_memberships: [] } });
+  store.setConnection('connected');
+  render(<MemoryRouter initialEntries={['/c/c']}><ConversationPage conversationId="c" target={store} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'x', ok: true, result: [] })) }}/></MemoryRouter>);
+  expect(document.querySelector('.composer')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Continue here' }));
+  expect(document.querySelector('.composer')).not.toBeNull();
 });

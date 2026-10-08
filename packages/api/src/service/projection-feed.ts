@@ -30,7 +30,8 @@ const LIST_COLUMNS: Record<string, string> = {
   tasks: "id, name, project, state",
   runs: "id, conversation_id, generation, state, started_ts, ended_ts, end_evidence, cause, last_evidence, last_evidence_ts, reason, repository_id, worktree_id, cwd, branch, launch, model, effort",
   artifacts: "id, run_id, version, repository_id, worktree_id, patch_hash, attribution, previous_artifact_id",
-  approvals: "id, run_id, conversation_id, state, requested_ts",
+  // 承認は、何を許すかの要求の中身と、選べる判断がないと答えられない。
+  approvals: "id, run_id, connection_id, conversation_id, request_id, state, available_decisions, decision, request, reason, artifact_id, patch_hash, requested_ts",
   findings: "id, artifact_id, version, file, start_line, end_line, severity, state",
 };
 function decodeFacts(rows: Record<string, unknown>[]): Fact[] {

@@ -231,7 +231,7 @@ it('keeps reviewers in the selected root tree and out of the root list', () => {
  expect(group.querySelectorAll('.root-row')).toHaveLength(1); expect(within(group).getByRole('button', { name: /Codex · review · Running$/ })).toBeTruthy();
  expect(runLabel(target.getSnapshot(), 'review-run')).toBe('Review of Browser fixture task · Run 1'); view.unmount();
  render(<MemoryRouter><WorkspacePage target={target} client={client} project={REPO}/></MemoryRouter>);
- expect(within(screen.getByRole('region', { name: 'Conversations' })).getAllByRole('button')).toHaveLength(1); expect(screen.getByRole('button', { name: /Codex · review · Running$/ })).toBeTruthy();
+ expect(within(screen.getByRole('region', { name: 'Conversations' })).getAllByRole('link')).toHaveLength(1); expect(screen.getByRole('button', { name: /Codex · review · Running$/ })).toBeTruthy();
 });
 it('shows the projected unknown state once when root execution evidence is absent', () => {
  const target = setup(); target.setSnapshot({ seq: 2, generation: 1, projection: projection({ roots: [{ id: 'external', name: 'External root', project: REPO, state: 'unknown', last_activity_ts: null, conversation_ids: ['external'], running_children: 0, total_children: 0 }], conversations: [{ id: 'external', origin: 'observed', provider: 'codex' }], runs: [], tasks: [], messages: [], message_memberships: [], approvals: [] }) });

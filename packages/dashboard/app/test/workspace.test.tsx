@@ -54,9 +54,9 @@ it('interrupts the selected root and keeps projected state until a patch arrives
  const target = createActivityStore(); const snapshot = target.getSnapshot();
  target.setSnapshot({ ...snapshot, projection: { ...snapshot.projection, conversations: [...snapshot.projection.conversations, { id: 'parallel', provider: 'claude', origin: 'managed', name: 'Parallel child' }] } });
  render(<MemoryRouter><WorkspacePage project="/repo/alpha" target={target} client={createCommandClient()}/></MemoryRouter>);
- const roots = screen.getByRole('region', { name: 'Conversations' }); expect(within(roots).getAllByRole('button')).toHaveLength(2);
+ const roots = screen.getByRole('region', { name: 'Conversations' }); expect(within(roots).getAllByRole('link')).toHaveLength(2);
  expect(within(roots).queryByText('Parallel child')).toBeNull();
- fireEvent.click(within(roots).getByRole('button', { name: /Investigate latency/ })); expect(screen.getByText('Investigate latency. Then report.')).toBeTruthy();
+ fireEvent.click(within(roots).getByRole('link', { name: /Investigate latency/ })); expect(screen.getByText('Investigate latency. Then report.')).toBeTruthy();
 });it('disables root controls without the runner and reports rejected interrupts', async () => {
  const target = createActivityStore(); const client = createCommandClient(); target.setConnection('runner_unavailable');
  render(<MemoryRouter><WorkspacePage project="/repo/alpha" target={target} client={client}/></MemoryRouter>);

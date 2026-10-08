@@ -1,8 +1,9 @@
-export const DEFAULT_KEYS = { command: 'Cmd+K', home: 'g h', workspace: 'g w', inbox: 'g i', tree: 'g t', changes: 'g c', next: 'j', previous: 'k', allow: 'a', deny: 'd', interrupt: 'Esc', help: '?' };
+// Alt はブラウザの Cmd と Ctrl によるタブ切り替えと衝突しないため採用する。
+export const DEFAULT_KEYS = { command: 'Cmd+K', nextTurn: 'g n', recent1: 'Alt+1', recent2: 'Alt+2', recent3: 'Alt+3', recent4: 'Alt+4', recent5: 'Alt+5', recent6: 'Alt+6', recent7: 'Alt+7', recent8: 'Alt+8', recent9: 'Alt+9', home: 'g h', workspace: 'g w', inbox: 'g i', tree: 'g t', changes: 'g c', next: 'j', previous: 'k', allow: 'a', deny: 'd', interrupt: 'Esc', help: '?' };
 export type KeyAction = keyof typeof DEFAULT_KEYS;
 export type KeyBindings = Record<KeyAction, string>;
-export const KEY_LABELS: Record<KeyAction, string> = { command: 'Search and commands', home: 'Go to Overview', workspace: 'Go to workspace', inbox: 'Go to approvals', tree: 'Go to requests', changes: 'Go to Changes', next: 'Next row', previous: 'Previous row', allow: 'Allow approval', deny: 'Deny approval', interrupt: 'Interrupt run', help: 'Keyboard shortcuts' };
-export const KEY_LABELS_JA: Record<KeyAction, string> = { command: '検索と操作', home: '概要を開く', workspace: '作業場を開く', inbox: '承認待ちを開く', tree: '依頼を開く', changes: '変更を開く', next: '次の行', previous: '前の行', allow: '許可', deny: '拒否', interrupt: '実行を中断', help: 'キー操作' };
+export const KEY_LABELS: Record<KeyAction, string> = { command: 'Search and commands', nextTurn: 'Next turn for you', recent1: 'Open recent conversation 1', recent2: 'Open recent conversation 2', recent3: 'Open recent conversation 3', recent4: 'Open recent conversation 4', recent5: 'Open recent conversation 5', recent6: 'Open recent conversation 6', recent7: 'Open recent conversation 7', recent8: 'Open recent conversation 8', recent9: 'Open recent conversation 9', home: 'Go to Overview', workspace: 'Go to workspace', inbox: 'Go to approvals', tree: 'Go to requests', changes: 'Go to Changes', next: 'Next row', previous: 'Previous row', allow: 'Allow approval', deny: 'Deny approval', interrupt: 'Interrupt run', help: 'Keyboard shortcuts' };
+export const KEY_LABELS_JA: Record<KeyAction, string> = { command: '検索と操作', nextTurn: '次の自分の番へ', recent1: '最近の会話 1 を開く', recent2: '最近の会話 2 を開く', recent3: '最近の会話 3 を開く', recent4: '最近の会話 4 を開く', recent5: '最近の会話 5 を開く', recent6: '最近の会話 6 を開く', recent7: '最近の会話 7 を開く', recent8: '最近の会話 8 を開く', recent9: '最近の会話 9 を開く', home: '概要を開く', workspace: '作業場を開く', inbox: '承認待ちを開く', tree: '依頼を開く', changes: '変更を開く', next: '次の行', previous: '前の行', allow: '許可', deny: '拒否', interrupt: '実行を中断', help: 'キー操作' };
 export function keyLabel(key: KeyAction, language: 'en' | 'ja'): string { return (language === 'ja' ? KEY_LABELS_JA : KEY_LABELS)[key]; }
 export const SEQUENCE_TIMEOUT_MS = 1000;
 function normalizeStroke(value: string): string {
@@ -28,7 +29,7 @@ export function validateBindings(value: Record<string, string>): KeyBindings {
 export function isTextInput(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && Boolean(target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"]'));
 }
-export function createKeyHandler(bindings: KeyBindings, execute: (action: KeyAction) => void) {
+export function createKeyHandler(bindings: Partial<KeyBindings>, execute: (action: KeyAction) => void) {
   const entries = (Object.entries(bindings) as [KeyAction, string][]).map(([action, binding]) => [action, normalizeBinding(binding)] as const);
   let sequence = '';
   let last = 0;

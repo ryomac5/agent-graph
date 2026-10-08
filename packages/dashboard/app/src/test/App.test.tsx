@@ -73,7 +73,7 @@ it('shares live activity, approval counts, commands and notices across all stage
   expect(within(header).queryByRole('checkbox')).toBeNull();
   expect(within(header).queryByRole('combobox')).toBeNull();
   expect(screen.getByRole('textbox', { name: 'Message' })).toBeTruthy();
-  fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getByRole('button', { name: /Console conversation/ }));
+  fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getByRole('link', { name: /Console conversation/ }));
   expect(screen.getByRole('heading', { name: 'Console conversation' })).toBeTruthy();
   fireEvent.click(screen.getByRole('link', { name: 'Approvals1' }));
   expect(screen.getByRole('heading', { name: 'Approvals' })).toBeTruthy();

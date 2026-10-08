@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { DEFAULT_KEYS, keyLabel, validateBindings, type KeyBindings } from '../../lib/keys.ts';
+import { useTurns } from '../../lib/turns.ts';
+import { orderCommands } from './navigation.ts';
 import type { SettingsClient, SettingsSnapshot } from '../../lib/settings.ts';
 export interface Command { id: string; name: string; run(): void; disabled?: boolean }
 const KEY_REFRESH_MS = 1500;
@@ -25,7 +27,8 @@ export function CommandDialog({ title, onClose, children, language = 'en' }: { t
 export function CommandPalette({ commands, onClose, language = 'en' }: { commands: Command[]; onClose(): void; language?: 'en' | 'ja' }) {
   const [query, setQuery] = useState('');
   const [index, setIndex] = useState(0);
-  const matches = commands.filter(command => query.toLowerCase().trim().split(/\s+/).every(word => command.name.toLowerCase().includes(word)));
+  const snapshot = useTurns();
+  const matches = orderCommands(commands, snapshot, language).filter(command => query.toLowerCase().trim().split(/\s+/).every(word => command.name.toLowerCase().includes(word)));
   function execute(command: Command) { if (!command.disabled) { onClose(); command.run(); } }
   const enabled = matches.filter(command => !command.disabled);
   const selected = enabled[Math.min(index, Math.max(0, enabled.length - 1))];

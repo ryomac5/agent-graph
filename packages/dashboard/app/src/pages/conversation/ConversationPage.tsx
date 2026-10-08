@@ -304,7 +304,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const Heading = embedded ? 'h2' : 'h1';
   const evidence = status === 'ended' ? run?.end_evidence : run?.last_evidence;
   const started = Date.parse(readText(status.startsWith('waiting') ? run?.last_evidence_ts : run?.started_ts));
-  const elapsed = Number.isFinite(started) ? formatSeconds(Math.max(0, Math.floor((now - started) / TICK_MS))) : '';
+  const elapsed = !seriesIds && ['running', 'starting'].includes(status) && Number.isFinite(started) ? formatSeconds(Math.max(0, Math.floor((now - started) / TICK_MS))) : '';
   const worktree = worktreeLabel(run);
   const shownModel = appliedModel?.model || currentModel;
   const shownEffort = appliedModel?.effort || currentEffort;

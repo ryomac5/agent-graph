@@ -44,3 +44,5 @@
 .request-meta .status, .root-row-meta .status { flex: none; }
 .request-who { flex: 1 1 auto; }
 .root-running { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.request-row { cursor: pointer; }
+.request-older { margin: var(--space-1) 0 0 var(--space-1); color: var(--text-3); }

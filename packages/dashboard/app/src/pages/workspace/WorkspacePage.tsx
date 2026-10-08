@@ -74,6 +74,9 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
   // 系列は最後に動いた会話を末尾に並べ、その会話を開く。
   const series = useMemo(() => selected ? orderSeries(state, selected.conversation_ids) : [], [selected, state.projection.conversations, state.projection.runs]);
   const conversationId = childId ?? series.at(-1);
+  // 子の会話は、頼んだ内容を名前として出す。
+  const childNode = childId ? tree.nodes.find(node => node.conversationId === childId) : undefined;
+  const childTitle = childNode ? tree.edges.find(edge => edge.target === childNode.id)?.title || undefined : undefined;
   return <div className={`workspace root-workspace${requestsOpen ? '' : ' requests-collapsed'}`}>
     <ProjectHeader route={route} name={getProjectName(state, project)} language={language}
       actions={<button className="btn btn-secondary btn-sm" onClick={() => setCreating(value => !value)} aria-expanded={creating}><Icon name="plus" size={14}/>{t.newTask}</button>}/>
@@ -84,10 +87,10 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
           setChild(undefined); const next = new URLSearchParams(search); next.set('root', root.id); next.delete('path'); next.delete('child'); setSearch(next);
         }}/></div></section>
       <section className="workspace-conversation" aria-label={t.conversation}>
-        {childId && <button className="btn btn-ghost btn-sm root-back" onClick={() => { setChild(undefined); const next = new URLSearchParams(search); next.delete('child'); setSearch(next); }}><Icon name="chevronLeft" size={14}/>{t.back} {selected?.name}</button>}
+        {childId && <button className="btn btn-ghost btn-sm root-back" aria-label={`Back to ${selected?.name ?? ""}`} onClick={() => { setChild(undefined); const next = new URLSearchParams(search); next.delete('child'); setSearch(next); }}><span aria-hidden="true">←</span>{selected?.name}</button>}
         {conversationId ? renderConversation && (childId || selected?.conversation_ids.length === 1) ? renderConversation(conversationId)
           : <ConversationPage key={selected?.id + ':' + (childId ?? 'root')} target={target} client={client} conversationId={conversationId} embedded language={language}
-            seriesIds={childId ? undefined : series} seriesState={childId ? undefined : selected?.state} displayName={childId ? undefined : selected?.name}/>
+            seriesIds={childId ? undefined : series} seriesState={childId ? undefined : selected?.state} displayName={childId ? childTitle : selected?.name}/>
           : <p className="empty-row">{t.selectConversation}</p>}
       </section>
       <aside className="workspace-requests" aria-label={t.requests}><header className="column-header">
@@ -97,7 +100,7 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
         {requestsOpen && <div className="column-scroll">{retryError && <p role="alert" className="status-line danger">{retryError}</p>}{selected && <RootTree tree={tree} language={language} selected={childId} root={selected}
           onSelectRoot={() => { setChild(undefined); const next = new URLSearchParams(search); next.delete('child'); setSearch(next); }}
           onRetry={client && state.connection === 'connected' ? node => void retry(node) : undefined}
-          onSelect={node => { if (node.conversationId && selected) { setChild({ root: selected.id, id: node.conversationId }); } }}/>}</div>}</aside>
+          onSelect={node => { if (node.conversationId && selected) { setChild({ root: selected.id, id: node.conversationId }); const next = new URLSearchParams(search); next.set('root', selected.id); next.set('child', node.conversationId); setSearch(next); } }}/>}</div>}</aside>
     </div>
   </div>;
 }

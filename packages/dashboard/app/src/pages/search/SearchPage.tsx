@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { store, useScreenStore, type ScreenStore } from '../../lib/store.ts';
-import { conversationName } from '../../lib/format.ts';
+import { conversationName, formatWhen } from '../../lib/format.ts';
 import { getProjectName } from '../../lib/projects.ts';
 import type { Language } from '../../lib/i18n.ts';
 import { SEARCH_KINDS, getResultHref, extractSnippet, type SearchClient, type SearchKind, type SearchQuery, type SearchResponse } from './model.ts';
@@ -21,7 +21,7 @@ const TEXT = {
 };
 function formatTimestamp(value: string): string {
   const time = Date.parse(value);
-  return Number.isFinite(time) ? new Date(time).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' }) : value;
+  return Number.isFinite(time) ? formatWhen(value) : value;
 }
 export function SearchPage({ client, target = store, language = 'en' }: { client: SearchClient; target?: ScreenStore; language?: Language }) {
   const state = useScreenStore(target);

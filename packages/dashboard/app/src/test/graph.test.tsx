@@ -25,7 +25,7 @@ function fixture() {
       { id: 'run-child', conversation_id: 'child', state: 'running', model: 'gpt-6.1-sol', last_evidence_ts: '2026-10-08T11:00:00Z' },
       { id: 'run-approval', conversation_id: 'approval', state: 'waiting_approval', last_evidence_ts: '2026-10-08T11:00:00Z' },
       { id: 'run-old', conversation_id: 'old', state: 'ended', ended_ts: '2026-10-06T11:00:00Z' },
-      { id: 'run-nested', conversation_id: 'nested', state: 'failed', ended_ts: '2026-10-06T11:00:00Z' },
+      { id: 'run-nested', conversation_id: 'nested', state: 'ended', ended_ts: '2026-10-06T11:00:00Z' },
     ],
     relations: [
       ...['child', 'approval', 'old'].map(id => ({ id: `relation-${id}`, type: 'delegated', from_id: 'root', to_id: id, evidence: { description: id === 'child' ? 'Build the screen' : id === 'approval' ? 'Verify the build' : 'Earlier implementation' } })),
@@ -37,8 +37,8 @@ function fixture() {
   return target;
 }
 function Location() { const location = useLocation(); return <output data-testid="location">{location.pathname}{location.search}</output>; }
-function renderGraph(language: 'en' | 'ja' = 'en', client = { command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'cmd', ok: true })) }, target = fixture()) {
-  render(<MemoryRouter initialEntries={['/p/repo/graph?root=root']}><Routes><Route path="/p/:project/graph" element={<GraphPage target={target} client={client} language={language}/>}/><Route path="/p/:project" element={<p>Conversation destination</p>}/></Routes><Location/></MemoryRouter>);
+function renderGraph(language: 'en' | 'ja' = 'en', client = { command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'cmd', ok: true })) }, target = fixture(), entry = '/p/repo/graph?root=root') {
+  render(<MemoryRouter initialEntries={[entry]}><Routes><Route path="/p/:project/graph" element={<GraphPage target={target} client={client} language={language}/>}/><Route path="/p/:project" element={<p>Conversation destination</p>}/></Routes><Location/></MemoryRouter>);
   return { client, target };
 }
 beforeEach(() => {
@@ -67,22 +67,26 @@ it('adds a child without moving existing cards, even after a state change', () =
   expect(second.nodes.filter(row => row.id !== 'three')).toEqual(first.nodes);
   expect(second.nodes.find(row => row.id === 'three')!.y).toBeGreaterThan(second.nodes.find(row => row.id === 'two')!.y);
 });
-it('switches to top-to-bottom layers below 720px and reserves space for approvals', () => {
+it('switches to an indented preorder tree below 720px and reserves space for approvals', () => {
   const input = tree([node('root', 'running', ['a', 'b']), { ...node('a', 'waiting_approval', ['c']), approvalCount: 2 }, node('b'), node('c')]);
   const wide = calculateLayout(input, 720); const narrow = calculateLayout(input, 719, wide);
   expect(wide.vertical).toBe(false); expect(narrow.vertical).toBe(true);
   const at = (id: string) => narrow.nodes.find(row => row.id === id)!;
   expect(at('a').y).toBeGreaterThan(at('root').y); expect(at('c').y).toBeGreaterThan(at('a').y + at('a').height);
-  expect(at('b').x).toBeGreaterThan(at('a').x + at('a').width);
+  expect(at('b').x).toBe(at('a').x);
+  expect(at('c').x).toBeGreaterThan(at('a').x);
+  expect(at('b').y).toBeGreaterThan(at('c').y + at('c').height);
+  expect(narrow.width).toBeLessThanOrEqual(719);
 });
 it('folds only terminal branches older than 24 hours per parent, preserves active descendants and expands', () => {
   const old = '2026-10-06T11:00:00Z';
-  const input = tree([node('root', 'running', ['old', 'parent', 'unknown', 'boundary']), node('old', 'failed', ['older'], old), node('older', 'idle', [], old), node('parent', 'ended', ['active'], old), node('active', 'running', ['past']), node('past', 'ended', [], old), node('unknown', 'unknown', [], old), node('boundary', 'ended', [], '2026-10-07T12:00:00Z')]);
+  const input = tree([node('root', 'running', ['old', 'parent', 'unknown', 'boundary']), node('old', 'ended', ['older'], old), node('older', 'idle', [], old), node('parent', 'ended', ['active'], old), node('active', 'running', ['past']), node('past', 'ended', [], old), node('unknown', 'unknown', [], old), node('boundary', 'ended', [], '2026-10-07T12:00:00Z')]);
   const folded = foldEarlier(input, new Set(), now);
   expect(folded.nodes.map(row => row.id)).toEqual(['root', 'parent', 'active', 'earlier:active', 'unknown', 'boundary', 'earlier:root']);
   expect(folded.nodes.find(row => row.id === 'earlier:root')?.earlier?.count).toBe(1);
-  const expanded = foldEarlier(input, new Set(['root', 'old']), now);
+  const expanded = foldEarlier(input, new Set(['earlier:root', 'earlier:old']), now);
   expect(expanded.nodes.some(row => row.id === 'older')).toBe(true);
+  expect(expanded.nodes.find(row => row.id === 'earlier:root')?.earlier?.expanded).toBe(true);
   const selected = foldEarlier(input, new Set(), now, 'older');
   expect(selected.nodes.some(row => row.id === 'older')).toBe(true);
 });
@@ -105,7 +109,7 @@ it('expands earlier requests and shows Japanese labels', () => {
   expect(screen.queryByRole('link', { name: /Earlier implementation/ })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: '以前の依頼 1 件' }));
   expect(screen.getByRole('link', { name: /Earlier implementation/ })).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: '以前の依頼 1 件' }));
+  fireEvent.click(screen.getAllByRole('button', { name: '以前の依頼 1 件' }).find(button => button.getAttribute('aria-expanded') === 'false')!);
   expect(screen.getByRole('link', { name: /Earlier review/ })).toBeTruthy();
 });
 it('allows approval once, shows its summary, and keeps the graph open', async () => {
@@ -126,17 +130,19 @@ it('disables approval offline and recovers from an unsuccessful answer', async (
   expect(screen.getByRole('alert').textContent).toBe('Try again');
   expect(screen.getByRole('button', { name: 'Allow' }).hasAttribute('disabled')).toBe(false);
 });
-it('responds to a narrow viewport, zoom controls and keyboard node navigation', () => {
+it('hides zoom on a narrow tree and supports keyboard node navigation', () => {
   renderGraph();
   const canvas = screen.getByRole('region', { name: 'Request graph' });
   expect(canvas.getAttribute('data-direction')).toBe('horizontal');
-  vi.stubGlobal('innerWidth', 600); fireEvent(window, new Event('resize'));
-  expect(canvas.getAttribute('data-direction')).toBe('vertical');
   const scale = document.querySelector('.graph-scale')!.textContent;
   fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
   expect(document.querySelector('.graph-scale')!.textContent).not.toBe(scale);
-  fireEvent.click(screen.getByRole('button', { name: 'Fit to view' }));
-  expect(document.querySelector('.graph-scale')!.textContent).toBe(scale);
+  vi.stubGlobal('innerWidth', 390); fireEvent(window, new Event('resize'));
+  expect(canvas.getAttribute('data-direction')).toBe('vertical');
+  expect(canvas.classList.contains('graph-tree')).toBe(true);
+  expect(screen.queryByRole('button', { name: 'Zoom in' })).toBeNull();
+  expect(document.querySelector('.graph-world')!.getAttribute('style')).toBe('');
+  expect(document.querySelector('.graph-edges')).toBeNull();
   const root = screen.getByRole('link', { name: /Ship the console ·/ });
   fireEvent.keyDown(root, { key: 'ArrowDown' });
   expect(document.activeElement).toBe(screen.getByRole('link', { name: /Build the screen/ }));
@@ -201,4 +207,105 @@ it('uses the first root by default and respects an explicit root parameter', () 
   render(<MemoryRouter initialEntries={['/p/repo/graph?root=second']}><GraphPage project="repo" target={target} client={client}/></MemoryRouter>);
   expect(screen.getByRole('link', { name: /Second root ·/ })).toBeTruthy();
   expect(screen.queryByRole('link', { name: /Build the screen/ })).toBeNull();
+});
+
+function createWideFixture() {
+  const target = createStore();
+  const children = Array.from({ length: 42 }, (_, index) => 'task-' + index);
+  target.setSnapshot({ seq: 1, generation: 1, projection: {
+    projects: [{ id: 'repo', display_name: 'Repo', root_path: '/repo', state: 'registered' }],
+    roots: [{ id: 'root', name: '42 requests', project: 'repo', state: 'idle', conversation_ids: ['root'], running_children: 1, total_children: 42 }],
+    conversations: ['root', ...children].map(id => ({ id, provider: 'codex', type: id === 'root' ? 'interactive' : 'subagent' })),
+    runs: children.map((id, index) => ({ id: 'run-' + id, conversation_id: id, state: index === 0 ? 'running' : 'ended',
+      ended_ts: index === 0 ? undefined : new Date(now - index * 60_000).toISOString(), last_evidence_ts: new Date(now - index * 60_000).toISOString() })),
+    relations: children.map(id => ({ id: 'relation-' + id, type: 'delegated', from_id: 'root', to_id: id, evidence: { description: id } })),
+  } });
+  target.setConnection('connected');
+  return target;
+}
+it('shows nine readable nodes for 42 requests, keeps the active child in view, and limits fit to 25 percent', () => {
+  renderGraph('ja', undefined, createWideFixture());
+  expect(document.querySelectorAll('.graph-card')).toHaveLength(9);
+  expect(screen.getByRole('link', { name: /task-0 ·/ })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'ほかの完了 35 件' }).getAttribute('aria-expanded')).toBe('false');
+  const scale = Number(document.querySelector('.graph-scale')!.textContent!.replace('%', ''));
+  expect(scale).toBeGreaterThanOrEqual(75); expect(scale).toBeLessThanOrEqual(100);
+  const world = document.querySelector<HTMLElement>('.graph-world')!;
+  const [, x, y, zoom] = /translate\(([-\d.]+)px, ([-\d.]+)px\) scale\(([-\d.]+)\)/.exec(world.style.transform)!;
+  for (const id of ['root', 'task-0']) {
+    const card = document.querySelector<HTMLElement>('[data-node-id="' + id + '"]')!;
+    expect(Number(x) + parseFloat(card.style.left) * Number(zoom)).toBeGreaterThanOrEqual(0);
+    expect(Number(y) + (parseFloat(card.style.top) + parseFloat(card.style.height)) * Number(zoom)).toBeLessThanOrEqual(640);
+  }
+  fireEvent.click(screen.getByRole('button', { name: 'ほかの完了 35 件' }));
+  fireEvent.click(screen.getByRole('button', { name: '全体を表示' }));
+  expect(Number(document.querySelector('.graph-scale')!.textContent!.replace('%', ''))).toBeGreaterThanOrEqual(25);
+});
+it('opens and closes other completed requests and restores the URL after remounting', () => {
+  const target = createWideFixture();
+  renderGraph('ja', undefined, target);
+  fireEvent.click(screen.getByRole('button', { name: 'ほかの完了 35 件' }));
+  expect(document.querySelectorAll('.graph-card')).toHaveLength(44);
+  expect(screen.getByRole('button', { name: 'ほかの完了 35 件' }).getAttribute('aria-expanded')).toBe('true');
+  const entry = screen.getByTestId('location').textContent!;
+  expect(new URLSearchParams(entry.split('?')[1]).getAll('expanded')).toContain('completed:root');
+  cleanup(); renderGraph('ja', undefined, target, entry);
+  expect(screen.getByRole('link', { name: /task-41 ·/ })).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'ほかの完了 35 件' }));
+  expect(document.querySelectorAll('.graph-card')).toHaveLength(9);
+  expect(screen.queryByRole('link', { name: /task-41 ·/ })).toBeNull();
+  expect(screen.getByTestId('location').textContent).toBe('/p/repo/graph?root=root');
+});
+it('uses the same filtering at 390px and lets wheel scrolling pass through', () => {
+  vi.stubGlobal('innerWidth', 390);
+  renderGraph('ja', undefined, createWideFixture());
+  expect(document.querySelectorAll('.graph-card')).toHaveLength(9);
+  expect(screen.queryByRole('button', { name: '全体を表示' })).toBeNull();
+  const canvas = screen.getByRole('region', { name: '依頼のグラフ' });
+  const wheel = new WheelEvent('wheel', { deltaY: 100, cancelable: true });
+  fireEvent(canvas, wheel); expect(wheel.defaultPrevented).toBe(false);
+  fireEvent.click(screen.getByRole('button', { name: 'ほかの完了 35 件' }));
+  expect(document.querySelectorAll('.graph-card')).toHaveLength(44);
+});
+it('wraps 42 children into columns of at most eight rows without card or edge overlaps', () => {
+  const children = Array.from({ length: 42 }, (_, index) => node('task-' + index, index === 0 ? 'running' : 'ended'));
+  const input = tree([node('root', 'running', children.map(child => child.id)), ...children]);
+  const layout = calculateLayout(input, 1440);
+  const root = layout.nodes.find(node => node.id === 'root')!;
+  const columns = new Map<number, number>();
+  const paths = new Set<string>();
+  const segments: { x1: number; y1: number; x2: number; y2: number }[] = [];
+  for (const child of layout.nodes.filter(node => node.depth === 1)) {
+    columns.set(child.x, (columns.get(child.x) ?? 0) + 1);
+    const path = curvePath(root, child, false);
+    paths.add(path);
+    const points = [...path.matchAll(/[ML] ([\d.]+) ([\d.]+)/g)].map(match => [Number(match[1]), Number(match[2])]);
+    points.slice(1).forEach(([x2, y2], index) => {
+      const [x1, y1] = points[index];
+      for (const segment of segments) {
+        const horizontalOverlap = y1 === y2 && segment.y1 === segment.y2 && y1 === segment.y1
+          && Math.max(Math.min(x1, x2), Math.min(segment.x1, segment.x2)) < Math.min(Math.max(x1, x2), Math.max(segment.x1, segment.x2));
+        const verticalOverlap = x1 === x2 && segment.x1 === segment.x2 && x1 === segment.x1
+          && Math.max(Math.min(y1, y2), Math.min(segment.y1, segment.y2)) < Math.min(Math.max(y1, y2), Math.max(segment.y1, segment.y2));
+        expect(horizontalOverlap || verticalOverlap).toBe(false);
+      }
+      segments.push({ x1, y1, x2, y2 });
+    });
+    expect(child.route!.y).toBeLessThan(child.y);
+    for (const other of layout.nodes.filter(node => node.id !== child.id)) {
+      expect(child.x + child.width <= other.x || other.x + other.width <= child.x || child.y + child.height <= other.y || other.y + other.height <= child.y).toBe(true);
+    }
+  }
+  expect(columns.size).toBe(6); expect(Math.max(...columns.values())).toBe(8);
+  expect(paths.size).toBe(42);
+});
+it('always keeps failures, waiting children and branches with active descendants', () => {
+  const old = '2026-10-06T11:00:00Z';
+  const children = Array.from({ length: 12 }, (_, index) => node('done-' + index, 'ended', [], new Date(now - index * 60_000).toISOString()));
+  const input = tree([node('root', 'running', [...children.map(child => child.id), 'failed', 'approval', 'input', 'parent']), ...children,
+    node('failed', 'failed', [], old), node('approval', 'waiting_approval', [], old), node('input', 'waiting_input', [], old), node('parent', 'ended', ['active'], old), node('active', 'running')]);
+  const folded = foldEarlier(input, new Set(), now);
+  for (const id of ['failed', 'approval', 'input', 'parent', 'active', 'done-0', 'done-5']) expect(folded.nodes.some(node => node.id === id)).toBe(true);
+  expect(folded.nodes.some(node => node.id === 'done-6')).toBe(false);
+  expect(folded.nodes.find(node => node.id === 'completed:root')!.earlier!.count).toBe(6);
 });

@@ -14,7 +14,8 @@ import { answerApproval, getConversation, getDecision, isPending } from '../inbo
 import { calculateLayout, curvePath, foldEarlier, type GraphLayout, type GraphTree, type PositionedNode } from './layout.ts';
 import './graph.css';
 
-const MIN_SCALE = 0.15;
+const MIN_SCALE = 0.25;
+const INITIAL_MIN_SCALE = 0.75;
 const MAX_SCALE = 2;
 const VIEW_PADDING = 48;
 interface View { x: number; y: number; scale: number }
@@ -65,20 +66,31 @@ function GraphCanvas({ tree, root, route, language, approvals, connected, client
   const links = useRef(new Map<string, HTMLElement>());
   const previous = useRef<GraphLayout | undefined>(undefined);
   const [size, setSize] = useState({ width: window.innerWidth, height: 640 });
-  const [expanded, setExpanded] = useState<Set<string>>(() => {
-    const parents = new Set<string>();
+  const [search, setSearch] = useSearchParams();
+  const expanded = useMemo(() => {
+    const parents = new Set<string>(search.getAll('expanded'));
+    const visited = new Set<string>();
     let child = tree.nodes.find(node => node.conversationId === requestedChild)?.id;
-    while (child) {
+    while (child && !visited.has(child)) {
+      visited.add(child);
       const parent = tree.edges.find(edge => edge.target === child)?.source;
-      if (!parent || parents.has(parent)) break;
-      parents.add(parent); child = parent;
+      if (!parent) break;
+      parents.add(`earlier:${parent}`); parents.add(`completed:${parent}`); child = parent;
     }
     return parents;
-  });
+  }, [search, requestedChild, tree]);
+  function toggleGroup(id: string) {
+    const next = new Set(expanded);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    setSearch(current => {
+      const params = new URLSearchParams(current); params.delete('expanded');
+      next.forEach(group => params.append('expanded', group)); return params;
+    });
+  }
   const [now, setNow] = useState(Date.now);
   const [focused, setFocused] = useState(requestedChild ? tree.nodes.find(node => node.conversationId === requestedChild)?.id ?? root.id : root.id);
   useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 60_000); return () => clearInterval(timer); }, []);
-  const visible = useMemo(() => foldEarlier(tree, expanded, now, focused), [tree, expanded, now, focused]);
+  const visible = useMemo(() => foldEarlier(tree, expanded, now, tree.nodes.find(node => node.conversationId === requestedChild)?.id), [tree, expanded, now, requestedChild]);
   const layout = useMemo(() => calculateLayout(visible, size.width, previous.current), [visible, size.width]);
   const byId = new Map(visible.nodes.map(node => [node.id, node]));
   const positions = new Map(layout.nodes.map(node => [node.id, node]));
@@ -92,16 +104,17 @@ function GraphCanvas({ tree, root, route, language, approvals, connected, client
   const drag = useRef<{ id: number; x: number; y: number; view: View } | undefined>(undefined);
   const [dragging, setDragging] = useState(false);
   function fit() {
-    const scale = Math.max(0.001, Math.min(1, Math.max(1, size.width - VIEW_PADDING * 2) / Math.max(layout.width, 1), Math.max(1, size.height - VIEW_PADDING * 2) / Math.max(layout.height, 1)));
+    const scale = Math.max(MIN_SCALE, Math.min(1, Math.max(1, size.width - VIEW_PADDING * 2) / Math.max(layout.width, 1), Math.max(1, size.height - VIEW_PADDING * 2) / Math.max(layout.height, 1)));
     setView({ scale, x: (size.width - layout.width * scale) / 2, y: (size.height - layout.height * scale) / 2 });
   }
   function zoom(factor: number, x = size.width / 2, y = size.height / 2) {
     setView(current => {
-      const scale = factor < 1 && current.scale < MIN_SCALE ? Math.max(0.001, current.scale * factor) : clampScale(current.scale * factor);
+      const scale = clampScale(current.scale * factor);
       return { scale, x: x - (x - current.x) * scale / current.scale, y: y - (y - current.y) * scale / current.scale };
     });
   }
   function reveal(node: PositionedNode) {
+    if (layout.vertical) return;
     setView(current => {
       const left = current.x + node.x * current.scale; const top = current.y + node.y * current.scale;
       const right = left + node.width * current.scale; const bottom = top + node.height * current.scale;
@@ -114,7 +127,13 @@ function GraphCanvas({ tree, root, route, language, approvals, connected, client
     const resized = measuredSize.current.width !== size.width || measuredSize.current.height !== size.height;
     measuredSize.current = size;
     previous.current = layout;
-    if (!initialized.current || changedDirection || resized) { fit(); initialized.current = true; }
+    if (!initialized.current || changedDirection || resized) {
+      const rootPosition = positions.get(root.id);
+      const active = layout.nodes.find(node => ['starting', 'running'].includes(toDisplayState(byId.get(node.id)!.state)) && node.id !== root.id);
+      const width = Math.max(rootPosition ? rootPosition.x + rootPosition.width : 1, active ? active.x + active.width : 1);
+      const scale = Math.max(INITIAL_MIN_SCALE, Math.min(1, (size.width - VIEW_PADDING * 2) / width));
+      setView({ x: VIEW_PADDING, y: VIEW_PADDING, scale }); initialized.current = true;
+    }
     else {
       const node = positions.get(focused);
       if (node) reveal(node);
@@ -134,13 +153,14 @@ function GraphCanvas({ tree, root, route, language, approvals, connected, client
   useEffect(() => {
     const element = canvas.current!;
     const wheel = (event: WheelEvent) => {
+      if (layout.vertical) return;
       event.preventDefault();
       const rect = element.getBoundingClientRect();
       zoom(Math.exp(-event.deltaY * 0.002), event.clientX - rect.left, event.clientY - rect.top);
     };
     element.addEventListener('wheel', wheel, { passive: false });
     return () => element.removeEventListener('wheel', wheel);
-  }, [size]);
+  }, [size, layout.vertical]);
   async function answer(row: Row, action: 'allow' | 'deny') {
     const id = String(row.id);
     if (answering.current.has(id)) return;
@@ -171,17 +191,17 @@ function GraphCanvas({ tree, root, route, language, approvals, connected, client
         {running > 0 && <span><i className="graph-indicator running"/>{ja ? `${running} 実行中` : `${running} running`}</span>}
         {waiting > 0 && <span><i className="graph-indicator waiting"/>{ja ? `${waiting} 承認待ち` : `${waiting} awaiting approval`}</span>}</div></div>
     {error && <p className="banner banner-danger" role="alert">{error}</p>}
-    <div ref={canvas} className={`graph-canvas${dragging ? ' dragging' : ''}`} role="region" aria-label={ja ? '依頼のグラフ' : 'Request graph'} data-direction={layout.vertical ? 'vertical' : 'horizontal'}
+    <div ref={canvas} className={`graph-canvas${layout.vertical ? ' graph-tree' : ''}${dragging ? ' dragging' : ''}`} role="region" aria-label={ja ? '依頼のグラフ' : 'Request graph'} data-direction={layout.vertical ? 'vertical' : 'horizontal'}
       onPointerDown={event => {
-        if (event.button !== 0 || (event.target as Element).closest('.graph-card, .graph-controls')) return;
+        if (layout.vertical || event.button !== 0 || (event.target as Element).closest('.graph-card, .graph-controls')) return;
         drag.current = { id: event.pointerId, x: event.clientX, y: event.clientY, view: viewRef.current };
         event.currentTarget.setPointerCapture(event.pointerId); setDragging(true);
       }} onPointerMove={event => {
         if (!drag.current || drag.current.id !== event.pointerId) return;
         setView({ ...drag.current.view, x: drag.current.view.x + event.clientX - drag.current.x, y: drag.current.view.y + event.clientY - drag.current.y });
       }} onPointerUp={() => { drag.current = undefined; setDragging(false); }} onPointerCancel={() => { drag.current = undefined; setDragging(false); }}>
-      <div className="graph-world" style={{ width: layout.width, height: layout.height, transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})` }}>
-        <svg className="graph-edges" width={layout.width} height={layout.height} aria-hidden="true">
+      <div className="graph-world" style={layout.vertical ? undefined : { width: layout.width, height: layout.height, transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})` }}>
+        {!layout.vertical && <svg className="graph-edges" width={layout.width} height={layout.height} aria-hidden="true">
           {visible.edges.map(edge => {
             const parent = positions.get(edge.source); const child = positions.get(edge.target); const node = byId.get(edge.target);
             if (!parent || !child || !node) return null;
@@ -190,12 +210,12 @@ function GraphCanvas({ tree, root, route, language, approvals, connected, client
               {tone === 'running' && <path className="graph-edge-flow" d={curvePath(parent, child, layout.vertical)}/>}
               <circle cx={child.x + (layout.vertical ? child.width / 2 : 0)} cy={child.y + (layout.vertical ? 0 : child.height / 2)} r="3"/></g>;
           })}
-        </svg>
+        </svg>}
         {layout.nodes.map(position => {
           const node = byId.get(position.id)!;
           const isRoot = node.id === root.id;
           const pending = approvals.filter(row => Boolean(node.run && row.run_id === node.run.id) || Boolean(node.conversationId && row.conversation_id === node.conversationId));
-          const title = node.earlier ? earlierLabel(node.earlier.count) : node.label;
+          const title = node.earlier ? node.earlier.kind === 'earlier' ? earlierLabel(node.earlier.count) : ja ? `ほかの完了 ${node.earlier.count} 件` : `${node.earlier.count} other completed requests` : node.label;
           const who = agentName(node.provider, node.model) || (ja ? 'エージェント' : 'Agent');
           const tone = stateTone(toDisplayState(node.state));
           const target = `/p/${encodeURIComponent(route)}?root=${encodeURIComponent(root.id)}${!isRoot && node.conversationId ? `&child=${encodeURIComponent(node.conversationId)}` : ''}`;
@@ -204,9 +224,9 @@ function GraphCanvas({ tree, root, route, language, approvals, connected, client
             <strong className="graph-card-title" title={title}>{title}</strong><div className="graph-card-meta"><span title={who}>{who}</span><time dateTime={node.activity || undefined}>{formatWhen(node.activity, language) || (ja ? '時刻不明' : 'Unknown time')}</time></div></>;
           const focus = () => { setFocused(node.id); reveal(position); };
           return <article key={node.id} className={`graph-card tone-${tone}${toDisplayState(node.state) === 'unknown' ? ' graph-unknown' : ''}${isRoot ? ' graph-root' : ''}${node.earlier ? ' graph-earlier' : ''}${focused === node.id ? ' graph-selected' : ''}`}
-            style={{ left: position.x, top: position.y, width: position.width, height: position.height }} data-node-id={node.id} onFocus={focus}>
+            style={layout.vertical ? { marginLeft: position.x, width: `calc(100% - ${position.x}px)` } : { left: position.x, top: position.y, width: position.width, height: position.height }} data-node-id={node.id} onFocus={focus}>
             {node.earlier ? <button className="graph-card-link" ref={element => { if (element) links.current.set(node.id, element); else links.current.delete(node.id); }} onFocus={focus} onKeyDown={event => move(event, node.id)}
-              aria-label={title} aria-expanded="false" onClick={() => { links.current.get(node.earlier!.parent)?.focus(); setFocused(node.earlier!.parent); setExpanded(current => new Set([...current, node.earlier!.parent])); }}><span className="graph-earlier-icon"><Icon name="chevronRight" size={16}/></span><strong>{title}</strong><span>{ja ? '押して開く' : 'Click to expand'}</span></button>
+              aria-label={title} aria-expanded={node.earlier.expanded} onClick={() => { setFocused(node.earlier!.parent); toggleGroup(node.id); }}><span className="graph-earlier-icon"><Icon name="chevronRight" size={16}/></span><strong>{title}</strong><span>{node.earlier.expanded ? ja ? '押して閉じる' : 'Click to collapse' : ja ? '押して開く' : 'Click to expand'}</span></button>
               : node.conversationId ? <Link className="graph-card-link" to={target} ref={element => { if (element) links.current.set(node.id, element); else links.current.delete(node.id); }} onFocus={focus} onKeyDown={event => move(event, node.id)} aria-label={`${title} · ${who} · ${stateLabel(node.state, language)}`}>{content}</Link>
                 : <button className="graph-card-link" ref={element => { if (element) links.current.set(node.id, element); else links.current.delete(node.id); }} onFocus={focus} onKeyDown={event => move(event, node.id)}
                   aria-label={title} aria-expanded="true" onClick={() => { const child = node.children.map(id => positions.get(id)).find(Boolean); if (child) { reveal(child); links.current.get(child.id)?.focus(); } }}>{content}</button>}
@@ -217,9 +237,9 @@ function GraphCanvas({ tree, root, route, language, approvals, connected, client
           </article>;
         })}
       </div>
-      <p className="graph-hint">{ja ? 'ドラッグで移動 · ホイールで拡大縮小' : 'Drag to pan · Scroll to zoom'}</p>
+      {!layout.vertical && <><p className="graph-hint">{ja ? 'ドラッグで移動 · ホイールで拡大縮小' : 'Drag to pan · Scroll to zoom'}</p>
       <div className="graph-controls" aria-label={ja ? 'グラフの表示' : 'Graph view controls'}><button onClick={fit} title={ja ? '全体を表示' : 'Fit to view'}>{ja ? '全体を表示' : 'Fit to view'}</button><span className="graph-scale numeric">{Math.round(view.scale * 100)}%</span>
-        <button aria-label={ja ? '縮小' : 'Zoom out'} onClick={() => zoom(1 / 1.2)}>−</button><button aria-label={ja ? '拡大' : 'Zoom in'} onClick={() => zoom(1.2)}>+</button></div>
+        <button aria-label={ja ? '縮小' : 'Zoom out'} onClick={() => zoom(1 / 1.2)}>−</button><button aria-label={ja ? '拡大' : 'Zoom in'} onClick={() => zoom(1.2)}>+</button></div></>}
     </div>
   </>;
 }

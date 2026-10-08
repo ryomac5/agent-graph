@@ -55,6 +55,8 @@ export class ClaudeHost implements AgentHost {
   private sequence = 0;
   private timestamp = 0;
   private options: ClaudeHostOptions;
+  private models?: ModelInfo[];
+  private modelDiscovery?: Promise<ModelInfo[]>;
   constructor(factory: QueryFactory = query, options: ClaudeHostOptions = {}) { this.factory = factory; this.options = options; }
   capabilities(): ClaudeCapabilities {
     return { start: true, resume: this.options.persistSession !== false, fork: this.options.persistSession !== false && (this.options.enableFork ?? false), interrupt: true, approvals: true, setModel: true, delta: true,
@@ -77,25 +79,14 @@ export class ClaudeHost implements AgentHost {
     // 管理する実行の既定は disabled。claude.ai の外部連携を読み込まず、プラグインの MCP は残す。
     const integrationMode = req.integrationMode ?? this.options.integrationMode ?? "disabled";
     let run: OpenRun;
-    const sdkQuery = this.factory({ prompt: input, options: {
+    const sdkQuery = this.createQuery(input, {
       cwd: req.cwd, model: req.model.model, effort,
       ...(forkFrom ? { sessionId, resume: forkFrom, forkSession: true } : resume ? { resume: sessionId } : { sessionId }),
-      ...(integrationMode === "strict" ? { strictMcpConfig: true, mcpServers: {} } : {}),
       ...(req.outputSchema ? { outputFormat: { type: "json_schema" as const, schema: req.outputSchema } } : {}),
-      settingSources: ["user", "project"], permissionMode: "default", includePartialMessages: true, persistSession: this.options.persistSession ?? true,
-      env: { ...process.env, ...req.env, ...(integrationMode === "enabled" ? {} : { ENABLE_CLAUDEAI_MCP_SERVERS: "false" }),
-        CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1", AGENT_GRAPH_MANAGED: "1",
+      env: { ...req.env,
         AGENT_GRAPH_RUN_ID: req.runId, AGENT_GRAPH_CONVERSATION_ID: req.conversationId, AGENT_GRAPH_GENERATION: String(req.generation) },
       canUseTool: (name, toolInput, options) => this.requestApproval(run, name, toolInput, options),
-      spawnClaudeCodeProcess(options) {
-        const child = spawn(options.command, options.args, { cwd: options.cwd, env: options.env, signal: options.signal, stdio: ["pipe", "pipe", "pipe"] });
-        childProcess.pid = child.pid;
-        // stderr の書き込みで子が止まらないよう、保存せず読み続ける。
-        child.stderr.resume();
-        child.once("close", (code, signal) => { childProcess.exitCode = code; childProcess.signal = signal; });
-        return child;
-      },
-    } });
+    }, integrationMode, childProcess);
     run = { request: req, integrationMode, sessionId, input, events, query: sdkQuery, reader: Promise.resolve(), closed: false,
       finished: false, sawState: false, firstResult: true, turns: [], interrupted: new Set(), tasks: new Set(), activeTasks: new Set(),
       childConversations: new Map(), process: childProcess, lastInterrupted: false };
@@ -109,6 +100,23 @@ export class ClaudeHost implements AgentHost {
       throw error;
     }
     return { runId: req.runId, nativeId: sessionId, pid: childProcess.pid, events };
+  }
+  private createQuery(input: AsyncQueue<SDKUserMessage>, options: Options, integrationMode: IntegrationMode, childProcess: OpenRun["process"] = {}): ClaudeQuery {
+    return this.factory({ prompt: input, options: {
+      settingSources: ["user", "project"], permissionMode: "default", includePartialMessages: true, persistSession: this.options.persistSession ?? true,
+      ...options,
+      ...(integrationMode === "strict" ? { strictMcpConfig: true, mcpServers: {} } : {}),
+      env: { ...process.env, ...options.env, ...(integrationMode === "enabled" ? {} : { ENABLE_CLAUDEAI_MCP_SERVERS: "false" }),
+        CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1", AGENT_GRAPH_MANAGED: "1" },
+      spawnClaudeCodeProcess(options) {
+        const child = spawn(options.command, options.args, { cwd: options.cwd, env: options.env, signal: options.signal, stdio: ["pipe", "pipe", "pipe"] });
+        childProcess.pid = child.pid;
+        // stderr の書き込みで子が止まらないよう、保存せず読み続ける。
+        child.stderr.resume();
+        child.once("close", (code, signal) => { childProcess.exitCode = code; childProcess.signal = signal; });
+        return child;
+      },
+    } });
   }
   private recordAuthentication(account: AccountInfo): void {
     this.authentication = {
@@ -156,8 +164,36 @@ export class ClaudeHost implements AgentHost {
   }
   async listModels(): Promise<ModelInfo[]> {
     const run = [...this.runs.values()].find((run) => !run.closed && !run.finished);
-    if (!run) throw new Error("An open Claude query is required to list models");
-    return (await run.query.supportedModels()).map((model) => ({ model: model.value, displayName: model.displayName }));
+    if (run) {
+      this.models = await this.readModels(run.query);
+      return this.models;
+    }
+    if (this.models) return this.models;
+    this.modelDiscovery ??= this.discoverModels()
+      .then((models) => { this.models = models; return models; })
+      .finally(() => { this.modelDiscovery = undefined; });
+    return this.modelDiscovery;
+  }
+  private async readModels(sdkQuery: ClaudeQuery): Promise<ModelInfo[]> {
+    return (await sdkQuery.supportedModels()).map((model) => ({ model: model.value, displayName: model.displayName }));
+  }
+  private async discoverModels(): Promise<ModelInfo[]> {
+    const input = new AsyncQueue<SDKUserMessage>();
+    let sdkQuery: ClaudeQuery | undefined;
+    try {
+      try {
+        sdkQuery = this.createQuery(input, {
+          persistSession: false,
+          canUseTool: async () => ({ behavior: "deny", message: "Model discovery does not allow tool execution." }),
+        }, this.options.integrationMode ?? "disabled");
+        return await this.readModels(sdkQuery);
+      } finally {
+        input.end();
+        sdkQuery?.close();
+      }
+    } catch (error) {
+      throw new Error(`Failed to list Claude models: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+    }
   }
   private requestApproval(run: OpenRun, name: string, input: Record<string, unknown>, options: Parameters<CanUseTool>[2]): Promise<PermissionResult> {
     // 購読の外部連携は読まれる前提で拒否し、受け箱には出さない。

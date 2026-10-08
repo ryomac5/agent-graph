@@ -265,6 +265,106 @@ test("Claude failures use result body and missing state events expose degraded f
   assert.ok(queries[0].closed);
 });
 
+test("Claude lists models without an open run using a closed query with no user messages", async () => {
+  const { host, queries } = createFixture((query) => {
+    query.supportedModels = async () => {
+      assert.equal(query.closed, false);
+      assert.deepEqual(query.inputs, []);
+      return [{ value: "haiku", displayName: "Haiku", description: "Fast" }];
+    };
+  });
+  assert.deepEqual(await host.listModels(), [{ model: "haiku", displayName: "Haiku" }]);
+  assert.equal(queries.length, 1);
+  const query = queries[0];
+  await query.inputReader;
+  assert.deepEqual(query.inputs, []);
+  assert.equal(query.closed, true);
+  assert.equal(query.options.persistSession, false);
+  assert.deepEqual(query.options.settingSources, ["user", "project"]);
+  assert.equal(query.options.env?.AGENT_GRAPH_MANAGED, "1");
+  assert.equal(query.options.env?.ENABLE_CLAUDEAI_MCP_SERVERS, "false");
+  assert.equal(typeof query.options.spawnClaudeCodeProcess, "function");
+});
+
+test("Claude caches discovered models without creating another query", async () => {
+  const { host, queries } = createFixture();
+  const models = await host.listModels();
+  assert.deepEqual(await host.listModels(), models);
+  assert.equal(queries.length, 1);
+});
+
+test("Claude shares one model discovery query across concurrent calls", async () => {
+  let release!: () => void;
+  const ready = new Promise<void>((resolve) => { release = resolve; });
+  const { host, queries } = createFixture((query) => {
+    query.supportedModels = async () => {
+      await ready;
+      return [{ value: "haiku", displayName: "Haiku", description: "Fast" }];
+    };
+  });
+  const first = host.listModels();
+  const second = host.listModels();
+  assert.equal(queries.length, 1);
+  assert.equal(queries[0].closed, false);
+  release();
+  assert.deepEqual(await Promise.all([first, second]), [
+    [{ model: "haiku", displayName: "Haiku" }],
+    [{ model: "haiku", displayName: "Haiku" }],
+  ]);
+  await queries[0].inputReader;
+  assert.deepEqual(queries[0].inputs, []);
+  assert.equal(queries[0].closed, true);
+});
+
+test("Claude closes failed model discovery and retries without caching the failure", async () => {
+  const cause = new Error("Authentication unavailable");
+  let fail = true;
+  const { host, queries } = createFixture((query) => {
+    query.supportedModels = async () => {
+      if (fail) throw cause;
+      return [{ value: "haiku", displayName: "Haiku", description: "Fast" }];
+    };
+  });
+  await assert.rejects(host.listModels(), (error: Error) => {
+    assert.equal(error.message, "Failed to list Claude models: Authentication unavailable");
+    assert.equal(error.cause, cause);
+    return true;
+  });
+  await queries[0].inputReader;
+  assert.equal(queries[0].closed, true);
+  assert.deepEqual(queries[0].inputs, []);
+  fail = false;
+  assert.deepEqual(await host.listModels(), [{ model: "haiku", displayName: "Haiku" }]);
+  assert.equal(queries.length, 2);
+  assert.equal(queries[1].closed, true);
+});
+
+test("Claude retries model discovery after a query factory failure", async () => {
+  let calls = 0;
+  const host = new ClaudeHost((args) => {
+    if (++calls === 1) throw new Error("Claude executable unavailable");
+    return new FakeQuery(args);
+  });
+  await assert.rejects(host.listModels(), /Failed to list Claude models: Claude executable unavailable/);
+  assert.deepEqual(await host.listModels(), [{ model: "haiku", displayName: "Haiku" }]);
+  assert.equal(calls, 2);
+});
+
+test("Claude refreshes cached models from an open query and retains them after closing", async () => {
+  const { host, queries } = createFixture();
+  await host.listModels();
+  const handle = await host.start(makeRequest());
+  const { done } = collect(handle);
+  queries[1].supportedModels = async () => [{ value: "sonnet", displayName: "Sonnet", description: "Balanced" }];
+  const models = [{ model: "sonnet", displayName: "Sonnet" }];
+  assert.deepEqual(await host.listModels(), models);
+  assert.equal(queries[1].closed, false);
+  await host.close("run-1");
+  await done;
+  assert.deepEqual(await host.listModels(), models);
+  assert.equal(queries.length, 2);
+});
+
 test("Claude close and resume preserve session ID; model changes use the same query", async () => {
   const { host, queries } = createFixture();
   const handle = await host.start(makeRequest());

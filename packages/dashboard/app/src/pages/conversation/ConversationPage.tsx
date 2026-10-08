@@ -18,6 +18,7 @@ import { ApprovalRequestView, OutcomeChip, OutcomeIcon } from '../../components/
 import { providerName } from '../../components/ActivityRow.tsx';
 import { executionStates } from '../../components/activity.ts';
 import { countTools, isBlank, isToolOnly, Message } from '../../components/conversation/Message.tsx';
+import { harnessKind, readBody } from '../../lib/message-body.ts';
 import { collectToolResults } from '../../components/conversation/ToolCall.tsx';
 import { resolveParticipants, senderOf, type Sender } from '../../components/conversation/participants.ts';
 import { ACTIVE_STATES, compareEntries, PENDING_APPROVALS, readObject, readText, selectTimeline, showValue, type TimelineEntry } from '../../components/conversation/model.ts';
@@ -197,6 +198,10 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     return first ? [entry] : [{ kind: 'boundary', key: 'series:' + id, time: entry.time, row: { type: 'continued', series: true } } satisfies TimelineEntry, entry];
   });
   const messageEntries = allEntries.filter(entry => entry.kind === 'message');
+  // 動いている間は、最後の人の発言からの経過と、最後に使った道具を末尾に出す。端末の「Cogitating…」に当たる。
+  const lastHuman = [...messageEntries].reverse().find(entry => readText(entry.row.role) === 'user' && !isToolOnly(entry.row) && !isBlank(entry.row)
+    && harnessKind(readBody(entry.row.body)) === 'user');
+  const lastTool = [...messageEntries].reverse().flatMap(entry => Array.isArray(entry.row.body) ? entry.row.body.map(readObject).filter(block => block.type === 'tool_use').map(block => readText(block.name)).reverse() : [])[0];
   const shownMessages = new Set(messageEntries.slice(-messageLimit).map(entry => entry.row.id));
   if (anchorId) shownMessages.add(anchorId);
   const entries = allEntries.filter(entry => entry.kind !== 'message' || shownMessages.has(entry.row.id));
@@ -408,6 +413,9 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
       })}
       {deltas.map(([key, delta]) => <Message key={key} language={language} streaming sender={agentSender} showName={nameShown(agentSender)}
         row={{ id: delta.messageId ?? key, role: 'assistant', body: delta.text, body_state: 'stored' } satisfies Row}/>)}
+      {rawStatus === 'running' && lastHuman && Number.isFinite(Date.parse(lastHuman.time)) && <p className="working-line" role="status">
+        <span className="pulse" aria-hidden="true"/>{language === 'ja' ? '作業中' : 'Working'}… {formatSeconds(Math.max(0, Math.floor((now - Date.parse(lastHuman.time)) / 1000)))}
+        {lastTool && <span className="working-tool"> · {lastTool}</span>}</p>}
     </div></div>
     {/* 端末で動いている会話は、返信の場所と、ここで続ける操作だけを入力欄に出す。押すと通常の入力欄になる。 */}
     {external && !continueHere && <footer className="composer composer-terminal">

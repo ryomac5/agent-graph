@@ -17,6 +17,7 @@ import { SearchPage } from './pages/search/SearchPage.tsx';
 import { createSearchClient, type SearchClient } from './pages/search/model.ts';
 import { Inbox } from './pages/inbox/Inbox.tsx';
 import { answerApproval, getDecision, getInbox } from './pages/inbox/model.ts';
+import { TurnSignals } from './components/TurnSignals.tsx';
 import { Notifications } from './components/notifications/Notifications.tsx';
 import { selectRoots, isRunning, rootProject } from './lib/roots.ts';
 import { RootList } from './components/RootViews.tsx';
@@ -183,7 +184,7 @@ export function App({ target = store, client = unavailableClient, searchClient =
   const conversation = (conversationId?: string, embedded = false) => <ConversationPage key={conversationId} conversationId={conversationId} target={target} client={client} language={language} embedded={embedded}
     onConversation={id => navigate(`/c/${encodeURIComponent(id)}`)}/>;
   const icons = { overview: 'overview', inbox: 'inbox', search: 'search' } as const;
-  return <div className="app-shell"><aside className="sidebar"><Link className="brand" to="/"><span className="brand-mark"><Icon name="logo" size={16}/></span>{t('brand')}</Link>
+  return <div className="app-shell"><TurnSignals target={target} bindings={bindings}/><aside className="sidebar"><Link className="brand" to="/"><span className="brand-mark"><Icon name="logo" size={16}/></span>{t('brand')}</Link>
     <nav aria-label={t('workspace')} className="nav-group">
       {(['overview', 'inbox', 'search'] as const).map(key => <NavLink key={key} end to={key === 'overview' ? '/' : `/${key}`}><Icon name={icons[key]} size={16}/><span className="nav-label">{t(key)}</span>
         {key === 'inbox' && approvals > 0 && <span className="nav-count numeric" aria-hidden="true">{approvals}</span>}</NavLink>)}

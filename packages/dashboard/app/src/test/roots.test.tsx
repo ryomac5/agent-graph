@@ -45,7 +45,7 @@ it('selects the running root, joins its continuation and switches to child conve
   vi.stubGlobal('innerWidth', 1440);
   render(<MemoryRouter><WorkspacePage project="repo" target={fixture()} client={client}/></MemoryRouter>);
   const list = screen.getByRole('region', { name: 'Conversations' });
-  expect(within(list).getAllByRole('button').map(row => row.querySelector('strong')?.textContent)).toEqual(['Repo-20261008', 'agent-graph-002']);
+  expect(within(list).getAllByRole('link').map(row => row.querySelector('strong')?.textContent)).toEqual(['Repo-20261008', 'agent-graph-002']);
   expect(within(list).getByText('1 agent running')).toBeTruthy();
   expect(screen.getByText('Original request').closest('article')?.getAttribute('data-side')).toBe('end');
   expect(screen.getByText('Root response').closest('article')?.getAttribute('data-side')).toBe('start');
@@ -58,7 +58,7 @@ it('selects the running root, joins its continuation and switches to child conve
   expect(screen.getByText('Parent request').closest('article')?.getAttribute('data-side')).toBe('end');
   fireEvent.click(screen.getByRole('button', { name: 'Back to Repo-20261008' }));
   expect(await screen.findByText('Original request')).toBeTruthy(); expect(screen.queryByText('Child response')).toBeNull();
-  fireEvent.click(within(list).getByRole('button', { name: /agent-graph-002/ })); expect(screen.queryByText('Build the screen')).toBeNull();
+  fireEvent.click(within(list).getByRole('link', { name: /agent-graph-002/ })); expect(screen.queryByText('Build the screen')).toBeNull();
 });
 it('lists only roots with running children and leaves orphan unattended runs out', () => {
   render(<MemoryRouter><HomePage target={fixture()}/></MemoryRouter>);

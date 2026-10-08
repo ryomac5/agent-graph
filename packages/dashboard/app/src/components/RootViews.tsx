@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router';
+import { rootHref, useTurnConversations } from '../lib/turns.ts';
 import { shownRole, type Root } from '../lib/roots.ts';
 import { agentName, formatWhen, summarizeApproval } from '../lib/format.ts';
 import type { Row } from '../lib/store.ts';
@@ -29,6 +30,7 @@ function runningText(count: number, language: Language): string {
 export function RootList({ roots, selected, onSelect, project, language = 'en' }: { roots: Root[]; selected?: string; onSelect?: (root: Root) => void; project?: string; language?: Language }) {
   const t = dictionaries[language];
   const [showEarlier, setShowEarlier] = useState(false);
+  const turns = useTurnConversations();
   // 動いている会話と、24 時間以内に動いた会話を先に出す。それより前の会話は Earlier に畳む。
   const newest = Math.max(...roots.map(root => Date.parse(root.last_activity_ts ?? '')).filter(Number.isFinite));
   const cutoff = Number.isFinite(newest) ? newest - EARLIER_MS : Number.NEGATIVE_INFINITY;
@@ -37,12 +39,16 @@ export function RootList({ roots, selected, onSelect, project, language = 'en' }
   const current = roots.filter(recent);
   const older = roots.filter(root => !recent(root));
   const row = (root: Root) => {
-    const content = <><span className="root-row-line"><strong className="root-name" title={root.kit_name}>{root.name}</strong></span>
+    const content = <><span className="root-row-line"><strong className="root-name" title={root.kit_name}>{root.name}</strong>{root.conversation_ids.some(id => turns.has(id)) && <span className="root-turn-dot" role="img" aria-label={language === 'ja' ? '自分の番' : 'Your turn'}/>}</span>
       <span className="root-row-meta">{[...ACTIVE, ...WAITING, 'failed', 'denied', 'ended', 'done'].includes(root.state) && <StatusDot className="root-state" state={root.state} language={language}/>}
         {root.running_children > 0 && <span className="root-running">{runningText(root.running_children, language)}</span>}
         {root.last_activity_ts && <time className="root-time" dateTime={root.last_activity_ts} title={formatWhen(root.last_activity_ts, language)}>{formatWhen(root.last_activity_ts, language)}</time>}</span></>;
-    return onSelect ? <button key={root.id} className="root-row activity-name" aria-pressed={selected === root.id} onClick={() => onSelect(root)}>{content}</button>
-      : <Link key={root.id} className="root-row activity-name" to={`/p/${encodeURIComponent(project ?? root.project ?? 'other')}?root=${encodeURIComponent(root.id)}`}>{content}</Link>;
+    return <Link key={root.id} className="root-row activity-name" aria-label={root.name} aria-current={selected === root.id ? 'page' : undefined}
+      to={rootHref({ ...root, project: project ?? root.project })} onClick={event => {
+        if (onSelect && event.button === 0 && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+          event.preventDefault(); onSelect(root);
+        }
+      }}>{content}</Link>;
   };
   return <div className="root-list">{current.map(row)}
     {older.length > 0 && (showEarlier ? <>{<p className="root-earlier-label">{language === 'ja' ? '以前' : 'Earlier'}</p>}{older.map(row)}</>

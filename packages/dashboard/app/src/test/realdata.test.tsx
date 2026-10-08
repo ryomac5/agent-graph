@@ -118,7 +118,7 @@ it('loads roots after the snapshot page without overwriting a newer live root', 
  target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: { roots: { remove: [], upsert: [{ ...root, name: 'Live title' }] } } });
  return { ok: true, json: async () => ({ generation: 0, rows: [root, { ...root, id: 'c2', name: 'Second page', conversation_ids: ['c2'] }], next: null }) }; }));
  render(<MemoryRouter><App target={target}/></MemoryRouter>);
- await screen.findByRole('link', { name: /Second page/ }); expect(screen.getByRole('link', { name: /Live title/ })).toBeTruthy(); expect(screen.queryByRole('link', { name: /Old title/ })).toBeNull();
+ await within(screen.getByRole('main')).findByRole('link', { name: /Second page/ }); expect(within(screen.getByRole('main')).getByRole('link', { name: /Live title/ })).toBeTruthy(); expect(screen.queryByRole('link', { name: /Old title/ })).toBeNull();
 });it('uses the root projection name without fetching conversation bodies', () => {
  const target = createConversationStore(); const snapshot = target.getSnapshot();
  target.setSnapshot({ ...snapshot, projection: { ...snapshot.projection, roots: [{ id: 'c', name: 'agent-graph-001', project: 'p', state: 'unknown', last_activity_ts: null, conversation_ids: ['c'], running_children: 0, total_children: 0 }] } });

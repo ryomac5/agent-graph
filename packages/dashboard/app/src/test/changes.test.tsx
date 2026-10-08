@@ -142,12 +142,12 @@ it('surfaces command failures and prevents commands while disconnected', async (
   expect((screen.getByRole('button', { name: 'Approve' }) as HTMLButtonElement).disabled).toBe(true);
 });
 
-it('renders missing diff explicitly and filters other projects and unrelated approvals', () => {
+it('does not show the agent changes section when no artifact has a saved diff', () => {
+  // 見る差分のない成果物の区画は、利用者にとって無駄なので出さない。git の履歴は出す。
   setup({ artifacts: [{ ...artifact, diff: undefined }, { ...artifact, id: 'foreign', repository_id: 'other', version: 9 }],
     approvals: [{ id: 'foreign-approval', artifact_id: 'foreign', state: 'stale' }] });
-  expect(screen.getByText('Saved diff unavailable. Content may not have been retained.')).toBeTruthy();
-  expect(screen.queryByRole('article', { name: 'Approval foreign-approval' })).toBeNull();
-  expect(screen.getByLabelText('Version').querySelectorAll('option')).toHaveLength(1);
+  expect(screen.queryByRole('region', { name: 'Agent changes' })).toBeNull();
+  expect(screen.queryByText('Saved diff unavailable. Content may not have been retained.')).toBeNull();
 });
 
 it('parses header-like content, multiple hunks, deleted and binary files, and compares patches accurately', () => {

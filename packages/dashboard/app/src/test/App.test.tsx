@@ -35,7 +35,7 @@ it('uses the OS theme, reacts to changes, allows explicit overrides and Japanese
   expect(document.documentElement.lang).toBe('ja');
 });
 it.each([['/p/demo', 'Other'], ['/c/demo', 'Conversation'], ['/inbox', 'Approvals'],
-  ['/p/demo/tree', 'Other'], ['/p/demo/changes', 'Changes'], ['/search', 'Search']])('renders route %s', (path, heading) => {
+  ['/p/demo/tree', 'Other'], ['/p/demo/changes', 'Other'], ['/search', 'Search']])('renders route %s', (path, heading) => {
   render(<MemoryRouter initialEntries={[path]}><App/></MemoryRouter>);
   expect(screen.getByRole('heading', { name: heading })).toBeTruthy();
 });

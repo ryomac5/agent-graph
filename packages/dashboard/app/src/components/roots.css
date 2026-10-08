@@ -46,3 +46,13 @@
 .root-running { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .request-row { cursor: pointer; }
 .request-older { margin: var(--space-1) 0 0 var(--space-1); color: var(--text-3); }
+
+/* 誰が誰に頼んだかを線で示す木。親の頭から縦の線を下ろし、各子の頭へ横の線を引く。 */
+.request-flow ul ul, .request-flow > ul > li > ul { border-left: none; margin-left: 13px; padding-left: 18px; position: relative; }
+.request-flow ul ul > li { position: relative; }
+.request-flow ul ul > li::before { content: ''; position: absolute; left: -18px; top: 0; bottom: 0; border-left: 1.5px solid var(--border-strong); }
+.request-flow ul ul > li:last-child::before { bottom: auto; height: 20px; }
+.request-flow ul ul > li::after { content: ''; position: absolute; left: -18px; top: 20px; width: 14px; border-top: 1.5px solid var(--border-strong); }
+.request-avatar { flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; margin: 8px 2px 0 4px; border-radius: 50%; font-size: 11px; font-weight: 700; color: #fff; background: var(--text-3); }
+.request-avatar.provider-claude { background: #d97757; }
+.request-avatar.provider-codex { background: #10a37f; }

@@ -80,7 +80,8 @@ it('does not draw a bubble for user rows that only carry injected text or tool r
 function flowStore(childCount: number) {
   const target = store();
   const p = target.getSnapshot().projection;
-  const day = (n: number) => new Date(Date.UTC(2026, 8, 1 + n)).toISOString();
+  // 子は 1 時間ずつずらす。24 時間を超えて離れた子は Earlier に畳まれるので、ここでは全てを 24 時間の中に置く。
+  const day = (n: number) => new Date(Date.UTC(2026, 8, 1, n)).toISOString();
   for (let index = 0; index < childCount; index++) {
     const id = `child-${index}`;
     p.conversations!.push({ id, provider: 'claude', type: 'subagent', origin: 'observed' });
@@ -130,4 +131,16 @@ it('子のエージェントの報告と裏の作業の通知を、利用者の�
   expect(shown.container.textContent).not.toContain('other Claude session');
   const hidden = render(<Message row={notice} sender={senderOf(notice, participants)}/>);
   expect(hidden.container.textContent).toBe('');
+});
+
+it('最後に動いた子から 24 時間より前に止まった子は、Earlier に畳む', () => {
+  const store = flowStore(3);
+  const runs = store.getSnapshot().projection.runs!;
+  for (const run of runs) if (run.id === 'child-1:1') { run.last_evidence_ts = '2026-08-01T00:00:00Z'; run.started_ts = '2026-08-01T00:00:00Z'; }
+  render(<MemoryRouter><WorkspacePage project="repo" target={store} client={client}/></MemoryRouter>);
+  const flow = screen.getByRole('complementary', { name: 'Sub-agents' });
+  const titles = () => [...flow.querySelectorAll('.delegation-select .request-title')].map(element => element.textContent);
+  expect(titles()).not.toContain('Task 1');
+  fireEvent.click(within(flow).getByRole('button', { name: /Show older/ }));
+  expect(titles()).toContain('Task 1');
 });

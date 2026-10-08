@@ -1,4 +1,6 @@
 import { GitChanges } from './GitChanges.tsx';
+import { ProjectHeader } from '../workspace/WorkspacePage.tsx';
+import { getProjectName } from '../../lib/projects.ts';
 import { resolveProjectId } from '../../lib/projects.ts';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router';
@@ -195,10 +197,11 @@ export function ChangesPage(props: ChangesPageProps) {
   const projectId = resolveProjectId(state, project);
   const registered = state.projection.projects?.some(row => row.id === projectId && row.state === 'registered') ?? false;
   const artifacts = selectArtifacts(state, project);
+  // 差分を保存できた成果物だけを出す。中身のない成果物の区画は、見る物がないので出さない。
+  const reviewable = artifacts.filter(row => typeof row.diff === 'string' ? row.diff.trim() !== '' : Number(row.files ?? row.file_count ?? 0) > 0);
   return <section className="page changes-page" aria-label="Project changes">
-    <header className="page-header"><div className="page-title"><h1>Changes</h1></div></header>
-    {project && <nav className="tabs" aria-label="Project"><AppLink to={`/p/${encodeURIComponent(project)}`}>Conversations</AppLink><AppLink to={`/p/${encodeURIComponent(project)}/changes`} aria-current="page">Changes</AppLink></nav>}
-    {!!artifacts.length && <section aria-label="Agent changes"><AgentChangesPage {...props}/></section>}
+    {project && <ProjectHeader route={project} name={getProjectName(state, projectId)}/>}
+    {!!reviewable.length && <section aria-label="Agent changes"><AgentChangesPage {...props}/></section>}
     <GitChanges client={props.client} projectId={projectId} worktree={search.get('worktree') ?? undefined} enabled={registered}/>
   </section>;
 }

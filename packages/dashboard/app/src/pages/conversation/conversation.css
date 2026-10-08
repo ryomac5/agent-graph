@@ -1,7 +1,7 @@
 /* 会話。見出しは上、時系列は中央で流し、入力欄は下に置く。重ならないよう各領域を別の箱にする。 */
-:root { --user-bubble: #f1f1ef; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme='light']) { --user-bubble: #25262c; } }
-:root[data-theme='dark'] { --user-bubble: #25262c; }
+:root { --user-bubble: #e7edfb; --agent-bubble: #ffffff; --agent-bubble-border: #dcdde3; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme='light']) { --user-bubble: #22304d; --agent-bubble: #1f2127; --agent-bubble-border: #30323a; } }
+:root[data-theme='dark'] { --user-bubble: #22304d; --agent-bubble: #1f2127; --agent-bubble-border: #30323a; }
 .conversation-page { display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; background: var(--bg); }
 .conversation-page.missing { justify-content: center; }
 /* 見出しは 1 行。名前、状態、provider とモデル、経過だけを出し、残りは Details に畳む。 */
@@ -117,7 +117,7 @@
 
 /* エージェントの返答も吹き出しにする。利用者の右の吹き出しと対にし、左に寄せる。 */
 .message-agent .message-main { max-width: min(88%, 760px); }
-.message-agent .message-bubble { padding: 10px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 14px 14px 14px 4px; }
+.message-agent .message-bubble { padding: 10px 14px; background: var(--agent-bubble); border: 1px solid var(--agent-bubble-border); border-radius: 14px 14px 14px 4px; box-shadow: 0 1px 2px rgb(0 0 0 / 4%); }
 
 /* 続く道具の呼び出しは 1 行に畳む。 */
 .tool-run { margin: 4px 0; max-width: min(88%, 760px); }

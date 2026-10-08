@@ -2,6 +2,8 @@ export const DEFAULT_KEYS = { command: 'Cmd+K', home: 'g h', workspace: 'g w', i
 export type KeyAction = keyof typeof DEFAULT_KEYS;
 export type KeyBindings = Record<KeyAction, string>;
 export const KEY_LABELS: Record<KeyAction, string> = { command: 'Search and commands', home: 'Go to Overview', workspace: 'Go to workspace', inbox: 'Go to approvals', tree: 'Go to requests', changes: 'Go to Changes', next: 'Next row', previous: 'Previous row', allow: 'Allow approval', deny: 'Deny approval', interrupt: 'Interrupt run', help: 'Keyboard shortcuts' };
+export const KEY_LABELS_JA: Record<KeyAction, string> = { command: '検索と操作', home: '概要を開く', workspace: '作業場を開く', inbox: '承認待ちを開く', tree: '依頼を開く', changes: '変更を開く', next: '次の行', previous: '前の行', allow: '許可', deny: '拒否', interrupt: '実行を中断', help: 'キー操作' };
+export function keyLabel(key: KeyAction, language: 'en' | 'ja'): string { return (language === 'ja' ? KEY_LABELS_JA : KEY_LABELS)[key]; }
 export const SEQUENCE_TIMEOUT_MS = 1000;
 function normalizeStroke(value: string): string {
   const parts = value.toLowerCase().split('+').map(part => part.trim());

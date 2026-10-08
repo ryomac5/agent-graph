@@ -55,6 +55,7 @@ const SNIPPET_CONTEXT_CHARS = 80;
 const SNIPPET_CHAR_LIMIT = 360;
 const SNIPPET_LINE_LIMIT = 3;
 export function extractSnippet(body: string, query: string): { text: string; match: boolean }[] {
+  body = body.replace(/!?(?:\[([^\]]*)\])\([^)]*\)/g, '$1').replace(/\*\*|__|~~|\x60{1,3}/g, '').replace(/^\s{0,3}#{1,6}\s+/gm, '');
   const terms = [...new Set(query.match(/[\p{L}\p{N}_-]+/gu) ?? [])].filter(term => !['AND', 'OR', 'NOT', 'NEAR'].includes(term));
   const lower = body.toLocaleLowerCase();
   const hits = terms.map(term => lower.indexOf(term.toLocaleLowerCase())).filter(index => index >= 0);

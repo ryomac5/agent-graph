@@ -5,3 +5,6 @@
 .command-dialog [role=option][aria-selected=true] { outline: 2px solid var(--accent, #0031D8); }
 .command-dialog dl { display: grid; grid-template-columns: 1fr auto; gap: 0.5rem; }
 .command-dialog dl > div { display: contents; }
+
+.command-dialog [role=option] { min-width: 0; }
+.command-dialog [role=option] button { display: block; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }

@@ -14,7 +14,7 @@ export const dictionaries = {
     requests: 'Sub-agents', noRequests: 'No sub-agents yet', noConversations: 'No conversations yet', newTask: 'New task',
     selectConversation: 'Select a conversation', back: 'Back to', showRequests: 'Show sub-agents', hideRequests: 'Hide sub-agents',
     agentsRunning: 'agents running', agentRunning: 'agent running', viewAll: 'View all conversations', unattended: 'Background',
-    other: 'Other', agent: 'Agent', commands: 'Search and commands', retry: 'Retry', showOlder: 'Show older',
+    other: 'Other', agent: 'Agent', commands: 'Search and commands', retry: 'Retry', showOlder: 'Earlier',
   },
   ja: {
     english: 'English', japanese: '日本語', brand: 'agent-graph', workspace: '作業場', overview: '一覧', projects: 'プロジェクト',
@@ -31,7 +31,7 @@ export const dictionaries = {
     requests: 'サブエージェント', noRequests: 'まだサブエージェントはいません', noConversations: 'まだ会話はありません', newTask: '新規タスク',
     selectConversation: '会話を選んでください', back: '戻る:', showRequests: 'サブエージェントを開く', hideRequests: 'サブエージェントを畳む',
     agentsRunning: '件が実行中', agentRunning: '件が実行中', viewAll: 'すべての会話を見る', unattended: '自動実行',
-    other: 'その他', agent: 'エージェント', commands: 'コマンドと検索', retry: '再試行', showOlder: '古い依頼を表示',
+    other: 'その他', agent: 'エージェント', commands: 'コマンドと検索', retry: '再試行', showOlder: '以前',
   },
 } as const;
 export type Language = keyof typeof dictionaries;

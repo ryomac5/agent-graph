@@ -1,7 +1,7 @@
 import { Link } from 'react-router';
 import type { ReactNode } from 'react';
 import type { Language } from '../lib/i18n.ts';
-import { evidenceLabel, providerName } from '../lib/format.ts';
+import { evidenceLabel, providerName, modelName } from '../lib/format.ts';
 import { StateBadge } from './StateBadge.tsx';
 import { readBody, readText, summarizeChanges, type Activity } from './activity.ts';
 import { formatDuration, RelativeTime } from './RelativeTime.tsx';
@@ -12,7 +12,7 @@ export function AgentCell({ provider, model, effort, language = 'en' }: { provid
   return <span className="agent-cell">
     {provider && <span className={`provider-mark provider-${provider}`}>{providerName(provider)}</span>}
     {/* モデルが記録されていないときは provider だけを出す。記録なしの文言は行ごとに繰り返さない。 */}
-    {model ? <span className="agent-model" title={model}>{model}</span>
+    {model ? <span className="agent-model" title={model}>{modelName(model)}</span>
       : !provider && <span className="muted-text" title={language === 'ja' ? 'エージェントの記録がありません' : 'No agent recorded for this run'}>—</span>}
     {effort && <span className="chip chip-quiet">{effort}</span>}
   </span>;
@@ -49,7 +49,7 @@ export function ActivityRow({ activity, now, language = 'en', onSelect, selected
   const stopped = isStoppedState(activity.state);
   const excerpt = activity.messages.at(-1);
   const changes = summarizeChanges(activity.artifacts);
-  const badge = <StateBadge state={activity.state} language={language} evidenceUrl={url}
+  const badge = ['idle', 'unknown'].includes(activity.state) ? null : <StateBadge state={activity.state} language={language} evidenceUrl={url}
     evidence={evidenceLabel(activity.state === 'ended' ? run?.end_evidence : run?.last_evidence) || undefined}
     evidenceTime={readText(run?.last_evidence_ts) ? <RelativeTime value={readText(run?.last_evidence_ts)} now={now} language={language}/> : undefined} reason={readText(run?.cause ?? run?.reason) || undefined}
     elapsed={statusElapsed === 'Unknown' ? undefined : statusElapsed}/>;

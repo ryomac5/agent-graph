@@ -49,7 +49,7 @@ it('groups roots by project and leaves conversations that are not roots out', ()
  expect(rows[0].getAttribute('href')).toBe('/p/%2Frepo%2Falpha?root=c1');
 });it('shows projected root state and activity time and applies root patches', () => {
  const target = createActivityStore(); render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
- const row = screen.getByRole('link', { name: /Investigate latency/ }); expect(row.querySelector('.root-state')!.textContent).toBe('Unknown');
+ const row = screen.getByRole('link', { name: /Investigate latency/ }); expect(row.querySelector('.root-state')).toBeNull();
  expect(row.querySelector('time')!.getAttribute('datetime')).toBe('2026-10-07T01:05:00Z');
  act(() => target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: { roots: { remove: [], upsert: [{ ...target.getSnapshot().projection.roots[0], state: 'failed' }] } } }));
  expect(screen.getByRole('link', { name: /Implement API/ }).textContent).toContain('Failed');
@@ -57,7 +57,7 @@ it('groups roots by project and leaves conversations that are not roots out', ()
  const target = createActivityStore(); const snapshot = target.getSnapshot();
  target.setSnapshot({ ...snapshot, projection: { ...snapshot.projection, roots: [{ ...snapshot.projection.roots[0], name: 'agent-graph-001' }] } });
  render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
- expect(screen.getByRole('link', { name: /agent-graph-001/ })).toBeTruthy();
+ expect(screen.getByRole('link', { name: /alpha-20261007/ })).toBeTruthy();
  expect(screen.queryByText('Added the endpoint')).toBeNull(); expect(screen.queryByRole('link', { name: /Investigate latency/ })).toBeNull();
 });it('keeps JSON conversation bodies out of root rows', () => {
  const target = createActivityStore(); const snapshot = target.getSnapshot();

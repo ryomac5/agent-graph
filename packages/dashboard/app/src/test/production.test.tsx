@@ -82,7 +82,7 @@ function flowStore(childCount: number) {
   const target = store();
   const p = target.getSnapshot().projection;
   // 子は 1 時間ずつずらす。24 時間を超えて離れた子は Earlier に畳まれるので、ここでは全てを 24 時間の中に置く。
-  const day = (n: number) => new Date(Date.UTC(2026, 8, 1, n)).toISOString();
+  const day = (n: number) => new Date(Date.now() - (24 - n) * 30 * 60 * 1000).toISOString();
   for (let index = 0; index < childCount; index++) {
     const id = `child-${index}`;
     p.conversations!.push({ id, provider: 'claude', type: 'subagent', origin: 'observed' });
@@ -99,7 +99,7 @@ it('puts running children first, then the newest, and folds older children past 
   const titles = () => [...flow.querySelectorAll('.delegation-select .request-title')].map(element => element.textContent);
   expect(titles().slice(0, 3)).toEqual(['Task 0', 'Task 24', 'Task 23']);
   expect(titles()).toHaveLength(21);
-  fireEvent.click(within(flow).getByRole('button', { name: /Show older/ }));
+  fireEvent.click(within(flow).getByRole('button', { name: /Earlier/ }));
   expect(titles()).toHaveLength(25);
   expect(titles().at(-1)).toBe('Task 1');
 });
@@ -111,12 +111,12 @@ it('opens a child conversation from anywhere on its row, writes it to the URL an
   const flow = screen.getByRole('complementary', { name: 'Sub-agents' });
   fireEvent.click(within(flow).getByText('Task 1').closest('.request-row')!);
   expect(screen.getByTestId('location').textContent).toContain('child=child-1');
-  expect(screen.getByRole('button', { name: 'Back to agent-graph-001' }).textContent).toBe('←agent-graph-001');
+  expect(screen.getByRole('button', { name: 'Back to Repo-20260925' }).textContent).toBe('←Repo-20260925');
   fireEvent.click(within(flow).getByText('Task 0'));
   expect(screen.getByTestId('location').textContent).toContain('child=child-0');
   // 子の会話は動いている間だけ経過を出す。
   expect(header().textContent).toMatch(/Elapsed/);
-  fireEvent.click(screen.getByRole('button', { name: 'Back to agent-graph-001' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Back to Repo-20260925' }));
   expect(screen.getByTestId('location').textContent).not.toContain('child=');
 });
 
@@ -134,7 +134,7 @@ it('子のエージェントの報告と裏の作業の通知を、利用者の�
   expect(hidden.container.textContent).toBe('');
 });
 
-it('最後に動いた子から 24 時間より前に止まった子は、Earlier に畳む', () => {
+it('現在から 24 時間より前に止まった子は、Earlier に畳む', () => {
   const store = flowStore(3);
   const runs = store.getSnapshot().projection.runs!;
   for (const run of runs) if (run.id === 'child-1:1') { run.last_evidence_ts = '2026-08-01T00:00:00Z'; run.started_ts = '2026-08-01T00:00:00Z'; }
@@ -142,7 +142,7 @@ it('最後に動いた子から 24 時間より前に止まった子は、Earlie
   const flow = screen.getByRole('complementary', { name: 'Sub-agents' });
   const titles = () => [...flow.querySelectorAll('.delegation-select .request-title')].map(element => element.textContent);
   expect(titles()).not.toContain('Task 1');
-  fireEvent.click(within(flow).getByRole('button', { name: /Show older/ }));
+  fireEvent.click(within(flow).getByRole('button', { name: /Earlier/ }));
   expect(titles()).toContain('Task 1');
 });
 

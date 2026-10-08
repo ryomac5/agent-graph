@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { store, useScreenStore, type ScreenStore } from '../../lib/store.ts';
-import { conversationName, formatWhen } from '../../lib/format.ts';
+import { conversationName, formatWhen, readTitle } from '../../lib/format.ts';
 import { getProjectName } from '../../lib/projects.ts';
 import type { Language } from '../../lib/i18n.ts';
 import { SEARCH_KINDS, getResultHref, extractSnippet, type SearchClient, type SearchKind, type SearchQuery, type SearchResponse } from './model.ts';
+import { selectRoots } from '../../lib/roots.ts';
+import { readAttempts } from '../tree/model.ts';
 import './search.css';
 
 const TEXT = {
@@ -19,13 +21,14 @@ const TEXT = {
     retention: '保持期間により本文が削除されました。', missing: 'メッセージを取得できません。',
     unsupported: '形式未対応の会話は検索できません。', fallback: '部分一致で表示しています', more: 'さらに表示', failed: '検索できません' },
 };
-function formatTimestamp(value: string): string {
+function formatTimestamp(value: string, language: Language): string {
   const time = Date.parse(value);
-  return Number.isFinite(time) ? formatWhen(value) : value;
+  return Number.isFinite(time) ? formatWhen(value, language) : value;
 }
 export function SearchPage({ client, target = store, language = 'en' }: { client: SearchClient; target?: ScreenStore; language?: Language }) {
   const state = useScreenStore(target);
   const t = TEXT[language];
+  const rootNames = new Map(selectRoots(state).flatMap(root => root.conversation_ids.map(id => [id, root.name] as const)));
   const [query, setQuery] = useState<SearchQuery>({ query: '' });
   const [result, setResult] = useState<SearchResponse>();
   const [loading, setLoading] = useState(false);
@@ -54,7 +57,7 @@ export function SearchPage({ client, target = store, language = 'en' }: { client
       <label>{t.query}<input type="search" value={query.query} onChange={event => setQuery({ ...query, query: event.target.value })}/></label>
       <label>{t.project}<input value={query.project ?? ''} onChange={event => setQuery({ ...query, project: event.target.value })}/></label>
       <label>{t.provider}<select value={query.provider ?? ''} onChange={event => setQuery({ ...query, provider: event.target.value })}><option value="">{t.all}</option><option value="claude">Claude</option><option value="codex">Codex</option></select></label>
-      {(['from', 'to'] as const).map(key => <label key={key}>{t[key]}<input type="datetime-local" value={query[key] ?? ''} onChange={event => setQuery({ ...query, [key]: event.target.value })}/></label>)}
+      {(['from', 'to'] as const).map(key => <label key={key}>{t[key]}<input type={language === 'ja' ? 'text' : 'datetime-local'} lang={language} placeholder={language === 'ja' ? '年/月/日 時:分' : undefined} pattern={language === 'ja' ? '[0-9]{4}/[0-9]{2}/[0-9]{2} [0-9]{2}:[0-9]{2}' : undefined} value={language === 'ja' ? (query[key] ?? '').replaceAll('-', '/').replace('T', ' ') : query[key] ?? ''} onChange={event => setQuery({ ...query, [key]: language === 'ja' ? event.target.value.replaceAll('/', '-').replace(' ', 'T') : event.target.value })}/></label>)}
       <label>{t.kind}<select value={query.kind ?? ''} onChange={event => setQuery({ ...query, kind: event.target.value as SearchKind || undefined })}><option value="">{t.all}</option>{SEARCH_KINDS.map(kind => <option key={kind} value={kind}>{t[kind]}</option>)}</select></label>
       <button className="btn btn-primary" type="submit">{t.title}</button>
     </form>
@@ -70,13 +73,16 @@ export function SearchPage({ client, target = store, language = 'en' }: { client
           const id = state.identities?.conversations[row.conversation_id ?? ''] ?? row.conversation_id ?? '';
           const conversation = state.projection.conversations?.find(item => item.id === id);
           const task = state.projection.tasks?.find(item => item.id === conversation?.task_id || `task:${item.id}` === row.subject);
-          const name = conversationName(state, id) || String(task?.name || 'Conversation');
-          const taskName = String(task?.name || conversationName(state, id) || 'Task');
+          const delegation = state.projection.delegations?.find(d => d.conversation_id === id || Boolean(row.run_id) && (d.run_id === row.run_id || readAttempts(d).some(a => a.run_id === row.run_id)));
+          const usable = (value: unknown) => /^(done|ended|idle|running|failed|unknown)$/i.test(readTitle(value)) ? '' : readTitle(value);
+          const rootName = usable(rootNames.get(id));
+          const name = rootName || usable(conversationName(state, id)) || usable(delegation?.title) || usable(task?.name) || t.conversation;
+          const taskName = usable(delegation?.title) || usable(task?.name) || name;
           const projectName = getProjectName(state, String(conversation?.project ?? task?.project ?? row.project ?? ''));
-          const title = row.kind === 'diff' ? `Changes · ${taskName}` : row.kind === 'finding' ? `Finding · ${taskName}` : name;
+          const title = row.kind === 'diff' ? `${t.diff} · ${taskName}` : row.kind === 'finding' ? `${t.finding} · ${taskName}` : name;
           return <li key={row.id}><article><header>{href ? <Link to={href}>{title}</Link> : <strong>{title}</strong>}</header>
-            <dl><div><dt>{t.conversation}</dt><dd>{name}</dd></div><div><dt>Task</dt><dd>{taskName}</dd></div>
-              <div><dt>{t.project}</dt><dd>{projectName}</dd></div></dl><time dateTime={row.source_ts} title={row.source_ts}>{formatTimestamp(row.source_ts)}</time>
+            <dl><div><dt>{t.conversation}</dt><dd>{name}</dd></div><div><dt>{t.task}</dt><dd>{taskName}</dd></div>
+              <div><dt>{t.project}</dt><dd>{projectName}</dd></div></dl><time dateTime={row.source_ts} title={row.source_ts}>{formatTimestamp(row.source_ts, language)}</time>
             {row.body === null ? <p className="muted-text">{row.reason === 'retention' ? t.retention : t.missing}</p> : <p className="search-excerpt">{extractSnippet(row.body, submitted.current.query).map((part, index) => part.match ? <mark key={index}>{part.text}</mark> : part.text)}</p>}
           </article></li>;
         })}</ul></section>;

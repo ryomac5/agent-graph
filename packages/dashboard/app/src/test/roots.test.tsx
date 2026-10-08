@@ -45,7 +45,7 @@ it('selects the running root, joins its continuation and switches to child conve
   vi.stubGlobal('innerWidth', 1440);
   render(<MemoryRouter><WorkspacePage project="repo" target={fixture()} client={client}/></MemoryRouter>);
   const list = screen.getByRole('region', { name: 'Conversations' });
-  expect(within(list).getAllByRole('button').map(row => row.querySelector('strong')?.textContent)).toEqual(['agent-graph-001', 'agent-graph-002']);
+  expect(within(list).getAllByRole('button').map(row => row.querySelector('strong')?.textContent)).toEqual(['Repo-20261008', 'agent-graph-002']);
   expect(within(list).getByText('1 agent running')).toBeTruthy();
   expect(screen.getByText('Original request').closest('article')?.getAttribute('data-side')).toBe('end');
   expect(screen.getByText('Root response').closest('article')?.getAttribute('data-side')).toBe('start');
@@ -56,14 +56,14 @@ it('selects the running root, joins its continuation and switches to child conve
   fireEvent.click(within(tree).getByRole('button', { name: 'Build the screen · GPT-6.1 Sol · implement · Running' }));
   expect(await screen.findByText('Child response')).toBeTruthy(); expect(screen.queryByText('Original request')).toBeNull();
   expect(screen.getByText('Parent request').closest('article')?.getAttribute('data-side')).toBe('end');
-  fireEvent.click(screen.getByRole('button', { name: 'Back to agent-graph-001' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Back to Repo-20261008' }));
   expect(await screen.findByText('Original request')).toBeTruthy(); expect(screen.queryByText('Child response')).toBeNull();
   fireEvent.click(within(list).getByRole('button', { name: /agent-graph-002/ })); expect(screen.queryByText('Build the screen')).toBeNull();
 });
 it('lists only roots with running children and leaves orphan unattended runs out', () => {
   render(<MemoryRouter><HomePage target={fixture()}/></MemoryRouter>);
-  expect(screen.getAllByRole('link', { name: /agent-graph-/ })).toHaveLength(2);
-  expect(screen.getByRole('heading', { name: 'Screen graph' })).toBeTruthy();
+  expect(screen.getAllByRole('link', { name: /Repo-20261008|agent-graph-002/ })).toHaveLength(2);
+  expect(screen.getByRole('heading', { name: /Screen graph/ })).toBeTruthy();
   expect(screen.getByRole('button', { name: 'Build the screen · GPT-6.1 Sol · implement · Running' })).toBeTruthy();
   expect(screen.queryByText('Check the screen')).toBeNull();
   // 根でない会話は一覧に出さない。

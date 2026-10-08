@@ -110,7 +110,8 @@ it('shows the flow under its root in the workspace, selects requests and sends t
   fireEvent.click(implement);
   expect(within(flow).getByRole('button', { name: /(Codex|GPT)[^·]* · implement/ }).getAttribute('aria-pressed')).toBe('true');
   expect(within(flow).getByRole('button', { name: /^Terminal/ }).getAttribute('aria-pressed')).toBe('false');
-  fireEvent.click(within(flow).getByRole('button', { name: 'Retry' }));
+  expect(within(flow).queryByRole('button', { name: 'Retry' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
   await waitFor(() => expect(command).toHaveBeenCalledWith('intake.retry', { requestId: 'implementation' }));
   fireEvent.click(within(flow).getByRole('button', { name: /Claude[^·]* · review/ }));
   expect(within(flow).getByRole('button', { name: /Claude[^·]* · review/ }).getAttribute('aria-pressed')).toBe('true');
@@ -137,8 +138,10 @@ it('groups retry executions in one delegation node and reports retry errors', as
   render(<MemoryRouter><WorkspacePage project={PROJECT} target={target} client={{ command }}/></MemoryRouter>);
   const flow = screen.getByRole('complementary', { name: 'Sub-agents' });
   expect(within(flow).getAllByRole('button', { name: /(Codex|GPT)[^·]* · implement/ })).toHaveLength(1);
-  fireEvent.click(within(flow).getByRole('button', { name: 'Retry' }));
-  await waitFor(() => expect(within(flow).getByRole('alert').textContent).toBe('Runner unavailable'));
+  fireEvent.click(within(flow).getByRole('button', { name: /(Codex|GPT)[^·]* · implement/ }));
+  expect(within(flow).queryByRole('button', { name: 'Retry' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  await waitFor(() => expect(screen.getAllByRole('alert')[0].textContent).toBe('Runner unavailable'));
 });
 
 it('keeps a resumed delegated conversation under its origin with two attempts and its reviewer as a child', () => {

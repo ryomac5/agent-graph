@@ -11,18 +11,48 @@ export interface Root {
   /** キットが付けた番号の名前。画面ではプロジェクト名と始めた日の名前で呼び、番号は補足に出す。 */
   kit_name?: string;
 }
-/** 会話の系列を始めた時刻。系列の会話のうち最も早く作られた時刻である。 */
-function startedAt(state: ScreenState, root: Root): number | undefined {
-  const times = root.conversation_ids.map(id => state.projection.conversations?.find(row => row.id === id))
-    .map(row => Date.parse(String(row?.created_ts ?? row?.first_message_ts ?? ''))).filter(Number.isFinite);
-  return times.length ? Math.min(...times) : undefined;
+interface ConversationTimes { first?: number; last?: string }
+function readConversationTimes(state: ScreenState): Map<string, ConversationTimes> {
+  const messages = new Map((state.projection.messages ?? []).map(row => [row.id, row]));
+  const spoken = new Map<string, Map<unknown, string>>();
+  for (const link of state.projection.message_memberships ?? []) {
+    if (link.active === 0 || link.active === false) continue;
+    const ts = messages.get(link.message_id)?.source_ts;
+    if (typeof ts !== 'string' || !Number.isFinite(Date.parse(ts))) continue;
+    const id = String(link.conversation_id);
+    if (!spoken.has(id)) spoken.set(id, new Map());
+    spoken.get(id)!.set(link.message_id, ts);
+  }
+  const starts = new Map<string, number>();
+  for (const run of state.projection.runs ?? []) {
+    const time = Date.parse(String(run.started_ts ?? ''));
+    if (!Number.isFinite(time)) continue;
+    const id = String(run.conversation_id);
+    starts.set(id, Math.min(starts.get(id) ?? time, time));
+  }
+  return new Map((state.projection.conversations ?? []).map(row => {
+    const id = String(row.id);
+    const times = [...(spoken.get(id)?.values() ?? [])].sort();
+    // 最近の発言だけの窓を、系列の最初の発言と取り違えない。
+    const complete = row.message_count === undefined || times.length >= Number(row.message_count);
+    const firstMessage = Date.parse(String(row.first_message_ts ?? (complete ? times[0] : '') ?? ''));
+    const created = Date.parse(String(row.created_ts ?? ''));
+    const first = Number.isFinite(firstMessage) ? firstMessage : starts.get(id) ?? (Number.isFinite(created) ? created : undefined);
+    const last = [row.last_message_ts, times.at(-1)].filter((value): value is string => typeof value === 'string' && Number.isFinite(Date.parse(value))).sort().at(-1);
+    return [id, { first, last }];
+  }));
+}
+/** 発言の時刻を優先し、未配信なら実行の開始、観測の開始の順に使う。 */
+export function startedAt(state: ScreenState, root: Root, times = readConversationTimes(state)): number | undefined {
+  const starts = root.conversation_ids.map(id => times.get(id)?.first).filter((value): value is number => value !== undefined);
+  return starts.length ? Math.min(...starts) : undefined;
 }
 /** キットの番号の名前を、プロジェクト名と始めた日の名前に置き換える。同じ日に複数あれば、始めた順に -2 から付ける。 */
-function renameKitRoots(state: ScreenState, roots: Root[]): Root[] {
+function renameKitRoots(state: ScreenState, roots: Root[], times: Map<string, ConversationTimes>): Root[] {
   const groups = new Map<string, { root: Root; start: number }[]>();
   for (const root of roots) {
     const kit = /^(.+)-\d{3,}$/.exec(root.name);
-    const start = kit ? startedAt(state, root) : undefined;
+    const start = kit ? startedAt(state, root, times) : undefined;
     if (!kit || start === undefined) continue;
     const day = new Date(start);
     const project = root.project ? String(state.projection.projects?.find(row => row.id === root.project)?.display_name ?? '') : '';
@@ -56,13 +86,17 @@ export function rootProject(root: { project: string | null }, registered: Set<st
   return root.project !== null && registered.has(root.project) ? root.project : OTHER_PROJECT;
 }
 export function selectRoots(state: ScreenState, project?: string): Root[] {
+  const times = readConversationTimes(state);
   const reviews = reviewConversations(state);
   const registered = new Set(getRegisteredProjects(state).map(row => String(row.id)));
   return renameKitRoots(state, (state.projection.roots ?? []).filter(row => project === undefined || row.project === project
       || project === OTHER_PROJECT && rootProject(row as unknown as Root, registered) === OTHER_PROJECT)
     .filter(row => !((row.conversation_ids as string[] | undefined) ?? []).some(id => reviews.has(id)))
-    .map(row => { const root = { ...(row as unknown as Root) }; root.conversation_ids ??= []; root.name = rootName(state, root); return root; }))
-    .toSorted((a, b) => Number(isRunning(b.state)) - Number(isRunning(a.state))
+    .map(row => { const root = { ...(row as unknown as Root) }; root.conversation_ids ??= []; root.name = rootName(state, root);
+      const spoken = root.conversation_ids.map(id => times.get(id)?.last).filter((value): value is string => Boolean(value));
+      if (spoken.length) root.last_activity_ts = spoken.sort().at(-1)!;
+      return root; }), times)
+    .toSorted((a, b) => Number(isRunning(b.state) || ['waiting_approval', 'waiting_input'].includes(b.state)) - Number(isRunning(a.state) || ['waiting_approval', 'waiting_input'].includes(a.state))
       || (b.last_activity_ts ?? '').localeCompare(a.last_activity_ts ?? '') || a.id.localeCompare(b.id));
 }
 export function useRootIndex(state: ScreenState) {
@@ -125,16 +159,16 @@ export function buildRootTree(root: Root, index: RootIndex): DelegationTree {
       const conversation = index.conversations.get(id);
       const run = index.runs.get(id);
       const evidence = readObject(relation.evidence);
+      const request = readText(evidence.request_id);
+      const delegation = request ? index.requests.get(request) : undefined;
       const node: TreeNode = { id, kind: 'conversation', conversationId: id, run, label: '', attempts: [], children: [],
         provider: readText(conversation?.provider), model: readModel(run).model || readText(run?.model ?? conversation?.model ?? evidence.model),
-        role: readText(evidence.agentType ?? evidence.role) || 'subagent', state: readText(run?.state ?? conversation?.state) || 'unknown' };
+        role: readText(delegation?.role ?? evidence.role ?? evidence.agentType) || 'subagent', state: readText(run?.state ?? conversation?.state) || 'unknown' };
       // Claude の子は、結果を返して止まると待機に戻る。頼まれた仕事は終えているので、完了として見せる。
       if (node.provider === 'claude' && evidence.agentType !== undefined && node.state === 'idle') node.state = 'ended';
       node.label = nodeLine(node);
       nodes.push(node); parent.children.push(id);
       // 頼んだ内容は、子のエージェントの説明か、runner の委譲の題から取る。
-      const request = readText(evidence.request_id);
-      const delegation = request ? index.requests.get(request) : undefined;
       edges.push({ id: `relation:${readText(relation.id) || id}`, source: parent.id, target: id, title: readText(evidence.description) || readText(delegation?.title),
         confidence: readText(relation.confidence) || 'confirmed', kind: 'delegated' });
       addChildren(node, id);

@@ -27,7 +27,7 @@ it('classifies every notification type and distinguishes unknown from completed'
   next.connection = 'runner_unavailable';
   const notices = collectNotifications(before, next);
   expect(new Set(notices.map(notice => notice.kind))).toEqual(new Set(NOTIFICATION_KINDS));
-  expect(notices.find(notice => notice.kind === 'unknown')?.detail).toContain('Disconnected');
+  expect(notices.some(notice => notice.conversationId === 'c')).toBe(false);
   expect(notices.filter(notice => notice.kind === 'completed')).toHaveLength(1);
   expect(collectNotifications(next, next)).toEqual([]);
 });
@@ -40,11 +40,11 @@ it('does not replay historical completion on initial load or notify merely for e
 it('saves per-kind settings and recovers invalid saved preferences', async () => {
   setup();
   fireEvent.click(screen.getByText('Settings'));
-  fireEvent.change(screen.getByLabelText('Run unknown'), { target: { value: 'silent' } });
-  await waitFor(() => expect(loadPreferences(localStorage).unknown).toBe('silent'));
+  fireEvent.change(screen.getByLabelText('Run failed'), { target: { value: 'silent' } });
+  await waitFor(() => expect(loadPreferences(localStorage).failed).toBe('silent'));
   expect(loadPreferences(localStorage).completed).toBe('in_app');
   localStorage.setItem(PREFERENCES_KEY, '{broken');
-  expect(loadPreferences(localStorage).unknown).toBe('in_app');
+  expect(loadPreferences(localStorage).failed).toBe('in_app');
   localStorage.setItem(PREFERENCES_KEY, JSON.stringify({ failed: 'bad', input: 'browser' }));
   expect(loadPreferences(localStorage).failed).toBe('in_app');
   expect(loadPreferences(localStorage).input).toBe('browser');
@@ -59,16 +59,15 @@ it('answers approvals directly in notifications and marks expired requests unava
   expect(screen.getByText('Approval expired')).toBeTruthy();
   expect(screen.queryByRole('button', { name: 'Allow' })).toBeNull();
 });
-it('suppresses silent kinds and renders unknown evidence with a dashed border', () => {
+it('suppresses silent kinds and unknown executions', () => {
   localStorage.setItem(PREFERENCES_KEY, JSON.stringify({ failed: 'silent' }));
   const { target } = setup();
   act(() => target.setSnapshot(snapshot({ runs: [{ id: 'f', state: 'failed' }, { id: 'u', state: 'unknown',
     conversation_id: 'conversation', last_evidence: 'Last event', last_evidence_ts: '2026-10-07', reason: 'Lost connection' }] }, 2)));
   expect(screen.queryByRole('heading', { name: 'Run failed' })).toBeNull();
-  const unknown = screen.getByRole('heading', { name: 'Run unknown' }).closest('li')!;
-  expect(unknown.className).toContain('notice-unknown');
-  expect(unknown.textContent).toContain('Last event'); expect(unknown.textContent).toContain('2026-10-07');
-  expect(screen.getByRole('link', { name: 'Conversation' }).getAttribute('href')).toBe('/c/conversation');
+  expect(screen.queryByRole('heading', { name: 'Run unknown' })).toBeNull();
+  expect(screen.queryByRole('link', { name: 'Conversation' })).toBeNull();
+  expect(screen.getByText('No notifications yet')).toBeTruthy();
 });
 it('requests browser permission only on preference change and opens inline approval from browser click', async () => {
   const created: FakeNotification[] = [];
@@ -105,14 +104,14 @@ it('reports browser permission denial and keeps the in-app notification', async 
   act(() => target.setSnapshot(snapshot({ approvals: [pending] }, 2)));
   expect(screen.getByRole('heading', { name: 'Approval pending' })).toBeTruthy();
 });
-it('emits distinct runner and API faults without duplicate notices during snapshot resync', () => {
+it('keeps connection faults out of notifications during snapshot resync', () => {
   const { target } = setup();
   act(() => target.setConnection('runner_unavailable'));
   act(() => target.setConnection('reconnecting'));
-  expect(screen.getAllByRole('heading', { name: 'Connection error' })).toHaveLength(2);
+  expect(screen.queryByRole('heading', { name: 'Connection error' })).toBeNull();
   act(() => target.setConnection('reconnecting'));
-  expect(screen.getAllByRole('heading', { name: 'Connection error' })).toHaveLength(2);
+  expect(screen.queryByRole('heading', { name: 'Connection error' })).toBeNull();
   act(() => target.setConnection('connected'));
   act(() => target.setConnection('reconnecting'));
-  expect(screen.getAllByRole('heading', { name: 'Connection error' })).toHaveLength(3);
+  expect(screen.queryByRole('heading', { name: 'Connection error' })).toBeNull();
 });

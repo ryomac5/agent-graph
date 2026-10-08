@@ -68,6 +68,7 @@ function createTarget() {
 }
 // 選択中のプロジェクトの下で木を開く。
 function setup(search = '', width = 1280) {
+  localStorage.setItem('agent-graph-files-open', JSON.stringify({ 'repo-id': width > 1024 }));
   vi.stubGlobal('innerWidth', width);
   vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
   const target = createTarget();
@@ -360,6 +361,8 @@ describe('Files explorer', () => {
     await screen.findByRole('region', { name: 'Contents of README.md' });
     const select = await screen.findByRole('combobox', { name: 'Worktree' });
     await waitFor(() => expect((select as HTMLSelectElement).disabled).toBe(false));
+    expect(within(select).getAllByRole('option').map(option => option.textContent)).toEqual(['main · repo']);
+    fireEvent.click(screen.getByRole('button', { name: 'Other worktrees · 1' }));
     expect(within(select).getAllByRole('option').map(option => option.textContent)).toEqual(['main · repo', 'feature · repo-feature']);
     expect((select as HTMLSelectElement).value).toBe(ROOT);
     fireEvent.change(select, { target: { value: FEATURE } });

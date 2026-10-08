@@ -12,7 +12,7 @@
 
   --bg: #f7f7f8; --bg-sidebar: #f7f7f8; --surface: #ffffff; --surface-2: #f7f7f8; --surface-hover: #efeff1; --surface-active: #ebebef;
   --border: #e6e6e9; --border-strong: #dcdce0; --text: #1c1d21; --text-2: #5f616b; --text-3: #8b8d96;
-  --state-running: #1f9d55; --state-waiting: #e0820b; --state-idle: #a1a3ab; --state-failed: #d93a3a;
+  --state-running: #1f9d55; --state-waiting: #e0820b; --state-idle: #a1a3ab; --state-completed: #5265c8; --state-input: #9745b0; --state-failed: #d93a3a;
   --accent: #5b5bd6; --accent-solid: #5b5bd6; --accent-hover: #4b4bc6; --accent-soft: #efeffd; --accent-text: #4747bd; --accent-fg: #ffffff;
   --focus-ring: rgb(91 91 214 / 0.28);
   --success: #1d8049; --success-soft: #e7f5ed;
@@ -29,7 +29,7 @@
   color-scheme: dark;
   --bg: #121316; --bg-sidebar: #121316; --surface: #18191d; --surface-2: #121316; --surface-hover: #212227; --surface-active: #26272d;
   --border: #26272d; --border-strong: #303138; --text: #e8e9ec; --text-2: #a1a3ab; --text-3: #6f717a;
-  --state-running: #3fbf7a; --state-waiting: #f0a03c; --state-idle: #6f717a; --state-failed: #f06464;
+  --state-running: #3fbf7a; --state-waiting: #f0a03c; --state-idle: #6f717a; --state-completed: #8c9bea; --state-input: #ca87e2; --state-failed: #f06464;
   --accent: #8484f2; --accent-solid: #5f5fde; --accent-hover: #6e6ee8; --accent-soft: #25254a; --accent-text: #a9a9fb; --accent-fg: #ffffff;
   --focus-ring: rgb(132 132 242 / 0.35);
   --success: #4fc38a; --success-soft: #142a1f;
@@ -45,7 +45,7 @@
   color-scheme: dark;
   --bg: #121316; --bg-sidebar: #121316; --surface: #18191d; --surface-2: #121316; --surface-hover: #212227; --surface-active: #26272d;
   --border: #26272d; --border-strong: #303138; --text: #e8e9ec; --text-2: #a1a3ab; --text-3: #6f717a;
-  --state-running: #3fbf7a; --state-waiting: #f0a03c; --state-idle: #6f717a; --state-failed: #f06464;
+  --state-running: #3fbf7a; --state-waiting: #f0a03c; --state-idle: #6f717a; --state-completed: #8c9bea; --state-input: #ca87e2; --state-failed: #f06464;
   --accent: #8484f2; --accent-solid: #5f5fde; --accent-hover: #6e6ee8; --accent-soft: #25254a; --accent-text: #a9a9fb; --accent-fg: #ffffff;
   --focus-ring: rgb(132 132 242 / 0.35);
   --success: #4fc38a; --success-soft: #142a1f;
@@ -433,3 +433,7 @@ kbd { font-size: 11px; border-bottom-width: 1px; }
 /* 作業場に会話の一覧を出すときだけ、左に一覧の列を足す。 */
 .root-workspace.with-roots .workspace-columns { grid-template-columns: var(--roots-width) minmax(0, 1fr) var(--requests-width); }
 .root-workspace.with-roots.requests-collapsed .workspace-columns { grid-template-columns: var(--roots-width) minmax(0, 1fr) 40px; }
+
+.status-completed .status-dot { background: var(--state-completed); }
+.status-input .status-dot { background: var(--state-input); }
+.request-detail-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px; }

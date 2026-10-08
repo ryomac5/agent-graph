@@ -1,3 +1,4 @@
+import { modelName } from './format.ts';
 import type { Ack } from './client.ts';
 import type { ConfigSettings, ProjectSettings, SettingsStatus, Policy } from '../../../../api/src/ws/settings-contract.ts';
 export type { ConfigSettings, ProjectSettings, SettingsStatus, Policy };
@@ -6,7 +7,7 @@ export interface SettingsSnapshot { config: ConfigSettings; policy: Policy; proj
 export interface PolicyPreview { token: string; rows: { id: string; before: Decision; after: Decision }[] }
 interface Decision { ok: boolean; assignment?: { executor: string; model: string }; reason?: string[] }
 export function describeDecision(decision: Decision): string {
-  return decision.ok && decision.assignment ? `${decision.assignment.executor} · ${decision.assignment.model}` : decision.reason?.join('; ') ?? 'Unavailable';
+  return decision.ok && decision.assignment ? `${decision.assignment.executor} · ${modelName(decision.assignment.model)}` : decision.reason?.join('; ') ?? 'Unavailable';
 }
 export async function requestSettings<T>(client: SettingsClient, command: string, payload?: unknown): Promise<T> {
   const ack = await client.command(command, payload);

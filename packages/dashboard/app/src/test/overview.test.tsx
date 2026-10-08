@@ -116,7 +116,7 @@ it('filters root views and Changes by a display-name route', () => {
 it('keeps reason codes out of root rows and translates evidence reasons', async () => {
  const { reasonText } = await import('../lib/reasons.ts'); expect(reasonText('unconfirmed_end_evidence')).toBe('No end recorded'); expect(reasonText('missing_turn_evidence')).toBe('No turn record'); expect(reasonText('legacy ended inference: process_exit')).toBe('Ended by process exit (legacy)'); expect(reasonText('some_new_code')).toBe('Some new code'); expect(reasonText('Observation interrupted')).toBe('Observation interrupted');
  const target = setup({ runs: [...projection().runs!.filter(run => run.id !== 'lonely:1'), { id: 'lonely:1', conversation_id: 'lonely', generation: 1, state: 'unknown', reason: 'legacy ended inference: process_exit', last_evidence_ts: EARLIER }] });
- render(<MemoryRouter><HomePage target={target}/></MemoryRouter>); const row = screen.getByRole('link', { name: /Unrelated terminal/ }); expect(row.querySelector('.root-state')!.textContent).toBe('Unknown'); expect(document.body.textContent).not.toContain('legacy ended inference');
+ render(<MemoryRouter><HomePage target={target}/></MemoryRouter>); const row = screen.getByRole('link', { name: /Unrelated terminal/ }); expect(row.querySelector('.root-state')).toBeNull(); expect(document.body.textContent).not.toContain('legacy ended inference');
 });
 it('roots the tree only at tasks that delegated, names untitled conversations and folds repeated runs into attempts', () => {
   const state = setup({
@@ -135,7 +135,7 @@ it('roots the tree only at tasks that delegated, names untitled conversations an
   // 名前のない会話は、画面の全てで同じ conversationTitle の規則で provider と時刻で呼ぶ。
   const solo = tree.nodes.find(node => node.conversationId === 'solo');
   expect(solo).toBeUndefined();
-  expect(conversationTitle({ provider: 'claude', name: null }, '2020-01-02T10:46:00')).toBe('Claude · Jan 2 10:46');
+  expect(conversationTitle({ provider: 'claude', name: null }, '2020-01-02T10:46:00')).toBe('Claude · Jan 2, 2020 10:46');
   expect(conversationTitle({ provider: 'codex' }, undefined)).toBe('Codex');
 });
 

@@ -70,7 +70,7 @@ function GraphCanvas({ tree, root, route, language, approvals, connected, client
   const expanded = useMemo(() => {
     const parents = new Set<string>(search.getAll('expanded'));
     const visited = new Set<string>();
-    let child = tree.nodes.find(node => node.conversationId === requestedChild)?.id;
+    let child = requestedChild ? tree.nodes.find(node => node.conversationId === requestedChild)?.id : undefined;
     while (child && !visited.has(child)) {
       visited.add(child);
       const parent = tree.edges.find(edge => edge.target === child)?.source;
@@ -88,12 +88,22 @@ function GraphCanvas({ tree, root, route, language, approvals, connected, client
     });
   }
   const [now, setNow] = useState(Date.now);
+  const [titleHeights, setTitleHeights] = useState(new Map<string, number>());
   const [focused, setFocused] = useState(requestedChild ? tree.nodes.find(node => node.conversationId === requestedChild)?.id ?? root.id : root.id);
   useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 60_000); return () => clearInterval(timer); }, []);
-  const visible = useMemo(() => foldEarlier(tree, expanded, now, tree.nodes.find(node => node.conversationId === requestedChild)?.id), [tree, expanded, now, requestedChild]);
-  const layout = useMemo(() => calculateLayout(visible, size.width, previous.current), [visible, size.width]);
+  const visible = useMemo(() => foldEarlier(tree, expanded, now, requestedChild ? tree.nodes.find(node => node.conversationId === requestedChild)?.id : undefined), [tree, expanded, now, requestedChild]);
+  const layout = useMemo(() => calculateLayout(visible, size.width, previous.current, titleHeights), [visible, size.width, titleHeights]);
   const byId = new Map(visible.nodes.map(node => [node.id, node]));
   const positions = new Map(layout.nodes.map(node => [node.id, node]));
+  useLayoutEffect(() => {
+    if (layout.vertical) return;
+    const measured = new Map(titleHeights);
+    for (const node of visible.nodes) {
+      const height = links.current.get(node.id)?.querySelector<HTMLElement>('.graph-card-title')?.offsetHeight;
+      if (height) measured.set(node.label, height);
+    }
+    if ([...measured].some(([label, height]) => titleHeights.get(label) !== height)) setTitleHeights(measured);
+  }, [visible, layout.vertical, titleHeights]);
   const [view, setView] = useState<View>({ x: 0, y: 0, scale: 1 });
   const viewRef = useRef(view); viewRef.current = view;
   const [sent, setSent] = useState(new Set<string>());
@@ -219,9 +229,8 @@ function GraphCanvas({ tree, root, route, language, approvals, connected, client
           const who = agentName(node.provider, node.model) || (ja ? 'エージェント' : 'Agent');
           const tone = stateTone(toDisplayState(node.state));
           const target = `/p/${encodeURIComponent(route)}?root=${encodeURIComponent(root.id)}${!isRoot && node.conversationId ? `&child=${encodeURIComponent(node.conversationId)}` : ''}`;
-          const content = <><div className="graph-card-top"><ProviderMark provider={node.provider}/><span className="graph-node-role">{isRoot ? ja ? '根の会話' : 'Root conversation' : node.role === 'planner' ? ja ? '依頼のまとまり' : 'Request group' : ja ? '依頼' : 'Request'}</span>
-            {node.state !== 'idle' && <StatusDot state={node.state} language={language}/>}</div>
-            <strong className="graph-card-title" title={title}>{title}</strong><div className="graph-card-meta"><span title={who}>{who}</span><time dateTime={node.activity || undefined}>{formatWhen(node.activity, language) || (ja ? '時刻不明' : 'Unknown time')}</time></div></>;
+          const content = <><div className="graph-card-top"><ProviderMark provider={node.provider}/><strong className="graph-card-title" title={title}>{title}</strong></div>
+            <div className="graph-card-meta"><span className="graph-card-model" title={who}>{who}</span><StatusDot state={node.state} language={language}/><time dateTime={node.activity || undefined}>{formatWhen(node.activity, language) || (ja ? '時刻不明' : 'Unknown time')}</time></div></>;
           const focus = () => { setFocused(node.id); reveal(position); };
           return <article key={node.id} className={`graph-card tone-${tone}${toDisplayState(node.state) === 'unknown' ? ' graph-unknown' : ''}${isRoot ? ' graph-root' : ''}${node.earlier ? ' graph-earlier' : ''}${focused === node.id ? ' graph-selected' : ''}`}
             style={layout.vertical ? { marginLeft: position.x, width: `calc(100% - ${position.x}px)` } : { left: position.x, top: position.y, width: position.width, height: position.height }} data-node-id={node.id} onFocus={focus}>

@@ -4,14 +4,15 @@ import { toDisplayState } from '../../components/StateBadge.tsx';
 
 export const NARROW_WIDTH = 720;
 const EARLIER_MS = 24 * 60 * 60 * 1000;
-const RECENT_LIMIT = 6;
+const RECENT_LIMIT = 4;
 const COLUMN_ROWS = 8;
-const CARD_WIDTH = 264;
-const ROOT_WIDTH = 288;
-const CARD_HEIGHT = 156;
-const APPROVAL_HEIGHT = 264;
-const LAYER_GAP = 112;
-const ROW_GAP = 28;
+const CARD_WIDTH = 240;
+const CARD_HEIGHT = 76;
+const TITLE_LINE_HEIGHT = 20;
+const TITLE_WIDTH = CARD_WIDTH - 58;
+const APPROVAL_HEIGHT = 106;
+const LAYER_GAP = 80;
+const ROW_GAP = 16;
 export interface GraphNode extends TreeNode { activity?: string; approvalCount?: number; earlier?: { parent: string; count: number; kind: 'earlier' | 'completed'; expanded: boolean } }
 export interface GraphTree extends Omit<DelegationTree, 'nodes'> { nodes: GraphNode[] }
 export interface PositionedNode { id: string; depth: number; x: number; y: number; width: number; height: number; route?: { y: number; lane: number } }
@@ -37,11 +38,12 @@ export function foldEarlier(tree: GraphTree, expanded: ReadonlySet<string>, now:
     const node = byId.get(id);
     if (!node || seen.has(id)) return;
     seen.add(id);
-    const finished = node.children.filter(child => complete(child) && Number.isFinite(endedAt(child)));
+    const finished = node.children.filter(child => complete(child));
     const old = (child: string): boolean => complete(child) && endedAt(child) < now - EARLIER_MS && byId.get(child)!.children.every(old);
     const earlier = finished.filter(old);
-    const recent = finished.filter(child => !earlier.includes(child)).sort((a, b) => endedAt(b) - endedAt(a) || a.localeCompare(b));
-    const groups = [{ kind: 'completed' as const, children: recent.slice(RECENT_LIMIT) }, { kind: 'earlier' as const, children: earlier }]
+    const recent = finished.filter(child => !earlier.includes(child) && Number.isFinite(endedAt(child))).sort((a, b) => endedAt(b) - endedAt(a) || a.localeCompare(b));
+    const undated = finished.filter(child => !Number.isFinite(endedAt(child)));
+    const groups = [{ kind: 'completed' as const, children: [...recent.slice(RECENT_LIMIT), ...undated] }, { kind: 'earlier' as const, children: earlier }]
       .filter(group => group.children.length).map(group => ({ ...group, id: `${group.kind}:${id}`, expanded: expanded.has(`${group.kind}:${id}`) }));
     const hidden = new Set(groups.filter(group => !group.expanded).flatMap(group => group.children));
     const children = node.children.filter(child => !hidden.has(child));
@@ -65,7 +67,7 @@ function orderNodes(nodes: GraphNode[]) {
 }
 
 /** 狭い画面は木の順、広い画面は八行で折り返す。 */
-export function calculateLayout(tree: GraphTree, viewportWidth: number, previous?: GraphLayout): GraphLayout {
+export function calculateLayout(tree: GraphTree, viewportWidth: number, previous?: GraphLayout, titleHeights?: ReadonlyMap<string, number>): GraphLayout {
   const vertical = viewportWidth < NARROW_WIDTH;
   const byId = new Map(tree.nodes.map(node => [node.id, node]));
   const depths = new Map<string, number>();
@@ -75,8 +77,12 @@ export function calculateLayout(tree: GraphTree, viewportWidth: number, previous
     orderNodes(byId.get(id)!.children.map(child => byId.get(child)!).filter(Boolean)).forEach(child => visit(child.id, depth + 1));
   }
   tree.roots.forEach(id => visit(id, 0));
-  const sizeNode = (node: GraphNode, depth: number): PositionedNode => ({ id: node.id, depth, x: 0, y: 0, width: depth === 0 ? ROOT_WIDTH : CARD_WIDTH,
-    height: node.earlier ? 88 : CARD_HEIGHT + (depth === 0 ? 20 : 0) + (node.approvalCount ? APPROVAL_HEIGHT - CARD_HEIGHT + (node.approvalCount - 1) * 106 : 0) });
+  const sizeNode = (node: GraphNode, depth: number): PositionedNode => {
+    const titleWidth = [...node.label].reduce((width, letter) => width + (/[^\x00-\xff]/.test(letter) ? 13 : 6.5), 0);
+    const titleHeight = titleHeights?.get(node.label) ?? (titleWidth > TITLE_WIDTH ? TITLE_LINE_HEIGHT * 2 : TITLE_LINE_HEIGHT);
+    return { id: node.id, depth, x: 0, y: 0, width: CARD_WIDTH,
+      height: CARD_HEIGHT + (node.earlier ? 0 : Math.max(0, titleHeight - TITLE_LINE_HEIGHT)) + (node.approvalCount ?? 0) * APPROVAL_HEIGHT };
+  };
   const nodes: PositionedNode[] = [];
   if (vertical) {
     let y = 0;
@@ -96,16 +102,15 @@ export function calculateLayout(tree: GraphTree, viewportWidth: number, previous
       const retained = ordered.filter(node => prior.has(node.id)).sort((a, b) => prior.get(a.id)! - prior.get(b.id)!);
       const sized = [...retained, ...ordered.filter(node => !prior.has(node.id))].map(node => sizeNode(node, depth));
       const columns = Math.ceil(sized.length / COLUMN_ROWS);
-      const corridor = columns > 1 ? sized.length * 6 + 24 : 0;
       for (let column = 0; column < columns; column++) {
-        let y = corridor;
+        let y = 0;
         for (const [row, node] of sized.slice(column * COLUMN_ROWS, (column + 1) * COLUMN_ROWS).entries()) {
           node.x = x + column * (CARD_WIDTH + LAYER_GAP); node.y = y;
-          if (columns > 1) node.route = { y: 12 + (column * COLUMN_ROWS + row) * 6, lane: column * COLUMN_ROWS + row };
+          if (column > 0) node.route = { y: -16 - (column * COLUMN_ROWS + row) * 2, lane: row };
           y += node.height + ROW_GAP; nodes.push(node);
         }
       }
-      x += (depth === 0 ? ROOT_WIDTH : CARD_WIDTH) + (columns - 1) * (CARD_WIDTH + LAYER_GAP) + LAYER_GAP;
+      x += columns * (CARD_WIDTH + LAYER_GAP);
     }
   }
   return { nodes, width: Math.max(0, ...nodes.map(node => node.x + node.width)), height: Math.max(0, ...nodes.map(node => node.y + node.height)), vertical };
@@ -117,9 +122,9 @@ export function curvePath(parent: PositionedNode, child: PositionedNode, vertica
   const ty = child.y + (vertical ? 0 : child.height / 2);
   if (!vertical && child.route) {
     const { y, lane } = child.route;
-    const exit = sx + 12 + lane * 0.8;
-    const entry = tx - 12 - lane * 0.8;
-    return `M ${sx} ${sy + 0.5 + lane * 0.8} L ${exit} ${sy + lane * 2} L ${exit} ${y} L ${entry} ${y} L ${entry} ${ty} L ${tx} ${ty}`;
+    const exit = sx + 16 + lane * 2;
+    const entry = tx - 16 - lane * 2;
+    return `M ${sx} ${sy} L ${exit} ${sy} L ${exit} ${y} L ${entry} ${y} L ${entry} ${ty} L ${tx} ${ty}`;
   }
   return vertical ? `M ${sx} ${sy} C ${sx} ${(sy + ty) / 2}, ${tx} ${(sy + ty) / 2}, ${tx} ${ty}`
     : `M ${sx} ${sy} C ${(sx + tx) / 2} ${sy}, ${(sx + tx) / 2} ${ty}, ${tx} ${ty}`;

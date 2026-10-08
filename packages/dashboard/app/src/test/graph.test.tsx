@@ -54,8 +54,9 @@ it('lays out layers from left to right, orders running then approval then newest
   const layout = calculateLayout(input, 1000);
   const at = (id: string) => layout.nodes.find(row => row.id === id)!;
   expect(at('root').x).toBe(0); expect(at('active').x).toBeGreaterThan(at('root').x); expect(at('grandchild').x).toBeGreaterThan(at('active').x);
-  expect([at('active').y, at('approval').y, at('new').y, at('done').y]).toEqual([0, 184, 368, 552]);
-  expect(at('root').width).toBeGreaterThan(at('active').width);
+  expect([at('active').y, at('approval').y, at('new').y, at('done').y]).toEqual([0, 92, 184, 276]);
+  expect(at('root').width).toBe(240); expect(at('active').width).toBe(240);
+  expect(at('root').height).toBe(76);
   expect(curvePath(at('root'), at('active'), false)).toContain(' C ');
   expect(input.nodes[0].children).toEqual(['done', 'approval', 'active', 'new']);
 });
@@ -223,11 +224,11 @@ function createWideFixture() {
   target.setConnection('connected');
   return target;
 }
-it('shows nine readable nodes for 42 requests, keeps the active child in view, and limits fit to 25 percent', () => {
+it('shows seven readable nodes for 42 requests, keeps the active child in view, and limits fit to 25 percent', () => {
   renderGraph('ja', undefined, createWideFixture());
-  expect(document.querySelectorAll('.graph-card')).toHaveLength(9);
+  expect(document.querySelectorAll('.graph-card')).toHaveLength(7);
   expect(screen.getByRole('link', { name: /task-0 ·/ })).toBeTruthy();
-  expect(screen.getByRole('button', { name: 'ほかの完了 35 件' }).getAttribute('aria-expanded')).toBe('false');
+  expect(screen.getByRole('button', { name: 'ほかの完了 37 件' }).getAttribute('aria-expanded')).toBe('false');
   const scale = Number(document.querySelector('.graph-scale')!.textContent!.replace('%', ''));
   expect(scale).toBeGreaterThanOrEqual(75); expect(scale).toBeLessThanOrEqual(100);
   const world = document.querySelector<HTMLElement>('.graph-world')!;
@@ -237,67 +238,53 @@ it('shows nine readable nodes for 42 requests, keeps the active child in view, a
     expect(Number(x) + parseFloat(card.style.left) * Number(zoom)).toBeGreaterThanOrEqual(0);
     expect(Number(y) + (parseFloat(card.style.top) + parseFloat(card.style.height)) * Number(zoom)).toBeLessThanOrEqual(640);
   }
-  fireEvent.click(screen.getByRole('button', { name: 'ほかの完了 35 件' }));
+  fireEvent.click(screen.getByRole('button', { name: 'ほかの完了 37 件' }));
   fireEvent.click(screen.getByRole('button', { name: '全体を表示' }));
   expect(Number(document.querySelector('.graph-scale')!.textContent!.replace('%', ''))).toBeGreaterThanOrEqual(25);
 });
 it('opens and closes other completed requests and restores the URL after remounting', () => {
   const target = createWideFixture();
   renderGraph('ja', undefined, target);
-  fireEvent.click(screen.getByRole('button', { name: 'ほかの完了 35 件' }));
+  fireEvent.click(screen.getByRole('button', { name: 'ほかの完了 37 件' }));
   expect(document.querySelectorAll('.graph-card')).toHaveLength(44);
-  expect(screen.getByRole('button', { name: 'ほかの完了 35 件' }).getAttribute('aria-expanded')).toBe('true');
+  expect(screen.getByRole('button', { name: 'ほかの完了 37 件' }).getAttribute('aria-expanded')).toBe('true');
   const entry = screen.getByTestId('location').textContent!;
   expect(new URLSearchParams(entry.split('?')[1]).getAll('expanded')).toContain('completed:root');
   cleanup(); renderGraph('ja', undefined, target, entry);
   expect(screen.getByRole('link', { name: /task-41 ·/ })).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: 'ほかの完了 35 件' }));
-  expect(document.querySelectorAll('.graph-card')).toHaveLength(9);
+  fireEvent.click(screen.getByRole('button', { name: 'ほかの完了 37 件' }));
+  expect(document.querySelectorAll('.graph-card')).toHaveLength(7);
   expect(screen.queryByRole('link', { name: /task-41 ·/ })).toBeNull();
   expect(screen.getByTestId('location').textContent).toBe('/p/repo/graph?root=root');
 });
 it('uses the same filtering at 390px and lets wheel scrolling pass through', () => {
   vi.stubGlobal('innerWidth', 390);
   renderGraph('ja', undefined, createWideFixture());
-  expect(document.querySelectorAll('.graph-card')).toHaveLength(9);
+  expect(document.querySelectorAll('.graph-card')).toHaveLength(7);
   expect(screen.queryByRole('button', { name: '全体を表示' })).toBeNull();
   const canvas = screen.getByRole('region', { name: '依頼のグラフ' });
   const wheel = new WheelEvent('wheel', { deltaY: 100, cancelable: true });
   fireEvent(canvas, wheel); expect(wheel.defaultPrevented).toBe(false);
-  fireEvent.click(screen.getByRole('button', { name: 'ほかの完了 35 件' }));
+  fireEvent.click(screen.getByRole('button', { name: 'ほかの完了 37 件' }));
   expect(document.querySelectorAll('.graph-card')).toHaveLength(44);
 });
-it('wraps 42 children into columns of at most eight rows without card or edge overlaps', () => {
+it('starts every column at the root top and uses an 80px gap when expanding 42 children', () => {
   const children = Array.from({ length: 42 }, (_, index) => node('task-' + index, index === 0 ? 'running' : 'ended'));
-  const input = tree([node('root', 'running', children.map(child => child.id)), ...children]);
-  const layout = calculateLayout(input, 1440);
+  const layout = calculateLayout(tree([node('root', 'running', children.map(child => child.id)), ...children]), 1440);
   const root = layout.nodes.find(node => node.id === 'root')!;
-  const columns = new Map<number, number>();
-  const paths = new Set<string>();
-  const segments: { x1: number; y1: number; x2: number; y2: number }[] = [];
+  const columns = new Map<number, typeof layout.nodes>();
   for (const child of layout.nodes.filter(node => node.depth === 1)) {
-    columns.set(child.x, (columns.get(child.x) ?? 0) + 1);
-    const path = curvePath(root, child, false);
-    paths.add(path);
-    const points = [...path.matchAll(/[ML] ([\d.]+) ([\d.]+)/g)].map(match => [Number(match[1]), Number(match[2])]);
-    points.slice(1).forEach(([x2, y2], index) => {
-      const [x1, y1] = points[index];
-      for (const segment of segments) {
-        const horizontalOverlap = y1 === y2 && segment.y1 === segment.y2 && y1 === segment.y1
-          && Math.max(Math.min(x1, x2), Math.min(segment.x1, segment.x2)) < Math.min(Math.max(x1, x2), Math.max(segment.x1, segment.x2));
-        const verticalOverlap = x1 === x2 && segment.x1 === segment.x2 && x1 === segment.x1
-          && Math.max(Math.min(y1, y2), Math.min(segment.y1, segment.y2)) < Math.min(Math.max(y1, y2), Math.max(segment.y1, segment.y2));
-        expect(horizontalOverlap || verticalOverlap).toBe(false);
-      }
-      segments.push({ x1, y1, x2, y2 });
-    });
-    expect(child.route!.y).toBeLessThan(child.y);
+    columns.set(child.x, [...columns.get(child.x) ?? [], child]);
+    expect(curvePath(root, child, false)).toMatch(new RegExp(' ' + child.x + ' ' + (child.y + child.height / 2) + '$'));
     for (const other of layout.nodes.filter(node => node.id !== child.id)) {
       expect(child.x + child.width <= other.x || other.x + other.width <= child.x || child.y + child.height <= other.y || other.y + other.height <= child.y).toBe(true);
     }
   }
-  expect(columns.size).toBe(6); expect(Math.max(...columns.values())).toBe(8);
-  expect(paths.size).toBe(42);
+  expect(columns.size).toBe(6);
+  for (const column of columns.values()) { expect(column).toHaveLength(column === [...columns.values()].at(-1) ? 2 : 8); expect(column[0].y).toBe(root.y); }
+  const xs = [...columns.keys()];
+  expect(xs[0] - root.x - root.width).toBe(80);
+  for (let index = 1; index < xs.length; index++) expect(xs[index] - xs[index - 1] - 240).toBe(80);
 });
 it('always keeps failures, waiting children and branches with active descendants', () => {
   const old = '2026-10-06T11:00:00Z';
@@ -305,7 +292,7 @@ it('always keeps failures, waiting children and branches with active descendants
   const input = tree([node('root', 'running', [...children.map(child => child.id), 'failed', 'approval', 'input', 'parent']), ...children,
     node('failed', 'failed', [], old), node('approval', 'waiting_approval', [], old), node('input', 'waiting_input', [], old), node('parent', 'ended', ['active'], old), node('active', 'running')]);
   const folded = foldEarlier(input, new Set(), now);
-  for (const id of ['failed', 'approval', 'input', 'parent', 'active', 'done-0', 'done-5']) expect(folded.nodes.some(node => node.id === id)).toBe(true);
-  expect(folded.nodes.some(node => node.id === 'done-6')).toBe(false);
-  expect(folded.nodes.find(node => node.id === 'completed:root')!.earlier!.count).toBe(6);
+  for (const id of ['failed', 'approval', 'input', 'parent', 'active', 'done-0', 'done-3']) expect(folded.nodes.some(node => node.id === id)).toBe(true);
+  expect(folded.nodes.some(node => node.id === 'done-4')).toBe(false);
+  expect(folded.nodes.find(node => node.id === 'completed:root')!.earlier!.count).toBe(8);
 });

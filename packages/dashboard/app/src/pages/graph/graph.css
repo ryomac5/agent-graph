@@ -34,24 +34,21 @@
 .graph-card.graph-unknown { border-style: dashed; }
 .graph-root { border-color: var(--accent); background: linear-gradient(145deg, var(--accent-soft), var(--surface) 60%); }
 .graph-root::before { content: ''; position: absolute; top: 0; bottom: 0; left: 0; width: 3px; background: var(--accent); }
-.graph-card-link { display: flex; flex-direction: column; height: 154px; padding: 18px; gap: 14px; text-align: left; width: 100%; }
-.graph-root .graph-card-link { height: 174px; padding: 22px; gap: 18px; }
+.graph-card-link { display: flex; flex-direction: column; min-height: 74px; padding: 12px; gap: 8px; text-align: left; width: 100%; }
 .graph-card-link:focus-visible { outline-offset: -4px; border-radius: 12px; }
-.graph-card-top { display: flex; align-items: center; gap: 8px; }
-.graph-card-top .request-avatar { width: 26px; height: 26px; border-radius: 7px; flex: none; }
-.graph-node-role { color: var(--text-3); font-size: 11px; flex: 1; }
-.graph-card-top .status { font-size: 10px; gap: 4px; white-space: nowrap; }
-.graph-card-top .status-dot { width: 5px; height: 5px; }
-.graph-card-title { font-size: 13px; font-weight: 550; line-height: 1.55; letter-spacing: -.01em; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 40px; }
-.graph-root .graph-card-title { font-size: 15px; min-height: 46px; }
-.graph-card-meta { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 10px; color: var(--text-3); margin-top: auto; }
-.graph-card-meta > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.graph-card-top { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+.graph-card-top .request-avatar { width: 22px; height: 22px; border-radius: 6px; flex: none; }
+.graph-card-title { flex: 1; min-width: 0; font-size: 13px; font-weight: 550; line-height: 20px; letter-spacing: -.01em; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.graph-card-meta { display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--text-3); }
+.graph-card-model { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.graph-card-meta .status { font-size: 10px; gap: 3px; white-space: nowrap; flex: none; }
+.graph-card-meta .status-dot { width: 5px; height: 5px; }
 .graph-card-meta time { white-space: nowrap; flex: none; font-variant-numeric: tabular-nums; }
 .graph-approval { margin: 0 12px 8px; padding: 10px; background: var(--attention-soft); border: 1px solid var(--attention-border); border-radius: 7px; }
 .graph-approval code { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; font: 10px/1.5 var(--mono); color: var(--text-2); height: 30px; }
 .graph-approval-actions { display: flex; gap: 6px; margin-top: 8px; font-size: 11px; color: var(--text-2); height: 22px; }
 .graph-earlier { box-shadow: none; border-style: dashed; background: var(--bg); }
-.graph-earlier .graph-card-link { height: 86px; display: grid; grid-template-columns: 22px 1fr; gap: 4px 8px; align-content: center; }
+.graph-earlier .graph-card-link { min-height: 74px; display: grid; grid-template-columns: 22px 1fr; gap: 4px 8px; align-content: center; }
 .graph-earlier-icon { grid-row: span 2; align-self: center; color: var(--text-3); }
 .graph-earlier strong { font-size: 12px; font-weight: 500; }
 .graph-earlier .graph-card-link > span:last-child { font-size: 11px; color: var(--text-3); }
@@ -70,5 +67,5 @@
 .graph-tree .graph-world { position: relative; display: flex; flex-direction: column; gap: 16px; }
 .graph-tree .graph-card { position: relative; flex: none; min-width: 0; box-shadow: none; }
 .graph-tree .graph-card:not(.graph-root) { border-left-width: 3px; }
-.graph-tree .graph-card-link { height: auto; min-height: 154px; }
-.graph-tree .graph-earlier .graph-card-link { min-height: 86px; }
+.graph-tree .graph-card-link { height: auto; min-height: 74px; }
+.graph-tree .graph-earlier .graph-card-link { min-height: 74px; }

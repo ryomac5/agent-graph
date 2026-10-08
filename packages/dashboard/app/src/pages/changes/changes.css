@@ -27,3 +27,24 @@
 .acceptance-verification { min-width: 0; overflow-wrap: anywhere; }
 .acceptance-verification > .chip { justify-self: start; max-width: 100%; white-space: normal; }
 .acceptance-verification details, .acceptance-verification summary { min-width: 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+
+.git-changes { display: grid; gap: var(--space-6, 32px); }
+.git-changes > section { border-top: 1px solid var(--border); padding-top: var(--space-4); }
+.git-section-header { display: flex; justify-content: space-between; align-items: start; gap: var(--space-4); margin-bottom: var(--space-4); }
+.git-section-header h2 { margin-bottom: var(--space-2); }
+.git-columns { display: grid; grid-template-columns: minmax(200px, 280px) minmax(0, 1fr); gap: var(--space-4); align-items: start; }
+.git-columns > * { min-width: 0; }
+.git-columns > aside { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--space-3); }
+.git-columns ul { list-style: none; margin: 0; padding: 0; }
+.git-columns details > ul { padding-left: var(--space-3); }
+.git-columns summary { padding: var(--space-2); overflow-wrap: anywhere; }
+.git-file-choice, .git-commit-choice { display: grid; gap: var(--space-2); width: 100%; text-align: left; padding: var(--space-3); border-radius: var(--radius-sm); overflow-wrap: anywhere; }
+.git-file-meta { display: flex; gap: var(--space-2); font-size: var(--text-xs); font-family: var(--mono); }
+.git-file-choice[aria-pressed='true'], .git-commit-choice[aria-pressed='true'] { background: var(--accent-soft); }
+.git-file-choice:hover, .git-commit-choice:hover { background: var(--surface-hover); }
+.git-commit-list { display: grid; gap: var(--space-2); }
+.git-commit-choice > span, .git-commit-choice time { font-size: var(--text-xs); color: var(--text-3); }
+.git-commit-diff, .git-diff-panel { display: grid; gap: var(--space-3); }
+.git-commit-files { display: grid; gap: var(--space-1); justify-items: start; }
+.git-changes .diff-file-header > .chip, .git-diff-panel .diff-file-header > .chip { display: none; }
+@media (max-width: 800px) { .git-columns { grid-template-columns: minmax(0, 1fr); } }

@@ -1,3 +1,5 @@
+import { GitChanges } from './GitChanges.tsx';
+import { resolveProjectId } from '../../lib/projects.ts';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router';
 import { AppLink } from '../../components/AppLink.tsx';
@@ -43,7 +45,7 @@ function Verification({ value }: { value: unknown }) {
     })}
   </section>;
 }
-export function ChangesPage({ client, target = store, project, artifactId }: ChangesPageProps) {
+function AgentChangesPage({ client, target = store, project, artifactId }: ChangesPageProps) {
   const params = useParams();
   const state = useScreenStore(target);
   const [search] = useSearchParams();
@@ -110,15 +112,11 @@ export function ChangesPage({ client, target = store, project, artifactId }: Cha
   const fileHref = projectId ? (path: string) => `/p/${encodeURIComponent(projectId)}/files?${new URLSearchParams({ path, ...(runPlace ? { worktree: runPlace } : {}) })}` : undefined;
   const comparisonFiles = compare && typeof compare.diff === 'string' && typeof artifact?.diff === 'string' ? comparePatches(compare.diff, patch) : undefined;
   return <section className="page changes-page" aria-label="Changes and review">
-    <header className="page-header"><div className="page-title"><h1>Changes</h1></div>
+    <header className="page-header"><div className="page-title"><h2>Agent changes</h2></div>
       {artifact && <div className="button-row"><button className="btn btn-secondary btn-sm" disabled={!enabled || obsolete} onClick={() => void command('review.start', { artifactId: id })}>Review</button>
         <button className="btn btn-secondary btn-sm" disabled={!enabled || obsolete} onClick={() => void command('review.reverify', { artifactId: id })}><Icon name="play" size={14}/>Test</button>
         <button className="btn btn-secondary btn-allow btn-sm" disabled={!enabled || obsolete || approvals.some(row => row.state === 'approved' && row.patch_hash === artifact?.patch_hash)}
           onClick={() => void command('review.approve', { artifactId: id })}><Icon name="check" size={14}/>Approve</button></div>}</header>
-    {projectId && <nav className="tabs" aria-label="Project">
-      <AppLink to={`/p/${encodeURIComponent(projectId)}`}>Conversations</AppLink>
-      <AppLink to={`/p/${encodeURIComponent(projectId)}/changes`} aria-current="page">Changes</AppLink>
-    </nav>}
     {error && <p role="alert" className="banner banner-danger">{error}</p>}
     {notice?.artifactId === id && !hasReviewResult(state, notice.command, notice.result, notice.artifactId) && <p role="status" className="muted-text">Command accepted; waiting for the updated review.</p>}
     {artifact && <div className="toolbar changes-toolbar"><div className="inline-field"><label htmlFor="artifact-version">Version</label><select id="artifact-version" value={id} disabled={busy || !artifact} onChange={event => selectVersion(event.target.value)}>
@@ -188,6 +186,20 @@ export function ChangesPage({ client, target = store, project, artifactId }: Cha
               </article>;
             })}</section>
         </aside></div>}
+  </section>;
+}
+export function ChangesPage(props: ChangesPageProps) {
+  const params = useParams(); const [search] = useSearchParams();
+  const state = useScreenStore(props.target ?? store);
+  const project = props.project ?? params.project ?? '';
+  const projectId = resolveProjectId(state, project);
+  const registered = state.projection.projects?.some(row => row.id === projectId && row.state === 'registered') ?? false;
+  const artifacts = selectArtifacts(state, project);
+  return <section className="page changes-page" aria-label="Project changes">
+    <header className="page-header"><div className="page-title"><h1>Changes</h1></div></header>
+    {project && <nav className="tabs" aria-label="Project"><AppLink to={`/p/${encodeURIComponent(project)}`}>Conversations</AppLink><AppLink to={`/p/${encodeURIComponent(project)}/changes`} aria-current="page">Changes</AppLink></nav>}
+    {!!artifacts.length && <section aria-label="Agent changes"><AgentChangesPage {...props}/></section>}
+    <GitChanges client={props.client} projectId={projectId} worktree={search.get('worktree') ?? undefined} enabled={registered}/>
   </section>;
 }
 export default ChangesPage;

@@ -1,3 +1,4 @@
+import { callGit, FileGitDiff, type GitChange } from '../changes/GitChanges.tsx';
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router';
 import { AppLink } from '../../components/AppLink.tsx';
@@ -271,7 +272,7 @@ export function useFileExplorer({ client, target = store, project, enabled = tru
     ?? (dirs[parentPath(selectedPath)]?.status === 'loaded' ? (dirs[parentPath(selectedPath)] as { entries: FileEntry[] }).entries.find(entry => entry.path === selectedPath) : undefined);
   const worktreeValue = worktree ?? (worktrees.status === 'loaded' ? worktrees.result.worktree : '');
   const offline = state.connection === 'connecting' || state.connection === 'reconnecting';
-  return { project, projectId, dirs, rows, current, needle, query, setQuery, selectedPath, selectedEntry, shown, root, worktrees, worktreeValue,
+  return { client, revision, worktree, project, projectId, dirs, rows, current, needle, query, setQuery, selectedPath, selectedEntry, shown, root, worktrees, worktreeValue,
     wantedWorktree, unknownWorktree, offline, items, onKeyDown, activate, move, setParams,
     selectWorktree: (value: string) => setParams(next => next.set('worktree', value)),
     closeFile: () => { if (location.key !== 'default') navigate(-1); else navigate(`/p/${encodeURIComponent(project)}`); },
@@ -353,6 +354,17 @@ export function FileNotices({ explorer }: { explorer: FileExplorer }) {
 /** 選んだファイルの中身。作業場の中央に、会話の代わりに出す。 */
 export function FileViewerPanel({ explorer, actions }: { explorer: FileExplorer; actions?: ReactNode }) {
   const { selectedPath, selectedEntry, shown, project } = explorer;
+  const [view, setView] = useState<'diff' | 'file'>('diff');
+  const [change, setChange] = useState<GitChange>();
+  const [diffError, setDiffError] = useState('');
+  const changed = selectedEntry?.kind === 'file' && selectedEntry.changed;
+  useEffect(() => {
+    let cancelled = false; setView('diff'); setChange(undefined); setDiffError('');
+    if (changed) callGit<{ entries: GitChange[] }>(explorer.client, 'files.changes', { projectId: explorer.projectId, ...(explorer.worktree ? { worktree: explorer.worktree } : {}) }).then(result => {
+      if (!cancelled) setChange(result.entries.find(entry => entry.path === selectedPath));
+    }, error => { if (!cancelled) setDiffError(String(error.message ?? error)); });
+    return () => { cancelled = true; };
+  }, [explorer.client, explorer.projectId, explorer.worktree, explorer.revision, selectedPath, changed]);
   const prefix = `/p/${encodeURIComponent(project)}`;
   const language: Language | undefined = detectLanguage(selectedPath);
   const lineCount = shown?.status === 'loaded' && shown.result.state === 'text' ? highlightLineCount(shown.result.content) : undefined;
@@ -369,7 +381,9 @@ export function FileViewerPanel({ explorer, actions }: { explorer: FileExplorer;
           {actions}
         </div>
       </header>
-      {!shown || shown.status === 'loading' ? <p className="tree-status viewer-status" role="status">Loading {selectedPath}…</p>
+      {changed && <div className="viewer-mode" role="group" aria-label="File view"><button className="viewer-mode-option" aria-pressed={view === 'diff'} onClick={() => setView('diff')}>Diff</button><button className="viewer-mode-option" aria-pressed={view === 'file'} onClick={() => setView('file')}>File</button></div>}
+      {changed && view === 'diff' ? diffError ? <p role="alert">{diffError}</p> : change ? <FileGitDiff key={`${explorer.worktree}:${explorer.revision}:${selectedPath}`} client={explorer.client} request={{ projectId: explorer.projectId, path: selectedPath, ...(explorer.worktree ? { worktree: explorer.worktree } : {}) }} change={change}/> : <p>Loading diff…</p>
+        : !shown || shown.status === 'loading' ? <p className="tree-status viewer-status" role="status">Loading {selectedPath}…</p>
         : shown.status === 'error' ? <p role="alert" className="banner banner-danger explorer-inline"><Icon name="alert" size={14}/>Could not open {selectedPath}: {shown.error}</p>
           : shown.status === 'directory' ? <div className="empty-state"><Icon name="folder" size={22}/><h2>Folder</h2><p>Choose a file inside {selectedPath} to view it.</p></div>
             : shown.status === 'deleted' ? <div className="empty-state"><Icon name="x" size={22}/><h2>Deleted file</h2><p>This file was deleted in the working tree.</p>

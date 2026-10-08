@@ -1,6 +1,7 @@
+import { MAX_FILE_BYTES, createGitApi, locateRepository, validateGitRequest, type GitRequest } from './git.ts';
 import { execFile } from "node:child_process";
 import { constants } from "node:fs";
-import { lstat, open, realpath, stat } from "node:fs/promises";
+import { lstat, open, realpath, stat, readFile } from "node:fs/promises";
 import { dirname, isAbsolute, posix, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import type { DatabaseSync } from "node:sqlite";
@@ -8,7 +9,7 @@ import { projectProjects } from "../../../core/src/ledger/projections/projects.t
 import { redact, type RedactionRules } from "../../../core/src/ledger/redact.ts";
 import type { Fact } from "../../../core/src/ledger/facts.ts";
 
-export const MAX_FILE_BYTES = 1024 * 1024;
+export { MAX_FILE_BYTES } from './git.ts';
 const MAX_GIT_OUTPUT_BYTES = 64 * MAX_FILE_BYTES;
 const execute = promisify(execFile);
 export type GitMark = "modified" | "added" | "untracked" | "deleted" | "renamed";
@@ -159,7 +160,21 @@ export function createFilesApi(db: DatabaseSync, readRules: () => RedactionRules
     }
     return selected;
   }
+  async function selectGitRoot(request: FilesRequest): Promise<string> {
+    const root = await realpath(readProjectRoot(request.projectId));
+    if (request.worktree === undefined || await realpath(request.worktree) === root) return root;
+    const selected = await realpath(request.worktree);
+    const repository = await locateRepository(root);
+    const tree = await locateRepository(selected);
+    if (tree.root !== selected || tree.common !== repository.common) throw new Error('Worktree does not belong to project repository');
+    if (tree.metadata === tree.common && await realpath(dirname(tree.metadata)) === selected) return selected;
+    if (!isInside(resolve(repository.common, 'worktrees'), tree.metadata)) throw new Error('Worktree does not belong to project repository');
+    const backpointer = (await readFile(resolve(tree.metadata, 'gitdir'), 'utf8')).replace(/\n$/, '');
+    if (await realpath(dirname(backpointer)) !== selected) throw new Error('Worktree does not belong to project repository');
+    return selected;
+  }
   return {
+    ...createGitApi(selectGitRoot, resolveInside, readRules),
     async worktrees(request: FilesRequest) {
       const root = await selectRoot(request);
       return { worktree: root, worktrees: await listWorktrees(root) };
@@ -245,6 +260,11 @@ export async function handleFilesCommand(api: ReturnType<typeof createFilesApi>,
   if (typeof request.projectId !== "string" || !request.projectId
     || request.path !== undefined && typeof request.path !== "string"
     || request.worktree !== undefined && typeof request.worktree !== "string") throw new Error("Invalid files request");
+  validateGitRequest(request as GitRequest);
+  if (command === "files.changes") return api.changes(request);
+  if (command === "files.diff") return api.diff(request);
+  if (command === "files.commits") return api.commits(request);
+  if (command === "files.commit") return api.commit(request);
   if (command === "files.list") return api.list(request);
   if (command === "files.read") return api.read(request);
   if (command === "files.worktrees") return api.worktrees(request);

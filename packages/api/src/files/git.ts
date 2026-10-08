@@ -64,7 +64,8 @@ export async function locateRepository(root: string): Promise<{ root: string; me
     const parent = dirname(current); if (parent === current) throw new Error('Not a Git repository'); current = parent;
   }
 }
-export function createGitApi(selectRoot: (request: FilesRequest) => Promise<string>, resolveInside: (root: string, path: string, allowMissing?: boolean) => Promise<string>, readRules: () => RedactionRules) {
+export function createGitApi(selectRoot: (request: FilesRequest) => Promise<string>, resolveInside: (root: string, path: string, allowMissing?: boolean) => Promise<string>, readRules: () => RedactionRules,
+  readConversations: (commits: ReturnType<typeof parseCommitLog>) => Map<string, string[]> = () => new Map()) {
   async function check(root: string, request: FilesRequest) {
     await resolveInside(root, request.path ?? '', true);
   }
@@ -183,9 +184,11 @@ export function createGitApi(selectRoot: (request: FilesRequest) => Promise<stri
       try { output = await runGit(root, ['log', '--all', '--date-order', `-${request.limit ?? DEFAULT_COMMITS}`, '--decorate=short', '--format=%H%x00%P%x00%D%x00%an%x00%aI%x00%s%x00']); }
       catch (error) { if (error instanceof Error && 'stderr' in error && /does not have any commits yet|unknown revision.*HEAD/.test(String(error.stderr))) return { worktree: root, commits: [] }; throw error; }
       const commits = [];
-      for (const commit of parseCommitLog(output)) {
+      const history = parseCommitLog(output);
+      const conversations = readConversations(history);
+      for (const commit of history) {
         const files = await readCommitFiles(root, commit.hash);
-        commits.push({ ...commit, branches: commit.branches.map(name => redact(name, readRules()).text), tags: commit.tags.map(name => redact(name, readRules()).text),
+        commits.push({ ...commit, conversation_ids: conversations.get(commit.hash) ?? [], branches: commit.branches.map(name => redact(name, readRules()).text), tags: commit.tags.map(name => redact(name, readRules()).text),
           subject: redact(commit.subject, readRules()).text, author: redact(commit.author, readRules()).text,
           fileCount: files.length, additions: files.reduce((sum, file) => sum + file.additions, 0), deletions: files.reduce((sum, file) => sum + file.deletions, 0) });
       }

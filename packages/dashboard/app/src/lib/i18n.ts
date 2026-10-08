@@ -14,7 +14,7 @@ export const dictionaries = {
     requests: 'Requests', noRequests: 'No requests yet', noConversations: 'No conversations yet', newTask: 'New task',
     selectConversation: 'Select a conversation', back: 'Back to', showRequests: 'Show requests', hideRequests: 'Hide requests',
     agentsRunning: 'agents running', agentRunning: 'agent running', viewAll: 'View all conversations', unattended: 'Background',
-    other: 'Other', agent: 'Agent', commands: 'Search and commands', retry: 'Retry',
+    other: 'Other', agent: 'Agent', commands: 'Search and commands', retry: 'Retry', showOlder: 'Show older',
   },
   ja: {
     english: 'English', japanese: '日本語', brand: 'agent-graph', workspace: '作業場', overview: '一覧', projects: 'プロジェクト',
@@ -31,7 +31,7 @@ export const dictionaries = {
     requests: '依頼の流れ', noRequests: 'まだ依頼はありません', noConversations: 'まだ会話はありません', newTask: '新規タスク',
     selectConversation: '会話を選んでください', back: '戻る:', showRequests: '依頼の流れを開く', hideRequests: '依頼の流れを畳む',
     agentsRunning: '件が実行中', agentRunning: '件が実行中', viewAll: 'すべての会話を見る', unattended: '自動実行',
-    other: 'その他', agent: 'エージェント', commands: 'コマンドと検索', retry: '再試行',
+    other: 'その他', agent: 'エージェント', commands: 'コマンドと検索', retry: '再試行', showOlder: '古い依頼を表示',
   },
 } as const;
 export type Language = keyof typeof dictionaries;

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, useLocation } from 'react-router';
 import { createStore } from '../lib/store.ts';
 import { orderSeries, selectRoots } from '../lib/roots.ts';
 import { visibleText } from '../lib/message-body.ts';
@@ -74,4 +74,45 @@ it('does not draw a bubble for user rows that only carry injected text or tool r
   expect(result.container.querySelector('article')).toBeNull();
   const written = render(<Message row={{ id: 'c', role: 'user', body: 'Please fix it' }} sender={sender}/>);
   expect(written.container.querySelector('.message-bubble')?.textContent).toContain('Please fix it');
+});
+
+function flowStore(childCount: number) {
+  const target = store();
+  const p = target.getSnapshot().projection;
+  const day = (n: number) => new Date(Date.UTC(2026, 8, 1 + n)).toISOString();
+  for (let index = 0; index < childCount; index++) {
+    const id = `child-${index}`;
+    p.conversations!.push({ id, provider: 'claude', type: 'subagent', origin: 'observed' });
+    p.runs!.push({ id: `${id}:1`, conversation_id: id, generation: 1, state: index === 0 ? 'running' : 'ended', started_ts: day(index), last_evidence_ts: day(index) });
+    p.relations!.push({ id: `rel-${id}`, type: 'delegated', active: 1, from_id: 'new', to_id: id, confidence: 'confirmed', evidence: { agentType: 'general-purpose', description: `Task ${index}` } });
+  }
+  target.setSnapshot({ ...target.getSnapshot() });
+  return target;
+}
+function Location() { return <output data-testid="location">{useLocation().search}</output>; }
+it('puts running children first, then the newest, and folds older children past twenty', () => {
+  render(<MemoryRouter><WorkspacePage project="repo" target={flowStore(25)} client={client}/></MemoryRouter>);
+  const flow = screen.getByRole('complementary', { name: 'Requests' });
+  const titles = () => [...flow.querySelectorAll('.delegation-select .request-title')].map(element => element.textContent);
+  expect(titles().slice(0, 3)).toEqual(['Task 0', 'Task 24', 'Task 23']);
+  expect(titles()).toHaveLength(21);
+  fireEvent.click(within(flow).getByRole('button', { name: /Show older/ }));
+  expect(titles()).toHaveLength(25);
+  expect(titles().at(-1)).toBe('Task 1');
+});
+it('opens a child conversation from anywhere on its row, writes it to the URL and offers a way back', () => {
+  render(<MemoryRouter><WorkspacePage project="repo" target={flowStore(2)} client={client}/><Location/></MemoryRouter>);
+  const header = () => document.querySelector<HTMLElement>('.conv-title-row')!;
+  // 根の系列の見出しには経過の時間を出さない。
+  expect(header().textContent).not.toMatch(/Elapsed/);
+  const flow = screen.getByRole('complementary', { name: 'Requests' });
+  fireEvent.click(within(flow).getByText('Task 1').closest('.request-row')!);
+  expect(screen.getByTestId('location').textContent).toContain('child=child-1');
+  expect(screen.getByRole('button', { name: 'Back to agent-graph-001' }).textContent).toBe('←agent-graph-001');
+  fireEvent.click(within(flow).getByText('Task 0'));
+  expect(screen.getByTestId('location').textContent).toContain('child=child-0');
+  // 子の会話は動いている間だけ経過を出す。
+  expect(header().textContent).toMatch(/Elapsed/);
+  fireEvent.click(screen.getByRole('button', { name: 'Back to agent-graph-001' }));
+  expect(screen.getByTestId('location').textContent).not.toContain('child=');
 });

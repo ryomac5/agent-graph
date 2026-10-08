@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { formatWhen } from '../../lib/format.ts';
 import { DiffView } from '../../components/diff/DiffView.tsx';
 import { parseDiff, type DiffLayout } from '../../components/diff/model.ts';
 import { GIT_MARKS, type FilesClient, type FilesRequest, type GitMark } from '../files/model.ts';
@@ -87,7 +88,7 @@ export function GitChanges({ client, projectId, worktree, enabled }: { client: F
     </section>
     <section aria-label="Commits"><header className="git-section-header"><div><h2>Commits</h2><p className="muted-text">Recent commits and the files they changed.</p></div></header>
       {commitError && <p role="alert">{commitError}</p>}{!loading && !commits.length && !commitError && <p className="muted-text">No commits yet.</p>}
-      {!!commits.length && <div className="git-columns"><aside><ul className="git-commit-list">{commits.map(commit => <li key={commit.hash}><button className="git-commit-choice" aria-pressed={hash === commit.hash} onClick={() => { setCommitError(''); setHash(commit.hash); }}><strong>{commit.subject}</strong><span>{commit.shortHash} · {commit.author}</span><time dateTime={commit.time}>{new Date(commit.time).toLocaleString('en-US')}</time><span>{commit.fileCount} files · <span className="diff-add-count">+{commit.additions}</span> <span className="diff-remove-count">−{commit.deletions}</span></span></button></li>)}</ul></aside>
+      {!!commits.length && <div className="git-columns"><aside><ul className="git-commit-list">{commits.map(commit => <li key={commit.hash}><button className="git-commit-choice" aria-pressed={hash === commit.hash} onClick={() => { setCommitError(''); setHash(commit.hash); }}><strong>{commit.subject}</strong><span>{commit.shortHash} · {commit.author}</span><time dateTime={commit.time} title={commit.time}>{formatWhen(commit.time)}</time><span>{commit.fileCount} files · <span className="diff-add-count">+{commit.additions}</span> <span className="diff-remove-count">−{commit.deletions}</span></span></button></li>)}</ul></aside>
         <div className="git-commit-diff">{commitLoading ? <p>Loading commit…</p> : !hash ? <p>Choose a commit to view its changes.</p> : <><nav className="git-commit-files" aria-label="Commit files"><button className="btn btn-secondary btn-sm" aria-pressed={!commitPath} onClick={() => setCommitPath('')}>All files</button>{files.map(file => <button key={file.path} className="btn btn-ghost btn-sm" aria-pressed={commitPath === file.path} onClick={() => setCommitPath(file.path)}>{file.path}</button>)}</nav><Layout value={layout} onChange={setLayout}/>{files.filter(file => !commitPath || file.path === commitPath).map(file => <GitPatch key={file.path} patch={file} layout={layout}/>)}</>}</div>
       </div>}
     </section>

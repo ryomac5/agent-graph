@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Link } from 'react-router';
 import type { Root } from '../lib/roots.ts';
 import { agentName, formatAgo, formatWhen } from '../lib/format.ts';
@@ -7,6 +8,8 @@ import { StatusDot, stateLabel } from './StateBadge.tsx';
 import './roots.css';
 
 const ACTIVE = ['running', 'starting', 'assigned', 'verifying', 'reviewing'];
+const WAITING = ['waiting_approval', 'waiting_input'];
+const RECENT_LIMIT = 20;
 function runningText(count: number, language: Language): string {
   const t = dictionaries[language];
   return language === 'ja' ? `${count} ${t.agentsRunning}` : `${count} ${count === 1 ? t.agentRunning : t.agentsRunning}`;
@@ -36,13 +39,18 @@ export function RootTree({ tree, selected, onSelect, runningOnly = false, langua
   root?: { name: string; state: string }; onSelectRoot?: () => void; onRetry?: (node: TreeNode) => void;
 }) {
   const t = dictionaries[language];
+  const [showOlder, setShowOlder] = useState(false);
   const byId = new Map(tree.nodes.map(node => [node.id, node]));
+  // 動いている子と待っている子を先に置き、それ以外は最後に動いた時刻の新しい順に並べる。
+  const rank = (id: string) => { const node = byId.get(id); return node ? (ACTIVE.includes(node.state) ? 0 : WAITING.includes(node.state) ? 1 : 2) : 3; };
+  const latest = (id: string): string => { const node = byId.get(id); return node ? [lastActivity(node), ...node.children.map(latest)].sort().at(-1) ?? '' : ''; };
+  const order = (ids: string[]) => ids.toSorted((a, b) => rank(a) - rank(b) || latest(b).localeCompare(latest(a)));
   const descriptions = new Map(tree.edges.map(edge => [edge.target, edge]));
   function branch(id: string, ancestors = new Set<string>()): React.ReactNode {
     const node = byId.get(id);
     if (!node || ancestors.has(id)) return null;
     const next = new Set([...ancestors, id]);
-    const children = node.children.map(child => branch(child, next));
+    const children = order(node.children).map(child => branch(child, next));
     const shown = !runningOnly || ACTIVE.includes(node.state);
     if (!shown && !children.some(Boolean)) return null;
     const edge = descriptions.get(id);
@@ -54,20 +62,25 @@ export function RootTree({ tree, selected, onSelect, runningOnly = false, langua
     const retry = onRetry && node.delegation && String(node.delegation.state ?? node.state) === 'failed';
     return <li key={id}>{(shown || group && children.some(Boolean)) && (group
       ? <h3 className="request-group">{node.label}</h3>
-      : <div className={`request-row${isSelected ? ' selected' : ''}`}>
+      : <div className={`request-row${isSelected ? ' selected' : ''}`} onClick={event => { if (!(event.target as Element).closest('.request-retry, .request-main')) onSelect(node); }}>
         <button className="request-main delegation-select" title={title} aria-label={[edge?.title, [who, node.role].filter(Boolean).join(' · '), stateLabel(node.state, language)].filter(Boolean).join(' · ')} aria-pressed={isSelected} onClick={() => onSelect(node)}>
           <span className="request-title">{title}</span>
           <span className="request-meta"><StatusDot state={node.state} language={language}/><span className="request-who">{[who, node.role].filter(Boolean).join(' · ')}</span>{when && <span className="request-when">{when}</span>}</span>
         </button>
-        {retry && <button className="btn btn-ghost btn-xs request-retry" onClick={() => onRetry(node)}>{t.retry}</button>}
+        {retry && <button className="btn btn-ghost btn-xs request-retry" onClick={event => { event.stopPropagation(); onRetry(node); }}>{t.retry}</button>}
       </div>)}{children.some(Boolean) && <ul>{children}</ul>}</li>;
   }
-  const children = tree.nodes.find(node => node.id === tree.roots[0])?.children ?? [];
-  const items = children.map(id => branch(id));
+  const children = order(tree.nodes.find(node => node.id === tree.roots[0])?.children ?? []);
+  const rendered = children.map(id => ({ id, item: branch(id) })).filter(entry => entry.item);
+  // 動いていない子が多いときは、新しい 20 件だけを出し、残りは Show older で畳む。
+  const resting = rendered.filter(entry => rank(entry.id) === 2);
+  const hidden = !showOlder && !runningOnly && resting.length > RECENT_LIMIT ? new Set(resting.slice(RECENT_LIMIT).map(entry => entry.id)) : new Set<string>();
+  const items = rendered.filter(entry => !hidden.has(entry.id)).map(entry => entry.item);
+  const more = hidden.size > 0 && <li key="older"><button className="btn btn-ghost btn-sm request-older" onClick={() => setShowOlder(true)}>{t.showOlder} <span className="numeric">({hidden.size})</span></button></li>;
   const empty = !items.some(Boolean);
   if (root) return <div className="root-tree request-flow"><ul><li>
     <div className={`request-row request-apex${selected ? '' : ' selected'}`}><button className="request-main" aria-pressed={!selected} onClick={onSelectRoot}>
       <span className="request-title">{root.name}</span><span className="request-meta"><StatusDot state={root.state} language={language}/></span></button></div>
-    {!empty && <ul>{items}</ul>}</li></ul>{empty && <p className="empty-row">{t.noRequests}</p>}</div>;
-  return <div className="root-tree"><ul>{items}</ul>{empty && !runningOnly && <p className="empty-row">{t.noRequests}</p>}</div>;
+    {!empty && <ul>{items}{more}</ul>}</li></ul>{empty && <p className="empty-row">{t.noRequests}</p>}</div>;
+  return <div className="root-tree"><ul>{items}{more}</ul>{empty && !runningOnly && <p className="empty-row">{t.noRequests}</p>}</div>;
 }

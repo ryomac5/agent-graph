@@ -45,7 +45,7 @@ it('1: ignores unknown runs and shows only four notification kinds with a conver
   const projection = { roots: [{ ...root }], conversations: [{ id: 'c', provider: 'codex', first_message_ts: RECENT }],
     runs: Array.from({ length: 105 }, (_, index) => ({ id: String(index), conversation_id: 'c', state: 'unknown', reason: 'unconfirmed_end_evidence' })) };
   expect(collectNotifications(previous, state(projection))).toEqual([]);
-  const store = target(projection);
+  const store = target({ ...projection, runs: [...projection.runs, { id: 'run', conversation_id: 'c', state: 'running' }] });
   render(<MemoryRouter><Notifications target={store} client={client} language="ja" compact initiallyOpen={false}/></MemoryRouter>);
   expect(document.querySelector('.bell-count')).toBeNull();
   act(() => store.setSnapshot(state({ ...projection, runs: [{ id: 'run', conversation_id: 'c', state: 'ended', last_evidence_ts: OLD }] })));
@@ -57,7 +57,8 @@ it('1: ignores unknown runs and shows only four notification kinds with a conver
   expect(screen.getByRole('combobox', { name: '承認待ち' })).toBeTruthy();
   expect(document.body.textContent).not.toContain('unconfirmed_end_evidence');
   const notices = collectNotifications(previous, state({ ...projection, approvals: [{ id: 'approval', state: 'pending', conversation_id: 'c' }],
-    runs: [{ id: 'input', conversation_id: 'c', state: 'waiting_input' }, { id: 'failed', conversation_id: 'c', state: 'failed' }, { id: 'done', conversation_id: 'c', state: 'ended' }] }));
+    runs: [{ id: 'input', conversation_id: 'c', state: 'waiting_input', last_evidence_ts: new Date(NOW).toISOString() }, { id: 'failed', conversation_id: 'c', state: 'failed', last_evidence_ts: new Date(NOW).toISOString() },
+      { id: 'done', conversation_id: 'c', state: 'ended', last_evidence_ts: new Date(NOW).toISOString() }] }), 'en', NOW);
   expect(notices.map(n => n.kind)).toEqual(['approval', 'input', 'failed', 'completed']);
   expect(notificationDetail(notices[0], state(projection), 'en')).toBe('Repo-20261008 is waiting for approval.');
 });

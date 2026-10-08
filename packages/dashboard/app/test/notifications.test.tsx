@@ -22,8 +22,8 @@ it('classifies every notification type and distinguishes unknown from completed'
   const before = snapshot({ runs: [{ id: 'r', state: 'running' }] });
   const next = snapshot({ approvals: [pending, { id: 'review', state: 'stale', reason: 'patch changed' }],
     runs: [{ id: 'r', state: 'unknown', conversation_id: 'c', reason: 'Disconnected', last_evidence: { fact_id: 'fact' }, last_evidence_ts: '2026-10-07' },
-      { id: 'input', state: 'waiting_input' }, { id: 'failed', state: 'failed', cause: 'error' },
-      { id: 'end', state: 'ended', end_evidence: { kind: 'host_exit', exit_code: 0 } }] }, 2);
+      { id: 'input', state: 'waiting_input', last_evidence_ts: new Date().toISOString() }, { id: 'failed', state: 'failed', cause: 'error', last_evidence_ts: new Date().toISOString() },
+      { id: 'end', state: 'ended', end_evidence: { kind: 'host_exit', exit_code: 0 }, last_evidence_ts: new Date().toISOString() }] }, 2);
   next.connection = 'runner_unavailable';
   const notices = collectNotifications(before, next);
   expect(new Set(notices.map(notice => notice.kind))).toEqual(new Set(NOTIFICATION_KINDS));
@@ -36,6 +36,12 @@ it('does not replay historical completion on initial load or notify merely for e
   expect(collectNotifications(undefined, current)).toEqual([]);
   expect(collectNotifications(snapshot(), current)).toEqual([]);
   expect(collectNotifications(current, { ...current, seq: 100, deltas: { run: { runId: 'b', text: 'delta' } } })).toEqual([]);
+});
+it('一覧を後から読み足した古い実行は、終わったばかりとして通知しない', () => {
+  const before = snapshot({ runs: [{ id: 'known', state: 'running' }] });
+  const next = snapshot({ runs: [{ id: 'known', state: 'running' }, { id: 'old', state: 'ended', last_evidence_ts: '2026-09-01T00:00:00Z' },
+    { id: 'old-failed', state: 'failed', last_evidence_ts: '2026-09-01T00:00:00Z' }] }, 2);
+  expect(collectNotifications(before, next, 'ja', Date.parse('2026-10-08T00:00:00Z'))).toEqual([]);
 });
 it('saves per-kind settings and recovers invalid saved preferences', async () => {
   setup();

@@ -38,7 +38,8 @@ export function loadPreferences(storage?: Pick<Storage, 'getItem'>): Notificatio
   return Object.fromEntries(NOTIFICATION_KINDS.map(kind => [kind,
     ['in_app', 'browser', 'silent'].includes(String(saved[kind])) ? saved[kind] : 'in_app'])) as NotificationPreferences;
 }
-export function collectNotifications(previous: ScreenState | undefined, next: ScreenState, language: Language = 'en'): Notice[] {
+const RECENT_MS = 2 * 60_000;
+export function collectNotifications(previous: ScreenState | undefined, next: ScreenState, language: Language = 'en', now = Date.now()): Notice[] {
   const notices: Notice[] = [];
   function add(kind: NotificationKind, row: Row, approvalId?: string) {
     const notice: Notice = { id: JSON.stringify([kind, row.id, next.generation, next.seq]), kind,
@@ -54,6 +55,9 @@ export function collectNotifications(previous: ScreenState | undefined, next: Sc
   for (const row of next.projection.runs ?? []) {
     const before = previous?.projection.runs?.find(entry => entry.id === row.id);
     if (before?.state === row.state) continue;
+    // 一覧を後から読み足した古い行は、いま起きた変化ではない。前から知っている行か、直前に動いた行だけを通知する。
+    const changed = Date.parse(readText(row.last_evidence_ts ?? row.ended_ts ?? row.started_ts));
+    if (!before && !(Number.isFinite(changed) && now - changed < RECENT_MS)) continue;
     if (row.state === 'waiting_input') add('input', row);
     if (row.state === 'waiting_approval' && !(next.projection.approvals ?? []).some(a => a.run_id === row.id && isPending(a))) add('approval', row);
     // 初回の履歴取得を、新しく終了した実行として通知しない。

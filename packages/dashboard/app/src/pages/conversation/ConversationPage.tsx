@@ -54,8 +54,8 @@ function nameOf(state: ScreenState, id: unknown): string {
   const value = readText(id);
   return conversationName(state, value) || (state.projection.runs?.some(row => row.id === value) ? runLabel(state, value) : '') || 'another conversation';
 }
-function TimeStamp({ value, fallback }: { value: string; fallback: string }) {
-  return value ? <time dateTime={value} title={value}>{formatClock(value) || value}</time> : <span className="muted-text">{fallback}</span>;
+function TimeStamp({ value, fallback, language = 'en' }: { value: string; fallback: string; language?: Language }) {
+  return value ? <time dateTime={value} title={value}>{formatClock(value, language) || value}</time> : <span className="muted-text">{fallback}</span>;
 }
 function ApprovalCard({ entry, t, disabled, answered, onAnswer, screen }: {
   screen: ScreenState; entry: TimelineEntry; t: (key: ConversationText) => string; disabled: boolean; answered: boolean; onAnswer: (decision: string) => void;
@@ -198,8 +198,11 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     cwd: readText(conversation?.cwd) || savedCwd, projectRoot: readText(project?.root_path),
   });
   // 動いている間は、最後の人の発言からの経過と、最後に使った道具を末尾に出す。端末の「Cogitating…」に当たる。
+  // 経過は、実行が動き出した時刻から数える。発言の窓は新しい 200 件だけなので、人の発言は窓の外にあることがある。
+  const runningSince = readText(run?.state) === 'running' ? Date.parse(readText(run?.last_evidence_ts)) : NaN;
   const lastHuman = [...messageEntries].reverse().find(entry => readText(entry.row.role) === 'user' && !isToolOnly(entry.row) && !isBlank(entry.row)
     && harnessKind(readBody(entry.row.body)) === 'user');
+  const turnStarted = Number.isFinite(runningSince) ? runningSince : Date.parse(lastHuman?.time ?? '');
   const lastTool = [...messageEntries].reverse().flatMap(entry => Array.isArray(entry.row.body) ? entry.row.body.map(readObject).filter(block => block.type === 'tool_use').map(block => readText(block.name)).reverse() : [])[0];
   const shownMessages = new Set(messageEntries.slice(-messageLimit).map(entry => entry.row.id));
   if (anchorId) shownMessages.add(anchorId);
@@ -416,14 +419,16 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
         nameShown(undefined);
         return <div title={entry.kind === 'gap' ? showValue(entry.row.title ?? [entry.row.from, entry.row.to, entry.row.reason].filter(Boolean).join(' · ')) : undefined} role="separator" className={`timeline-boundary${entry.kind === 'gap' ? ' gap' : ''}${entry.row.confidence === 'inferred' ? ' inferred' : ''}`} key={entry.key}>
           {entry.row.series ? <span>{t('continued')}</span> : entry.kind === 'gap' ? <span>{t('oldHistory')}</span>
-            : <>{t(entry.row.type as ConversationText)} · {nameOf(state, entry.row.from_id)} → {nameOf(state, entry.row.to_id)}</>}
-          {!entry.row.series && <TimeStamp value={entry.time} fallback={t('timeUnknown')}/>}
+            // 要約と続きは同じ会話の中の区切りなので、種類だけを出す。分岐と引き継ぎは、名前が違うときだけ行き先を添える。
+            : <>{t(entry.row.type as ConversationText)}{!['compacted', 'continued'].includes(readText(entry.row.type)) && nameOf(state, entry.row.from_id) !== nameOf(state, entry.row.to_id)
+              && <> · {nameOf(state, entry.row.from_id)} → {nameOf(state, entry.row.to_id)}</>}</>}
+          {!entry.row.series && entry.time && <TimeStamp value={entry.time} fallback="" language={language}/>}
         </div>;
       })}
       {deltas.map(([key, delta]) => <Message key={key} language={language} streaming sender={agentSender} showName={nameShown(agentSender)}
         row={{ id: delta.messageId ?? key, role: 'assistant', body: delta.text, body_state: 'stored' } satisfies Row}/>)}
-      {rawStatus === 'running' && lastHuman && Number.isFinite(Date.parse(lastHuman.time)) && <p className="working-line" role="status">
-        <span className="pulse" aria-hidden="true"/>{language === 'ja' ? '作業中' : 'Working'}… {formatSeconds(Math.max(0, Math.floor((now - Date.parse(lastHuman.time)) / 1000)))}
+      {rawStatus === 'running' && Number.isFinite(turnStarted) && <p className="working-line" role="status">
+        <span className="pulse" aria-hidden="true"/>{language === 'ja' ? '作業中' : 'Working'}… {formatSeconds(Math.max(0, Math.floor((now - turnStarted) / 1000)))}
         {lastTool && <span className="working-tool"> · {lastTool}</span>}</p>}
     </div></div>
     {/* 端末で動いている会話も、同じ入力欄から返信する。送ると、この画面がその会話を引き継いで続ける。 */}

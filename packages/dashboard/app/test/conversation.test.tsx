@@ -89,7 +89,7 @@ it('renders chronological messages, tool calls, provenance, approval requests, b
   expect(document.querySelector('script')).toBeNull();
   expect(document.querySelector('a[href^="javascript:"]')).toBeNull();
   expect(screen.getAllByRole('separator')).toHaveLength(2);
-  expect(screen.getByText(/Compaction ·/).className).toContain('inferred');
+  expect(screen.getByText(/Compaction/).className).toContain('inferred');
   expect(screen.getByText('Older history is unavailable').closest('[role="separator"]')!.getAttribute('title')).toContain('History unavailable');
 });
 

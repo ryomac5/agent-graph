@@ -39,7 +39,7 @@ export function CommandPalette({ commands, onClose }: { commands: Command[]; onC
         if (event.key === 'Enter' && selected) { event.preventDefault(); execute(selected); }
       }}/>
     <ul id="command-results" role="listbox" aria-label="Commands">{matches.map(command => <li key={command.id} id={`command-${command.id}`} role="option" aria-selected={selected === command} aria-disabled={command.disabled}><button className="btn btn-ghost" disabled={command.disabled} onClick={() => execute(command)}>{command.name}</button></li>)}</ul>
-    {!matches.length && <p role="status">No commands found</p>}
+    {!matches.length && <p role="status">No commands</p>}
   </CommandDialog>;
 }
 export function useKeySettings(client: SettingsClient) {
@@ -85,8 +85,8 @@ export function KeyboardSettings({ bindings, client, onSave }: { bindings: KeyBi
     } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); }
   }
-  return <section aria-label="Keyboard shortcuts" className="settings-card"><h2>Keyboard shortcuts</h2><p>config.toml [keys] · Applies immediately. Duplicate bindings are rejected.</p>
+  return <section aria-label="Keyboard shortcuts" className="settings-section"><h2>Shortcuts</h2><div className="settings-card">
     {Object.entries(draft).map(([key, value]) => <label key={key}><span>{KEY_LABELS[key as keyof KeyBindings]}</span><input aria-label={`keys · ${key}`} value={value} disabled={busy} onChange={event => { setDirty(true); setDraft(previous => ({ ...previous, [key]: event.target.value })); }}/></label>)}
-    <button className="btn btn-primary" disabled={busy} onClick={() => void save()}>Save keyboard shortcuts</button>{message && <p role={message === 'Saved' ? 'status' : 'alert'}>{message}</p>}
-  </section>;
+    <div className="settings-card-footer"><button className="btn btn-secondary btn-sm" disabled={busy} onClick={() => void save()}>Save</button>{message && <p className="muted-text" role={message === 'Saved' ? 'status' : 'alert'}>{message}</p>}</div>
+  </div></section>;
 }

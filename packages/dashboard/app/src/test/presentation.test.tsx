@@ -1,5 +1,5 @@
 import { projectRoots } from './root-fixture.ts';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { App } from '../App.tsx';
@@ -13,6 +13,8 @@ import { selectTimeline } from '../components/conversation/model.ts';
 import { Notifications } from '../components/notifications/Notifications.tsx';
 import { readBody } from '../lib/message-body.ts';
 
+// 依頼の流れの列は 1280px 以上で開いて始まる。行を押す試験は広い画面で描く。
+beforeEach(() => { vi.stubGlobal('innerWidth', 1440); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 it.each(['approve', 'request_changes', 'reject'])('formats %s review output consistently in Overview, workspace and conversation', verdict => {
@@ -43,8 +45,8 @@ it.each(['approve', 'request_changes', 'reject'])('formats %s review output cons
   expect(screen.queryByRole('article', { name })).toBeNull();
   expect(screen.getByRole('link', { name: /Browser fixture task/ })).toBeTruthy(); overview.unmount();
   const workspace = render(<MemoryRouter><WorkspacePage target={target} client={client} project={REPO}/></MemoryRouter>);
-  expect(within(screen.getByRole('region', { name: 'Root conversations' })).queryByText(name)).toBeNull();
-  fireEvent.click(within(screen.getByRole('complementary', { name: 'Delegation tree' })).getByRole('button', { name: 'Codex · review · ended' }));
+  expect(within(screen.getByRole('region', { name: 'Conversations' })).queryByText(name)).toBeNull();
+  fireEvent.click(within(screen.getByRole('complementary', { name: 'Requests' })).getByRole('button', { name: /Codex · review · Done$/ }));
   expect(document.querySelector('.conversation-markdown')!.textContent).toBe(expected);
   workspace.unmount();
   render(<MemoryRouter><ConversationPage conversationId={review} target={target} client={client}/></MemoryRouter>);
@@ -107,10 +109,10 @@ it('reads Claude tool inputs and Codex requests into one approval shape without 
 it('shows the conversation header with model, effort, worktree place and branch, and keeps the composer after the timeline', () => {
   render(<MemoryRouter><ConversationPage conversationId={CONVERSATION} target={setup()} client={client}/></MemoryRouter>);
   const header = document.querySelector<HTMLElement>('.conv-header')!;
-  expect(within(header).getByText('claude-sonnet')).toBeTruthy();
-  expect(within(header).queryByText('Effort · high')).toBeNull();
+  expect(within(header).getByText('Claude Sonnet')).toBeTruthy();
+  expect(within(header).queryByText('high')).toBeNull();
   fireEvent.click(within(header).getByRole('button', { name: 'Details' }));
-  expect(within(header).getByText('Effort · high')).toBeTruthy();
+  expect(within(header).getByText('high')).toBeTruthy();
   expect(within(header).getByText('repo')).toBeTruthy();
   expect(within(header).getByText('main')).toBeTruthy();
   expect(header.textContent).not.toMatch(/Unknown|\[|\{/);
@@ -226,12 +228,12 @@ it('uses the same outcome marks in the inbox expired list and in notifications',
 it('keeps reviewers in the selected root tree and out of the root list', () => {
  const target = setup(); const review = 'review-conversation'; target.setSnapshot({ seq: 2, generation: 1, projection: projection({ conversations: [projection().conversations[0], { id: review, origin: 'managed', provider: 'codex', name: '{"verdict":"approve"}' }], runs: [...projection().runs, { id: 'review-run', conversation_id: review, generation: 1, state: 'running' }], relations: [{ id: 'review-edge', type: 'review_of', active: 1, confidence: 'confirmed', from_id: review, to_id: CONVERSATION }, { id: 'review-child', type: 'delegated', from_id: CONVERSATION, to_id: review, evidence: { agentType: 'review' } }] }) });
  const view = render(<MemoryRouter><HomePage target={target}/></MemoryRouter>); const group = screen.getByRole('region', { name: 'repo' });
- expect(group.querySelectorAll('.root-row')).toHaveLength(1); expect(within(group).getByRole('button', { name: 'Codex · review · running' })).toBeTruthy();
+ expect(group.querySelectorAll('.root-row')).toHaveLength(1); expect(within(group).getByRole('button', { name: /Codex · review · Running$/ })).toBeTruthy();
  expect(runLabel(target.getSnapshot(), 'review-run')).toBe('Review of Browser fixture task · Run 1'); view.unmount();
  render(<MemoryRouter><WorkspacePage target={target} client={client} project={REPO}/></MemoryRouter>);
- expect(within(screen.getByRole('region', { name: 'Root conversations' })).getAllByRole('button')).toHaveLength(1); expect(screen.getByRole('button', { name: 'Codex · review · running' })).toBeTruthy();
+ expect(within(screen.getByRole('region', { name: 'Conversations' })).getAllByRole('button')).toHaveLength(1); expect(screen.getByRole('button', { name: /Codex · review · Running$/ })).toBeTruthy();
 });
 it('shows the projected unknown state once when root execution evidence is absent', () => {
  const target = setup(); target.setSnapshot({ seq: 2, generation: 1, projection: projection({ roots: [{ id: 'external', name: 'External root', project: REPO, state: 'unknown', last_activity_ts: null, conversation_ids: ['external'], running_children: 0, total_children: 0 }], conversations: [{ id: 'external', origin: 'observed', provider: 'codex' }], runs: [], tasks: [], messages: [], message_memberships: [], approvals: [] }) });
- render(<MemoryRouter><HomePage target={target}/></MemoryRouter>); const row = screen.getByRole('link', { name: /External root/ }); expect(row.querySelectorAll('.root-state')).toHaveLength(1); expect(row.querySelector('.root-state')!.textContent).toBe('unknown'); expect(row.textContent).toContain('Activity unknown');
+ render(<MemoryRouter><HomePage target={target}/></MemoryRouter>); const row = screen.getByRole('link', { name: /External root/ }); expect(row.querySelectorAll('.root-state')).toHaveLength(1); expect(row.querySelector('.root-state')!.textContent).toBe('Unknown'); expect(row.textContent).not.toContain('Activity unknown');
 });

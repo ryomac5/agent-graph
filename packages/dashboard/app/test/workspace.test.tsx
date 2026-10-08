@@ -22,7 +22,7 @@ it('creates concurrent intake delegations with selected provider, model, effort 
   const client = createCommandClient();
   render(<MemoryRouter><WorkspacePage project="/repo/alpha" target={createActivityStore()} client={client}/></MemoryRouter>);
   fillTaskForm();
-  await act(async () => fireEvent.submit(screen.getByRole('form', { name: 'Create task' })));
+  await act(async () => fireEvent.submit(screen.getByRole('form', { name: 'New task' })));
   expect(client.command.mock.calls.filter(([name]) => name === 'intake.submit')).toHaveLength(3);
   const ids = new Set<string>();
   client.command.mock.calls.filter(([name]) => name === 'intake.submit').forEach(([command, payload, cmdId], index) => {
@@ -33,15 +33,15 @@ it('creates concurrent intake delegations with selected provider, model, effort 
       cwd: '/repo/alpha', project: '/repo/alpha', provider: 'claude', model: 'test-claude-model', effort: 'high', constraints: { excludeFamily: ['openai'] } });
   });
   expect(ids.size).toBe(3);
-  expect(screen.getByText('3/3 requests accepted')).toBeTruthy();
+  expect(screen.getByText('3/3 requests started')).toBeTruthy();
 });
 it('sends all delegations before acknowledgements arrive and prevents duplicate submissions', async () => {
   const resolves: ((ack: Ack) => void)[] = [];
   const client = { command: vi.fn((name: string) => name === 'intake.submit' ? new Promise<Ack>(resolve => resolves.push(resolve)) : Promise.resolve({ type: 'ack' as const, cmd_id: 'model', ok: true })) };
   render(<MemoryRouter><WorkspacePage project="/repo/alpha" target={createActivityStore()} client={client}/></MemoryRouter>);
-  fillTaskForm(); fireEvent.submit(screen.getByRole('form', { name: 'Create task' }));
+  fillTaskForm(); fireEvent.submit(screen.getByRole('form', { name: 'New task' }));
   expect(client.command.mock.calls.filter(([name]) => name === 'intake.submit')).toHaveLength(3);
-  fireEvent.submit(screen.getByRole('form', { name: 'Create task' }));
+  fireEvent.submit(screen.getByRole('form', { name: 'New task' }));
   expect(client.command.mock.calls.filter(([name]) => name === 'intake.submit')).toHaveLength(3);
   await act(async () => resolves.forEach(resolve => resolve({ type: 'ack', cmd_id: 'id', ok: true })));
 });
@@ -49,12 +49,12 @@ it('interrupts the selected root and keeps projected state until a patch arrives
  const client = createCommandClient(); render(<MemoryRouter><WorkspacePage project="/repo/alpha" target={createActivityStore()} client={client}/></MemoryRouter>);
  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Interrupt' })));
  expect(client.command).toHaveBeenCalledWith('interrupt', { runId: 'r1' });
- expect(within(screen.getByRole('region', { name: 'Root conversations' })).getByText('running')).toBeTruthy();
+ expect(within(screen.getByRole('region', { name: 'Conversations' })).getByText('Running')).toBeTruthy();
 });it('does not list parallel child conversations among roots', () => {
  const target = createActivityStore(); const snapshot = target.getSnapshot();
  target.setSnapshot({ ...snapshot, projection: { ...snapshot.projection, conversations: [...snapshot.projection.conversations, { id: 'parallel', provider: 'claude', origin: 'managed', name: 'Parallel child' }] } });
  render(<MemoryRouter><WorkspacePage project="/repo/alpha" target={target} client={createCommandClient()}/></MemoryRouter>);
- const roots = screen.getByRole('region', { name: 'Root conversations' }); expect(within(roots).getAllByRole('button')).toHaveLength(2);
+ const roots = screen.getByRole('region', { name: 'Conversations' }); expect(within(roots).getAllByRole('button')).toHaveLength(2);
  expect(within(roots).queryByText('Parallel child')).toBeNull();
  fireEvent.click(within(roots).getByRole('button', { name: /Investigate latency/ })); expect(screen.getByText('Investigate latency. Then report.')).toBeTruthy();
 });it('disables root controls without the runner and reports rejected interrupts', async () => {
@@ -69,6 +69,6 @@ it('interrupts the selected root and keeps projected state until a patch arrives
   client.command.mockImplementation(async (name, _payload, cmdId) => ({ type: 'ack', cmd_id: cmdId ?? 'id', ok: name !== 'intake.submit' || client.command.mock.calls.filter(([command]) => command === 'intake.submit').length > 1, error: 'Runner unavailable' }));
   render(<MemoryRouter><WorkspacePage project="/repo/alpha" target={createActivityStore()} client={client}/></MemoryRouter>);
   fillTaskForm();
-  await act(async () => fireEvent.submit(screen.getByRole('form', { name: 'Create task' })));
-  expect(screen.getByText('2/3 requests accepted · Runner unavailable')).toBeTruthy();
+  await act(async () => fireEvent.submit(screen.getByRole('form', { name: 'New task' })));
+  expect(screen.getByText('2/3 requests started · Runner unavailable')).toBeTruthy();
 });

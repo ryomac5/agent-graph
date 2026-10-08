@@ -1,10 +1,31 @@
 import { AppLink } from './AppLink.tsx';
 import type { ReactNode } from 'react';
 import { dictionaries, type Language } from '../lib/i18n.ts';
-import { Icon } from './Icon.tsx';
 import { reasonText } from '../lib/reasons.ts';
 
 export type ExecutionState = 'starting' | 'running' | 'waiting_approval' | 'waiting_input' | 'idle' | 'ended' | 'failed' | 'unknown';
+const KNOWN = new Set<ExecutionState>(['starting', 'running', 'waiting_approval', 'waiting_input', 'idle', 'ended', 'failed', 'unknown']);
+/** 状態は 4 色の点に寄せる。動いているものは緑、待ちは橙、止まっているものは灰、失敗は赤とする。 */
+export function stateTone(state: string): 'running' | 'waiting' | 'idle' | 'failed' {
+  if (state === 'running' || state === 'starting') return 'running';
+  if (state === 'waiting_approval' || state === 'waiting_input') return 'waiting';
+  if (state === 'failed') return 'failed';
+  return 'idle';
+}
+export function toDisplayState(state: string): ExecutionState {
+  if (KNOWN.has(state as ExecutionState)) return state as ExecutionState;
+  if (['assigned', 'verifying', 'reviewing'].includes(state)) return 'running';
+  if (['received', 'accepted'].includes(state)) return 'starting';
+  if (state === 'done' || state === 'interrupted') return 'ended';
+  if (state === 'denied') return 'failed';
+  return 'unknown';
+}
+export function stateLabel(state: string, language: Language = 'en'): string { return dictionaries[language][toDisplayState(state)]; }
+/** 小さな色の点と短い語で状態を出す。 */
+export function StatusDot({ state, language = 'en', className = '' }: { state: string; language?: Language; className?: string }) {
+  const shown = toDisplayState(state);
+  return <span className={`status status-${stateTone(shown)} ${className}`.trim()} data-state={shown}><span className="status-dot" aria-hidden="true"/><span className="status-label">{stateLabel(shown, language)}</span></span>;
+}
 interface StateBadgeProps {
   state: ExecutionState;
   language?: Language;
@@ -13,28 +34,20 @@ interface StateBadgeProps {
   evidenceTime?: ReactNode;
   reason?: string;
   elapsed?: string;
-  /** 詳しい表示では根拠と時刻と理由も並べる。一覧では印だけを 1 行で出し、理由は title に置く。 */
   detailed?: boolean;
 }
-// 状態は色だけに頼らず、印と文字で示す。不明は破線の枠と印で示す。
-export function StateBadge({ state, language = 'en', evidenceUrl, evidence, evidenceTime, reason, elapsed, detailed = false }: StateBadgeProps) {
+// 状態は点と語で示す。理由と経過は title に置き、行には出さない。失敗だけは理由を短く添える。
+export function StateBadge({ state, language = 'en', evidenceUrl, reason, elapsed }: StateBadgeProps) {
   const t = dictionaries[language];
-  evidence = state === 'unknown' && evidence && /unknown/i.test(evidence) ? undefined : evidence;
-  // 理由の符号は人が読む文に置き換える。不明の理由は一覧の行では出さず、title と Details に置く。
   reason = reasonText(reason) || undefined;
   reason = reason === 'Unknown' || reason === t.unknown ? undefined : reason;
-  if (state === 'unknown' && reason) reason = reason.replace(/\bunknown\b/gi, 'unavailable');
-  const fullReason = state === 'unknown' && !reason ? (language === 'ja' ? '実行の状態を確認できる根拠がありません' : 'No evidence confirming execution state') : reason;
-  if (state === 'unknown' && !reason) reason = language === 'ja' ? '根拠なし' : 'No evidence';
-  const label = state === 'starting' ? (language === 'ja' ? '起動中' : 'Starting') : t[state];
+  const label = t[state];
   const title = [label, ['starting', 'running', 'waiting_approval', 'waiting_input'].includes(state) ? elapsed : undefined,
-    ['unknown', 'ended'].includes(state) ? evidence : undefined, ['unknown', 'failed'].includes(state) ? fullReason : undefined].filter(Boolean).join(' · ');
-  return <AppLink className={`state-badge status-${state}${detailed ? ' detailed' : ''}`} to={evidenceUrl} aria-label={`${label} · ${t.evidence}`} title={title}>
-    {state === 'unknown' ? <Icon name="unknown" size={13}/> : state === 'failed' ? <Icon name="alert" size={13}/> : <span className="state-dot" aria-hidden="true"/>}
+    ['unknown', 'failed'].includes(state) ? reason : undefined].filter(Boolean).join(' · ');
+  return <AppLink className={`state-badge status status-${stateTone(state)} status-${state}`} to={evidenceUrl} aria-label={`${label} · ${t.evidence}`} title={title}>
+    <span className="status-dot" aria-hidden="true"/>
     <span className="state-label">{label}</span>
     {['starting', 'running', 'waiting_approval', 'waiting_input'].includes(state) && elapsed && <span className="state-detail">{elapsed}</span>}
-    {(state === 'ended' || detailed && state === 'unknown') && evidence && <span className="state-detail">{evidence}</span>}
-    {detailed && state === 'unknown' && evidenceTime && <span className="state-detail">{evidenceTime}</span>}
-    {(state === 'failed' || detailed && state === 'unknown') && reason && <span className="state-detail">{reason}</span>}
+    {state === 'failed' && reason && <span className="state-detail">{reason}</span>}
   </AppLink>;
 }

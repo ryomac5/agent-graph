@@ -51,20 +51,20 @@ it('shows at most five roots per project with running roots first', () => {
  const real = screen.getByRole('region', { name: 'Real project' }); const other = screen.getByRole('region', { name: 'Other' });
  expect(real.querySelectorAll('.root-row')).toHaveLength(5); expect(other.querySelectorAll('.root-row')).toHaveLength(5);
  expect(real.querySelector('.root-row')!.textContent).toContain('Task 9999'); expect(other.querySelector('.root-row')!.textContent).toContain('Task 9998');
- expect(within(real).getByRole('link', { name: 'View all root conversations' })).toBeTruthy();
+ expect(within(real).getByRole('link', { name: 'View all conversations' })).toBeTruthy();
 });it('limits ten thousand projected roots to five per project on the overview', () => {
  render(<MemoryRouter><HomePage target={createLargeStore()}/></MemoryRouter>);
- expect(document.querySelectorAll('.root-row')).toHaveLength(10); expect(screen.getAllByRole('link', { name: 'View all root conversations' })).toHaveLength(2);
+ expect(document.querySelectorAll('.root-row')).toHaveLength(10); expect(screen.getAllByRole('link', { name: 'View all conversations' })).toHaveLength(2);
 });it.each(['/tmp/test', '/private/tmp/test', '/var/folders/xx/test', '/private/var/folders/xx/test', '/Users/test/.cache/agent-graph/worktrees/test'])('does not invent roots from conversations under %s', root => {
  const target = createStore(); target.setSnapshot({ seq: 1, generation: 0, projection: { projects: [{ id: 'temporary', root_path: root, state: 'unregistered' }], conversations: [{ id: 'c', project: 'temporary', name: 'Temporary fixture', provider: 'codex', origin: 'observed' }], roots: [] } });
- render(<MemoryRouter><HomePage target={target}/></MemoryRouter>); expect(screen.queryByText('Temporary fixture')).toBeNull(); expect(screen.getByText('No root conversations yet')).toBeTruthy(); expect(isTemporaryPath('/tmp-project/main')).toBe(false);
+ render(<MemoryRouter><HomePage target={target}/></MemoryRouter>); expect(screen.queryByText('Temporary fixture')).toBeNull(); expect(screen.getByText('No conversations yet')).toBeTruthy(); expect(isTemporaryPath('/tmp-project/main')).toBe(false);
 });it('keeps projected roots attached to their registered main project visible', () => {
  const target = createStore(); target.setSnapshot({ seq: 1, generation: 0, projection: {
  projects: [{ id: 'main', display_name: 'Main', root_path: '/projects/main', state: 'registered' }],
  roots: [{ id: 'c', name: 'Feature worktree', project: 'main', state: 'unknown', last_activity_ts: null, conversation_ids: ['c'], running_children: 0, total_children: 0 }],
  conversations: [{ id: 'c', project: 'main', origin: 'observed' }], runs: [{ id: 'r', conversation_id: 'c', cwd: '/tmp/feature-worktree', state: 'unknown' }] } });
  render(<MemoryRouter><HomePage target={target}/></MemoryRouter>); const row = within(screen.getByRole('region', { name: 'Main' })).getByRole('link', { name: /Feature worktree/ });
- expect(row.querySelector('.root-state')!.textContent).toBe('unknown'); expect(row.textContent).toContain('Activity unknown');
+ expect(row.querySelector('.root-state')!.textContent).toBe('Unknown'); expect(row.textContent).not.toContain('Activity unknown');
 });function createConversationStore() {
   const target = createStore();
   target.setSnapshot({ seq: 1, generation: 0, projection: {
@@ -95,7 +95,7 @@ it('fetches conversation bodies, shows loading and displays the newest two hundr
   expect(fetcher.mock.calls[0][0].searchParams.get('id')).toBe('c');
   expect(screen.queryByText('Message 249')).toBeNull();
   expect(screen.getAllByRole('article', { name: 'User message' })).toHaveLength(200);
-  fireEvent.click(screen.getByRole('button', { name: 'Load older messages' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Load older' }));
   await screen.findByText('Message 50');
   expect(screen.getAllByRole('article', { name: 'User message' })).toHaveLength(400);
 });
@@ -145,7 +145,7 @@ it('shows readable stale review approval text and a Changes link', () => {
   const card = screen.getByRole('article', { name: 'Approval request' });
   expect(card.textContent).toContain('The patch changed, so this approval no longer applies.');
   expect(card.textContent).not.toMatch(/patch_hash|artifact|Request content unavailable/);
-  expect(within(card).getByRole('link', { name: 'Open Changes' }).getAttribute('href')).toBe('/p/p/changes?artifact=a');
+  expect(within(card).getByRole('link', { name: 'View changes' }).getAttribute('href')).toBe('/p/p/changes?artifact=a');
 });
 it('uses readable search context, highlights a bounded excerpt, and links to Changes or the exact message', async () => {
   const result: SearchResult = { id: 'result', fact_id: 'f', subject: 'message:internal-hash', kind: 'message',
@@ -153,7 +153,7 @@ it('uses readable search context, highlights a bounded excerpt, and links to Cha
     conversation_id: 'c', run_id: 'r', message_id: 'm', project: 'p', provider: 'codex', source_ts: OLD, confidence: 'confirmed' };
   render(<MemoryRouter><SearchPage target={createConversationStore()} client={{ search: async () => ({ mode: 'fts5', total: 2,
     results: [result, { ...result, id: 'diff', kind: 'diff', subject: 'artifact:a', message_id: null }], unsupported: [] }) }}/></MemoryRouter>);
-  fireEvent.change(screen.getByLabelText('Search all conversations'), { target: { value: 'needle' } });
+  fireEvent.change(screen.getByLabelText('Search conversations'), { target: { value: 'needle' } });
   fireEvent.click(screen.getByRole('button', { name: 'Search' }));
   await screen.findByText('2 results');
   const message = screen.getByRole('region', { name: 'Messages' });

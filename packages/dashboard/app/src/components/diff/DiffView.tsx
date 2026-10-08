@@ -13,7 +13,7 @@ const ATTRIBUTION = {
 export function AttributionBadge({ attribution, evidenceUrl }: { attribution: Attribution; evidenceUrl: string }) {
   const item = ATTRIBUTION[attribution];
   return <AppLink className={`chip ${item.style}`} to={evidenceUrl}
-    title={attribution === 'unknown' ? 'Changes whose author could not be identified' : `${item.label} attribution · Open evidence`}>
+    title={attribution === 'unknown' ? 'Changes whose author could not be identified' : item.label}>
     <Icon name={item.icon} size={12}/>{item.label}</AppLink>;
 }
 export interface DiffViewProps {

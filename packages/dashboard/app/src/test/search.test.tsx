@@ -17,18 +17,20 @@ function createResult(): SearchResponse {
 it('groups all kinds and shows provenance, unsupported formats and a link to the exact message', async () => {
   const search = vi.fn(async () => createResult());
   render(<MemoryRouter><SearchPage client={{ search }}/></MemoryRouter>);
-  fireEvent.change(screen.getByLabelText('Search all conversations'), { target: { value: 'needle' } });
+  fireEvent.change(screen.getByLabelText('Search conversations'), { target: { value: 'needle' } });
   fireEvent.click(screen.getByRole('button', { name: 'Search' }));
   await screen.findByText('6 results');
   for (const name of ['Messages', 'Tool output', 'Diffs', 'Findings', 'Task names', 'Aliases']) expect(screen.getByRole('region', { name })).toBeTruthy();
   const section = screen.getByRole('region', { name: 'Messages' });
-  expect(within(section).getByText('confirmed')).toBeTruthy();
+  expect(within(section).queryByText('confirmed')).toBeNull();
   expect(section.textContent).not.toContain('run-1');
   expect(section.textContent).not.toContain('["codex","c"]');
   expect(section.querySelector('time')?.getAttribute('datetime')).toBe('2026-01-01T00:00:00Z');
   expect(within(section).getByRole('link').getAttribute('href')).toBe('/c/%5B%22codex%22%2C%22c%22%5D#message-%5B%22codex%22%2C%22m%22%5D');
   expect(screen.getByText('Unsupported history formats cannot be searched.')).toBeTruthy();
-  expect(screen.getByText(/Unknown format version/)).toBeTruthy();
+  // 理由は内部の語なので一覧にせず、件数だけを出して理由は title に置く。
+  expect(screen.queryByText(/Unknown format version/)).toBeNull();
+  expect(screen.getByRole('complementary', { name: 'Unsupported history formats cannot be searched.' }).getAttribute('title')).toContain('Unknown format version');
 });
 
 it('sends project, provider, period and kind filters and explains removed bodies and fallback', async () => {
@@ -41,7 +43,7 @@ it('sends project, provider, period and kind filters and explains removed bodies
   }
   fireEvent.click(screen.getByRole('button', { name: 'Search' }));
   await screen.findByText('Body removed by retention policy.');
-  expect(screen.getByText('Substring search (FTS5 unavailable)')).toBeTruthy();
+  expect(screen.getByText('Showing substring matches')).toBeTruthy();
   expect(screen.queryByText('needle message')).toBeNull();
   expect(search.mock.calls[0][0]).toMatchObject({ project: 'repo', provider: 'codex', kind: 'message', from: '2026-01-01T00:00', to: '2026-02-01T00:00', offset: 0 });
 });
@@ -62,12 +64,12 @@ it('ignores stale responses and appends the next page using the submitted filter
     .mockResolvedValueOnce(response).mockResolvedValueOnce({ ...response, results: [{ ...response.results[0], id: 'next-page' }] });
   render(<MemoryRouter><SearchPage client={{ search }}/></MemoryRouter>);
   fireEvent.click(screen.getByRole('button', { name: 'Search' }));
-  fireEvent.change(screen.getByLabelText('Search all conversations'), { target: { value: 'second' } });
+  fireEvent.change(screen.getByLabelText('Search conversations'), { target: { value: 'second' } });
   fireEvent.click(screen.getByRole('button', { name: 'Search' }));
   await screen.findByText('7 results');
   resolveFirst({ mode: 'fts5', total: 0, results: [], unsupported: [] });
   await waitFor(() => expect(screen.queryByText('No results')).toBeNull());
-  fireEvent.change(screen.getByLabelText('Search all conversations'), { target: { value: 'unsent' } });
+  fireEvent.change(screen.getByLabelText('Search conversations'), { target: { value: 'unsent' } });
   fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
   await waitFor(() => expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull());
   expect(search.mock.calls[2][0]).toMatchObject({ query: 'second', offset: 6 });

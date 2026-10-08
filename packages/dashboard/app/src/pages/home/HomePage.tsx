@@ -2,18 +2,22 @@ import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import type { ConversationClient } from '../conversation/ConversationPage.tsx';
 import { store, useScreenStore, type ScreenStore } from '../../lib/store.ts';
-import type { Language } from '../../lib/i18n.ts';
+import { dictionaries, type Language } from '../../lib/i18n.ts';
 import { getProjectName } from '../../lib/projects.ts';
+import { conversationTitle } from '../../lib/format.ts';
 import { selectRoots, useRootIndex, buildRootTree } from '../../lib/roots.ts';
 import { readAttempts } from '../tree/model.ts';
 import { RootList, RootTree } from '../../components/RootViews.tsx';
+import { StatusDot } from '../../components/StateBadge.tsx';
+import { Icon } from '../../components/Icon.tsx';
 import '../../components/activity.css';
 
 const PROJECT_ROOT_LIMIT = 5;
-export function HomePage({ target = store }: { target?: ScreenStore; client?: ConversationClient; language?: Language }) {
+export function HomePage({ target = store, language = 'en' }: { target?: ScreenStore; client?: ConversationClient; language?: Language }) {
+  const t = dictionaries[language];
   const navigate = useNavigate();
   const state = useScreenStore(target);
-  const roots = useMemo(() => selectRoots(state), [state.projection.roots]);
+  const roots = useMemo(() => selectRoots(state), [state.projection.roots, state.projection.conversations]);
   const index = useRootIndex(state);
   const groups = useMemo(() => {
     const groups = new Map<string, typeof roots>();
@@ -44,17 +48,20 @@ export function HomePage({ target = store }: { target?: ScreenStore; client?: Co
     }
   }
   const unattended = [...index.conversations.values()].filter(row => row.type === 'unattended' && !linked.has(String(row.id)));
-  return <div className="page home-page"><header className="page-header"><div className="page-title"><h1>Overview</h1><p className="muted-text">Root conversations and their running agents</p></div></header>
+  return <div className="page home-page"><header className="page-header"><h1>{t.overview}</h1></header>
     {[...groups].map(([project, items]) => <section className="activity-group project-section" aria-label={getProjectName(state, project)} key={project}>
-      <header className="section-header"><h2><Link to={`/p/${encodeURIComponent(project)}`}>{getProjectName(state, project)}</Link></h2></header>
-      {items.slice(0, PROJECT_ROOT_LIMIT).map(root => <div key={root.id}><RootList roots={[root]}/><RootTree tree={trees.get(root.id)!} runningOnly onSelect={node => {
+      <header className="section-header"><h2><Link to={`/p/${encodeURIComponent(project)}`}><Icon name="folder" size={14}/>{getProjectName(state, project)}</Link></h2></header>
+      <div className="root-card">{items.slice(0, PROJECT_ROOT_LIMIT).map(root => <div className="root-block" key={root.id}><RootList roots={[root]} language={language}/><RootTree tree={trees.get(root.id)!} runningOnly language={language} onSelect={node => {
         if (node.conversationId) navigate(`/p/${encodeURIComponent(project)}?root=${encodeURIComponent(root.id)}&child=${encodeURIComponent(node.conversationId)}`);
-      }}/></div>)}
-      {items.length > PROJECT_ROOT_LIMIT && <Link className="btn btn-link" to={`/p/${encodeURIComponent(project)}`}>View all root conversations</Link>}
+      }}/></div>)}</div>
+      {items.length > PROJECT_ROOT_LIMIT && <Link className="btn btn-link show-more" to={`/p/${encodeURIComponent(project)}`}>{t.viewAll}</Link>}
     </section>)}
-    {!roots.length && <p className="empty-row">No root conversations yet</p>}
-    <details className="activity-group" open={unattendedOpen}><summary onClick={event => { event.preventDefault(); setUnattendedOpen(value => !value); }}>Unattended <span className="count-pill">{unattended.length}</span></summary>
-      {unattendedOpen && unattended.map(row => <Link className="root-row" key={String(row.id)} to={`/c/${encodeURIComponent(String(row.id))}`}>{String(row.name || 'Unattended run')} · {String(index.runs.get(String(row.id))?.state ?? row.state ?? 'unknown')}</Link>)}
-    </details>
+    {!roots.length && <p className="empty-row">{t.noConversations}</p>}
+    {unattended.length > 0 && <details className="activity-group fold-section" open={unattendedOpen}><summary className="section-header" onClick={event => { event.preventDefault(); setUnattendedOpen(value => !value); }}>
+      <Icon name={unattendedOpen ? 'chevronDown' : 'chevronRight'} size={14}/><h2>{t.unattended}</h2><span className="column-count numeric">{unattended.length}</span></summary>
+      {unattendedOpen && <div className="root-card">{unattended.map(row => <Link className="root-row" key={String(row.id)} to={`/c/${encodeURIComponent(String(row.id))}`}>
+        <span className="root-row-line"><strong className="root-name">{String(row.name || '') || conversationTitle(row)}</strong></span>
+        <span className="root-row-meta"><StatusDot state={String(index.runs.get(String(row.id))?.state ?? row.state ?? 'unknown')} language={language}/></span></Link>)}</div>}
+    </details>}
   </div>;
 }

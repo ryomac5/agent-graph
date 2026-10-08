@@ -38,10 +38,10 @@ export function openFolds(...names: string[]) {
 }
 it('groups roots by project and folds only unlinked unattended conversations', () => {
  render(<MemoryRouter><HomePage target={createActivityStore()}/></MemoryRouter>);
- expect(within(screen.getByRole('region', { name: 'alpha' })).getAllByRole('link').map(row => row.textContent)).toContain('Implement APIrunningActivity unknown0 running · 0 total');
+ expect(within(screen.getByRole('region', { name: 'alpha' })).getAllByRole('link').map(row => row.textContent)).toContain('Implement APIRunning');
  expect(screen.getByRole('link', { name: /Review UI/ })).toBeTruthy();
  expect(screen.queryByText('External conversations')).toBeNull(); expect(screen.queryByText('Unsupported conversations')).toBeNull();
- const unattended = screen.getByText('Unattended').closest('details')!; expect(unattended.open).toBe(false);
+ const unattended = screen.getByText('Background').closest('details')!; expect(unattended.open).toBe(false);
  fireEvent.click(unattended.querySelector('summary')!); expect(within(unattended).getByRole('link').getAttribute('href')).toBe('/c/exec');
 });it('orders running roots first and links each root to its project', () => {
  render(<MemoryRouter><HomePage target={createActivityStore()}/></MemoryRouter>);
@@ -50,10 +50,10 @@ it('groups roots by project and folds only unlinked unattended conversations', (
  expect(rows[0].getAttribute('href')).toBe('/p/%2Frepo%2Falpha?root=c1');
 });it('shows projected root state and activity time and applies root patches', () => {
  const target = createActivityStore(); render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
- const row = screen.getByRole('link', { name: /Investigate latency/ }); expect(row.querySelector('.root-state')!.textContent).toBe('unknown');
+ const row = screen.getByRole('link', { name: /Investigate latency/ }); expect(row.querySelector('.root-state')!.textContent).toBe('Unknown');
  expect(row.querySelector('time')!.getAttribute('datetime')).toBe('2026-10-07T01:05:00Z');
  act(() => target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: { roots: { remove: [], upsert: [{ ...target.getSnapshot().projection.roots[0], state: 'failed' }] } } }));
- expect(screen.getByRole('link', { name: /Implement API/ }).textContent).toContain('failed');
+ expect(screen.getByRole('link', { name: /Implement API/ }).textContent).toContain('Failed');
 });it('uses the projected root name and leaves unrelated conversations out of the list', () => {
  const target = createActivityStore(); const snapshot = target.getSnapshot();
  target.setSnapshot({ ...snapshot, projection: { ...snapshot.projection, roots: [{ ...snapshot.projection.roots[0], name: 'agent-graph-001' }] } });

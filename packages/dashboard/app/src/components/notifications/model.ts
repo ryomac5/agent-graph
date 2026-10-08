@@ -9,7 +9,7 @@ export type NotificationPreferences = Record<NotificationKind, NotificationMode>
 export const PREFERENCES_KEY = 'agent-graph-notifications';
 export const NOTIFICATION_LABELS: Record<NotificationKind, string> = {
   approval: 'Approval pending', input: 'Input pending', failed: 'Run failed', completed: 'Run completed',
-  review_invalidated: 'Review invalidated', daemon_fault: 'Daemon fault', unknown: 'Run unknown',
+  review_invalidated: 'Review needs another look', daemon_fault: 'Connection error', unknown: 'Run unknown',
 };
 export interface Notice {
   id: string; kind: NotificationKind; title: string; detail: string;

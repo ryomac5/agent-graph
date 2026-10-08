@@ -14,7 +14,7 @@ import './inbox.css';
 export interface InboxProps { client: CommandClient; target?: ScreenStore }
 const TAIL_LIMIT = 5;
 const CLOCK_INTERVAL_MS = 1_000;
-const ACTION_LABELS = { allow: 'Allow', deny: 'Deny', session: 'Allow for this conversation' };
+const ACTION_LABELS = { allow: 'Allow', deny: 'Deny', session: 'Always allow' };
 // 行の操作は従のボタンにし、主のボタンはまとめての許可の 1 つに限る。
 const ACTION_STYLES = { allow: 'btn-secondary btn-allow', deny: 'btn-secondary', session: 'btn-ghost' };
 const ACTION_ICONS = { allow: 'check', deny: 'x', session: 'check' } as const;
@@ -38,7 +38,7 @@ export function ApprovalActions({ row, client, disabled = false }: { row: Row; c
   }
   return <div className="approval-actions">
     <div className="button-row"><ActionButtons row={row} disabled={disabled || busy || answered || !isPending(row)} onAnswer={action => void answer(action)}/></div>
-    {answered && <p role="status" className="status-line">Answer sent; waiting for resolution.</p>}
+    {answered && <p role="status" className="status-line">Sent</p>}
     {error && <p role="alert" className="status-line danger">{error}</p>}
   </div>;
 }
@@ -50,7 +50,7 @@ function ConversationTail({ row, state }: { row: Row; state: ScreenState }) {
     .sort(compareMessages)
     .slice(-TAIL_LIMIT);
   const deltas = Object.values(state.deltas).filter(delta => delta.runId === row.run_id);
-  return <details className="disclosure"><summary><Icon name="chevronRight" size={12} className="caret"/>Conversation tail</summary>
+  return <details className="disclosure"><summary><Icon name="chevronRight" size={12} className="caret"/>Recent messages</summary>
     <div className="tail">
       {messages.length === 0 && deltas.length === 0 && <p className="muted-text">No conversation content available.</p>}
       {messages.map(message => <div className="tail-message" key={String(message.id)}><span className="tail-role">{readText(message.role) === 'user' ? 'User' : 'Agent'}</span>
@@ -114,7 +114,7 @@ export function Inbox({ client, target = store }: InboxProps) {
     } catch (error) { setError(error instanceof Error ? error.message : String(error)); }
     finally { lock.current = false; setBusy(false); }
   }
-  return <section className="page inbox-page" aria-label="Approval inbox" onKeyDown={event => {
+  return <section className="page inbox-page" aria-label="Approvals" onKeyDown={event => {
     if (event.repeat || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey
       || (event.target instanceof HTMLElement && (event.target.closest('input, textarea, select, [contenteditable="true"]')))) return;
     const action = (Object.keys(APPROVAL_KEYS) as ApprovalAction[]).find(action => APPROVAL_KEYS[action] === event.key.toLowerCase());
@@ -123,10 +123,10 @@ export function Inbox({ client, target = store }: InboxProps) {
     const rows = active.length ? active : pending.filter(row => String(row.id) === focused && !sent.includes(String(row.id)));
     if (rows.length) { event.preventDefault(); void answer(rows, action); }
   }}>
-    <header className="page-header"><div className="page-title"><h1>Approval inbox</h1>
-      <p role="status" className="page-subtitle"><span>Pending approvals: <strong className="numeric">{pending.length}</strong></span>{expired.length > 0 && <span>Expired: <strong className="numeric">{expired.length}</strong></span>}</p></div>
-      <p className="shortcut-hint">Select requests or focus a row. <kbd>A</kbd> allow <kbd>D</kbd> deny <kbd>S</kbd> allow for this conversation</p></header>
-    <div className="toolbar bulk-bar">
+    <header className="page-header"><div className="page-title"><h1>Approvals</h1>
+      <p role="status" className="page-subtitle">{pending.length > 0 && <span><strong className="numeric">{pending.length}</strong> waiting</span>}{expired.length > 0 && <span><strong className="numeric">{expired.length}</strong> expired</span>}</p></div>
+      {pending.length > 0 && <p className="shortcut-hint"><kbd>A</kbd> allow <kbd>D</kbd> deny <kbd>S</kbd> allow for this conversation</p>}</header>
+    {pending.length > 0 && <div className="toolbar bulk-bar">
       <label className="checkbox"><input type="checkbox" disabled={busy || pending.length === 0}
         checked={open.length > 0 && open.every(row => selected.includes(String(row.id)))}
         onChange={event => setSelected(event.target.checked ? open.map(row => String(row.id)) : [])}/>Select all pending</label>
@@ -135,7 +135,7 @@ export function Inbox({ client, target = store }: InboxProps) {
         className={`btn btn-sm ${action === 'allow' ? 'btn-primary' : ACTION_STYLES[action]}`}
         disabled={busy || !active.length || active.some(row => !getDecision(row, action))}
         onClick={() => void answer(active, action)}>{ACTION_LABELS[action]} selected</button>)}</div>
-    </div>
+    </div>}
     {error && <p role="alert" className="banner banner-danger"><Icon name="alert" size={14}/>{error}</p>}
     <ol aria-label="Pending approvals" className="approval-list">{pending.map(row => {
       const id = String(row.id);
@@ -146,18 +146,18 @@ export function Inbox({ client, target = store }: InboxProps) {
           onChange={event => setSelected(previous => event.target.checked ? [...previous, id] : previous.filter(value => value !== id))}/>
         <div className="approval-main"><ApprovalDetails row={row} state={state}/></div>
         <div className="approval-side">
-          <span className="wait" title={timestamp || undefined}><Icon name="clock" size={13}/>Waiting: {Number.isFinite(elapsed) ? formatSeconds(Math.max(0, Math.floor((now - elapsed) / 1000))) : 'start time unavailable'}</span>
+          <span className="wait" title={timestamp || undefined}><Icon name="clock" size={13}/>{Number.isFinite(elapsed) ? `Waiting ${formatSeconds(Math.max(0, Math.floor((now - elapsed) / 1000)))}` : 'Waiting'}</span>
           {timestamp && <time className="sr-only" dateTime={timestamp}>{timestamp}</time>}
           <div className="button-row vertical"><ActionButtons row={row} disabled={busy || sent.includes(id)} onAnswer={action => void answer([row], action)}/></div>
-          {sent.includes(id) && <p className="status-line">Answer sent; waiting for resolution.</p>}
+          {sent.includes(id) && <p className="status-line">Sent</p>}
         </div>
       </li>;
     })}</ol>
-    {pending.length === 0 && <div className="empty-state"><Icon name="check" size={22}/><h2>No pending approvals</h2><p>Requests from Claude and Codex appear here as soon as an agent asks.</p></div>}
+    {pending.length === 0 && <div className="empty-state"><Icon name="check" size={22}/><h2>Nothing to approve</h2><p>When an agent asks for permission, it shows up here.</p></div>}
     {expired.length > 0 && <section className="expired-section" aria-label="Expired"><h2>Expired</h2><ol aria-label="Expired approvals" className="approval-list">{expired.map(row => <li key={String(row.id)} className="approval-row expired">
       <OutcomeChip row={row}/>
       <div className="approval-main"><ApprovalDetails row={row} state={state}/>{approvalReasonText(readText(row.reason)) && <p className="muted-text">{approvalReasonText(readText(row.reason))}</p>}</div>
-      <div className="approval-side"><button className="btn btn-secondary btn-sm" disabled={busy || !getConversation(row, state)} onClick={() => void resume(row)}><Icon name="play" size={13}/>Resume run</button></div>
+      <div className="approval-side"><button className="btn btn-secondary btn-sm" disabled={busy || !getConversation(row, state)} onClick={() => void resume(row)}><Icon name="play" size={13}/>Resume</button></div>
     </li>)}</ol></section>}
   </section>;
 }

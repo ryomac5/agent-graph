@@ -77,9 +77,9 @@ it('renders chronological messages, tool calls, provenance, approval requests, b
   expect(articles[0]!.textContent).toContain('Plan');
   expect(articles[1]!.textContent).toContain('Approval request');
   expect(articles[2]!.textContent).toContain('Second');
-  expect(within(articles[0]!).getByText('Claude host')).toBeTruthy();
-  expect(within(articles[0]!).getByText('confirmed')).toBeTruthy();
-  expect(within(articles[0]!).getByTitle('Source: host-claude · Confidence: confirmed')).toBeTruthy();
+  expect(within(articles[0]!).queryByText('Claude host')).toBeNull();
+  expect(within(articles[0]!).queryByText('confirmed')).toBeNull();
+  expect(within(articles[0]!).queryByTitle(/Confidence/)).toBeNull();
   expect(within(articles[0]!).getByRole('heading', { name: 'Plan' }).tagName).toBe('H3');
   expect(document.querySelector('.md-code code')!.textContent).toBe('const value = 1;');
   expect(document.querySelector('.md-code-language')!.textContent).toBe('TypeScript');
@@ -164,9 +164,9 @@ it.each([true, false])('keeps external conversations read-only and confirms term
       : { conversationId: 'adopted', operation: confirmStopped ? 'resume' : 'fork' } }));
   setup({ origin: 'observed', status: 'unknown', client: { command } });
   await waitModels();
-  expect(screen.queryByText('External conversation · Read-only')).toBeNull();
+  expect(screen.queryByText('Read-only')).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Details' }));
-  expect(within(screen.getByRole('region', { name: 'Details' })).getByText('External conversation · Read-only')).toBeTruthy();
+  expect(within(screen.getByRole('region', { name: 'Details' })).getByText('Read-only')).toBeTruthy();
   expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).readOnly).toBe(true);
   expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
   expect((screen.getByRole('button', { name: 'Interrupt' }) as HTMLButtonElement).disabled).toBe(true);
@@ -178,14 +178,14 @@ it.each([true, false])('keeps external conversations read-only and confirms term
   fireEvent.click(within(dialog).getByRole('button', { name: confirmStopped ? 'Yes, resume here' : 'No, continue in a branch' }));
   await waitFor(() => expect(command).toHaveBeenCalledWith('adopt', { conversationId: 'c', cwd: '/workspace/demo',
     model: { model: 'model-a', effort: 'medium' }, input: { text: '' }, confirmStopped }));
-  expect((await screen.findByRole('link', { name: 'Open the new conversation' })).getAttribute('href')).toBe('/c/adopted');
+  expect((await screen.findByRole('link', { name: 'Open conversation' })).getAttribute('href')).toBe('/c/adopted');
 });
 
 it('shows unknown reason, last evidence, timestamp and a dashed state with evidence access', async () => {
   setup({ projection: { runs: [{ id: 'r', conversation_id: 'c', generation: 1, state: 'unknown', reason: 'Process check denied',
     last_evidence: { kind: 'disconnect' }, last_evidence_ts: '2026-10-07T01:23:00Z' }] } });
   await waitModels();
-  const status = screen.getByRole('link', { name: 'Unknown · Evidence' });
+  const status = screen.getByRole('link', { name: 'Unknown · Details' });
   expect(status.className).toContain('status-unknown');
   // 見出しの印には理由を出さず、title と Details に置く。
   expect(status.textContent).not.toContain('Process check denied');
@@ -195,7 +195,8 @@ it('shows unknown reason, last evidence, timestamp and a dashed state with evide
   // 状態の印を押すと Details が開き、根拠と時刻を見せる。
   fireEvent.click(status);
   const details = screen.getByRole('region', { name: 'Details' });
-  expect(details.textContent).toContain('disconnect');
+  // 根拠の種類は内部の語なので Details にも出さない。
+  expect(details.textContent).not.toContain('disconnect');
   expect(details.textContent).toContain('Process check denied');
   expect(details.querySelector('time')?.getAttribute('datetime')).toBe('2026-10-07T01:23:00Z');
 });
@@ -222,13 +223,13 @@ it('blocks handoff for unsupported formats only when asked and marks absent mess
   } });
   await waitModels();
   // 読むだけのときは黄色の帯を出さない。形式は Details で分かる。
-  expect(screen.queryByText('Unsupported history format; handoff unavailable')).toBeNull();
+  expect(screen.queryByText('This conversation cannot be taken over.')).toBeNull();
   expect(screen.getByText('Message unavailable')).toBeTruthy();
   expect(screen.getByRole('separator').textContent).toContain('missing – missing');
   fireEvent.click(screen.getByRole('button', { name: 'Details' }));
-  expect(within(screen.getByRole('region', { name: 'Details' })).getByText('Handoff not supported')).toBeTruthy();
+  expect(within(screen.getByRole('region', { name: 'Details' })).getByText('Take over not supported')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Take over conversation' }));
-  expect((await screen.findByRole('alert')).textContent).toBe('Unsupported history format; handoff unavailable');
+  expect((await screen.findByRole('alert')).textContent).toBe('This conversation cannot be taken over.');
   expect(command.mock.calls.some(call => call[0] === 'adopt')).toBe(false);
 });
 
@@ -365,7 +366,7 @@ it('names the parent of a review and of a subagent without a recorded relation',
     message_memberships: memberships(['u1', 'a1']),
   } });
   await waitModels();
-  expect(screen.getByRole('article', { name: 'Parent agent message' }).dataset.side).toBe('end');
+  expect(screen.getByRole('article', { name: 'Requesting agent message' }).dataset.side).toBe('end');
   expect(screen.getByRole('article', { name: 'Claude · subagent message' }).dataset.side).toBe('start');
 });
 
@@ -380,19 +381,19 @@ it('keeps the header to the name, state, provider with model and elapsed time, a
     const header = document.querySelector<HTMLElement>('.conv-header')!;
     const row = header.querySelector<HTMLElement>('.conv-title-row')!;
     expect(within(row).getByRole('heading', { name: 'Build console' })).toBeTruthy();
-    expect(within(row).getByRole('link', { name: 'Running · Evidence' }).textContent).toContain('Elapsed 1m 5s');
-    expect(within(row).getByText('Codex')).toBeTruthy();
-    expect(within(row).getByText('model-a')).toBeTruthy();
+    expect(within(row).getByRole('link', { name: 'Running · Details' }).textContent).toContain('Elapsed 1m 5s');
+    expect(within(row).getByText('Codex model-a')).toBeTruthy();
     for (const noise of ['Effort', 'Worktree', 'Observation', 'Read-only', 'Unsupported', 'Handoff']) expect(header.textContent).not.toContain(noise);
-    expect(screen.queryByText('Unsupported history format; handoff unavailable')).toBeNull();
+    expect(screen.queryByText('This conversation cannot be taken over.')).toBeNull();
     const toggle = within(row).getByRole('button', { name: 'Details' });
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     fireEvent.click(toggle);
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
     const details = screen.getByRole('region', { name: 'Details' });
-    for (const label of ['Effort', 'Worktree', 'Observation coverage', 'Access', 'History format', 'Evidence']) expect(within(details).getByText(label)).toBeTruthy();
-    expect(within(details).getByText('External conversation · Read-only')).toBeTruthy();
-    expect(within(details).getByText('future-format')).toBeTruthy();
+    for (const label of ['Effort', 'Worktree', 'Access']) expect(within(details).getByText(label)).toBeTruthy();
+    expect(within(details).getByText('Read-only')).toBeTruthy();
+    expect(within(details).getByText('Take over not supported')).toBeTruthy();
+    expect(details.textContent).not.toContain('future-format');
   } finally { vi.useRealTimers(); }
 });
 

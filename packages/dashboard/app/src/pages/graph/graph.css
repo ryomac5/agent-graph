@@ -66,3 +66,9 @@
 @media (prefers-reduced-motion: reduce) { .graph-edge .graph-edge-flow { animation: none; } }
 @media (max-width: 900px) { .graph-hint { display: none; } .graph-toolbar { gap: 12px; padding: 14px 16px; } .graph-summary { gap: 10px; } .graph-total { display: none; } }
 @media (max-width: 719px) { .graph-toolbar { flex-wrap: wrap; } .graph-controls { right: 16px; bottom: 16px; } .graph-page .workspace-header { gap: 14px; } .graph-page .workspace-title { max-width: 100px; } }
+.graph-tree { overflow: auto; touch-action: auto; cursor: default; background-image: none; padding: 16px; }
+.graph-tree .graph-world { position: relative; display: flex; flex-direction: column; gap: 16px; }
+.graph-tree .graph-card { position: relative; flex: none; min-width: 0; box-shadow: none; }
+.graph-tree .graph-card:not(.graph-root) { border-left-width: 3px; }
+.graph-tree .graph-card-link { height: auto; min-height: 154px; }
+.graph-tree .graph-earlier .graph-card-link { min-height: 86px; }

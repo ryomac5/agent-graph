@@ -4,28 +4,32 @@ import { toDisplayState } from '../../components/StateBadge.tsx';
 
 export const NARROW_WIDTH = 720;
 const EARLIER_MS = 24 * 60 * 60 * 1000;
+const RECENT_LIMIT = 6;
+const COLUMN_ROWS = 8;
 const CARD_WIDTH = 264;
 const ROOT_WIDTH = 288;
 const CARD_HEIGHT = 156;
 const APPROVAL_HEIGHT = 264;
 const LAYER_GAP = 112;
 const ROW_GAP = 28;
-export interface GraphNode extends TreeNode { activity?: string; approvalCount?: number; earlier?: { parent: string; count: number } }
+export interface GraphNode extends TreeNode { activity?: string; approvalCount?: number; earlier?: { parent: string; count: number; kind: 'earlier' | 'completed'; expanded: boolean } }
 export interface GraphTree extends Omit<DelegationTree, 'nodes'> { nodes: GraphNode[] }
-export interface PositionedNode { id: string; depth: number; x: number; y: number; width: number; height: number }
+export interface PositionedNode { id: string; depth: number; x: number; y: number; width: number; height: number; route?: { y: number; lane: number } }
 export interface GraphLayout { nodes: PositionedNode[]; width: number; height: number; vertical: boolean }
 
-/** 古い枝だけを親ごとに畳み、動いている子孫は残す。 */
+/** 注意が必要な枝を残し、完了した枝だけを親ごとに畳む。 */
 export function foldEarlier(tree: GraphTree, expanded: ReadonlySet<string>, now: number, selected?: string): GraphTree {
   const byId = new Map(tree.nodes.map(node => [node.id, node]));
-  const old = (id: string, ancestors = new Set<string>()): boolean => {
+  const complete = (id: string, ancestors = new Set<string>()): boolean => {
     const node = byId.get(id);
     if (!node || id === selected || ancestors.has(id) || node.approvalCount) return false;
-    const next = new Set([...ancestors, id]);
-    if (!node.children.every(child => old(child, next))) return false;
+    if (!node.children.every(child => complete(child, new Set([...ancestors, id])))) return false;
     if (node.role === 'planner' && !node.conversationId) return node.children.length > 0;
-    const time = Date.parse(lastActivity(node));
-    return ['failed', 'ended', 'idle'].includes(toDisplayState(node.state)) && Number.isFinite(time) && time < now - EARLIER_MS;
+    return ['ended', 'idle'].includes(toDisplayState(node.state));
+  };
+  const endedAt = (id: string) => {
+    const node = byId.get(id)!;
+    return Date.parse(String(node.run?.ended_ts || node.activity || lastActivity(node)));
   };
   const nodes: GraphNode[] = [];
   const seen = new Set<string>();
@@ -33,12 +37,18 @@ export function foldEarlier(tree: GraphTree, expanded: ReadonlySet<string>, now:
     const node = byId.get(id);
     if (!node || seen.has(id)) return;
     seen.add(id);
-    const hidden = expanded.has(id) ? [] : node.children.filter(child => old(child));
-    const children = node.children.filter(child => !hidden.includes(child));
-    const groupId = `earlier:${id}`;
-    nodes.push({ ...node, children: hidden.length ? [...children, groupId] : children });
+    const finished = node.children.filter(child => complete(child) && Number.isFinite(endedAt(child)));
+    const old = (child: string): boolean => complete(child) && endedAt(child) < now - EARLIER_MS && byId.get(child)!.children.every(old);
+    const earlier = finished.filter(old);
+    const recent = finished.filter(child => !earlier.includes(child)).sort((a, b) => endedAt(b) - endedAt(a) || a.localeCompare(b));
+    const groups = [{ kind: 'completed' as const, children: recent.slice(RECENT_LIMIT) }, { kind: 'earlier' as const, children: earlier }]
+      .filter(group => group.children.length).map(group => ({ ...group, id: `${group.kind}:${id}`, expanded: expanded.has(`${group.kind}:${id}`) }));
+    const hidden = new Set(groups.filter(group => !group.expanded).flatMap(group => group.children));
+    const children = node.children.filter(child => !hidden.has(child));
+    nodes.push({ ...node, children: [...children, ...groups.map(group => group.id)] });
     children.forEach(visit);
-    if (hidden.length) nodes.push({ id: groupId, kind: 'delegation', label: '', provider: '', model: '', role: 'earlier', state: 'idle', children: [], attempts: [], earlier: { parent: id, count: hidden.length } });
+    for (const group of groups) nodes.push({ id: group.id, kind: 'delegation', label: '', provider: '', model: '', role: group.kind, state: 'idle', children: [], attempts: [],
+      earlier: { parent: id, count: group.children.length, kind: group.kind, expanded: group.expanded } });
   }
   tree.roots.forEach(visit);
   const visible = new Set(nodes.map(node => node.id));
@@ -50,8 +60,11 @@ function rank(node: GraphNode): number {
   const state = toDisplayState(node.state);
   return ['starting', 'running'].includes(state) ? 0 : state === 'waiting_approval' ? 1 : node.earlier ? 3 : 2;
 }
+function orderNodes(nodes: GraphNode[]) {
+  return nodes.toSorted((a, b) => rank(a) - rank(b) || (b.activity ?? lastActivity(b)).localeCompare(a.activity ?? lastActivity(a)) || a.id.localeCompare(b.id));
+}
 
-/** 初回は列ごとに整列し、更新では残ったカードの位置を保持して末尾に足す。 */
+/** 狭い画面は木の順、広い画面は八行で折り返す。 */
 export function calculateLayout(tree: GraphTree, viewportWidth: number, previous?: GraphLayout): GraphLayout {
   const vertical = viewportWidth < NARROW_WIDTH;
   const byId = new Map(tree.nodes.map(node => [node.id, node]));
@@ -59,35 +72,41 @@ export function calculateLayout(tree: GraphTree, viewportWidth: number, previous
   function visit(id: string, depth: number) {
     if (depths.has(id) || !byId.has(id)) return;
     depths.set(id, depth);
-    byId.get(id)!.children.forEach(child => visit(child, depth + 1));
+    orderNodes(byId.get(id)!.children.map(child => byId.get(child)!).filter(Boolean)).forEach(child => visit(child.id, depth + 1));
   }
   tree.roots.forEach(id => visit(id, 0));
-  const layers = new Map<number, GraphNode[]>();
-  for (const [id, depth] of depths) {
-    if (!layers.has(depth)) layers.set(depth, []);
-    layers.get(depth)!.push(byId.get(id)!);
-  }
-  const prior = new Map((previous?.vertical === vertical ? previous.nodes : []).map(node => [node.id, node]));
+  const sizeNode = (node: GraphNode, depth: number): PositionedNode => ({ id: node.id, depth, x: 0, y: 0, width: depth === 0 ? ROOT_WIDTH : CARD_WIDTH,
+    height: node.earlier ? 88 : CARD_HEIGHT + (depth === 0 ? 20 : 0) + (node.approvalCount ? APPROVAL_HEIGHT - CARD_HEIGHT + (node.approvalCount - 1) * 106 : 0) });
   const nodes: PositionedNode[] = [];
-  let layerPosition = 0;
-  for (const [depth, layer] of [...layers].sort(([a], [b]) => a - b)) {
-    const ordered = layer.toSorted((a, b) => rank(a) - rank(b) || (b.activity ?? lastActivity(b)).localeCompare(a.activity ?? lastActivity(a)) || a.id.localeCompare(b.id));
-    const sized = ordered.map(node => ({ id: node.id, depth, x: 0, y: 0, width: depth === 0 ? ROOT_WIDTH : CARD_WIDTH,
-      height: node.earlier ? 88 : CARD_HEIGHT + (depth === 0 ? 20 : 0) + (node.approvalCount ? APPROVAL_HEIGHT - CARD_HEIGHT + (node.approvalCount - 1) * 106 : 0) }));
-    const retained = sized.filter(node => prior.get(node.id)?.depth === depth).sort((a, b) => {
-      const left = prior.get(a.id)!; const right = prior.get(b.id)!;
-      return vertical ? left.x - right.x : left.y - right.y;
-    });
-    let end = 0;
-    for (const node of [...retained, ...sized.filter(node => !retained.includes(node))]) {
-      const saved = prior.get(node.id);
-      const position = saved?.depth === depth ? Math.max(end, vertical ? saved.x : saved.y) : end;
-      node.x = vertical ? position : layerPosition;
-      node.y = vertical ? layerPosition : position;
-      end = position + (vertical ? node.width : node.height) + ROW_GAP;
+  if (vertical) {
+    let y = 0;
+    for (const [id, depth] of depths) {
+      const node = sizeNode(byId.get(id)!, depth);
+      node.x = Math.min(depth * 16, viewportWidth / 3); node.y = y;
+      node.width = Math.max(1, viewportWidth - 32 - node.x); y += node.height + ROW_GAP;
       nodes.push(node);
     }
-    layerPosition += Math.max(...sized.map(node => vertical ? node.height : node.width)) + LAYER_GAP;
+  } else {
+    const layers = new Map<number, GraphNode[]>();
+    for (const [id, depth] of depths) layers.set(depth, [...(layers.get(depth) ?? []), byId.get(id)!]);
+    const prior = new Map((previous?.vertical === vertical ? previous.nodes : []).map((node, index) => [node.id, index]));
+    let x = 0;
+    for (const [depth, layer] of layers) {
+      const ordered = orderNodes(layer);
+      const retained = ordered.filter(node => prior.has(node.id)).sort((a, b) => prior.get(a.id)! - prior.get(b.id)!);
+      const sized = [...retained, ...ordered.filter(node => !prior.has(node.id))].map(node => sizeNode(node, depth));
+      const columns = Math.ceil(sized.length / COLUMN_ROWS);
+      const corridor = columns > 1 ? sized.length * 6 + 24 : 0;
+      for (let column = 0; column < columns; column++) {
+        let y = corridor;
+        for (const [row, node] of sized.slice(column * COLUMN_ROWS, (column + 1) * COLUMN_ROWS).entries()) {
+          node.x = x + column * (CARD_WIDTH + LAYER_GAP); node.y = y;
+          if (columns > 1) node.route = { y: 12 + (column * COLUMN_ROWS + row) * 6, lane: column * COLUMN_ROWS + row };
+          y += node.height + ROW_GAP; nodes.push(node);
+        }
+      }
+      x += (depth === 0 ? ROOT_WIDTH : CARD_WIDTH) + (columns - 1) * (CARD_WIDTH + LAYER_GAP) + LAYER_GAP;
+    }
   }
   return { nodes, width: Math.max(0, ...nodes.map(node => node.x + node.width)), height: Math.max(0, ...nodes.map(node => node.y + node.height)), vertical };
 }
@@ -96,6 +115,12 @@ export function curvePath(parent: PositionedNode, child: PositionedNode, vertica
   const sy = parent.y + (vertical ? parent.height : parent.height / 2);
   const tx = child.x + (vertical ? child.width / 2 : 0);
   const ty = child.y + (vertical ? 0 : child.height / 2);
+  if (!vertical && child.route) {
+    const { y, lane } = child.route;
+    const exit = sx + 12 + lane * 0.8;
+    const entry = tx - 12 - lane * 0.8;
+    return `M ${sx} ${sy + 0.5 + lane * 0.8} L ${exit} ${sy + lane * 2} L ${exit} ${y} L ${entry} ${y} L ${entry} ${ty} L ${tx} ${ty}`;
+  }
   return vertical ? `M ${sx} ${sy} C ${sx} ${(sy + ty) / 2}, ${tx} ${(sy + ty) / 2}, ${tx} ${ty}`
     : `M ${sx} ${sy} C ${(sx + tx) / 2} ${sy}, ${(sx + tx) / 2} ${ty}, ${tx} ${ty}`;
 }

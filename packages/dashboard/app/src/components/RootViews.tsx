@@ -6,6 +6,14 @@ import type { Row } from '../lib/store.ts';
 import { dictionaries, type Language } from '../lib/i18n.ts';
 import type { DelegationTree, TreeNode } from '../pages/tree/model.ts';
 import { StatusDot, stateLabel } from './StateBadge.tsx';
+import { Icon } from './Icon.tsx';
+
+/** 依頼先の印。頭文字は Claude と Codex で重なるので、色と形で分ける。 */
+function ProviderMark({ provider }: { provider?: string }) {
+  const name = provider === 'claude' ? 'Claude' : provider === 'codex' ? 'Codex' : 'Agent';
+  return <span className={`request-avatar provider-${provider || 'unknown'}`} title={name} aria-hidden="true">
+    <Icon name={provider === 'codex' ? 'terminal' : provider === 'claude' ? 'sparkle' : 'bot'} size={13}/></span>;
+}
 import './roots.css';
 
 const ACTIVE = ['running', 'starting', 'assigned', 'verifying', 'reviewing'];
@@ -79,7 +87,7 @@ export function RootTree({ tree, selected, onSelect, runningOnly = false, langua
     return <li key={id}>{(shown || group && children.some(Boolean)) && (group
       ? <h3 className="request-group">{node.label}</h3>
       : <div className={`request-row${isSelected ? ' selected' : ''}`} onClick={event => { if (!(event.target as Element).closest('.request-retry, .request-main')) onSelect(node); }}>
-        <span className={`request-avatar provider-${node.provider || 'unknown'}`} aria-hidden="true">{(node.provider || '?').charAt(0).toUpperCase()}</span>
+        <ProviderMark provider={node.provider}/>
         <button className="request-main delegation-select" title={title} aria-label={[edge?.title, [who, node.role].filter(Boolean).join(' · '), stateLabel(node.state, language)].filter(Boolean).join(' · ')} aria-pressed={isSelected} onClick={() => onSelect(node)}>
           <span className="request-title">{title}</span>
           <span className="request-meta"><StatusDot state={node.state} language={language}/><span className="request-who">{[who, node.role].filter(Boolean).join(' · ')}</span>{when && <span className="request-when">{when}</span>}</span>
@@ -109,7 +117,7 @@ export function RootTree({ tree, selected, onSelect, runningOnly = false, langua
   const more = hidden.size > 0 && <li key="older"><button className="btn btn-ghost btn-sm request-older" onClick={() => setShowOlder(true)}>{t.showOlder} <span className="numeric">({hidden.size})</span></button></li>;
   const empty = !items.some(Boolean);
   if (root) return <div className="root-tree request-flow"><ul><li>
-    <div className={`request-row request-apex${selected ? '' : ' selected'}`}><span className="request-avatar provider-claude" aria-hidden="true">C</span><button className="request-main" aria-pressed={!selected} onClick={onSelectRoot}>
+    <div className={`request-row request-apex${selected ? '' : ' selected'}`}><ProviderMark provider="claude"/><button className="request-main" aria-pressed={!selected} onClick={onSelectRoot}>
       <span className="request-title">{root.name}</span><span className="request-meta"><StatusDot state={root.state} language={language}/></span></button></div>
     {!empty && <ul>{items}{more}</ul>}</li></ul>{empty && <p className="empty-row">{t.noRequests}</p>}</div>;
   return <div className="root-tree"><ul>{items}{more}</ul>{empty && !runningOnly && <p className="empty-row">{t.noRequests}</p>}</div>;

@@ -148,6 +148,11 @@ test("preserves trailing whitespace in a registered subdirectory when parsing gi
   assert.deepEqual(entries.map((entry) => entry.path), ["file.txt"]);
   assert.deepEqual(entries[0].git, ["modified"]);
   assert.equal((await api.read({ ...request, path: "file.txt" })).content, "after");
+  assert.equal((await api.changes(request)).entries[0].path, 'file.txt');
+  assert.ok((await api.diff({ ...request, path: 'file.txt' })).diff?.includes('+after'));
+  const history = await api.commits(request);
+  assert.equal(history.commits[0].fileCount, 1);
+  assert.equal((await api.commit({ ...request, hash: history.commits[0].hash })).files[0].path, 'file.txt');
 });
 
 test("limits content to 1 MiB, detects binary data, and redacts text through ledger rules", async (t) => {
@@ -274,4 +279,60 @@ test("WebSocket acknowledges files commands and safe failures while runner is un
   assert.equal(failure.error, "Files request failed");
   assert.equal((await command("files.list", null)).ok, false);
   assert.equal(service.ledger.readSince(0, 100).length, 1);
+});
+
+test('git commands return working tree sources, recent commits and redacted bounded patches', async (t) => {
+  const { api, db, root, request, write, commit } = await createFixture(t);
+  await write('src/file.txt', 'before\n'); await write('remove.txt', 'gone\n'); await commit();
+  await write('src/file.txt', 'staged\n'); await runGit(root, 'add', 'src/file.txt');
+  await write('src/file.txt', 'unstaged\n'); await rm(join(root, 'remove.txt'));
+  await write('new name.txt', 'one\ntwo'); await write('secret.txt', 'PASSWORD=small-secret\n');
+  await write('large.txt', 'x'.repeat(MAX_FILE_BYTES + 1));
+  const changes = await handleFilesCommand(api, 'files.changes', request) as Awaited<ReturnType<typeof api.changes>>;
+  const file = changes.entries.find(entry => entry.path === 'src/file.txt')!;
+  assert.equal(file.status, 'MM'); assert.equal(file.staged, true); assert.equal(file.unstaged, true);
+  assert.equal(file.additions, 2); assert.equal(file.deletions, 2);
+  assert.equal(changes.entries.find(entry => entry.path === 'new name.txt')?.additions, 2);
+  for (const [mode, expected] of [['staged', '+staged'], ['unstaged', '+unstaged']] as const) {
+    const patch = await handleFilesCommand(api, 'files.diff', { ...request, path: 'src/file.txt', mode }) as { diff: string; mode: string };
+    assert.equal(patch.mode, mode); assert.ok(patch.diff.includes(expected));
+  }
+  const untracked = await api.diff({ ...request, path: 'new name.txt', mode: 'untracked' });
+  assert.ok(untracked.diff?.includes('+two\n\\ No newline at end of file'));
+  const configured = createFilesApi(db, () => ({ patterns: ['small-secret'] }));
+  assert.ok(!(await configured.diff({ ...request, path: 'secret.txt', mode: 'untracked' })).diff?.includes('small-secret'));
+  const large = await api.diff({ ...request, path: 'large.txt', mode: 'untracked' });
+  assert.equal(large.state, 'too_large'); assert.equal('diff' in large, false);
+  const history = await handleFilesCommand(api, 'files.commits', request) as Awaited<ReturnType<typeof api.commits>>;
+  assert.equal(history.commits.length, 1);
+  assert.equal(history.commits[0].subject, 'fixture'); assert.equal(history.commits[0].author, 'Files Test');
+  assert.equal(history.commits[0].fileCount, 2); assert.equal(history.commits[0].additions, 2);
+  const saved = await handleFilesCommand(api, 'files.commit', { ...request, hash: history.commits[0].hash }) as Awaited<ReturnType<typeof api.commit>>;
+  assert.equal(saved.files.length, 2); assert.ok(saved.files.find(entry => entry.path === 'src/file.txt')?.diff?.includes('+before'));
+});
+
+test('git commands apply project, worktree and path rejection and validate arguments', async (t) => {
+  const { api, root, directory, request, write, commit, service } = await createFixture(t);
+  await write('file.txt', 'safe\n'); await commit();
+  const hash = (await api.commits(request)).commits[0].hash;
+  const outside = join(directory, 'outside.txt'); await writeFile(outside, 'outside');
+  await symlink(outside, join(root, 'escape.txt')); await symlink(join(root, '.git/config'), join(root, 'metadata.txt'));
+  const changes = await api.changes(request);
+  assert.ok(!changes.entries.some(entry => ['escape.txt', 'metadata.txt'].includes(entry.path)));
+  for (const command of ['files.changes', 'files.diff', 'files.commits', 'files.commit']) {
+    for (const path of ['../outside.txt', outside, '.git/config', 'escape.txt', 'metadata.txt']) {
+      await assert.rejects(handleFilesCommand(api, command, { ...request, path, hash }));
+    }
+    await assert.rejects(handleFilesCommand(api, command, { ...request, projectId: 'unknown', hash }));
+    await assert.rejects(handleFilesCommand(api, command, { ...request, worktree: directory, hash }));
+  }
+  for (const payload of [{ mode: 'other' }, { limit: 0 }, { limit: 101 }, { limit: '30' }, { hash: '--all' }, { hash: 'HEAD' }]) {
+    await assert.rejects(handleFilesCommand(api, 'files.commits', { ...request, ...payload }));
+  }
+  const tree = join(directory, 'second'); await runGit(root, 'worktree', 'add', '-b', 'second', tree);
+  await writeFile(join(tree, 'file.txt'), 'second\n');
+  assert.equal((await api.changes({ ...request, worktree: tree })).entries[0].path, 'file.txt');
+  service.ledger.append({ source: 'ui', source_event_id: 'linked-root', kind: 'project.updated', subject: 'project:original', source_ts: '2026-10-08T00:00:00Z', confidence: 'confirmed', payload: { root_path: tree } });
+  assert.equal((await api.commits({ ...request, worktree: root })).commits[0].hash, hash);
+
 });

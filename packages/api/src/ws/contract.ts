@@ -15,7 +15,7 @@ export interface ScreenCommand {
   payload?: JsonValue;
 }
 export type ScreenInput = ScreenHello | ScreenCommand;
-export const FILE_COMMANDS = ["files.list", "files.read", "files.worktrees"] as const;
+export const FILE_COMMANDS = ["files.list", "files.read", "files.worktrees", "files.changes", "files.diff", "files.commits", "files.commit"] as const;
 export type { FilesRequest, FileEntry, GitMark } from "../files/index.ts";
 export type { ProjectionPatch, ProjectionRows } from "../service/projection-feed.ts";
 

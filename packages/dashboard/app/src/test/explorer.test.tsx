@@ -50,6 +50,8 @@ function createClient() {
       const entries = LISTS[tree]?.[request.path ?? ''];
       return entries ? ok({ worktree: tree, path: request.path ?? '', entries }) : fail('Not a directory');
     }
+    if (command === 'files.changes') return ok({ worktree: tree, entries: Object.values(LISTS[tree] ?? {}).flat().filter(entry => entry.kind === 'file' && entry.changed).map(entry => ({ ...entry, status: '.M', staged: false, unstaged: true, additions: 1, deletions: 1 })) });
+    if (command === 'files.diff') return ok({ path: request.path, state: 'text', diff: `diff --git a/${request.path} b/${request.path}\n--- a/${request.path}\n+++ b/${request.path}\n@@ -1 +1 @@\n-old\n+new\n` });
     if (command === 'files.read') {
       const result = FILES[request.path ?? ''];
       return result && result.worktree === tree ? ok(result) : fail('File is not visible in project');
@@ -126,6 +128,7 @@ describe('Files explorer', () => {
 
   it('opens a file deep link with the sidebar collapsed and returns to the workspace', async () => {
     setup('?path=README.md', 1024);
+    fireEvent.click(await screen.findByRole('button', { name: 'File' }));
     expect(await screen.findByRole('region', { name: 'Contents of README.md' })).toBeTruthy();
     expect(screen.queryByRole('tree', { name: 'Files' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Back' }));
@@ -138,6 +141,7 @@ describe('Files explorer', () => {
     vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
     const client = createClient();
     render(<MemoryRouter initialEntries={[`/p/repo/files?path=README.md`]}><App target={createTarget()} client={client}/><Location/></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'File' }));
     expect(await screen.findByRole('region', { name: 'Contents of README.md' })).toBeTruthy();
     expect(location()).toBe('/p/repo/files?path=README.md');
     expect(document.querySelector('main .explorer-viewer')).toBeTruthy();
@@ -158,11 +162,13 @@ describe('Files explorer', () => {
     fireEvent.click(screen.getByRole('link', { name: 'Search' }));
     expect(screen.getByRole('heading', { name: 'Search' })).toBeTruthy();
     fireEvent.click(row(item('README.md')));
+    fireEvent.click(await screen.findByRole('button', { name: 'File' }));
     expect(await screen.findByRole('region', { name: 'Contents of README.md' })).toBeTruthy();
     expect(document.querySelector('main .explorer-viewer')).toBeTruthy();
     fireEvent.click(row(item('src')));
     await within(item('src')).findByRole('treeitem', { name: /^main\.ts/ });
     fireEvent.click(row(item('main.ts')));
+    fireEvent.click(await screen.findByRole('button', { name: 'File' }));
     await screen.findByRole('region', { name: 'Contents of src/main.ts' });
     fireEvent.click(screen.getByRole('button', { name: 'Back' }));
     expect(location()).toBe('/search');
@@ -231,6 +237,7 @@ describe('Files explorer', () => {
     expect(row(item('src')).querySelector('.tree-changed')).toBeTruthy();
     expect(row(item('docs')).querySelector('.tree-changed')).toBeNull();
     fireEvent.click(row(item('gone.txt')));
+    fireEvent.click(await screen.findByRole('button', { name: 'File' }));
     expect(await screen.findByText('Deleted file')).toBeTruthy();
     expect(within(screen.getByRole('region', { name: 'File viewer' })).getByRole('link', { name: /Open Changes/ }).getAttribute('href')).toBe(`/p/${encodeURIComponent(ROOT)}/changes`);
   });
@@ -239,6 +246,7 @@ describe('Files explorer', () => {
     const { client } = setup();
     await screen.findByRole('tree');
     fireEvent.click(row(item('README.md')));
+    fireEvent.click(await screen.findByRole('button', { name: 'File' }));
     await screen.findByRole('region', { name: 'Contents of README.md' });
     fireEvent.click(screen.getByRole('button', { name: 'Raw' }));
     const view = screen.getByRole('region', { name: 'Contents of README.md' });
@@ -256,6 +264,7 @@ describe('Files explorer', () => {
 
   it('formats Markdown by default and switches to the raw text with Raw', async () => {
     setup('?path=README.md');
+    fireEvent.click(await screen.findByRole('button', { name: 'File' }));
     const view = await screen.findByRole('region', { name: 'Contents of README.md' });
     const group = screen.getByRole('group', { name: 'Markdown view' });
     expect(within(group).getByRole('button', { name: 'Preview' }).getAttribute('aria-pressed')).toBe('true');
@@ -274,12 +283,14 @@ describe('Files explorer', () => {
 
   it('shows other text files as code without the Markdown switch', async () => {
     setup('?path=src%2Fmain.ts');
+    fireEvent.click(await screen.findByRole('button', { name: 'File' }));
     await screen.findByRole('region', { name: 'Contents of src/main.ts' });
     expect(screen.queryByRole('group', { name: 'Markdown view' })).toBeNull();
   });
 
   it('expands ancestors for a deep link and colours TypeScript', async () => {
     setup('?path=src%2Fmain.ts');
+    fireEvent.click(await screen.findByRole('button', { name: 'File' }));
     const view = await screen.findByRole('region', { name: 'Contents of src/main.ts' });
     expect(item('src').getAttribute('aria-expanded')).toBe('true');
     expect(item('main.ts').getAttribute('aria-selected')).toBe('true');
@@ -345,6 +356,7 @@ describe('Files explorer', () => {
 
   it('switches worktrees and lists the selected tree', async () => {
     const { client } = setup('?path=README.md');
+    fireEvent.click(await screen.findByRole('button', { name: 'File' }));
     await screen.findByRole('region', { name: 'Contents of README.md' });
     const select = await screen.findByRole('combobox', { name: 'Worktree' });
     await waitFor(() => expect((select as HTMLSelectElement).disabled).toBe(false));
@@ -356,6 +368,7 @@ describe('Files explorer', () => {
     expect(location()).toContain(`worktree=${encodeURIComponent(FEATURE)}`);
     expect(await screen.findByRole('alert')).toHaveProperty('textContent', expect.stringContaining('Could not open README.md'));
     fireEvent.click(row(item('feature.txt')));
+    fireEvent.click(await screen.findByRole('button', { name: 'File' }));
     expect(await screen.findByRole('region', { name: 'Contents of feature.txt' })).toBeTruthy();
     expect(calls(client, 'files.read').at(-1)).toEqual({ projectId: 'repo-id', path: 'feature.txt', worktree: FEATURE });
     expect((select as HTMLSelectElement).value).toBe(FEATURE);
@@ -411,4 +424,14 @@ describe('syntax colours', () => {
     expect(highlightLines('a\r\nb\n')).toEqual([[{ text: 'a' }], [{ text: 'b' }]]);
     expect(highlightLines('a\n\nb')).toEqual([[{ text: 'a' }], [], [{ text: 'b' }]]);
   });
+});
+
+it('defaults changed sidebar files to Diff and can switch to File', async () => {
+  setup('?path=README.md');
+  const diff = await screen.findByRole('table', { name: 'README.md unified diff' });
+  expect(within(diff).getByText('new')).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Diff' }).getAttribute('aria-pressed')).toBe('true');
+  expect(screen.queryByRole('region', { name: 'Contents of README.md' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'File' }));
+  expect(await screen.findByRole('region', { name: 'Contents of README.md' })).toBeTruthy();
 });

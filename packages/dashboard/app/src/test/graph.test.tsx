@@ -286,13 +286,26 @@ it('starts every column at the root top and uses an 80px gap when expanding 42 c
   expect(xs[0] - root.x - root.width).toBe(80);
   for (let index = 1; index < xs.length; index++) expect(xs[index] - xs[index - 1] - 240).toBe(80);
 });
-it('always keeps failures, waiting children and branches with active descendants', () => {
+it('keeps recent failures, waiting children and branches with active descendants', () => {
   const old = '2026-10-06T11:00:00Z';
   const children = Array.from({ length: 12 }, (_, index) => node('done-' + index, 'ended', [], new Date(now - index * 60_000).toISOString()));
   const input = tree([node('root', 'running', [...children.map(child => child.id), 'failed', 'approval', 'input', 'parent']), ...children,
-    node('failed', 'failed', [], old), node('approval', 'waiting_approval', [], old), node('input', 'waiting_input', [], old), node('parent', 'ended', ['active'], old), node('active', 'running')]);
+    node('failed', 'failed'), node('approval', 'waiting_approval', [], old), node('input', 'waiting_input', [], old), node('parent', 'ended', ['active'], old), node('active', 'running')]);
   const folded = foldEarlier(input, new Set(), now);
   for (const id of ['failed', 'approval', 'input', 'parent', 'active', 'done-0', 'done-3']) expect(folded.nodes.some(node => node.id === id)).toBe(true);
   expect(folded.nodes.some(node => node.id === 'done-4')).toBe(false);
   expect(folded.nodes.find(node => node.id === 'completed:root')!.earlier!.count).toBe(8);
+});
+
+it('folds failures only after 24 hours or when undated, preserving selection and active descendants', () => {
+  const old = '2026-10-06T11:00:00Z';
+  const input = tree([node('root', 'running', ['old', 'undated', 'boundary', 'parent', 'selected']),
+    node('old', 'failed', [], old), node('undated', 'failed', [], ''), node('boundary', 'failed', [], '2026-10-07T12:00:00Z'),
+    node('parent', 'failed', ['active'], old), node('active', 'running'), node('selected', 'failed', [], old)]);
+  const folded = foldEarlier(input, new Set(), now, 'selected');
+  expect(folded.nodes.find(node => node.id === 'earlier:root')!.earlier!.count).toBe(2);
+  for (const id of ['boundary', 'parent', 'active', 'selected']) expect(folded.nodes.some(node => node.id === id)).toBe(true);
+  for (const id of ['old', 'undated']) expect(folded.nodes.some(node => node.id === id)).toBe(false);
+  const expanded = foldEarlier(input, new Set(['earlier:root']), now, 'selected');
+  for (const id of ['old', 'undated']) expect(expanded.nodes.some(node => node.id === id)).toBe(true);
 });

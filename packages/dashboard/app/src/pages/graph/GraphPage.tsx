@@ -91,7 +91,7 @@ function GraphCanvas({ tree, root, route, language, approvals, connected, client
   const [titleHeights, setTitleHeights] = useState(new Map<string, number>());
   const [focused, setFocused] = useState(requestedChild ? tree.nodes.find(node => node.conversationId === requestedChild)?.id ?? root.id : root.id);
   useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 60_000); return () => clearInterval(timer); }, []);
-  const visible = useMemo(() => foldEarlier(tree, expanded, now, requestedChild ? tree.nodes.find(node => node.conversationId === requestedChild)?.id : undefined), [tree, expanded, now, requestedChild]);
+  const visible = useMemo(() => foldEarlier(tree, expanded, now, requestedChild ? tree.nodes.find(node => node.conversationId === requestedChild)?.id : undefined, language), [tree, expanded, now, requestedChild, language]);
   const layout = useMemo(() => calculateLayout(visible, size.width, previous.current, titleHeights), [visible, size.width, titleHeights]);
   const byId = new Map(visible.nodes.map(node => [node.id, node]));
   const positions = new Map(layout.nodes.map(node => [node.id, node]));
@@ -226,10 +226,12 @@ function GraphCanvas({ tree, root, route, language, approvals, connected, client
           const isRoot = node.id === root.id;
           const pending = approvals.filter(row => Boolean(node.run && row.run_id === node.run.id) || Boolean(node.conversationId && row.conversation_id === node.conversationId));
           const title = node.earlier ? node.earlier.kind === 'earlier' ? earlierLabel(node.earlier.count) : ja ? `ほかの完了 ${node.earlier.count} 件` : `${node.earlier.count} other completed requests` : node.label;
-          const who = agentName(node.provider, node.model) || (ja ? 'エージェント' : 'Agent');
+          const who = node.batchCount !== undefined ? ja ? `${node.batchCount} 件` : `${node.batchCount} requests` : agentName(node.provider, node.model) || (ja ? 'エージェント' : 'Agent');
           const tone = stateTone(toDisplayState(node.state));
           const target = `/p/${encodeURIComponent(route)}?root=${encodeURIComponent(root.id)}${!isRoot && node.conversationId ? `&child=${encodeURIComponent(node.conversationId)}` : ''}`;
-          const content = <><div className="graph-card-top"><ProviderMark provider={node.provider}/><strong className="graph-card-title" title={title}>{title}</strong></div>
+          const content = <><div className="graph-card-top">{node.batchCount !== undefined && node.provider !== 'codex'
+            ? <span className="request-avatar provider-unknown" title={ja ? 'まとめて出した依頼' : 'Batched requests'} aria-hidden="true"><Icon name="fork" size={13}/></span>
+            : <ProviderMark provider={node.provider}/>}<strong className="graph-card-title" title={title}>{title}</strong></div>
             <div className="graph-card-meta"><span className="graph-card-model" title={who}>{who}</span><StatusDot state={node.state} language={language}/><time dateTime={node.activity || undefined}>{formatWhen(node.activity, language) || (ja ? '時刻不明' : 'Unknown time')}</time></div></>;
           const focus = () => { setFocused(node.id); reveal(position); };
           return <article key={node.id} className={`graph-card tone-${tone}${toDisplayState(node.state) === 'unknown' ? ' graph-unknown' : ''}${isRoot ? ' graph-root' : ''}${node.earlier ? ' graph-earlier' : ''}${focused === node.id ? ' graph-selected' : ''}`}

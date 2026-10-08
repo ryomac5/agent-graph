@@ -1,6 +1,7 @@
 import type { DelegationTree, TreeNode } from '../tree/model.ts';
 import { lastActivity } from '../../components/RootViews.tsx';
 import { toDisplayState } from '../../components/StateBadge.tsx';
+import type { Language } from '../../lib/i18n.ts';
 
 export const NARROW_WIDTH = 720;
 const EARLIER_MS = 24 * 60 * 60 * 1000;
@@ -13,24 +14,56 @@ const TITLE_WIDTH = CARD_WIDTH - 58;
 const APPROVAL_HEIGHT = 106;
 const LAYER_GAP = 80;
 const ROW_GAP = 16;
-export interface GraphNode extends TreeNode { activity?: string; approvalCount?: number; earlier?: { parent: string; count: number; kind: 'earlier' | 'completed'; expanded: boolean } }
+export interface GraphNode extends TreeNode { activity?: string; approvalCount?: number; batchCount?: number; earlier?: { parent: string; count: number; kind: 'earlier' | 'completed'; expanded: boolean } }
 export interface GraphTree extends Omit<DelegationTree, 'nodes'> { nodes: GraphNode[] }
 export interface PositionedNode { id: string; depth: number; x: number; y: number; width: number; height: number; route?: { y: number; lane: number } }
 export interface GraphLayout { nodes: PositionedNode[]; width: number; height: number; vertical: boolean }
 
-/** 注意が必要な枝を残し、完了した枝だけを親ごとに畳む。 */
-export function foldEarlier(tree: GraphTree, expanded: ReadonlySet<string>, now: number, selected?: string): GraphTree {
+export function readGraphActivity(node: GraphNode): string {
+  const fields = ['updated_ts', 'completed_ts', 'ended_ts', 'last_evidence_ts', 'started_ts', 'created_ts', 'ts'];
+  const times = [node.activity, lastActivity(node), ...[node.run, node.delegation, ...node.attempts]
+    .flatMap(row => fields.map(field => row?.[field]))];
+  return times.filter((time): time is string => typeof time === 'string' && Number.isFinite(Date.parse(time)))
+    .sort((a, b) => Date.parse(b) - Date.parse(a))[0] ?? '';
+}
+
+/** 共有の木を変えず、グラフでだけ依頼のまとまりを表示する。 */
+export function prepareGraphTree(tree: GraphTree, now: number, language: Language = 'en'): GraphTree {
+  const nodes = tree.nodes.map(node => ({ ...node, activity: readGraphActivity(node) }));
+  const byId = new Map(nodes.map(node => [node.id, node]));
+  const prepared = new Set<string>();
+  function prepare(id: string, ancestors = new Set<string>()) {
+    const node = byId.get(id);
+    if (!node || prepared.has(id) || ancestors.has(id)) return;
+    node.children.forEach(child => prepare(child, new Set([...ancestors, id])));
+    prepared.add(id);
+    if (node.role !== 'planner' || node.conversationId) return;
+    const children = node.children.map(child => byId.get(child)).filter(child => child !== undefined);
+    const states = children.map(child => toDisplayState(child.state));
+    const active = (['running', 'starting', 'waiting_approval', 'waiting_input'] as const).find(state => states.includes(state));
+    const failed = children.some(child => toDisplayState(child.state) === 'failed' && Date.parse(child.activity) >= now - EARLIER_MS);
+    Object.assign(node, { label: language === 'ja' ? 'まとめて出した依頼' : 'Batched requests', batchCount: children.length,
+      state: active ?? (failed ? 'failed' : 'ended'), model: '',
+      provider: children.length > 0 && children.every(child => child.provider === 'codex') ? 'codex' : '',
+      activity: children.map(child => child.activity).filter(Boolean).sort((a, b) => Date.parse(b) - Date.parse(a))[0] ?? '' });
+  }
+  nodes.forEach(node => prepare(node.id));
+  return { ...tree, nodes };
+}
+
+/** 注意が必要な枝を残し、完了と古い失敗を親ごとに畳む。 */
+export function foldEarlier(tree: GraphTree, expanded: ReadonlySet<string>, now: number, selected?: string, language: Language = 'en'): GraphTree {
+  tree = prepareGraphTree(tree, now, language);
   const byId = new Map(tree.nodes.map(node => [node.id, node]));
+  const endedAt = (id: string) => Date.parse(byId.get(id)!.activity ?? '');
   const complete = (id: string, ancestors = new Set<string>()): boolean => {
     const node = byId.get(id);
     if (!node || id === selected || ancestors.has(id) || node.approvalCount) return false;
     if (!node.children.every(child => complete(child, new Set([...ancestors, id])))) return false;
-    if (node.role === 'planner' && !node.conversationId) return node.children.length > 0;
+    // 時刻のないまとまりは残し、中の完了と失敗を別々に畳む。
+    if (node.role === 'planner' && !node.conversationId) return node.children.length > 0 && Number.isFinite(endedAt(id));
+    if (toDisplayState(node.state) === 'failed') return !Number.isFinite(endedAt(id)) || endedAt(id) < now - EARLIER_MS;
     return ['ended', 'idle'].includes(toDisplayState(node.state));
-  };
-  const endedAt = (id: string) => {
-    const node = byId.get(id)!;
-    return Date.parse(String(node.run?.ended_ts || node.activity || lastActivity(node)));
   };
   const nodes: GraphNode[] = [];
   const seen = new Set<string>();
@@ -39,10 +72,12 @@ export function foldEarlier(tree: GraphTree, expanded: ReadonlySet<string>, now:
     if (!node || seen.has(id)) return;
     seen.add(id);
     const finished = node.children.filter(child => complete(child));
-    const old = (child: string): boolean => complete(child) && endedAt(child) < now - EARLIER_MS && byId.get(child)!.children.every(old);
+    const old = (child: string): boolean => complete(child)
+      && (endedAt(child) < now - EARLIER_MS || toDisplayState(byId.get(child)!.state) === 'failed' && !Number.isFinite(endedAt(child)))
+      && byId.get(child)!.children.every(old);
     const earlier = finished.filter(old);
     const recent = finished.filter(child => !earlier.includes(child) && Number.isFinite(endedAt(child))).sort((a, b) => endedAt(b) - endedAt(a) || a.localeCompare(b));
-    const undated = finished.filter(child => !Number.isFinite(endedAt(child)));
+    const undated = finished.filter(child => !earlier.includes(child) && !Number.isFinite(endedAt(child)));
     const groups = [{ kind: 'completed' as const, children: [...recent.slice(RECENT_LIMIT), ...undated] }, { kind: 'earlier' as const, children: earlier }]
       .filter(group => group.children.length).map(group => ({ ...group, id: `${group.kind}:${id}`, expanded: expanded.has(`${group.kind}:${id}`) }));
     const hidden = new Set(groups.filter(group => !group.expanded).flatMap(group => group.children));

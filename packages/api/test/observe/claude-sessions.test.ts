@@ -15,7 +15,8 @@ const CHECK_TS = "2026-10-08T00:00:12.000Z";
 
 function createFixture(t: TestContext) {
   const home = mkdtempSync(join(tmpdir(), "agent-graph-claude-sessions-"));
-  const service = openObservationService({ home, env: {}, dbPath: join(home, "ledger.db") });
+  const service = openObservationService({ home, env: {}, dbPath: join(home, "ledger.db"),
+    codexProcessReader: { listProcesses() { throw new Error("Codex is outside this fixture"); }, readOpenFiles: () => "" } });
   t.after(() => { service.close(); rmSync(home, { recursive: true, force: true }); });
   const directory = join(home, ".claude", "sessions");
   function addConversation(nativeId: string, state: RunState = "running",

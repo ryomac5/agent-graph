@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, unlinkSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -11,6 +11,8 @@ import { observeClaudeHistories } from "./claude-reader.ts";
 import { codexLocationEventId, observeCodex, observeCodexLocations } from "../observe/codex/index.ts";
 import { claudeConversationId, claudeLocationEventId } from "../observe/claude/context.ts";
 import { createClaudeSessionObserver } from "../observe/claude/sessions.ts";
+import { createCodexSessionObserver } from "../observe/codex/sessions.ts";
+import type { CodexProcessReader } from "../observe/codex/sessions.ts";
 import { createLocationResolver } from "../observe/location.ts";
 import { createKitObserver } from "../observe/kit/index.ts";
 import { hookOutboxPath, ledgerDbPath } from "../paths.ts";
@@ -36,6 +38,7 @@ export interface ObservationOptions {
   live?: boolean;
   writerOnly?: boolean;
   readerOnly?: boolean;
+  codexProcessReader?: CodexProcessReader;
   onProgress?: (progress: { processed: number; total: number }) => void;
 }
 export interface IngestionReport {
@@ -236,8 +239,10 @@ export function openObservationService(options: ObservationOptions = {}) {
   const list = createDirectoryReader();
   const listOutbox = createDirectoryReader(false);
   const kit = createKitObserver(scanLedger, checkpoints, refreshSnapshot);
-  const observeClaudeSessions = createClaudeSessionObserver(scanLedger,
-    join(env.CLAUDE_CONFIG_DIR ?? join(home, ".claude"), "sessions"));
+  const claudeSessionsDirectory = join(env.CLAUDE_CONFIG_DIR ?? join(home, ".claude"), "sessions");
+  const observeClaudeSessions = createClaudeSessionObserver(scanLedger, claudeSessionsDirectory);
+  const observeCodexSessions = createCodexSessionObserver(scanLedger, env.CODEX_HOME ?? join(home, ".codex"),
+    options.codexProcessReader);
   let rollout: ReturnType<typeof createIncrementalRolloutReader> | undefined;
   function hasChanged(path: string): boolean {
     let stat;
@@ -335,7 +340,9 @@ export function openObservationService(options: ObservationOptions = {}) {
         refreshSnapshot();
         const aliases = kit.observe();
         refreshSnapshot();
-        buffered.batch(() => observeClaudeSessions());
+        if (existsSync(claudeSessionsDirectory)) buffered.batch(() => observeClaudeSessions());
+        refreshSnapshot();
+        buffered.batch(() => observeCodexSessions());
         const changedCheckpoints = [...checkpoints].filter(([path, cursor]) => previousCheckpoints.get(path) !== cursor);
         if (changedCheckpoints.length) {
           projectionDb.exec("BEGIN IMMEDIATE");
@@ -358,6 +365,6 @@ export function openObservationService(options: ObservationOptions = {}) {
         if (!options.writerOnly) catchUp();
       }
     },
-    close() { clearImmediate(projectionTimer); projectionDb.close(); ledger.close(); },
+    close() { observeCodexSessions.close(); clearImmediate(projectionTimer); projectionDb.close(); ledger.close(); },
   };
 }

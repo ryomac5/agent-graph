@@ -65,3 +65,7 @@
 .git-file-meta .git-added, .git-file-meta .git-untracked { color: var(--success); }
 .git-file-meta .git-deleted { color: var(--danger); }
 .git-file-meta .git-renamed { color: var(--accent); }
+
+/* 変更の画面は、見出しを作業場と同じ外枠に置き、その下を全幅で使う。 */
+.changes-workspace { height: 100%; }
+.changes-workspace > .page.changes-page { flex: 1; min-height: 0; overflow: auto; }

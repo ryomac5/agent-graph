@@ -199,10 +199,13 @@ export function ChangesPage(props: ChangesPageProps) {
   const artifacts = selectArtifacts(state, project);
   // 差分を保存できた成果物だけを出す。中身のない成果物の区画は、見る物がないので出さない。
   const reviewable = artifacts.filter(row => typeof row.diff === 'string' ? row.diff.trim() !== '' : Number(row.files ?? row.file_count ?? 0) > 0);
-  return <section className="page changes-page" aria-label="Project changes">
+  // 見出しは会話の画面と同じ外枠で描き、タブの大きさと位置を揃える。
+  return <div className="workspace root-workspace changes-workspace">
     {project && <ProjectHeader route={project} name={getProjectName(state, projectId)} language={props.language}/>}
-    {!!reviewable.length && <section aria-label="Agent changes"><AgentChangesPage {...props}/></section>}
-    <GitChanges client={props.client} projectId={projectId} worktree={search.get('worktree') ?? undefined} enabled={registered} language={props.language}/>
-  </section>;
+    <section className="page changes-page" aria-label="Project changes">
+      {!!reviewable.length && <section aria-label="Agent changes"><AgentChangesPage {...props}/></section>}
+      <GitChanges client={props.client} projectId={projectId} worktree={search.get('worktree') ?? undefined} enabled={registered} language={props.language}/>
+    </section>
+  </div>;
 }
 export default ChangesPage;

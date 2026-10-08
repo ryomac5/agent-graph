@@ -36,7 +36,7 @@ function ActionButtons({ row, disabled, onAnswer, small = true, w = WORDS.en }: 
     disabled={disabled || !getDecision(row, action)} title={!getDecision(row, action) ? w.notOffered : `${w[action]} (${APPROVAL_KEYS[action].toUpperCase()})`}
     onClick={() => onAnswer(action)}>{action !== 'session' && <Icon name={ACTION_ICONS[action]} size={14}/>}{w[action]}</button>)}</>;
 }
-export function ApprovalActions({ row, client, disabled = false }: { row: Row; client: CommandClient; disabled?: boolean }) {
+export function ApprovalActions({ row, client, disabled = false, language = 'en' }: { row: Row; client: CommandClient; disabled?: boolean; language?: 'en' | 'ja' }) {
   const [busy, setBusy] = useState(false);
   const [answered, setAnswered] = useState(false);
   const [error, setError] = useState('');
@@ -49,8 +49,8 @@ export function ApprovalActions({ row, client, disabled = false }: { row: Row; c
     finally { setBusy(false); }
   }
   return <div className="approval-actions">
-    <div className="button-row"><ActionButtons row={row} disabled={disabled || busy || answered || !isPending(row)} onAnswer={action => void answer(action)}/></div>
-    {answered && <p role="status" className="status-line">Sent</p>}
+    <div className="button-row"><ActionButtons w={WORDS[language]} row={row} disabled={disabled || busy || answered || !isPending(row)} onAnswer={action => void answer(action)}/></div>
+    {answered && <p role="status" className="status-line">{WORDS[language].sent}</p>}
     {error && <p role="alert" className="status-line danger">{error}</p>}
   </div>;
 }

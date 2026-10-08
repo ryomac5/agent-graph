@@ -57,12 +57,6 @@ export function readModel(run?: Row): { model: string; effort: string } {
 export const PROVIDER_NAMES: Record<string, string> = { claude: 'Claude', codex: 'Codex' };
 export function providerName(provider: string): string { return PROVIDER_NAMES[provider] ?? provider; }
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-function formatLabelTime(value: unknown, now: number): string {
-  const time = new Date(text(value));
-  if (!Number.isFinite(time.getTime())) return '';
-  const clock = `${time.getHours()}:${String(time.getMinutes()).padStart(2, '0')}`;
-  return new Date(now).toDateString() === time.toDateString() ? clock : `${MONTHS[time.getMonth()]} ${time.getDate()} ${clock}`;
-}
 function parseTime(value: unknown): Date | undefined {
   const time = value instanceof Date ? value : typeof value === 'string' || typeof value === 'number' ? new Date(value) : undefined;
   return time && Number.isFinite(time.getTime()) ? time : undefined;
@@ -80,21 +74,14 @@ export function formatWhen(value: unknown, language: 'en' | 'ja' = 'en', now = D
   if (language === 'ja') return `${sameYear ? '' : `${time.getFullYear()}年`}${time.getMonth() + 1}月${time.getDate()}日 ${clock}`;
   return `${MONTHS[time.getMonth()]} ${time.getDate()}${sameYear ? '' : `, ${time.getFullYear()}`} ${clock}`;
 }
-/** 経過は「3 min ago」の形で出す。1 日を超えたら formatWhen に任せる。 */
+/** 既存の呼び出しも共通の時刻表示に揃える。 */
 export function formatAgo(value: unknown, language: 'en' | 'ja' = 'en', now = Date.now()): string {
-  const time = parseTime(value);
-  if (!time) return '';
-  const seconds = Math.max(0, Math.floor((now - time.getTime()) / 1000));
-  const ja = language === 'ja';
-  if (seconds < 60) return ja ? 'たった今' : 'just now';
-  if (seconds < 3600) return ja ? `${Math.floor(seconds / 60)} 分前` : `${Math.floor(seconds / 60)} min ago`;
-  if (seconds < 86400) return ja ? `${Math.floor(seconds / 3600)} 時間前` : `${Math.floor(seconds / 3600)} h ago`;
-  return formatWhen(time, language, now);
+  return formatWhen(value, language, now);
 }
 const MODEL_FAMILIES: Record<string, string> = { gpt: 'GPT', claude: 'Claude', o: 'o' };
 /** モデル名は人の読む形にする。「claude-opus-5-5」は「Claude Opus 5.5」、「gpt-6.1-sol」は「GPT-6.1 Sol」とする。 */
 export function modelName(model: string): string {
-  const value = model.trim();
+  const value = model.trim().replace(/^GPT-([\d.]+)\s+(.+)$/i, (_, version: string, suffix: string) => `gpt-${version}-${suffix.replace(/\s+/g, '-')}`);
   if (!value) return '';
   const claude = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?$/i.exec(value);
   if (claude) return `Claude ${claude[1][0].toUpperCase()}${claude[1].slice(1)} ${claude[2]}${claude[3] ? `.${claude[3]}` : ''}`;
@@ -125,7 +112,7 @@ export function conversationTitle(conversation: Row | undefined, startedAt?: unk
   const name = readTitle(conversation?.name);
   if (name) return name;
   const provider = providerName(text(conversation?.provider)) || 'Conversation';
-  const time = formatLabelTime(startedAt, now);
+  const time = formatWhen(startedAt, 'en', now);
   return time ? `${provider} · ${time}` : provider;
 }
 export function isProvisionalName(conversation: Row | undefined): boolean {
@@ -153,7 +140,7 @@ export function runLabel(state: ScreenState, runId: unknown): string {
   return run.generation === undefined || run.generation === null ? name : `${name} · Run ${String(run.generation)}`;
 }
 
-export function formatClock(value: unknown, language: 'en' | 'ja' = 'en'): string {
+export function formatClock(value: unknown, language: 'en' | 'ja' = typeof document !== 'undefined' && document.documentElement.lang === 'ja' ? 'ja' : 'en'): string {
   return typeof value === 'string' ? formatWhen(value, language) : '';
 }
 

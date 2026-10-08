@@ -19,7 +19,8 @@
 .explorer-filter { flex: none; display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); color: var(--text-3); border-bottom: 1px solid var(--border); }
 .explorer-filter input { flex: 1; width: 100%; }
 .explorer-hint { padding: var(--space-1) var(--space-3) 0; font-size: var(--text-xs); }
-.explorer-scroll { flex: 1; min-height: 0; overflow: auto; padding: var(--space-1) 0 var(--space-4); }
+.explorer-scroll-space { flex: 1; min-height: 26px; overflow: hidden; }
+.explorer-scroll { height: 100%; overflow: auto; padding: 0; }
 .explorer-inline { margin: var(--space-3); }
 .explorer-note { padding: var(--space-2) var(--space-4); font-size: var(--text-xs); }
 

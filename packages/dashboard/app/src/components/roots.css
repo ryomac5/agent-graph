@@ -60,3 +60,6 @@
 /* 承認待ちの子の行の中で、何を許すかを見せてその場で答える。 */
 .request-approval { display: grid; gap: 6px; margin: 2px 8px 6px 34px; padding: 8px 10px; border: 1px solid var(--warning, #d97706); border-radius: 8px; background: var(--surface); }
 .request-approval-command { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.request-group { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; }
+.request-group time { font-size: var(--text-xs); font-weight: normal; color: var(--text-3); }

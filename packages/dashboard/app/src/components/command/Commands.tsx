@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { DEFAULT_KEYS, KEY_LABELS, validateBindings, type KeyBindings } from '../../lib/keys.ts';
+import { DEFAULT_KEYS, keyLabel, validateBindings, type KeyBindings } from '../../lib/keys.ts';
 import type { SettingsClient, SettingsSnapshot } from '../../lib/settings.ts';
 export interface Command { id: string; name: string; run(): void; disabled?: boolean }
 const KEY_REFRESH_MS = 1500;
-export function CommandDialog({ title, onClose, children }: { title: string; onClose(): void; children: ReactNode }) {
+export function CommandDialog({ title, onClose, children, language = 'en' }: { title: string; onClose(): void; children: ReactNode; language?: 'en' | 'ja' }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
@@ -19,10 +19,10 @@ export function CommandDialog({ title, onClose, children }: { title: string; onC
         const index = controls.indexOf(document.activeElement as HTMLElement);
         if (event.shiftKey && index <= 0 || !event.shiftKey && index === controls.length - 1) { event.preventDefault(); controls[event.shiftKey ? controls.length - 1 : 0]?.focus(); }
       }
-    }}><header className="button-row"><h2>{title}</h2><span className="spacer"/><button className="btn btn-ghost" onClick={onClose}>Close</button></header>{children}</div>
+    }}><header className="button-row"><h2>{title}</h2><span className="spacer"/><button className="btn btn-ghost" onClick={onClose}>{language === 'ja' ? '閉じる' : 'Close'}</button></header>{children}</div>
   </div>;
 }
-export function CommandPalette({ commands, onClose }: { commands: Command[]; onClose(): void }) {
+export function CommandPalette({ commands, onClose, language = 'en' }: { commands: Command[]; onClose(): void; language?: 'en' | 'ja' }) {
   const [query, setQuery] = useState('');
   const [index, setIndex] = useState(0);
   const matches = commands.filter(command => query.toLowerCase().trim().split(/\s+/).every(word => command.name.toLowerCase().includes(word)));
@@ -32,14 +32,14 @@ export function CommandPalette({ commands, onClose }: { commands: Command[]; onC
   useEffect(() => {
     if (selected) document.getElementById(`command-${selected.id}`)?.scrollIntoView?.({ block: 'nearest' });
   }, [selected]);
-  return <CommandDialog title="Search and commands" onClose={onClose}>
-    <input aria-label="Search commands" role="combobox" aria-expanded="true" aria-controls="command-results" aria-activedescendant={selected ? `command-${selected.id}` : undefined} value={query}
+  return <CommandDialog language={language} title={language === 'ja' ? '検索と操作' : 'Search and commands'} onClose={onClose}>
+    <input aria-label={language === 'ja' ? '操作を検索' : 'Search commands'} role="combobox" aria-expanded="true" aria-controls="command-results" aria-activedescendant={selected ? `command-${selected.id}` : undefined} value={query}
       onChange={event => { setQuery(event.target.value); setIndex(0); }} onKeyDown={event => {
         if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setIndex(previous => enabled.length ? (previous + (event.key === 'ArrowDown' ? 1 : enabled.length - 1)) % enabled.length : 0); }
         if (event.key === 'Enter' && selected) { event.preventDefault(); execute(selected); }
       }}/>
-    <ul id="command-results" role="listbox" aria-label="Commands">{matches.map(command => <li key={command.id} id={`command-${command.id}`} role="option" aria-selected={selected === command} aria-disabled={command.disabled}><button className="btn btn-ghost" disabled={command.disabled} onClick={() => execute(command)}>{command.name}</button></li>)}</ul>
-    {!matches.length && <p role="status">No commands</p>}
+    <ul id="command-results" role="listbox" aria-label={language === 'ja' ? '操作' : 'Commands'}>{matches.map(command => <li key={command.id} id={`command-${command.id}`} role="option" aria-selected={selected === command} aria-disabled={command.disabled}><button className="btn btn-ghost" disabled={command.disabled} onClick={() => execute(command)}>{command.name}</button></li>)}</ul>
+    {!matches.length && <p role="status">{language === 'ja' ? '操作はありません' : 'No commands'}</p>}
   </CommandDialog>;
 }
 export function useKeySettings(client: SettingsClient) {
@@ -69,7 +69,7 @@ export function useKeySettings(client: SettingsClient) {
   }, [client]);
   return { bindings, setBindings };
 }
-export function KeyboardSettings({ bindings, client, onSave }: { bindings: KeyBindings; client: SettingsClient; onSave(value: KeyBindings): void }) {
+export function KeyboardSettings({ bindings, client, onSave, language = 'en' }: { bindings: KeyBindings; client: SettingsClient; onSave(value: KeyBindings): void; language?: 'en' | 'ja' }) {
   const [draft, setDraft] = useState(bindings);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -81,12 +81,12 @@ export function KeyboardSettings({ bindings, client, onSave }: { bindings: KeyBi
       const keys = validateBindings(draft);
       const ack = await client.command('settings.write', { store: 'config', patch: { keys } });
       if (!ack.ok) throw new Error(ack.error ?? 'Settings operation failed');
-      onSave(keys); setDirty(false); setMessage('Saved');
+      onSave(keys); setDirty(false); setMessage(language === 'ja' ? '保存しました' : 'Saved');
     } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); }
   }
-  return <section aria-label="Keyboard shortcuts" className="settings-section"><h2>Shortcuts</h2><div className="settings-card">
-    {Object.entries(draft).map(([key, value]) => <label key={key}><span>{KEY_LABELS[key as keyof KeyBindings]}</span><input aria-label={`keys · ${key}`} value={value} disabled={busy} onChange={event => { setDirty(true); setDraft(previous => ({ ...previous, [key]: event.target.value })); }}/></label>)}
-    <div className="settings-card-footer"><button className="btn btn-secondary btn-sm" disabled={busy} onClick={() => void save()}>Save</button>{message && <p className="muted-text" role={message === 'Saved' ? 'status' : 'alert'}>{message}</p>}</div>
+  return <section aria-label={language === 'ja' ? 'キー操作' : 'Keyboard shortcuts'} className="settings-section"><h2>{language === 'ja' ? 'キー操作' : 'Shortcuts'}</h2><div className="settings-card">
+    {Object.entries(draft).map(([key, value]) => <label key={key}><span>{keyLabel(key as keyof KeyBindings, language)}</span><input aria-label={`keys · ${key}`} value={value} disabled={busy} onChange={event => { setDirty(true); setDraft(previous => ({ ...previous, [key]: event.target.value })); }}/></label>)}
+    <div className="settings-card-footer"><button className="btn btn-secondary btn-sm" disabled={busy} onClick={() => void save()}>{language === 'ja' ? '保存' : 'Save'}</button>{message && <p className="muted-text" role={['Saved', '保存しました'].includes(message) ? 'status' : 'alert'}>{message}</p>}</div>
   </div></section>;
 }

@@ -156,7 +156,7 @@ export function buildDelegationTree(state: ScreenState, project?: string): Deleg
         const parent = nodes.get(source)!;
         const child = nodes.get(target)!;
         child.label = `Review of ${conversationName(state, parent.conversationId ?? '') || parent.label}`;
-        child.role = 'Reviewer';
+        child.role = readText(child.delegation?.role) || 'Reviewer';
         const edge: TreeEdge = { id: `relation:${readText(relation.id)}`, source, target, title: 'Review',
           confidence: readText(relation.confidence), kind: relation.confidence === 'confirmed' ? 'delegated' : 'candidate' };
         if (relation.confidence === 'confirmed') attach(source, target, edge);

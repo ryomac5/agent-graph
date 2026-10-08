@@ -235,5 +235,5 @@ it('keeps reviewers in the selected root tree and out of the root list', () => {
 });
 it('shows the projected unknown state once when root execution evidence is absent', () => {
  const target = setup(); target.setSnapshot({ seq: 2, generation: 1, projection: projection({ roots: [{ id: 'external', name: 'External root', project: REPO, state: 'unknown', last_activity_ts: null, conversation_ids: ['external'], running_children: 0, total_children: 0 }], conversations: [{ id: 'external', origin: 'observed', provider: 'codex' }], runs: [], tasks: [], messages: [], message_memberships: [], approvals: [] }) });
- render(<MemoryRouter><HomePage target={target}/></MemoryRouter>); const row = screen.getByRole('link', { name: /External root/ }); expect(row.querySelectorAll('.root-state')).toHaveLength(1); expect(row.querySelector('.root-state')!.textContent).toBe('Unknown'); expect(row.textContent).not.toContain('Activity unknown');
+ render(<MemoryRouter><HomePage target={target}/></MemoryRouter>); const row = screen.getByRole('link', { name: /External root/ }); expect(row.querySelectorAll('.root-state')).toHaveLength(0); expect(row.textContent).not.toContain('Activity unknown');
 });

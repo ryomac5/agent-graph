@@ -10,6 +10,7 @@ import { AttributionBadge, DiffView } from '../../components/diff/DiffView.tsx';
 import { comparePatches, parseDiff, type DiffLayout, type LineLocation } from '../../components/diff/model.ts';
 import type { Ack } from '../../lib/client.ts';
 import { runLabel, worktreeLabel } from '../../lib/format.ts';
+import { modelName } from '../../lib/format.ts';
 import { store, useScreenStore, type Row, type ScreenStore } from '../../lib/store.ts';
 import { collectSuccessors, collectVersionFamily, readAttribution, readObject, readText, readValue, selectArtifacts, staleApprovalText } from './model.ts';
 import './changes.css';
@@ -177,7 +178,7 @@ function AgentChangesPage({ client, target = store, project, artifactId }: Chang
               return <article className="review-approval" key={readText(row.id)} aria-label={`Approval ${readText(row.id)}`}>
                 <details open={stale}><summary className={`chip ${stale || row.state === 'rejected' ? 'chip-attention' : ''}`}><Icon name={stale ? 'alert' : row.state === 'approved' ? 'check' : 'x'} size={12}/>{stale ? 'Outdated' : readText(row.state)}</summary>
                   <p>Version {String(original?.version ?? 'Unknown')} · Patch {readText(row.patch_hash).slice(0, 8)}</p>{!stale && readText(row.reason) && <p>{readText(row.reason)}</p>}</details>
-                {readText(result.verdict) && <p>Reviewer: {readText(reviewer.executor ?? reviewer.provider)} {readText(reviewer.model)}{readText(reviewer.family) ? ` (${readText(reviewer.family)})` : ''} · {readText(result.verdict)}</p>}
+                {readText(result.verdict) && <p>Reviewer: {readText(reviewer.executor ?? reviewer.provider)} {modelName(readText(reviewer.model))}{readText(reviewer.family) ? ` (${readText(reviewer.family)})` : ''} · {readText(result.verdict)}</p>}
                 {readText(result.comment) && <p>{readText(result.comment)}</p>}
                 {readText(request.reviewer_run_id) && <AppLink className="btn btn-link" to={`/c/${encodeURIComponent(readText(state.projection.runs?.find(run => run.id === request.reviewer_run_id)?.conversation_id))}`}>Reviewer conversation</AppLink>}
                 {stale && <div className="stale-comparison"><p>{staleApprovalText(original, changed)}</p>

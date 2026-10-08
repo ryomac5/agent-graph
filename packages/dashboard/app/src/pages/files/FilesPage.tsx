@@ -3,6 +3,9 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, 
 import { useLocation, useNavigate, useSearchParams } from 'react-router';
 import { AppLink } from '../../components/AppLink.tsx';
 import { Icon } from '../../components/Icon.tsx';
+import type { Language as DisplayLanguage } from '../../lib/i18n.ts';
+import { isRunning } from '../../lib/roots.ts';
+import { worktreeLabel } from '../../lib/format.ts';
 import { store, useScreenStore, type ScreenStore } from '../../lib/store.ts';
 import { Markdown } from '../../components/conversation/Markdown.tsx';
 import { detectLanguage, highlightLines, LANGUAGE_NAMES, type Language } from './highlight.ts';
@@ -16,6 +19,7 @@ import './files.css';
 
 /** これより大きい本文は色分けを省き、表示の重さを抑える。 */
 export const HIGHLIGHT_LIMIT = 300_000;
+const TREE_ROW_HEIGHT = 26;
 type DirectoryState = { status: 'loading' } | { status: 'loaded'; entries: FileEntry[] } | { status: 'error'; error: string };
 type FileState = { key: string; path: string } & ({ status: 'loading' } | { status: 'deleted' } | { status: 'directory' } | { status: 'loaded'; result: ReadResult } | { status: 'error'; error: string });
 interface TreeRow { entry: FileEntry; depth: number; parent: string; open: boolean; setSize: number; position: number }
@@ -272,7 +276,8 @@ export function useFileExplorer({ client, target = store, project, enabled = tru
     ?? (dirs[parentPath(selectedPath)]?.status === 'loaded' ? (dirs[parentPath(selectedPath)] as { entries: FileEntry[] }).entries.find(entry => entry.path === selectedPath) : undefined);
   const worktreeValue = worktree ?? (worktrees.status === 'loaded' ? worktrees.result.worktree : '');
   const offline = state.connection === 'connecting' || state.connection === 'reconnecting';
-  return { client, revision, worktree, project, projectId, dirs, rows, current, needle, query, setQuery, selectedPath, selectedEntry, shown, root, worktrees, worktreeValue,
+  const activePaths = (state.projection.runs ?? []).filter(run => isRunning(String(run.state)) || ['waiting_approval', 'waiting_input'].includes(String(run.state))).map(run => worktreeLabel(run)?.full).filter((path): path is string => Boolean(path));
+  return { client, revision, worktree, project, projectId, activePaths, dirs, rows, current, needle, query, setQuery, selectedPath, selectedEntry, shown, root, worktrees, worktreeValue,
     wantedWorktree, unknownWorktree, offline, items, onKeyDown, activate, move, setParams,
     selectWorktree: (value: string) => setParams(next => next.set('worktree', value)),
     closeFile: () => { if (location.key !== 'default') navigate(-1); else navigate(`/p/${encodeURIComponent(project)}`); },
@@ -311,32 +316,47 @@ function TreeLevel({ explorer, path }: { explorer: FileExplorer; path: string })
 }
 
 /** 作業ツリーの選択と、名前の絞り込みと、ファイルの木。サイドバーのプロジェクトの下に置く。 */
-export function FileTreePanel({ explorer, actions }: { explorer: FileExplorer; actions?: ReactNode }) {
+export function FileTreePanel({ explorer, actions, language = 'en' }: { explorer: FileExplorer; actions?: ReactNode; language?: DisplayLanguage }) {
+  const [showOthers, setShowOthers] = useState(false);
+  const text = (en: string, ja: string) => language === 'ja' ? ja : en;
+  const trees = explorer.worktrees.status === 'loaded' ? explorer.worktrees.result.worktrees : [];
+  const main = explorer.worktrees.status === 'loaded' ? explorer.worktrees.result.worktree : '';
+  const primary = trees.filter(tree => tree.path === main || tree.branch === 'main' || explorer.activePaths.some(path => matchWorktree([tree], path)));
+  const others = trees.filter(tree => !primary.includes(tree));
+  const scroll = useRef<HTMLDivElement>(null);
+  const [treeHeight, setTreeHeight] = useState<number>();
+  useEffect(() => {
+    const element = scroll.current;
+    if (!element || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(entries => setTreeHeight(Math.floor(entries[0].contentRect.height / TREE_ROW_HEIGHT) * TREE_ROW_HEIGHT));
+    observer.observe(element); return () => observer.disconnect();
+  }, []);
   const { worktrees, worktreeValue, root, rows, needle, query, setQuery, current, move, onKeyDown } = explorer;
-  return <section className="explorer-tree" aria-label="Explorer">
-    <header className="column-header explorer-header"><h2>Files</h2><span className="spacer"/>
-      <button className="icon-button" aria-label="Refresh" title="Refresh" onClick={explorer.refresh}><Icon name="clock" size={14}/></button>
+  return <section className="explorer-tree" aria-label={text('Explorer', 'ファイル')}>
+    <header className="column-header explorer-header"><h2>{text('Files', 'ファイル')}</h2><span className="spacer"/>
+      <button className="icon-button" aria-label={text('Refresh', '更新')} title={text('Refresh', '更新')} onClick={explorer.refresh}><Icon name="clock" size={14}/></button>
       {actions}</header>
     <div className="explorer-worktree-row"><Icon name="branch" size={14}/>
-      <select className="select-sm explorer-worktree" aria-label="Worktree" value={worktreeValue} disabled={worktrees.status !== 'loaded'}
+      <select className="select-sm explorer-worktree" aria-label={text('Worktree', '作業ツリー')} value={worktreeValue} disabled={worktrees.status !== 'loaded'}
         onChange={event => explorer.selectWorktree(event.target.value)}>
-        {worktrees.status === 'loaded' ? worktrees.result.worktrees.map(tree => <option key={tree.path} value={tree.path} title={tree.path}>{worktreeName(tree)}</option>)
-          : <option value={worktreeValue}>{worktrees.status === 'loading' ? 'Loading worktrees…' : 'Project root'}</option>}
+        {worktrees.status === 'loaded' ? [...primary, ...others.filter(tree => showOthers || tree.path === worktreeValue)].map(tree => <option key={tree.path} value={tree.path} title={tree.path}>{worktreeName(tree)}</option>)
+          : <option value={worktreeValue}>{worktrees.status === 'loading' ? text('Loading worktrees…', '作業ツリーを読み込み中') : text('Project root', 'プロジェクトの場所')}</option>}
       </select></div>
+    {others.length > 0 && <button className="btn btn-ghost btn-xs" aria-expanded={showOthers} onClick={() => setShowOthers(value => !value)}>{language === 'ja' ? 'ほかの作業ツリー ' + others.length + ' 件' : 'Other worktrees · ' + others.length}</button>}
     <div className="explorer-filter"><Icon name="filter" size={14}/>
-      <input className="input-sm" type="search" placeholder="Filter by name" aria-label="Filter files by name" value={query}
+      <input className="input-sm" type="search" placeholder={text('Filter by name', '名前で絞り込む')} aria-label={text('Filter files by name', 'ファイル名で絞り込む')} value={query}
         onChange={event => setQuery(event.target.value)}
         onKeyDown={event => {
           if (event.key === 'Escape') setQuery('');
           else if (event.key === 'ArrowDown' && rows.length) { event.preventDefault(); move(rows.find(row => row.entry.path === current) ?? rows[0]); }
         }}/></div>
-    {needle && <p className="explorer-hint muted-text">Matches in opened folders</p>}
-    <div className="explorer-scroll">
+    {needle && <p className="explorer-hint muted-text">{text('Matches in opened folders', '開いたフォルダーを検索')}</p>}
+    <div className="explorer-scroll-space" ref={scroll}><div className="explorer-scroll" style={treeHeight === undefined ? undefined : { height: treeHeight }}>
       {root?.status === 'error' ? <p role="alert" className="banner banner-danger explorer-inline"><Icon name="alert" size={14}/>{root.error}</p>
-        : !root || root.status === 'loading' ? <p className="tree-status" role="status">Loading files…</p>
-          : !rows.length ? <p className="tree-status">{needle ? 'No matching names in opened folders' : 'No files'}</p>
-            : <ul role="tree" aria-label="Files" className="file-tree" onKeyDown={onKeyDown}><TreeLevel explorer={explorer} path=""/></ul>}
-    </div>
+        : !root || root.status === 'loading' ? <p className="tree-status" role="status">{text('Loading files…', 'ファイルを読み込み中')}</p>
+          : !rows.length ? <p className="tree-status">{needle ? text('No matching names in opened folders', '一致する名前はありません') : text('No files', 'ファイルはありません')}</p>
+            : <ul role="tree" aria-label={text('Files', 'ファイル')} className="file-tree" onKeyDown={onKeyDown}><TreeLevel explorer={explorer} path=""/></ul>}
+    </div></div>
   </section>;
 }
 

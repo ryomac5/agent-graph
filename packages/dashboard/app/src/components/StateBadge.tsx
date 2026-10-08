@@ -5,10 +5,12 @@ import { reasonText } from '../lib/reasons.ts';
 
 export type ExecutionState = 'starting' | 'running' | 'waiting_approval' | 'waiting_input' | 'idle' | 'ended' | 'failed' | 'unknown';
 const KNOWN = new Set<ExecutionState>(['starting', 'running', 'waiting_approval', 'waiting_input', 'idle', 'ended', 'failed', 'unknown']);
-/** 状態は 4 色の点に寄せる。動いているものは緑、待ちは橙、止まっているものは灰、失敗は赤とする。 */
-export function stateTone(state: string): 'running' | 'waiting' | 'idle' | 'failed' {
+/** 実行中、承認待ち、返答待ち、失敗、完了を別の色で示す。 */
+export function stateTone(state: string): 'running' | 'waiting' | 'input' | 'completed' | 'idle' | 'failed' {
   if (state === 'running' || state === 'starting') return 'running';
-  if (state === 'waiting_approval' || state === 'waiting_input') return 'waiting';
+  if (state === 'waiting_approval') return 'waiting';
+  if (state === 'waiting_input') return 'input';
+  if (state === 'ended') return 'completed';
   if (state === 'failed') return 'failed';
   return 'idle';
 }

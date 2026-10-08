@@ -1,16 +1,30 @@
 import type { ScreenState, Row } from '../../lib/store.ts';
 import { getConversation, isPending, readText } from '../../pages/inbox/model.ts';
-import { approvalReasonText, evidenceLabel, summarizeApproval } from '../../lib/format.ts';
+import { conversationName } from '../../lib/format.ts';
+import { selectRoots } from '../../lib/roots.ts';
+import type { Language } from '../../lib/i18n.ts';
 
-export const NOTIFICATION_KINDS = ['approval', 'input', 'failed', 'completed', 'review_invalidated', 'daemon_fault', 'unknown'] as const;
+export const NOTIFICATION_KINDS = ['approval', 'input', 'failed', 'completed'] as const;
 export type NotificationKind = typeof NOTIFICATION_KINDS[number];
 export type NotificationMode = 'in_app' | 'browser' | 'silent';
 export type NotificationPreferences = Record<NotificationKind, NotificationMode>;
 export const PREFERENCES_KEY = 'agent-graph-notifications';
 export const NOTIFICATION_LABELS: Record<NotificationKind, string> = {
   approval: 'Approval pending', input: 'Input pending', failed: 'Run failed', completed: 'Run completed',
-  review_invalidated: 'Review needs another look', daemon_fault: 'Connection error', unknown: 'Run unknown',
 };
+export const NOTIFICATION_LABELS_JA: Record<NotificationKind, string> = {
+  approval: '承認待ち', input: '返答待ち', failed: '失敗', completed: '完了',
+};
+export function notificationLabel(kind: NotificationKind, language: Language): string {
+  return (language === 'ja' ? NOTIFICATION_LABELS_JA : NOTIFICATION_LABELS)[kind];
+}
+export function notificationDetail(notice: Notice, state: ScreenState, language: Language): string {
+  const name = selectRoots(state).find(root => root.conversation_ids.includes(notice.conversationId ?? ''))?.name
+    || conversationName(state, notice.conversationId ?? '') || (language === 'ja' ? '会話' : 'Conversation');
+  const events = language === 'ja' ? { approval: '承認を待っています', input: '返答を待っています', failed: '失敗しました', completed: '完了しました' }
+    : { approval: 'is waiting for approval', input: 'is waiting for a reply', failed: 'failed', completed: 'completed' };
+  return language === 'ja' ? name + 'は' + events[notice.kind] + '。' : name + ' ' + events[notice.kind] + '.';
+}
 export interface Notice {
   id: string; kind: NotificationKind; title: string; detail: string;
   conversationId?: string; approvalId?: string; time: string;
@@ -24,30 +38,28 @@ export function loadPreferences(storage?: Pick<Storage, 'getItem'>): Notificatio
   return Object.fromEntries(NOTIFICATION_KINDS.map(kind => [kind,
     ['in_app', 'browser', 'silent'].includes(String(saved[kind])) ? saved[kind] : 'in_app'])) as NotificationPreferences;
 }
-export function collectNotifications(previous: ScreenState | undefined, next: ScreenState): Notice[] {
+export function collectNotifications(previous: ScreenState | undefined, next: ScreenState, language: Language = 'en'): Notice[] {
   const notices: Notice[] = [];
-  function add(kind: NotificationKind, row: Row, detail: string, approvalId?: string) {
-    notices.push({ id: JSON.stringify([kind, row.id, next.generation, next.seq]), kind,
-      title: NOTIFICATION_LABELS[kind], detail, approvalId, conversationId: getConversation(row, next),
-      time: readText(row.last_evidence_ts ?? row.requested_ts ?? row.source_ts ?? row.created_ts) });
+  function add(kind: NotificationKind, row: Row, approvalId?: string) {
+    const notice: Notice = { id: JSON.stringify([kind, row.id, next.generation, next.seq]), kind,
+      title: NOTIFICATION_LABELS[kind], detail: '', approvalId, conversationId: getConversation(row, next),
+      time: readText(row.requested_ts ?? row.ended_ts ?? row.last_evidence_ts ?? row.source_ts ?? row.created_ts) };
+    notice.title = notificationLabel(kind, language); notice.detail = notificationDetail(notice, next, language);
+    notices.push(notice);
   }
   for (const row of next.projection.approvals ?? []) {
     const before = previous?.projection.approvals?.find(entry => entry.id === row.id);
-    if (isPending(row) && (!before || !isPending(before))) add('approval', row, summarizeApproval(row.request), String(row.id));
-    if (row.state === 'stale' && before?.state !== 'stale') add('review_invalidated', row, approvalReasonText(readText(row.reason)) || 'The patch changed after this request.');
+    if (isPending(row) && (!before || !isPending(before))) add('approval', row, String(row.id));
   }
   for (const row of next.projection.runs ?? []) {
     const before = previous?.projection.runs?.find(entry => entry.id === row.id);
     if (before?.state === row.state) continue;
-    if (row.state === 'waiting_input') add('input', row, readText(row.reason) || 'Waiting for your input.');
-    if (row.state === 'unknown') add('unknown', row, [evidenceLabel(row.last_evidence), readText(row.last_evidence_ts), readText(row.reason)].filter(Boolean).join(' · '));
+    if (row.state === 'waiting_input') add('input', row);
+    if (row.state === 'waiting_approval' && !(next.projection.approvals ?? []).some(a => a.run_id === row.id && isPending(a))) add('approval', row);
     // 初回の履歴取得を、新しく終了した実行として通知しない。
     const hasHistory = previous && Object.keys(previous.projection).length > 0;
-    if (hasHistory && row.state === 'failed') add('failed', row, readText(row.cause));
-    if (hasHistory && row.state === 'ended') add('completed', row, evidenceLabel(row.end_evidence));
-  }
-  if ((next.connection === 'runner_unavailable' || next.connection === 'reconnecting') && previous?.connection !== next.connection) {
-    add('daemon_fault', { id: next.connection }, next.connection === 'runner_unavailable' ? 'Runner unavailable' : 'API connection lost; reconnecting');
+    if (hasHistory && row.state === 'failed') add('failed', row);
+    if (hasHistory && row.state === 'ended') add('completed', row);
   }
   return notices;
 }

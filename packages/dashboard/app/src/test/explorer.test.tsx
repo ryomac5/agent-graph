@@ -100,7 +100,7 @@ describe('Files explorer', () => {
     expect(item('docs').tabIndex).toBe(0);
     // 木は選択したプロジェクトの行の下に置く。
     expect(screen.queryByRole('link', { name: 'Files' })).toBeNull();
-    expect(within(screen.getByRole('navigation', { name: 'Project' })).getAllByRole('link').map(link => link.textContent)).toEqual(['Conversations', 'Changes']);
+    expect(within(screen.getByRole('navigation', { name: 'Project' })).getAllByRole('link').map(link => link.textContent)).toEqual(['Conversations', 'Graph', 'Changes']);
     expect(screen.queryByRole('region', { name: 'File viewer' })).toBeNull();
     expect(screen.getByRole('region', { name: 'Conversations' })).toBeTruthy();
     const projectRow = screen.getByRole('link', { name: 'repo' }).closest('.sidebar-project')!;

@@ -9,7 +9,7 @@ import { StatusDot, stateLabel } from './StateBadge.tsx';
 import { Icon } from './Icon.tsx';
 
 /** 依頼先の印。頭文字は Claude と Codex で重なるので、色と形で分ける。 */
-function ProviderMark({ provider }: { provider?: string }) {
+export function ProviderMark({ provider }: { provider?: string }) {
   const name = provider === 'claude' ? 'Claude' : provider === 'codex' ? 'Codex' : 'Agent';
   return <span className={`request-avatar provider-${provider || 'unknown'}`} title={name} aria-hidden="true">
     <Icon name={provider === 'codex' ? 'terminal' : provider === 'claude' ? 'sparkle' : 'bot'} size={13}/></span>;
@@ -50,7 +50,7 @@ export function RootList({ roots, selected, onSelect, project, language = 'en' }
     {!roots.length && <p className="empty-row">{t.noConversations}</p>}</div>;
 }
 
-function lastActivity(node: TreeNode): string {
+export function lastActivity(node: TreeNode): string {
   const run = node.run;
   return String(run?.ended_ts ?? run?.last_evidence_ts ?? run?.started_ts ?? node.delegation?.updated_ts ?? node.delegation?.completed_ts ?? node.delegation?.created_ts ?? '');
 }

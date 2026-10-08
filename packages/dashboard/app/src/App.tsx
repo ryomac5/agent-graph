@@ -11,6 +11,7 @@ import { ConversationPage } from './pages/conversation/ConversationPage.tsx';
 import { HomePage } from './pages/home/HomePage.tsx';
 import { FileNotices, FileTreePanel, FileViewerPanel, useFileExplorer } from './pages/files/FilesPage.tsx';
 import { WorkspacePage } from './pages/workspace/WorkspacePage.tsx';
+import { GraphPage } from './pages/graph/GraphPage.tsx';
 import { ChangesPage } from './pages/changes/ChangesPage.tsx';
 import { SearchPage } from './pages/search/SearchPage.tsx';
 import { createSearchClient, type SearchClient } from './pages/search/model.ts';
@@ -37,11 +38,10 @@ function EmptyView({ title, future, t }: { title: TextKey; future?: boolean; t: 
     <div className="empty-state"><Icon name={future ? 'sparkle' : 'search'} size={22}/>
     <h2>{t(future ? 'futureTitle' : 'emptyTitle')}</h2><p>{t(future ? 'futureBody' : 'emptyBody')}</p></div></div>;
 }
-/** 旧い依頼の流れの経路は、作業場の右の列へ移す。 */
+/** 旧い図の経路でも根の選択を保つ。 */
 function RequestsRedirect() {
   const params = useParams(); const location = useLocation();
-  const search = new URLSearchParams(location.search); search.set('requests', '1');
-  return <Navigate replace to={`/p/${encodeURIComponent(params.project ?? '')}?${search}`}/>;
+  return <Navigate replace to={`/p/${encodeURIComponent(params.project ?? '')}/graph${location.search}`}/>;
 }
 const unavailableClient: ConversationClient = { command: async (_command, _payload, cmdId = '') => ({ type: 'ack', cmd_id: cmdId, ok: false, error: 'Runner unavailable' }) };
 const defaultSearchClient: SearchClient = { search: (query, signal) => createSearchClient({
@@ -119,7 +119,7 @@ export function App({ target = store, client = unavailableClient, searchClient =
   // サイドバーの選んだプロジェクトの下に、そのプロジェクトの会話を出す。
   const sidebarRoots = useMemo(() => project ? selectRoots(state, project) : [], [state, project]);
   function moveRow(direction: number) {
-    const rows = [...(mainRef.current?.querySelectorAll<HTMLElement>('.activity-name, [data-approval-id], .delegation-select, [role="treeitem"][tabindex]') ?? [])];
+    const rows = [...(mainRef.current?.querySelectorAll<HTMLElement>('.activity-name, [data-approval-id], .delegation-select, .graph-card-link, [role="treeitem"][tabindex]') ?? [])];
     const current = rows.findIndex(row => row === document.activeElement || (row.closest('.activity-item, .activity-row, [data-approval-id]') ?? row).contains(document.activeElement));
     const row = rows[Math.max(0, Math.min(rows.length - 1, current < 0 ? (direction > 0 ? 0 : rows.length - 1) : current + direction))];
     row?.focus();
@@ -146,7 +146,7 @@ export function App({ target = store, client = unavailableClient, searchClient =
       if (stop) { setStopButton(stop); setOverlay('interrupt'); }
     } else if (action === 'home') navigate('/');
     else if (action === 'inbox') navigate('/inbox');
-    else if (project) navigate(`/p/${encodeURIComponent(project)}${action === 'workspace' ? '' : action === 'tree' ? '?requests=1' : `/${action}`}`);
+    else if (project) navigate(`/p/${encodeURIComponent(project)}${action === 'workspace' ? '' : action === 'tree' ? '/graph' : `/${action}`}`);
   }
   const executeRef = useRef(executeKey);
   executeRef.current = executeKey;
@@ -179,7 +179,7 @@ export function App({ target = store, client = unavailableClient, searchClient =
     }))),
     ...projects.map(row => ({ id: `workspace-${row.id}`, name: language === 'ja' ? `作業場を開く: ${row.full}` : `Open workspace: ${row.full}`, run: () => navigate(`/p/${encodeURIComponent(row.id)}`) })),
   ];
-  const fullHeight = /^\/(c|p)\/[^/]+(?:\/files)?$/.test(location.pathname);
+  const fullHeight = /^\/(c|p)\/[^/]+(?:\/(files|graph|tree))?$/.test(location.pathname);
   const conversation = (conversationId?: string, embedded = false) => <ConversationPage key={conversationId} conversationId={conversationId} target={target} client={client} language={language} embedded={embedded}
     onConversation={id => navigate(`/c/${encodeURIComponent(id)}`)}/>;
   const icons = { overview: 'overview', inbox: 'inbox', search: 'search' } as const;
@@ -208,6 +208,7 @@ export function App({ target = store, client = unavailableClient, searchClient =
       <Route path="/c/:conversation" element={conversation()}/>
       <Route path="/inbox" element={<Inbox target={target} client={client} language={language}/>}/>
       <Route path="/p/:project/tree" element={<RequestsRedirect/>}/>
+      <Route path="/p/:project/graph" element={<GraphPage target={target} client={client} language={language}/>}/>
       <Route path="/p/:project/changes" element={<ChangesPage target={target} client={client} language={language}/>}/>
       <Route path="/p/:project/files" element={<div className="files-page"><FileNotices explorer={explorer}/><FileViewerPanel explorer={explorer} actions={<button className="btn btn-ghost btn-xs" onClick={explorer.closeFile}><Icon name="chevronLeft" size={12}/>Back</button>}/></div>}/>
       <Route path="/search" element={<SearchPage target={target} client={searchClient} language={language}/>}/>

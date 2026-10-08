@@ -25,8 +25,10 @@ function initialRequestsOpen(): boolean {
 export function ProjectHeader({ route, name, language = 'en', actions }: { route: string; name: string; language?: Language; actions?: ReactNode }) {
   const t = dictionaries[language];
   const prefix = `/p/${encodeURIComponent(route)}`;
+  const [search] = useSearchParams();
+  const rootQuery = search.get('root') ? `?root=${encodeURIComponent(search.get('root')!)}` : '';
   return <header className="workspace-header"><h1 className="workspace-title"><Icon name="folder" size={16}/><span className="truncate">{name}</span></h1>
-    <nav className="tabs header-tabs" aria-label={t.project}><NavLink end to={prefix}>{t.conversations}</NavLink><NavLink to={`${prefix}/changes`}>{t.changes}</NavLink></nav>
+    <nav className="tabs header-tabs" aria-label={t.project}><NavLink end to={`${prefix}${rootQuery}`}>{t.conversations}</NavLink><NavLink to={`${prefix}/graph${rootQuery}`}>{language === 'ja' ? 'グラフ' : 'Graph'}</NavLink><NavLink to={`${prefix}/changes`}>{t.changes}</NavLink></nav>
     <span className="spacer"/>{actions}</header>;
 }
 

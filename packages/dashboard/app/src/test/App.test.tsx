@@ -67,7 +67,7 @@ it('shares live activity, approval counts, commands and notices across all stage
   fireEvent.click(within(screen.getByRole('complementary')).getByRole('link', { name: 'demo' }));
   expect(screen.getByRole('heading', { name: 'demo' })).toBeTruthy();
   const header = document.querySelector<HTMLElement>('.workspace-header')!;
-  expect(header.textContent).toBe('demoConversationsChangesNew task');
+  expect(header.textContent).toBe('demoConversationsGraphChangesNew task');
   expect(within(header).getAllByRole('button')).toHaveLength(1);
   expect(within(header).getByRole('button', { name: 'New task' }).getAttribute('aria-expanded')).toBe('false');
   expect(within(header).queryByRole('checkbox')).toBeNull();
@@ -106,7 +106,7 @@ it('opens Changes from the root workspace and sends review commands', async () =
   expect(screen.getByRole('button', { name: 'Comment on code.txt new line 1' })).toBeTruthy();
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Approve' })));
   expect(client.command).toHaveBeenCalledWith('review.approve', { artifactId: 'a' });
-  expect(screen.getByRole('navigation', { name: 'Project' }).textContent).toBe('ConversationsChanges');
+  expect(screen.getByRole('navigation', { name: 'Project' }).textContent).toBe('ConversationsGraphChanges');
 });
 
 it('connects sidebar search to the authenticated search client', async () => {

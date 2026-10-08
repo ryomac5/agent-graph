@@ -33,7 +33,7 @@ function mount(path = '/') {
   return { target, client, setKeys: (value: typeof keys) => { keys = value; } };
 }
 function press(key: string, target: Element | Document = document, options = {}) { fireEvent.keyDown(target, { key, ...options }); }
-it.each([['h', '/'], ['w', '/p/demo'], ['i', '/inbox'], ['t', '/p/demo'], ['c', '/p/demo/changes']])('navigates with g %s', async (key, path) => {
+it.each([['h', '/'], ['w', '/p/demo'], ['i', '/inbox'], ['t', '/p/demo/graph'], ['c', '/p/demo/changes']])('navigates with g %s', async (key, path) => {
   mount('/p/demo');
   await act(async () => {});
   press('g'); press(key);
@@ -174,7 +174,7 @@ it('supports named keys and treats Shift+? as the help key', () => {
   expect(() => validateBindings({ unknown: 'x' })).toThrow('Invalid');
 });
 it('selects delegation tree rows with j and k', async () => {
-  const { target } = mount('/p/demo/tree');
+  const { target } = mount('/p/demo?requests=1');
   // 木には委譲を起こした作業だけが出る。
   act(() => target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: {
     conversations: { remove: [], upsert: [{ id: 'child', provider: 'codex', origin: 'managed', name: 'Child' }] },

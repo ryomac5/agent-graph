@@ -20,7 +20,7 @@ import { executionStates } from '../../components/activity.ts';
 import { Message } from '../../components/conversation/Message.tsx';
 import { collectToolResults } from '../../components/conversation/ToolCall.tsx';
 import { resolveParticipants, senderOf, type Sender } from '../../components/conversation/participants.ts';
-import { ACTIVE_STATES, PENDING_APPROVALS, readObject, readText, selectTimeline, showValue, type TimelineEntry } from '../../components/conversation/model.ts';
+import { ACTIVE_STATES, compareEntries, PENDING_APPROVALS, readObject, readText, selectTimeline, showValue, type TimelineEntry } from '../../components/conversation/model.ts';
 import { translate, type ConversationText } from '../../components/conversation/text.ts';
 import './conversation.css';
 
@@ -33,6 +33,8 @@ export interface ConversationPageProps {
   language?: Language;
   embedded?: boolean;
   seriesIds?: string[];
+  /** 系列の状態。一覧と同じ、系列の最新の会話の実行の状態を見出しに出す。 */
+  seriesState?: string;
   displayName?: string;
   onConversation?: (conversationId: string) => void;
 }
@@ -86,7 +88,7 @@ function ApprovalCard({ entry, t, disabled, answered, onAnswer, screen }: {
   </article>;
 }
 
-export function ConversationPage({ client, conversationId: explicitId, target = store, language = 'en', embedded = false, seriesIds, displayName, onConversation }: ConversationPageProps) {
+export function ConversationPage({ client, conversationId: explicitId, target = store, language = 'en', embedded = false, seriesIds, seriesState, displayName, onConversation }: ConversationPageProps) {
   const params = useParams();
   const conversationId = explicitId ?? params.conversation ?? '';
   const visibleConversation = useRef(conversationId);
@@ -141,7 +143,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const supported = SUPPORTED_FORMATS.includes(readText(conversation?.history_format));
   // 未対応の形式でも押せるようにし、押したときに理由を出す。
   const canLaunch = connected && !pending && Boolean(model && cwd.trim());
-  const rawStatus = readText(run?.state);
+  const rawStatus = seriesState ?? readText(run?.state);
   const status = executionStates.find(value => value === rawStatus) ?? 'unknown';
   const local = detail?.id === conversationId ? detail.projection : {};
   const combine = (table: string) => [...new Map([...(local[table] ?? []), ...(state.projection[table] ?? [])].map(row => [readText(row.id), row])).values()];
@@ -149,15 +151,22 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const historyIds = seriesIds?.length ? seriesIds : [conversationId];
   const seriesKey = historyIds.join('|');
   const seenMessages = new Set<unknown>();
-  const allEntries = historyIds.flatMap((id, index) => {
-    const entries = selectTimeline(historyState, id).filter(entry => {
-      if (entry.kind === 'boundary' && seriesIds && ['continued', 'compacted'].includes(readText(entry.row.type))) return false;
-      if (entry.kind !== 'message') return true;
-      if (seenMessages.has(entry.row.id)) return false;
-      seenMessages.add(entry.row.id); return true;
-    });
-    const boundary: TimelineEntry[] = index ? [{ kind: 'boundary', key: 'series:' + id, time: '', row: { type: 'continued', series: true } }] : [];
-    return [...boundary, ...entries];
+  // 系列の発言は会話をまたいで時刻順に並べる。最新の発言が末尾に来る。会話が替わる所に区切りを 1 つ置く。
+  const owner = new Map<string, string>();
+  const seriesEntries = historyIds.flatMap(id => selectTimeline(historyState, id).filter(entry => {
+    if (entry.kind === 'boundary' && seriesIds && ['continued', 'compacted'].includes(readText(entry.row.type))) return false;
+    if (entry.kind !== 'message') return true;
+    if (seenMessages.has(entry.row.id)) return false;
+    seenMessages.add(entry.row.id); owner.set(entry.key, id); return true;
+  }));
+  if (historyIds.length > 1) seriesEntries.sort(compareEntries);
+  const seriesStarted = new Set<string>();
+  const allEntries = seriesEntries.flatMap(entry => {
+    const id = owner.get(entry.key);
+    if (!id || seriesStarted.has(id)) return [entry];
+    const first = seriesStarted.size === 0;
+    seriesStarted.add(id);
+    return first ? [entry] : [{ kind: 'boundary', key: 'series:' + id, time: entry.time, row: { type: 'continued', series: true } } satisfies TimelineEntry, entry];
   });
   const messageEntries = allEntries.filter(entry => entry.kind === 'message');
   const shownMessages = new Set(messageEntries.slice(-messageLimit).map(entry => entry.row.id));
@@ -169,22 +178,25 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     setHistoryLoading(true); setHistoryError('');
     const previous = older && detailRef.current?.id === conversationId ? detailRef.current : undefined;
     try {
-      const pages = await Promise.all(historyIds.map(id => loadConversationWindow(id, controller.signal,
-        older ? previous?.projection.messages?.filter(row => previous.projection.message_memberships?.some(link => link.message_id === row.id && link.conversation_id === id)).toSorted(compareMessages)[0] : undefined,
-        older ? undefined : anchorId, client.fetchConversation ? path => client.fetchConversation!(path, controller.signal) : undefined)));
-      const page = { generation: pages[0].generation, conversation: pages.at(-1)?.conversation,
-        hasOlder: pages.some(page => page.hasOlder), projection: {} as Record<string, Row[]> };
-      for (const part of pages) {
-        if (part.generation !== page.generation) throw new Error('Conversation changed. Please retry.');
-        for (const [table, rows] of Object.entries(part.projection)) page.projection[table] = [...(page.projection[table] ?? []), ...rows];
+      // 系列は最新の会話から読む。読めた会話から順に出し、古い会話は後から上に足す。
+      const order = [...historyIds].reverse();
+      const pages: Awaited<ReturnType<typeof loadConversationWindow>>[] = [];
+      for (const id of order) {
+        const part = await loadConversationWindow(id, controller.signal,
+          older ? previous?.projection.messages?.filter(row => previous.projection.message_memberships?.some(link => link.message_id === row.id && link.conversation_id === id)).toSorted(compareMessages)[0] : undefined,
+          older ? undefined : anchorId, client.fetchConversation ? path => client.fetchConversation!(path, controller.signal) : undefined);
+        if (controller.signal.aborted || visibleConversation.current !== conversationId) return;
+        if (pages.length && part.generation !== pages[0].generation) throw new Error('Conversation changed. Please retry.');
+        pages.push(part);
+        const page = { generation: pages[0].generation, hasOlder: pages.some(page => page.hasOlder) || pages.length < order.length, projection: {} as Record<string, Row[]> };
+        for (const piece of pages) for (const [table, rows] of Object.entries(piece.projection)) page.projection[table] = [...(page.projection[table] ?? []), ...rows];
+        if (page.generation !== target.getSnapshot().generation) throw new Error('Conversation changed. Please retry.');
+        const projection = Object.fromEntries(Object.entries(page.projection).map(([table, rows]) => [table,
+          [...new Map([...(previous?.projection[table] ?? []), ...rows].map(row => [readText(row.id), row])).values()]]));
+        setDetail({ id: conversationId, projection, hasOlder: pages.length === order.length ? pages.some(page => page.hasOlder) : page.hasOlder });
+        // 一覧の先頭のページにない会話も、api が返す投影の行で名前を出す。
+        if (part.conversation && part.generation !== undefined) target.mergeProjection({ conversations: [part.conversation] }, part.generation);
       }
-      if (controller.signal.aborted || visibleConversation.current !== conversationId) return;
-      if (page.generation !== target.getSnapshot().generation) throw new Error('Conversation changed. Please retry.');
-      const projection = Object.fromEntries(Object.entries(page.projection).map(([table, rows]) => [table,
-        [...new Map([...(previous?.projection[table] ?? []), ...rows].map(row => [readText(row.id), row])).values()]]));
-      setDetail({ id: conversationId, projection, hasOlder: page.hasOlder });
-      // 一覧の先頭のページにない会話も、api が返す投影の行で名前を出す。
-      if (page.conversation && page.generation !== undefined) target.mergeProjection({ conversations: [page.conversation] }, page.generation);
       if (older) { following.current = false; setMessageLimit(value => value + MESSAGE_PAGE_SIZE); }
     } catch (error) { if (!controller.signal.aborted) setHistoryError(`Unable to load messages. ${error instanceof Error ? error.message : ''}`.trim()); }
     finally { if (!controller.signal.aborted) setHistoryLoading(false); }

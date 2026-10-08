@@ -36,13 +36,12 @@ export function createActivityStore(): ScreenStore {
 export function openFolds(...names: string[]) {
   for (const name of names) fireEvent.click(screen.getByRole('button', { name }));
 }
-it('groups roots by project and folds only unlinked unattended conversations', () => {
+it('groups roots by project and leaves conversations that are not roots out', () => {
  render(<MemoryRouter><HomePage target={createActivityStore()}/></MemoryRouter>);
  expect(within(screen.getByRole('region', { name: 'alpha' })).getAllByRole('link').map(row => row.textContent)).toContain('Implement APIRunning');
  expect(screen.getByRole('link', { name: /Review UI/ })).toBeTruthy();
  expect(screen.queryByText('External conversations')).toBeNull(); expect(screen.queryByText('Unsupported conversations')).toBeNull();
- const unattended = screen.getByText('Background').closest('details')!; expect(unattended.open).toBe(false);
- fireEvent.click(unattended.querySelector('summary')!); expect(within(unattended).getByRole('link').getAttribute('href')).toBe('/c/exec');
+ expect(screen.queryByText('Background')).toBeNull(); expect(document.querySelector('a[href="/c/exec"]')).toBeNull();
 });it('orders running roots first and links each root to its project', () => {
  render(<MemoryRouter><HomePage target={createActivityStore()}/></MemoryRouter>);
  const alpha = screen.getByRole('region', { name: 'alpha' }); const rows = alpha.querySelectorAll('.root-row');

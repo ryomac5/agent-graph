@@ -4,6 +4,7 @@ import type { Row } from '../../lib/store.ts';
 import { formatClock } from '../../lib/format.ts';
 import { Markdown } from './Markdown.tsx';
 import { PREVIEW_LINES, readBody, readObject, readText } from './model.ts';
+import { visibleText } from '../../lib/message-body.ts';
 import type { Sender } from './participants.ts';
 import { translate } from './text.ts';
 import { ToolCall } from './ToolCall.tsx';
@@ -24,7 +25,7 @@ export function Message({ row, sender, showName = true, language = 'en', streami
   const [expanded, setExpanded] = useState(false);
   const t = (key: Parameters<typeof translate>[1]) => translate(language, key);
   const blocks = (Array.isArray(row.body) ? row.body : []).map(readObject);
-  const text = Array.isArray(row.body) ? blocks.filter(block => !['tool_use', 'tool_result', 'thinking'].includes(readText(block.type))).map(readBody).filter(Boolean).join('\n') : readBody(row.body);
+  const text = visibleText(Array.isArray(row.body) ? blocks.filter(block => !['tool_use', 'tool_result', 'thinking'].includes(readText(block.type))).map(readBody).filter(Boolean).join('\n') : readBody(row.body));
   const lines = text.split('\n');
   const long = lines.length > PREVIEW_LINES;
   const tools = blocks.filter(block => block.type === 'tool_use');
@@ -37,6 +38,8 @@ export function Message({ row, sender, showName = true, language = 'en', streami
   const confidence = readText(row.confidence);
   const unavailable = row.body_state === 'unavailable' || row.body_state === 'omitted';
   if (!unavailable && !text && !tools.length && blocks.length > 0 && blocks.every(paired)) return null;
+  // 本文のない利用者の行は、hook が差し込んだ行か道具の結果だけの行である。吹き出しを出さない。
+  if (!unavailable && !streaming && !text && !tools.length && end && row.tool_output == null) return null;
   const toolOutput = row.tool_output !== undefined && row.tool_output !== null;
   const hasTools = tools.length > 0 || orphanResults.length > 0 || toolOutput;
   return <article className={`message ${end ? 'message-user' : 'message-agent'}${showName ? ' message-first' : ''}${streaming ? ' streaming' : ''}`}

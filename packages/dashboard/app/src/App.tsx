@@ -17,7 +17,7 @@ import { createSearchClient, type SearchClient } from './pages/search/model.ts';
 import { Inbox } from './pages/inbox/Inbox.tsx';
 import { answerApproval, getDecision, getInbox } from './pages/inbox/model.ts';
 import { Notifications } from './components/notifications/Notifications.tsx';
-import { selectRoots, isRunning } from './lib/roots.ts';
+import { selectRoots, isRunning, rootProject } from './lib/roots.ts';
 import { Icon } from './components/Icon.tsx';
 import { fetchProjection } from './lib/projection-client.ts';
 import type { Row } from './lib/store.ts';
@@ -65,7 +65,8 @@ export function App({ target = store, client = unavailableClient, searchClient =
   useEffect(() => { document.documentElement.lang = language; localStorage.setItem('agent-graph-language', language); }, [language]);
   const projects = getRegisteredProjects(state).map(row => ({ id: String(row.id), name: String(row.display_name), full: String(row.display_name), detail: '' }));
   const roots = useMemo(() => selectRoots(state), [state.projection.roots]);
-  const hasOther = roots.some(row => row.project === OTHER_PROJECT || row.project === null);
+  const registeredIds = new Set(projects.map(row => row.id));
+  const hasOther = roots.some(row => rootProject(row, registeredIds) === OTHER_PROJECT);
   const [listError, setListError] = useState('');
   useEffect(() => {
     const controller = new AbortController();

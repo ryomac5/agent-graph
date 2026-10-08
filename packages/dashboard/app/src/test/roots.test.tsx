@@ -60,11 +60,12 @@ it('selects the running root, joins its continuation and switches to child conve
   expect(await screen.findByText('Original request')).toBeTruthy(); expect(screen.queryByText('Child response')).toBeNull();
   fireEvent.click(within(list).getByRole('button', { name: /agent-graph-002/ })); expect(screen.queryByText('Build the screen')).toBeNull();
 });
-it('lists only roots with running children and folds orphan unattended runs', () => {
+it('lists only roots with running children and leaves orphan unattended runs out', () => {
   render(<MemoryRouter><HomePage target={fixture()}/></MemoryRouter>);
   expect(screen.getAllByRole('link', { name: /agent-graph-/ })).toHaveLength(2);
   expect(screen.getByRole('heading', { name: 'Screen graph' })).toBeTruthy();
   expect(screen.getByRole('button', { name: 'Build the screen · GPT-6.1 Sol · implement · Running' })).toBeTruthy();
   expect(screen.queryByText('Check the screen')).toBeNull();
-  expect(screen.getByText('Background').closest('details')?.open).toBe(false);
+  // 根でない会話は一覧に出さない。
+  expect(screen.queryByText('Orphan run')).toBeNull();
 });

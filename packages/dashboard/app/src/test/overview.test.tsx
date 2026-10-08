@@ -101,7 +101,8 @@ it('shows roots and only their running descendants on the overview', () => {
  expect(within(section).getByRole('link', { name: /Terminal root/ })).toBeTruthy();
  expect(within(section).getByRole('button', { name: /GPT-6.1 Sol · implement · Running$/ })).toBeTruthy();
  expect(within(section).queryByText('Review the overview')).toBeNull(); expect(screen.queryByText('External conversations')).toBeNull();
- expect(screen.getByText('Background').closest('details')!.open).toBe(false);
+ // 根でない会話は一覧に出さない。
+ expect(screen.queryByText('Background')).toBeNull();
 });
 it('filters root views and Changes by a display-name route', () => {
  const target = setup({ artifacts: [{ id: 'artifact', run_id: 'child:2', version: 1, repository_id: HASH, patch_hash: 'h', diff: 'diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-old\n+new\n' }, { id: 'foreign', run_id: 'probe:1', version: 1, repository_id: 'other-hash', patch_hash: 'f', diff: '' }] });

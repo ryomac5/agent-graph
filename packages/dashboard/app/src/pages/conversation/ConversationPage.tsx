@@ -352,7 +352,11 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const shownModel = appliedModel?.model || currentModel;
   const shownEffort = appliedModel?.effort || currentEffort;
   const title = displayName || conversationName(state, conversationId) || t('conversation');
-  const dirty = Boolean(model) && (model !== currentModel || effort !== currentEffort);
+  // 記録のモデル名「claude-opus-5-5」は、一覧の「Opus 5.5」と同じものとして選ぶ。内部名をそのまま出さない。
+  const matchModel = (value: string) => models.find(item => item.model === value)?.model
+    ?? models.find(item => modelName(value) !== '' && [item.displayName, `Claude ${item.displayName}`].includes(modelName(value)))?.model ?? value;
+  const selectedModel = matchModel(model);
+  const dirty = Boolean(model) && (selectedModel !== matchModel(currentModel) || effort !== currentEffort);
   const hint = provider === 'codex' ? codexActive ? 'activeCodex' : 'nextTurn' : 'claudeEffort';
   const participants = resolveParticipants(state, conversationId, { user: t('user'), assistant: t('assistant'), parent: t('parentAgent') });
   const agentSender = senderOf({ role: 'assistant' }, participants);
@@ -451,17 +455,17 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
         <div className="composer-toolbar">
           <div className="composer-controls">
             {!codexActive && <>
-              <select className="select-sm" aria-label={t('model')} title={t('model')} disabled={!connected || pending || confirmation !== undefined} value={model} onChange={event => {
+              <select className="select-sm" aria-label={t('model')} title={t('model')} disabled={!connected || pending || confirmation !== undefined} value={selectedModel} onChange={event => {
                 setModel(event.target.value);
                 if (provider === 'codex') setEffort(models.find(item => item.model === event.target.value)?.effort ?? '');
               }}><option value="">{models.length ? t('chooseModel') : t('noModels')}</option>
-                {model && !models.some(item => item.model === model) && <option value={model} disabled>{model}</option>}
+                {model && !models.some(item => item.model === selectedModel) && <option value={model} disabled>{modelName(model) || model}</option>}
                 {models.map(item => <option key={item.model} value={item.model}>{item.displayName}</option>)}</select>
               <select className="select-sm" aria-label={t('effort')} title={provider === 'codex' ? t('effort') : t('claudeEffort')} value={effort}
                 disabled={!connected || pending || provider !== 'codex' || confirmation !== undefined} onChange={event => setEffort(event.target.value)}>
                 <option value="">{t('defaultEffort')}</option>{[...new Set([...CODEX_EFFORTS, ...(effort ? [effort] : [])])].map(value => <option key={value} value={value}>{value}</option>)}
               </select>
-              {!external && <button className="btn btn-ghost btn-sm" aria-label={t('apply')} title={t('apply')} disabled={!writable || !models.some(item => item.model === model) || !dirty}
+              {!external && <button className="btn btn-ghost btn-sm" aria-label={t('apply')} title={t('apply')} disabled={!writable || !models.some(item => item.model === selectedModel) || !dirty}
                 onClick={() => void applyModel()}>{t('applyShort')}</button>}
             </>}
             {!savedCwd && <input className="input-sm" aria-label={t('cwd')} placeholder={t('cwd')} value={cwd} disabled={pending || confirmation !== undefined} onChange={event => setCwd(event.target.value)}/>}

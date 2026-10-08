@@ -434,3 +434,15 @@ it('端末の会話にも、案内文ではなく普通の入力欄を出す', (
   expect(document.querySelector('.composer')?.textContent ?? '').not.toMatch(/terminal|ターミナル/i);
   expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).readOnly).toBe(false);
 });
+
+it('記録のモデル名を一覧の同じモデルとして選び、内部名を出さない', async () => {
+  const command = vi.fn(async (name: string): Promise<Ack> => ({ type: 'ack', cmd_id: 'cmd', ok: true,
+    result: name === 'list_models' ? [{ model: 'default', displayName: 'Default (recommended)' }, { model: 'opus', displayName: 'Opus 5.5' }] : {} }));
+  setup({ provider: 'claude', client: { command }, projection: { runs: [{ id: 'r', conversation_id: 'c', generation: 1, state: 'idle', started_ts: '2026-10-07T00:00:00Z',
+    launch: { cwd: '/workspace/demo', model: { model: 'claude-opus-5-5' } } }] } });
+  await screen.findByRole('option', { name: 'Opus 5.5' });
+  const select = screen.getByRole('combobox', { name: 'Model' }) as HTMLSelectElement;
+  expect(select.value).toBe('opus');
+  expect(screen.queryByRole('option', { name: 'claude-opus-5-5' })).toBeNull();
+  expect((screen.getByRole('button', { name: 'Apply model and effort' }) as HTMLButtonElement).disabled).toBe(true);
+});

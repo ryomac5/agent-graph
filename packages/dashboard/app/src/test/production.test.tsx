@@ -179,3 +179,12 @@ it('前の日の時刻にも、日付に続けて時と分を出す', () => {
   expect(formatWhen(new Date(2026, 9, 6, 9, 5), 'en', now)).toBe('Oct 6 9:05');
   expect(formatWhen(new Date(2026, 9, 6, 9, 5), 'ja', now)).toBe('10月6日 9:05');
 });
+it('結果を返して待機に戻った Claude の子は完了と出し、general-purpose の役割は出さない', () => {
+  const target = flowStore(2);
+  for (const run of target.getSnapshot().projection.runs!) if (run.id === 'child-1:1') run.state = 'idle';
+  render(<MemoryRouter><WorkspacePage project="repo" target={target} client={client}/></MemoryRouter>);
+  const flow = screen.getByRole('complementary', { name: 'Sub-agents' });
+  const row = [...flow.querySelectorAll<HTMLElement>('.delegation-select')].find(element => element.textContent?.includes('Task 1'))!;
+  expect(row.getAttribute('aria-label')).toContain('Done');
+  expect(row.textContent).not.toContain('general-purpose');
+});

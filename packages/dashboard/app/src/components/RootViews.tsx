@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router';
-import type { Root } from '../lib/roots.ts';
+import { shownRole, type Root } from '../lib/roots.ts';
 import { agentName, formatAgo, formatWhen, summarizeApproval } from '../lib/format.ts';
 import type { Row } from '../lib/store.ts';
 import { dictionaries, type Language } from '../lib/i18n.ts';
@@ -79,7 +79,7 @@ export function RootTree({ tree, selected, onSelect, runningOnly = false, langua
     if (!shown && !children.some(Boolean)) return null;
     const edge = descriptions.get(id);
     const who = agentName(node.provider, node.model) || t.agent;
-    const title = edge?.title || [who, node.role].filter(Boolean).join(' · ');
+    const title = edge?.title || [who, shownRole(node.role)].filter(Boolean).join(' · ');
     const when = formatAgo(lastActivity(node), language);
     const group = node.role === 'planner' && !node.conversationId;
     const isSelected = selected === id || Boolean(selected) && node.conversationId === selected;
@@ -88,9 +88,9 @@ export function RootTree({ tree, selected, onSelect, runningOnly = false, langua
       ? <h3 className="request-group">{node.label}</h3>
       : <div className={`request-row${isSelected ? ' selected' : ''}`} onClick={event => { if (!(event.target as Element).closest('.request-retry, .request-main')) onSelect(node); }}>
         <ProviderMark provider={node.provider}/>
-        <button className="request-main delegation-select" title={title} aria-label={[edge?.title, [who, node.role].filter(Boolean).join(' · '), stateLabel(node.state, language)].filter(Boolean).join(' · ')} aria-pressed={isSelected} onClick={() => onSelect(node)}>
+        <button className="request-main delegation-select" title={title} aria-label={[edge?.title, [who, shownRole(node.role)].filter(Boolean).join(' · '), stateLabel(node.state, language)].filter(Boolean).join(' · ')} aria-pressed={isSelected} onClick={() => onSelect(node)}>
           <span className="request-title">{title}</span>
-          <span className="request-meta"><StatusDot state={node.state} language={language}/><span className="request-who">{[who, node.role].filter(Boolean).join(' · ')}</span>{when && <span className="request-when">{when}</span>}</span>
+          <span className="request-meta"><StatusDot state={node.state} language={language}/><span className="request-who">{[who, shownRole(node.role)].filter(Boolean).join(' · ')}</span>{when && <span className="request-when">{when}</span>}</span>
         </button>
         {retry && <button className="btn btn-ghost btn-xs request-retry" onClick={event => { event.stopPropagation(); onRetry(node); }}>{t.retry}</button>}
       </div>)}{(() => {

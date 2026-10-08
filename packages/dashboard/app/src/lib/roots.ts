@@ -104,9 +104,11 @@ export function orderSeries(state: ScreenState, ids: readonly string[]): string[
   const activity = new Map(ids.map(id => [id, conversationActivity(state, id)]));
   return ids.map((id, index) => ({ id, index })).toSorted((a, b) => activity.get(a.id)!.localeCompare(activity.get(b.id)!) || a.index - b.index).map(item => item.id);
 }
+/** 画面に出す役割。既定の general-purpose と subagent は何も伝えないので省く。 */
+export function shownRole(role: string): string { return ['general-purpose', 'subagent'].includes(role) ? '' : role; }
 /** 相手と役割の 1 行。「Claude Opus 5.5 · general-purpose」の形にする。 */
 export function nodeLine(node: TreeNode): string {
-  return [agentName(node.provider, node.model) || 'Agent', node.role].filter(Boolean).join(' · ');
+  return [agentName(node.provider, node.model) || 'Agent', shownRole(node.role)].filter(Boolean).join(' · ');
 }
 export function buildRootTree(root: Root, index: RootIndex): DelegationTree {
   const nodes: TreeNode[] = [];
@@ -126,6 +128,8 @@ export function buildRootTree(root: Root, index: RootIndex): DelegationTree {
       const node: TreeNode = { id, kind: 'conversation', conversationId: id, run, label: '', attempts: [], children: [],
         provider: readText(conversation?.provider), model: readModel(run).model || readText(run?.model ?? conversation?.model ?? evidence.model),
         role: readText(evidence.agentType ?? evidence.role) || 'subagent', state: readText(run?.state ?? conversation?.state) || 'unknown' };
+      // Claude の子は、結果を返して止まると待機に戻る。頼まれた仕事は終えているので、完了として見せる。
+      if (node.provider === 'claude' && evidence.agentType !== undefined && node.state === 'idle') node.state = 'ended';
       node.label = nodeLine(node);
       nodes.push(node); parent.children.push(id);
       // 頼んだ内容は、子のエージェントの説明か、runner の委譲の題から取る。

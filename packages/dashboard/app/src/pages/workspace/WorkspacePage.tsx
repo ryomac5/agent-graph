@@ -30,8 +30,10 @@ export function ProjectHeader({ route, name, language = 'en', actions }: { route
     <span className="spacer"/>{actions}</header>;
 }
 
-export function WorkspacePage({ project: suppliedProject, target = store, client, renderConversation, language = 'en' }: {
+export function WorkspacePage({ project: suppliedProject, target = store, client, renderConversation, language = 'en', showRootList = true }: {
   project?: string; target?: ScreenStore; client: ConversationClient; language?: Language; renderConversation?: (conversationId: string) => ReactNode;
+  /** 会話の一覧を作業場に出すか。サイドバーに一覧があるアプリの画面では出さない。 */
+  showRootList?: boolean;
 }) {
   const t = dictionaries[language];
   const params = useParams();
@@ -78,15 +80,16 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
   // 子の会話は、頼んだ内容を名前として出す。
   const childNode = childId ? tree.nodes.find(node => node.conversationId === childId) : undefined;
   const childTitle = childNode ? tree.edges.find(edge => edge.target === childNode.id)?.title || undefined : undefined;
-  return <div className={`workspace root-workspace${requestsOpen ? '' : ' requests-collapsed'}`}>
+  return <div className={`workspace root-workspace${requestsOpen ? '' : ' requests-collapsed'}${showRootList ? ' with-roots' : ''}`}>
     <ProjectHeader route={route} name={getProjectName(state, project)} language={language}
       actions={<button className="btn btn-secondary btn-sm" onClick={() => setCreating(value => !value)} aria-expanded={creating}><Icon name="plus" size={14}/>{t.newTask}</button>}/>
     {creating && <div className="workspace-notices"><CreateTaskForm project={project} root={String(state.projection.projects?.find(row => row.id === project)?.root_path ?? '')} client={client} disabled={state.connection !== 'connected'} language={language} onCancel={() => setCreating(false)}/></div>}
     <div className="workspace-columns">
-      <section className="workspace-roots" aria-label={t.conversations}><header className="column-header"><h2>{t.conversations}</h2><span className="column-count numeric">{roots.length}</span></header>
+      {/* アプリの画面では、会話の一覧は左のサイドバーのプロジェクトの下に置き、作業場は会話とサブエージェントに広さを渡す。 */}
+      {showRootList && <section className="workspace-roots" aria-label={t.conversations}><header className="column-header"><h2>{t.conversations}</h2><span className="column-count numeric">{roots.length}</span></header>
         <div className="column-scroll"><RootList roots={roots} selected={selected?.id} language={language} onSelect={root => {
           setChild(undefined); const next = new URLSearchParams(search); next.set('root', root.id); next.delete('path'); next.delete('child'); setSearch(next);
-        }}/></div></section>
+        }}/></div></section>}
       <section className="workspace-conversation" aria-label={t.conversation}>
         {childId && <button className="btn btn-ghost btn-sm root-back" aria-label={`Back to ${selected?.name ?? ""}`} onClick={() => { setChild(undefined); const next = new URLSearchParams(search); next.delete('child'); setSearch(next); }}><span aria-hidden="true">←</span>{selected?.name}</button>}
         {conversationId ? renderConversation && (childId || selected?.conversation_ids.length === 1) ? renderConversation(conversationId)

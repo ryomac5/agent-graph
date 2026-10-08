@@ -434,7 +434,9 @@ it('端末の会話は見るだけで始め、Continue here を押すまで入�
     runs: [{ id: 'r', conversation_id: 'c', generation: 1, state: 'running', started_ts: '2026-10-07T00:00:00Z' }], messages: [], message_memberships: [] } });
   store.setConnection('connected');
   render(<MemoryRouter initialEntries={['/c/c']}><ConversationPage conversationId="c" target={store} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'x', ok: true, result: [] })) }}/></MemoryRouter>);
-  expect(document.querySelector('.composer')).toBeNull();
+  // 入力欄の場所には、返信の場所の説明と、ここで続ける操作だけが出る。
+  expect(document.querySelector('.composer-terminal')).not.toBeNull();
+  expect(document.querySelector('.composer:not(.composer-terminal) textarea')).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Continue here' }));
-  expect(document.querySelector('.composer')).not.toBeNull();
+  expect(document.querySelector('.composer:not(.composer-terminal)')).not.toBeNull();
 });

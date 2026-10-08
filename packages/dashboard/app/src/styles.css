@@ -343,8 +343,8 @@ kbd { font-size: 11px; border-bottom-width: 1px; }
 .workspace-title .icon { color: var(--text-3); }
 .header-tabs { align-self: stretch; margin: 0; border: 0; gap: var(--space-1); }
 .header-tabs a { height: 100%; padding: 0 var(--space-2); margin-bottom: 0; }
-.root-workspace .workspace-columns, .tree-columns { flex: 1; min-height: 0; display: grid; grid-template-areas: none; grid-template-columns: var(--roots-width) minmax(0, 1fr) var(--requests-width); }
-.root-workspace.requests-collapsed .workspace-columns { grid-template-columns: var(--roots-width) minmax(0, 1fr) 40px; }
+.root-workspace .workspace-columns, .tree-columns { flex: 1; min-height: 0; display: grid; grid-template-areas: none; grid-template-columns: minmax(0, 1fr) var(--requests-width); }
+.root-workspace.requests-collapsed .workspace-columns { grid-template-columns: minmax(0, 1fr) 40px; }
 .workspace-roots, .workspace-requests { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
 .workspace-roots { border-right: 1px solid var(--border); }
 .workspace-requests { border-left: 1px solid var(--border); }
@@ -361,7 +361,7 @@ kbd { font-size: 11px; border-bottom-width: 1px; }
 /* 1440 未満では横幅を詰め、1024 では左を細くする。 */
 @media (max-width: 1279px) { :root { --roots-width: 240px; --requests-width: 320px; } }
 @media (max-width: 860px) {
-  .root-workspace .workspace-columns, .tree-columns { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; }
+  .root-workspace .workspace-columns, .tree-columns { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
   .workspace-roots { max-height: 200px; border-right: 0; border-bottom: 1px solid var(--border); }
   .workspace-requests { border-left: 0; border-top: 1px solid var(--border); max-height: 240px; }
 }
@@ -423,3 +423,12 @@ kbd { font-size: 11px; border-bottom-width: 1px; }
   .root-workspace:not(.requests-collapsed) .conv-agent, .root-workspace:not(.requests-collapsed) .state-badge .state-detail { display: none; }
   .root-workspace:not(.requests-collapsed) .composer-controls select, .root-workspace:not(.requests-collapsed) .composer-controls input { max-width: 100%; }
 }
+
+/* サイドバーのプロジェクトの下の会話の一覧。Files の上に置く。 */
+.sidebar-section-label { margin: 6px 0 2px 26px; color: var(--text-3); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.sidebar-roots .root-list { margin-left: 18px; }
+.sidebar-roots .root-row { padding: 4px 8px; }
+
+/* 作業場に会話の一覧を出すときだけ、左に一覧の列を足す。 */
+.root-workspace.with-roots .workspace-columns { grid-template-columns: var(--roots-width) minmax(0, 1fr) var(--requests-width); }
+.root-workspace.with-roots.requests-collapsed .workspace-columns { grid-template-columns: var(--roots-width) minmax(0, 1fr) 40px; }

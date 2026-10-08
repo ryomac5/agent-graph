@@ -3,7 +3,7 @@ import { createKeyHandler, isTextInput, KEY_LABELS, type KeyAction } from './lib
 import { CommandDialog, CommandPalette, KeyboardSettings, useKeySettings, type Command } from './components/command/Commands.tsx';
 import { CreateTaskForm } from './components/CreateTaskForm.tsx';
 import './components/command/command.css';
-import { BrowserRouter, Link, Navigate, NavLink, Route, Routes, useLocation, useNavigate, useParams } from 'react-router';
+import { BrowserRouter, Link, Navigate, NavLink, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import { dictionaries, type Language, type TextKey } from './lib/i18n.ts';
 import { store, useScreenStore, type ScreenStore } from './lib/store.ts';
 import type { ConversationClient } from './pages/conversation/ConversationPage.tsx';
@@ -18,6 +18,7 @@ import { Inbox } from './pages/inbox/Inbox.tsx';
 import { answerApproval, getDecision, getInbox } from './pages/inbox/model.ts';
 import { Notifications } from './components/notifications/Notifications.tsx';
 import { selectRoots, isRunning, rootProject } from './lib/roots.ts';
+import { RootList } from './components/RootViews.tsx';
 import { Icon } from './components/Icon.tsx';
 import { fetchProjection } from './lib/projection-client.ts';
 import type { Row } from './lib/store.ts';
@@ -110,6 +111,9 @@ export function App({ target = store, client = unavailableClient, searchClient =
   const explorer = useFileExplorer({ client, target, project: pathProject ? decodeURIComponent(pathProject) : project ?? '',
     enabled: Boolean(project) && (filesOpen || location.pathname.endsWith('/files')) });
   const projectRoot = String(state.projection.projects?.find(row => row.id === project)?.root_path ?? '');
+  const [search] = useSearchParams();
+  // サイドバーの選んだプロジェクトの下に、そのプロジェクトの会話を出す。
+  const sidebarRoots = useMemo(() => project ? selectRoots(state, project) : [], [state, project]);
   function moveRow(direction: number) {
     const rows = [...(mainRef.current?.querySelectorAll<HTMLElement>('.activity-name, [data-approval-id], .delegation-select, [role="treeitem"][tabindex]') ?? [])];
     const current = rows.findIndex(row => row === document.activeElement || (row.closest('.activity-item, .activity-row, [data-approval-id]') ?? row).contains(document.activeElement));
@@ -186,7 +190,9 @@ export function App({ target = store, client = unavailableClient, searchClient =
           <Icon name={row.id === project && filesOpen ? 'chevronDown' : 'chevronRight'} size={12}/></button>
           <NavLink to={`/p/${encodeURIComponent(row.id)}`} title={row.full} aria-label={row.full}>
             <Icon name="folder" size={16}/><span className="project-link"><span className="truncate">{row.name}</span></span></NavLink></div>
-        {row.id === project && filesOpen && <div className="sidebar-files"><FileTreePanel explorer={explorer}/><FileNotices explorer={explorer}/></div>}
+        {row.id === project && <section className="sidebar-roots" aria-label={language === 'ja' ? '会話' : 'Conversations'}><p className="sidebar-section-label">{language === 'ja' ? '会話' : 'Conversations'}</p>
+          <RootList roots={sidebarRoots} selected={search.get('root') ?? undefined} language={language} onSelect={root => navigate(`/p/${encodeURIComponent(row.id)}?root=${encodeURIComponent(root.id)}`)}/></section>}
+        {row.id === project && filesOpen && <div className="sidebar-files"><p className="sidebar-section-label">Files</p><FileTreePanel explorer={explorer}/><FileNotices explorer={explorer}/></div>}
       </div>)}</nav>}
     {hasOther && <nav className="nav-group" aria-label={t('other')}><div className="sidebar-project-row"><span className="sidebar-indent"/><NavLink to="/p/other"><Icon name="folder" size={16}/><span className="project-link"><span className="truncate">{t('other')}</span></span></NavLink></div></nav>}</div><NavLink className="settings-link" to="/settings"><Icon name="settings" size={16}/>{t('settings')}</NavLink></aside>
     <div className="main-column">{listError && <p role="alert" className="status-line danger list-error">{listError}</p>}<header className="topbar"><span className={`connection ${state.connection}`} role="status">{state.connection !== 'connected' && <><span className="connection-dot" aria-hidden="true"/>{t(state.connection)}</>}</span>
@@ -194,7 +200,7 @@ export function App({ target = store, client = unavailableClient, searchClient =
       <Notifications target={target} client={client} initiallyOpen={false} compact language={language}/></div>
     </header><main ref={mainRef} className={fullHeight ? 'full-height' : undefined}><Routes>
       <Route path="/" element={<HomePage target={target} client={client} language={language}/>}/>
-      <Route path="/p/:project" element={<WorkspacePage target={target} client={client} language={language}/>}/>
+      <Route path="/p/:project" element={<WorkspacePage target={target} client={client} language={language} showRootList={false}/>}/>
       <Route path="/c/:conversation" element={conversation()}/>
       <Route path="/inbox" element={<Inbox target={target} client={client} language={language}/>}/>
       <Route path="/p/:project/tree" element={<RequestsRedirect/>}/>

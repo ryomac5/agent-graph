@@ -361,7 +361,6 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
           reason={readText(run?.cause ?? run?.reason) || undefined} elapsed={elapsed ? `${t(status.startsWith('waiting') ? 'waiting' : 'elapsed')} ${elapsed}` : undefined}/>
         {provider && <span className="conv-agent truncate" title={[providerName(provider), shownModel].filter(Boolean).join(' · ')}>{agentName(provider, shownModel)}</span>}
         <span className="spacer"/>
-        {external && !continueHere && <button type="button" className="btn btn-ghost btn-sm" onClick={() => setContinueHere(true)}>Continue here</button>}
         <button type="button" className="btn btn-ghost btn-sm conv-details-toggle" aria-expanded={detailsOpen} aria-controls="conversation-details"
           onClick={() => setDetailsOpen(value => !value)}>{t('details')}<Icon name="chevronDown" size={14} className="caret"/></button>
       </div>
@@ -410,7 +409,13 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
       {deltas.map(([key, delta]) => <Message key={key} language={language} streaming sender={agentSender} showName={nameShown(agentSender)}
         row={{ id: delta.messageId ?? key, role: 'assistant', body: delta.text, body_state: 'stored' } satisfies Row}/>)}
     </div></div>
-    {/* 端末で動いている会話は見るだけである。Continue here を押したときだけ入力欄を出す。 */}
+    {/* 端末で動いている会話は、返信の場所と、ここで続ける操作だけを入力欄に出す。押すと通常の入力欄になる。 */}
+    {external && !continueHere && <footer className="composer composer-terminal">
+      <div className="composer-box readonly composer-terminal-box">
+        <p className="composer-terminal-note">{language === 'ja' ? 'この会話はターミナルで動いています。返信はターミナルで行えます。' : 'This conversation is running in your terminal. Reply there, or continue it here.'}</p>
+        <button type="button" className="btn btn-secondary btn-sm" onClick={() => setContinueHere(true)}>{language === 'ja' ? 'ここで続ける' : 'Continue here'}</button>
+      </div>
+    </footer>}
     {(!external || continueHere) && <footer className="composer" onFocusCapture={() => setEngaged(true)} onPointerDownCapture={() => setEngaged(true)}>
       {(error || pending || nextConversation || modelsError && engaged || handoffBlocked) && <div className="composer-status">
         {error && <p role="alert" className="status-line danger"><Icon name="alert" size={14}/>{error}</p>}

@@ -39,7 +39,8 @@ function createLargeStore() {
 it('uses only registered display names in the sidebar for ten thousand conversations', () => {
   render(<MemoryRouter><App target={createLargeStore()}/></MemoryRouter>);
   const sidebar = screen.getByRole('complementary');
-  expect(within(sidebar).getByRole('navigation', { name: 'Projects' }).textContent).toBe('Real project');
+  // プロジェクトの行の名前だけを見る。選んだプロジェクトの下には、その会話の一覧も並ぶ。
+  expect([...within(sidebar).getByRole('navigation', { name: 'Projects' }).querySelectorAll('.sidebar-project-row')].map(row => row.textContent)).toEqual(['Real project']);
   expect(within(sidebar).getByRole('link', { name: 'Other' })).toBeTruthy();
   expect(sidebar.textContent).not.toMatch(/hash|Old project/);
   expect(document.querySelectorAll('.activity-row').length).toBeLessThanOrEqual(200);

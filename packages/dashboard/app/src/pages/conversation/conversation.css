@@ -126,3 +126,7 @@
 .tool-run > summary:hover { background: var(--surface-hover); color: var(--text-2); }
 .tool-run[open] > summary { color: var(--text-2); }
 .tool-run-body { display: grid; gap: 4px; margin-top: 4px; padding-left: 12px; border-left: 2px solid var(--border); }
+
+/* 端末で動いている会話の入力欄。返信の場所と、ここで続ける操作だけを出す。 */
+.composer-terminal-box { display: flex; align-items: center; gap: 12px; padding: 10px 14px; }
+.composer-terminal-note { flex: 1; margin: 0; color: var(--text-2); font-size: 13px; }

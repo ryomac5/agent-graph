@@ -106,7 +106,7 @@ describe('Files explorer', () => {
     expect(projectRow.querySelector('[role="tree"]')).toBe(tree());
     expect(projectRow.firstElementChild?.className).toBe('sidebar-project-row');
     expect(document.querySelector('.workspace-files')).toBeNull();
-    expect(document.querySelector('.workspace-columns')?.children).toHaveLength(3);
+    expect(document.querySelector('.workspace-columns')?.children).toHaveLength(2);
     expect(document.querySelector('.workspace-columns > .workspace-conversation')).toBeTruthy();
     expect(screen.getByRole('complementary', { name: 'Sub-agents' })).toBeTruthy();
     expect(screen.queryByRole('region', { name: 'Tasks' })).toBeNull();
@@ -117,7 +117,7 @@ describe('Files explorer', () => {
     expect(screen.queryByRole('tree', { name: 'Files' })).toBeNull();
     expect(calls(client, 'files.list')).toEqual([]);
     const columns = document.querySelector('.workspace-columns')!;
-    expect(columns.firstElementChild!.className).toBe('workspace-roots');
+    expect(columns.firstElementChild!.className).toBe('workspace-conversation');
     fireEvent.click(screen.getByRole('button', { name: 'Toggle files for repo' }));
     await screen.findByRole('tree', { name: 'Files' });
     expect(names()).toContain('README.md');

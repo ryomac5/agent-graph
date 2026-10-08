@@ -62,7 +62,8 @@ export function useRootIndex(state: ScreenState) {
       if (!delegations.has(root)) delegations.set(root, []);
       delegations.get(root)!.push(delegation);
     }
-    return { conversations, runs, runsById, children, delegations };
+    const requests = new Map((state.projection.delegations ?? []).map(row => [readText(row.request_id ?? row.id), row]));
+    return { conversations, runs, runsById, children, delegations, requests };
   }, [state.projection.conversations, state.projection.runs, state.projection.relations, state.projection.delegations]);
 }
 export type RootIndex = ReturnType<typeof useRootIndex>;
@@ -102,7 +103,10 @@ export function buildRootTree(root: Root, index: RootIndex): DelegationTree {
         role: readText(evidence.agentType ?? evidence.role) || 'subagent', state: readText(run?.state ?? conversation?.state) || 'unknown' };
       node.label = nodeLine(node);
       nodes.push(node); parent.children.push(id);
-      edges.push({ id: `relation:${readText(relation.id) || id}`, source: parent.id, target: id, title: readText(evidence.description),
+      // 頼んだ内容は、子のエージェントの説明か、runner の委譲の題から取る。
+      const request = readText(evidence.request_id);
+      const delegation = request ? index.requests.get(request) : undefined;
+      edges.push({ id: `relation:${readText(relation.id) || id}`, source: parent.id, target: id, title: readText(evidence.description) || readText(delegation?.title),
         confidence: readText(relation.confidence) || 'confirmed', kind: 'delegated' });
       addChildren(node, id);
     }

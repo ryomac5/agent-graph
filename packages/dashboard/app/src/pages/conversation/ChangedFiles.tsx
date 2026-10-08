@@ -9,7 +9,7 @@ export function ChangedFiles({ files, language }: { files: FileChange[]; languag
   return <section id="conversation-changed-files" className="conv-changed-files" aria-label={translate(language, 'filesChanged')}>
     {files.map(file => <details key={file.path} className="conv-changed-file">
       <summary><Icon name="chevronRight" size={14} className="caret"/><span className="truncate mono" title={file.path}>{file.path}</span>
-        <span className="spacer"/><span className="diff-add-count">+{file.additions}</span><span className="diff-remove-count">−{file.deletions}</span></summary>
+        <span className="spacer"/>{file.additions > 0 && <span className="diff-add-count">+{file.additions}</span>}{file.deletions > 0 && <span className="diff-remove-count">−{file.deletions}</span>}</summary>
       {file.changes.map((change, index) => <div key={index} className="conv-file-change">
         <div className="conv-change-meta"><span>{change.tool}</span>{change.time && <time dateTime={change.time} title={change.time}>{formatClock(change.time, language)}</time>}</div>
         <div className="diff-scroll"><table className="diff-table diff-unified" aria-label={`${file.path} ${translate(language, 'difference')}`}><tbody>

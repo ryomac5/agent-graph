@@ -87,7 +87,7 @@ export function collectConversationChanges(messages: Row[], { cwd = '', projectR
       else if (tool === 'MultiEdit') changes = [{ path: readText(input.file_path), lines: Array.isArray(input.edits) ? input.edits.flatMap(edit => readReplacement(readObject(edit))) : [] }];
       else changes = parsePatch(findPatch(decodeStoredValue(block.input)));
       for (const change of changes) {
-        if (!change.path) continue;
+        if (!change.path || change.path.split('/').includes('.agents')) continue;
         const path = makeRelative(change.path, [cwd, projectRoot].filter(Boolean));
         const file = files.get(path) ?? { path, additions: 0, deletions: 0, changes: [] };
         file.additions += change.lines.filter(line => line.kind === 'add').length;
@@ -98,5 +98,5 @@ export function collectConversationChanges(messages: Row[], { cwd = '', projectR
     }
   }
   // プロジェクトの中のファイルを先に、外の一時的なファイルを後に並べる。
-  return [...files.values()].toSorted((a, b) => Number(a.path.startsWith('/')) - Number(b.path.startsWith('/')));
+  return [...files.values()].toSorted((a, b) => Number(a.path.startsWith('/') || a.path.startsWith('../')) - Number(b.path.startsWith('/') || b.path.startsWith('../')) || a.path.localeCompare(b.path));
 }

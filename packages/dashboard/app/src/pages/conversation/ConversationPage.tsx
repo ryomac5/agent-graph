@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { useLocation, useParams } from 'react-router';
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import { getRegisteredProjects, OTHER_PROJECT } from '../../lib/projects.ts';
 import { compareMessages, loadConversationWindow, MESSAGE_PAGE_SIZE } from '../../lib/projection-client.ts';
 import { staleApprovalText } from '../changes/model.ts';
@@ -21,11 +21,14 @@ import { countTools, isBlank, isToolOnly, Message } from '../../components/conve
 import { harnessKind, readBody } from '../../lib/message-body.ts';
 import { collectToolResults } from '../../components/conversation/ToolCall.tsx';
 import { resolveParticipants, senderOf, type Sender } from '../../components/conversation/participants.ts';
-import { ACTIVE_STATES, compareEntries, PENDING_APPROVALS, readObject, readText, selectTimeline, showValue, type TimelineEntry } from '../../components/conversation/model.ts';
-import { translate, type ConversationText } from '../../components/conversation/text.ts';
+import { ACTIVE_STATES, compareEntries, messageSignature, PENDING_APPROVALS, readObject, readText, selectTimeline, showValue, type TimelineEntry } from '../../components/conversation/model.ts';
+import { effortLabel, toolsLabel, translate, type ConversationText } from '../../components/conversation/text.ts';
 import { collectConversationChanges } from '../../lib/conversation-changes.ts';
 import { resolveProjectId } from '../../lib/projects.ts';
 import { ChangedFiles } from './ChangedFiles.tsx';
+import { groupToolRuns } from '../../components/conversation/timeline.ts';
+import { resolveDelegationNode } from '../../components/conversation/DelegationCard.tsx';
+import { selectRoots, useRootIndex } from '../../lib/roots.ts';
 import './conversation.css';
 
 export type ConversationClient = Pick<ReturnType<typeof createClient>, 'command'> & Partial<Pick<ReturnType<typeof createClient>, 'watchConversation' | 'fetchConversation'>>;
@@ -47,32 +50,6 @@ const SUPPORTED_FORMATS = ['jsonl', 'legacy', 'paginated'];
 const TICK_MS = 1000;
 const STICK_TO_BOTTOM_PX = 120;
 
-type ToolRunEntry = { kind: 'tools'; key: string; rows: TimelineEntry[] };
-/** 続く道具だけの発言を 1 つにまとめる。本文のある発言と区切りと承認は、そのまま残す。 */
-function groupToolRuns(entries: TimelineEntry[]): (TimelineEntry | ToolRunEntry)[] {
-  const grouped: (TimelineEntry | ToolRunEntry)[] = [];
-  for (const entry of entries) {
-    // 何も出さない行は、畳みの続きとして扱い、まとまりを切らない。
-    if (entry.kind === 'message' && isBlank(entry.row)) {
-      const last = grouped.at(-1);
-      if (last?.kind === 'tools') last.rows.push(entry);
-      continue;
-    }
-    if (entry.kind === 'message' && readText(entry.row.role) !== 'user' && isToolOnly(entry.row)) {
-      const last = grouped.at(-1);
-      if (last?.kind === 'tools') last.rows.push(entry);
-      else grouped.push({ kind: 'tools', key: 'tools:' + entry.key, rows: [entry] });
-      continue;
-    }
-    // 道具の結果だけの利用者の行は、直前の畳みに入れる。
-    if (entry.kind === 'message' && readText(entry.row.role) === 'user' && isToolOnly(entry.row) && grouped.at(-1)?.kind === 'tools') {
-      (grouped.at(-1) as ToolRunEntry).rows.push(entry);
-      continue;
-    }
-    grouped.push(entry);
-  }
-  return grouped;
-}
 function nameOf(state: ScreenState, id: unknown): string {
   const value = readText(id);
   return conversationName(state, value) || (state.projection.runs?.some(row => row.id === value) ? runLabel(state, value) : '') || 'another conversation';
@@ -103,7 +80,7 @@ function ApprovalCard({ entry, t, disabled, answered, onAnswer, screen }: {
   useEffect(() => setOpen(pending), [pending]);
   return <article className={`timeline-approval ${pending ? 'is-pending' : 'is-settled'} outcome-${outcome}`} aria-label={t('approval')} data-outcome={outcome}>
     <details open={open} onToggle={event => setOpen(event.currentTarget.open)}>
-      <summary><Icon name="chevronRight" size={14} className="caret"/><OutcomeIcon outcome={outcome}/><strong>{t('approval')}</strong>{!review && <span className="tool-name">{request.tool}</span>}
+      <summary><Icon name="chevronRight" size={14} className="caret"/><OutcomeIcon outcome={outcome}/><strong>{t('approval')}</strong>{!review && <span className="tool-name">{request.tool === 'Command' ? t('command') : request.tool}</span>}
         {!review && request.summary && <span className="truncate muted-text">{request.summary}</span>}
         <span className="spacer"/><OutcomeChip row={row} answered={answered} label={value => t(labels[value])}/>
         <TimeStamp value={entry.time} fallback={t('timeUnknown')}/></summary>
@@ -127,6 +104,17 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const following = useRef(true);
   const state = useScreenStore(target);
   const location = useLocation();
+  const navigate = useNavigate();
+  const [search, setSearch] = useSearchParams();
+  const rootIndex = useRootIndex(state);
+  const roots = selectRoots(state);
+  const root = roots.find(item => item.id === search.get('root')) ?? roots.find(item => item.conversation_ids.includes(conversationId));
+  const delegationNode = (tool: Row) => resolveDelegationNode(tool, conversationId, state, rootIndex, root);
+  const selectChild = (id: string) => {
+    if (embedded) { const next = new URLSearchParams(search); if (root) next.set('root', root.id); next.set('child', id); setSearch(next); }
+    else if (onConversation) onConversation(id);
+    else navigate(`/c/${encodeURIComponent(id)}?child=${encodeURIComponent(id)}`);
+  };
   const anchorId = location.hash.startsWith('#message-') ? decodeURIComponent(location.hash.slice(9)) : undefined;
   const [detail, setDetail] = useState<{ id: string; projection: Record<string, Row[]>; hasOlder: boolean }>();
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -181,14 +169,15 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const historyState = { ...state, projection: { ...state.projection, messages: combine('messages'), message_memberships: combine('message_memberships') } };
   const historyIds = seriesIds?.length ? seriesIds : [conversationId];
   const seriesKey = historyIds.join('|');
-  const seenMessages = new Set<unknown>();
+  const seenMessages = new Set<string>();
   // 系列の発言は会話をまたいで時刻順に並べる。最新の発言が末尾に来る。会話が替わる所に区切りを 1 つ置く。
   const owner = new Map<string, string>();
   const seriesEntries = historyIds.flatMap(id => selectTimeline(historyState, id).filter(entry => {
-    if (entry.kind === 'boundary' && seriesIds && ['continued', 'compacted'].includes(readText(entry.row.type))) return false;
+    if (entry.kind === 'boundary' && seriesIds && entry.row.type === 'continued') return false;
     if (entry.kind !== 'message') return true;
-    if (seenMessages.has(entry.row.id)) return false;
-    seenMessages.add(entry.row.id); owner.set(entry.key, id); return true;
+    const signature = messageSignature(entry.row, entry.time);
+    if (seenMessages.has(`id:${entry.row.id}`) || seenMessages.has(signature)) return false;
+    seenMessages.add(`id:${entry.row.id}`); seenMessages.add(signature); owner.set(entry.key, id); return true;
   }));
   if (historyIds.length > 1) seriesEntries.sort(compareEntries);
   const seriesStarted = new Set<string>();
@@ -388,7 +377,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
       {detailsOpen && <section id="conversation-details" className="conv-details" aria-label={t('details')}>
         <dl className="conv-meta">
           <div><dt>{t('model')}</dt><dd>{shownModel ? modelName(shownModel) : <span className="muted-text">{t('noModel')}</span>}</dd></div>
-          <div><dt>{t('effort')}</dt><dd>{shownEffort || <span className="muted-text">{t('defaultEffort')}</span>}</dd></div>
+          <div><dt>{t('effort')}</dt><dd>{effortLabel(shownEffort, language) || <span className="muted-text">{t('defaultEffort')}</span>}</dd></div>
           <div title={worktree?.full || t('worktree')}><dt>{t('worktree')}</dt><dd className="meta-item"><Icon name="branch" size={14}/>
             {worktree ? <><span className="truncate mono">{worktree.place}</span>{worktree.branch && <span className="branch-name mono">{worktree.branch}</span>}</>
               : <span className="muted-text">{t('noWorktree')}</span>}</dd></div>
@@ -404,25 +393,29 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
       {anchorId && <AppLink to={`/c/${encodeURIComponent(conversationId)}`}>Latest</AppLink>}
       {historyLoading && <p role="status" className="status-line">Loading messages…</p>}
       {historyError && <p role="alert" className="status-line danger">{historyError} <button className="btn btn-secondary btn-sm" onClick={() => setHistoryRevision(value => value + 1)}>Retry</button></p>}
-      {(detail?.hasOlder || messageEntries.length > shownMessages.size) && <button className="btn btn-secondary btn-sm" disabled={historyLoading} onClick={() => { following.current = false; if (detail?.hasOlder) void loadHistory(true); else setMessageLimit(value => value + MESSAGE_PAGE_SIZE); }}>Load older</button>}
+      {(detail?.hasOlder || messageEntries.length > shownMessages.size) && <button className="btn btn-secondary btn-sm" disabled={historyLoading} onClick={() => { following.current = false; if (detail?.hasOlder) void loadHistory(true); else setMessageLimit(value => value + MESSAGE_PAGE_SIZE); }}>{t('loadOlder')}</button>}
       {!historyLoading && !historyError && entries.length === 0 && deltas.length === 0 && <p className="timeline-empty"><Icon name="message" size={16}/>{t('empty')}</p>}
       {groupToolRuns(entries).map(entry => {
         if (entry.kind === 'tools') {
           // 続く道具の呼び出しは 1 行に畳み、開くと 1 つずつ見られる。
           const count = countTools(entry.rows.map(item => item.row));
           return <details className="tool-run" key={entry.key}>
-            <summary><Icon name="terminal" size={13}/>{count === 1 ? 'Used 1 tool' : `Used ${count} tools`}</summary>
+            <summary><Icon name="terminal" size={13}/>{toolsLabel(count, language)}</summary>
             <div className="tool-run-body">{entry.rows.map(item => <Message key={item.key} row={item.row} sender={agentSender} showName={false} language={language} toolResults={toolResults}/>)}</div>
           </details>;
         }
+        if (entry.kind === 'instructions' || entry.kind === 'project') return <details className="timeline-instructions" key={entry.key}>
+          <summary>{entry.kind === 'project' ? t('projectInstructions') : language === 'ja' ? `${t('settingsInstructions')} ${entry.rows.length} 件` : `${t('settingsInstructions')}: ${entry.rows.length}`}</summary>
+          {entry.rows.map(item => <pre className="code-block" key={item.key}>{readBody(item.row.body)}</pre>)}
+        </details>;
         if (entry.kind === 'message') {
           const sender = senderOf(entry.row, participants);
-          return <Message key={entry.key} row={entry.row} sender={sender} showName={nameShown(sender)} language={language} toolResults={toolResults}/>;
+          return <Message key={entry.key} row={entry.row} sender={sender} showName={nameShown(sender)} language={language} toolResults={toolResults} delegationNode={delegationNode} onSelectChild={selectChild}/>;
         }
         if (entry.kind === 'approval') return <ApprovalCard screen={historyState} key={entry.key} entry={entry} t={t} disabled={!writable} answered={answered.has(entry.row.id)} onAnswer={decision => void answer(entry.row.id, decision)}/>;
         nameShown(undefined);
-        return <div role="separator" className={`timeline-boundary${entry.kind === 'gap' ? ' gap' : ''}${entry.row.confidence === 'inferred' ? ' inferred' : ''}`} key={entry.key}>
-          {entry.row.series ? <span>Conversation continued</span> : entry.kind === 'gap' ? <>{t('missing')}: {showValue(entry.row.from_ts ?? entry.row.from)} – {showValue(entry.row.to_ts ?? entry.row.to)} {readText(entry.row.reason)}</>
+        return <div title={entry.kind === 'gap' ? showValue(entry.row.title ?? [entry.row.from, entry.row.to, entry.row.reason].filter(Boolean).join(' · ')) : undefined} role="separator" className={`timeline-boundary${entry.kind === 'gap' ? ' gap' : ''}${entry.row.confidence === 'inferred' ? ' inferred' : ''}`} key={entry.key}>
+          {entry.row.series ? <span>{t('continued')}</span> : entry.kind === 'gap' ? <span>{t('oldHistory')}</span>
             : <>{t(entry.row.type as ConversationText)} · {nameOf(state, entry.row.from_id)} → {nameOf(state, entry.row.to_id)}</>}
           {!entry.row.series && <TimeStamp value={entry.time} fallback={t('timeUnknown')}/>}
         </div>;
@@ -447,7 +440,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
           <button className="btn btn-secondary btn-sm" disabled={pending} onClick={() => void launchConversation('adopt', false)}>{t('branchInstead')}</button>
           <button className="btn btn-ghost btn-sm" disabled={pending} onClick={() => setConfirmation(undefined)}>{t('cancel')}</button></div>
       </section>}
-      <div className="composer-box">
+      <div className="composer-box" title={[provider === 'codex' ? t(hint) : '', engaged && (!model || !cwd.trim()) ? t('launchReady') : ''].filter(Boolean).join(' ')}>
         <textarea aria-label={t('input')} rows={2} placeholder={t('placeholder')} value={input}
           disabled={pending || !connected || !external && !canSend} onChange={event => setInput(event.target.value)} onKeyDown={event => {
             if (event.key === 'Enter' && event.metaKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (external) { if (input.trim()) void launchConversation('adopt'); } else void send(); }
@@ -460,10 +453,10 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
                 if (provider === 'codex') setEffort(models.find(item => item.model === event.target.value)?.effort ?? '');
               }}><option value="">{models.length ? t('chooseModel') : t('noModels')}</option>
                 {model && !models.some(item => item.model === selectedModel) && <option value={model} disabled>{modelName(model) || model}</option>}
-                {models.map(item => <option key={item.model} value={item.model}>{item.displayName}</option>)}</select>
+                {models.map(item => <option key={item.model} value={item.model}>{language === 'ja' && item.displayName === 'Default (recommended)' ? t('defaultModel') : item.displayName}</option>)}</select>
               <select className="select-sm" aria-label={t('effort')} title={provider === 'codex' ? t('effort') : t('claudeEffort')} value={effort}
                 disabled={!connected || pending || provider !== 'codex' || confirmation !== undefined} onChange={event => setEffort(event.target.value)}>
-                <option value="">{t('defaultEffort')}</option>{[...new Set([...CODEX_EFFORTS, ...(effort ? [effort] : [])])].map(value => <option key={value} value={value}>{value}</option>)}
+                <option value="">{t('defaultEffort')}</option>{[...new Set([...CODEX_EFFORTS, ...(effort ? [effort] : [])])].map(value => <option key={value} value={value}>{effortLabel(value, language)}</option>)}
               </select>
               {!external && <button className="btn btn-ghost btn-sm" aria-label={t('apply')} title={t('apply')} disabled={!writable || !models.some(item => item.model === selectedModel) || !dirty}
                 onClick={() => void applyModel()}>{t('applyShort')}</button>}
@@ -480,7 +473,6 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
           </div>
         </div>
       </div>
-      {(engaged && (!model || !cwd.trim()) || provider === 'codex') && <p className="composer-hint">{provider === 'codex' && <span>{t(hint)}</span>}{engaged && (!model || !cwd.trim()) && <span>{t('launchReady')}</span>}</p>}
     </footer>
   </section>;
 }

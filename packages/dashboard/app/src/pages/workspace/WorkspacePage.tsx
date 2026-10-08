@@ -69,10 +69,9 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
     try { const ack = await client.command('intake.retry', { requestId: node.delegation.request_id ?? node.delegation.id }); if (!ack.ok) setRetryError(ack.error ?? 'Retry failed'); }
     catch (cause) { setRetryError(cause instanceof Error ? cause.message : String(cause)); }
   }
-  const [child, setChild] = useState<{ root: string; id: string }>();
   const index = useRootIndex(state);
   const tree = useMemo(() => selected ? buildRootTree(selected, index) : { nodes: [], edges: [], roots: [], unresolved: [] }, [selected, index]);
-  const requestedChild = child && child.root === selected?.id ? child.id : search.get('child') ?? undefined;
+  const requestedChild = search.get('child') ?? undefined;
   const childId = requestedChild && !selected?.conversation_ids.includes(requestedChild) && tree.nodes.some(node => node.conversationId === requestedChild) ? requestedChild : undefined;
   // 系列は最後に動いた会話を末尾に並べ、その会話を開く。
   const series = useMemo(() => selected ? orderSeries(state, selected.conversation_ids) : [], [selected, state.projection.conversations, state.projection.runs]);
@@ -88,10 +87,10 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
       {/* アプリの画面では、会話の一覧は左のサイドバーのプロジェクトの下に置き、作業場は会話とサブエージェントに広さを渡す。 */}
       {showRootList && <section className="workspace-roots" aria-label={t.conversations}><header className="column-header"><h2>{t.conversations}</h2><span className="column-count numeric">{roots.length}</span></header>
         <div className="column-scroll"><RootList roots={roots} selected={selected?.id} language={language} onSelect={root => {
-          setChild(undefined); const next = new URLSearchParams(search); next.set('root', root.id); next.delete('path'); next.delete('child'); setSearch(next);
+          const next = new URLSearchParams(search); next.set('root', root.id); next.delete('path'); next.delete('child'); setSearch(next);
         }}/></div></section>}
       <section className="workspace-conversation" aria-label={t.conversation}>
-        {childId && <button className="btn btn-ghost btn-sm root-back" aria-label={`Back to ${selected?.name ?? ""}`} onClick={() => { setChild(undefined); const next = new URLSearchParams(search); next.delete('child'); setSearch(next); }}><span aria-hidden="true">←</span>{selected?.name}</button>}
+        {childId ? <button className="btn btn-ghost btn-sm root-back" aria-label={`Back to ${selected?.name ?? ""}`} onClick={() => { const next = new URLSearchParams(search); next.delete('child'); setSearch(next); }}><span aria-hidden="true">←</span>{selected?.name}</button> : <div className="root-back root-back-placeholder" aria-hidden="true"/>}
         {conversationId ? renderConversation && (childId || selected?.conversation_ids.length === 1) ? renderConversation(conversationId)
           : <ConversationPage key={selected?.id + ':' + (childId ?? 'root')} target={target} client={client} conversationId={conversationId} embedded language={language}
             seriesIds={childId ? undefined : series} seriesState={childId ? childNode?.state : selected?.state} displayName={childId ? childTitle : selected?.name}/>
@@ -102,11 +101,11 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
         <button className="icon-button" aria-label={requestsOpen ? t.hideRequests : t.showRequests} title={requestsOpen ? t.hideRequests : t.showRequests} aria-expanded={requestsOpen}
           onClick={() => setRequestsOpen(!requestsOpen)}><Icon name={requestsOpen ? 'chevronRight' : 'chevronLeft'} size={14}/></button></header>
         {requestsOpen && <div className="column-scroll">{retryError && <p role="alert" className="status-line danger">{retryError}</p>}{selected && <RootTree tree={tree} language={language} selected={childId} root={selected}
-          onSelectRoot={() => { setChild(undefined); const next = new URLSearchParams(search); next.delete('child'); setSearch(next); }}
+          onSelectRoot={() => { const next = new URLSearchParams(search); next.delete('child'); setSearch(next); }}
           onRetry={client && state.connection === 'connected' ? node => void retry(node) : undefined}
           approvals={(state.projection.approvals ?? []).filter(isPending)}
           onAnswer={client && state.connection === 'connected' ? (approval, action) => void answerApproval(client, approval, action).catch(error => setRetryError(error instanceof Error ? error.message : String(error))) : undefined}
-          onSelect={node => { if (node.conversationId && selected) { setChild({ root: selected.id, id: node.conversationId }); const next = new URLSearchParams(search); next.set('root', selected.id); next.set('child', node.conversationId); setSearch(next); } }}/>}</div>}</aside>
+          onSelect={node => { if (node.conversationId && selected) { const next = new URLSearchParams(search); next.set('root', selected.id); next.set('child', node.conversationId); setSearch(next); } }}/>}</div>}</aside>
     </div>
   </div>;
 }

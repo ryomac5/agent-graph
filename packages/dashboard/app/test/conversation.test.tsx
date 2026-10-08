@@ -88,9 +88,9 @@ it('renders chronological messages, tool calls, provenance, approval requests, b
   expect(within(tool).getByText('pwd', { selector: '.tool-summary' })).toBeTruthy();
   expect(document.querySelector('script')).toBeNull();
   expect(document.querySelector('a[href^="javascript:"]')).toBeNull();
-  expect(screen.getAllByRole('separator')).toHaveLength(4);
-  expect(screen.getByText(/Continuation ·/).className).toContain('inferred');
-  expect(screen.getByText(/Missing messages:/).textContent).toContain('00:00 – 00:01');
+  expect(screen.getAllByRole('separator')).toHaveLength(2);
+  expect(screen.getByText(/Compaction ·/).className).toContain('inferred');
+  expect(screen.getByText('Older history is unavailable').closest('[role="separator"]')!.getAttribute('title')).toContain('History unavailable');
 });
 
 it('answers with the exact approval ID and offered decision; expired requests have no answer buttons', async () => {
@@ -122,7 +122,7 @@ it('loads models from runner and sends model and effort using set_model', async 
   fireEvent.change(screen.getByRole('combobox', { name: 'Effort' }), { target: { value: 'high' } });
   fireEvent.click(screen.getByRole('button', { name: 'Apply model and effort' }));
   await waitFor(() => expect(command).toHaveBeenCalledWith('set_model', { runId: 'r', model: { model: 'model-b', effort: 'high' } }));
-  expect(screen.getByText('Codex model and effort changes apply from the next turn.')).toBeTruthy();
+  expect(screen.getByTitle('Codex model and effort changes apply from the next turn.')).toBeTruthy();
 });
 
 it('hides Codex model and effort changes and blocks sending during an active turn', async () => {
@@ -131,7 +131,7 @@ it('hides Codex model and effort changes and blocks sending during an active tur
   expect(screen.queryByRole('combobox', { name: 'Effort' })).toBeNull();
   expect(screen.queryByRole('button', { name: 'Apply model and effort' })).toBeNull();
   expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
-  expect(screen.getByText('Codex controls are available after the active turn ends.')).toBeTruthy();
+  expect(screen.getByTitle('Codex controls are available after the active turn ends.')).toBeTruthy();
 });
 
 it('sends only on Cmd+Enter, preserves newlines on Enter and rejects composing input', async () => {
@@ -224,8 +224,9 @@ it('blocks handoff for unsupported formats only when asked and marks absent mess
   await waitModels();
   // 読むだけのときは黄色の帯を出さない。形式は Details で分かる。
   expect(screen.queryByText('This conversation cannot be taken over.')).toBeNull();
-  expect(screen.getByText('Message unavailable')).toBeTruthy();
-  expect(screen.getByRole('separator').textContent).toContain('missing – missing');
+  expect(screen.getByText('Older history is unavailable')).toBeTruthy();
+  expect(screen.getByRole('separator').getAttribute('title')).toContain('missing');
+  expect(screen.queryByRole('article', { name: 'Codex message' })).toBeNull();
   fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Hello' } });
   fireEvent.click(screen.getByRole('button', { name: 'Send' }));
   expect((await screen.findByRole('alert')).textContent).toBe('This conversation cannot be taken over.');
@@ -243,7 +244,7 @@ it('decodes SQLite JSON columns from real snapshot rows for tool content and app
   await waitModels();
   expect(screen.getByText('Decoded message')).toBeTruthy();
   expect(within(screen.getByText('Write', { selector: '.tool-call .tool-name' }).closest('details')!).getByText('demo.ts', { selector: '.tool-summary' })).toBeTruthy();
-  expect(screen.getByRole('separator').querySelector('time')?.getAttribute('datetime')).toBe('2026-10-07T00:00:01Z');
+  expect(screen.queryByRole('separator')).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Allow' }));
   await waitFor(() => expect(command).toHaveBeenCalledWith('answer', { approvalId: 'a', decision: 'allow' }));
   await waitFor(() => expect((screen.getByRole('button', { name: 'Allow' }) as HTMLButtonElement).disabled).toBe(true));

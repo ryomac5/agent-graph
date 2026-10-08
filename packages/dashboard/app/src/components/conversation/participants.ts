@@ -41,13 +41,16 @@ function parentLink(state: ScreenState, conversationId: string): ParentLink | un
     if (relation.type === 'delegated' && conversationOf(state, relation.to_id) === conversationId) {
       const parentId = conversationOf(state, relation.from_id);
       if (parentId === conversationId) continue;
-      return { parentId, role: readText(readObject(relation.evidence).agentType) || delegationRole(state, conversationId, readObject(relation.evidence)) || 'subagent' };
+      return { parentId, role: readText(readObject(relation.evidence).agentType ?? readObject(relation.evidence).role) || delegationRole(state, conversationId, readObject(relation.evidence)) || 'subagent' };
     }
     if (relation.type === 'review_of' && conversationOf(state, relation.from_id) === conversationId) {
       const parentId = conversationOf(state, relation.to_id);
       if (parentId !== conversationId) return { parentId, role: 'review' };
     }
   }
+  const delegation = (state.projection.delegations ?? []).find(row => attemptRuns(row).some(run => conversationOf(state, run) === conversationId) || row.conversation_id === conversationId);
+  const parentId = delegation ? conversationOf(state, delegation.parent_run_id) : undefined;
+  if (parentId && parentId !== conversationId) return { parentId, role: readText(delegation?.role) || 'subagent' };
 }
 
 function label(provider: string, role: string): string {

@@ -1,5 +1,6 @@
 import { compareEventOrder } from '../../../../../core/src/ledger/event-order.ts';
 import type { Row, ScreenState } from '../../lib/store.ts';
+import { readBody } from '../../lib/message-body.ts';
 export { readBody } from '../../lib/message-body.ts';
 
 export function decodeStoredValue(value: unknown): unknown {
@@ -37,7 +38,7 @@ export function selectTimeline(state: ScreenState, conversationId: string): Time
     entries.push({ kind, row: decoded, key: `${kind}:${row.id}`, time: readText(row.source_ts ?? row.requested_ts ?? row.created_ts ?? evidence.source_ts ?? evidence.timestamp) });
   }
   for (const row of p.messages ?? []) if (ids.has(row.id)) {
-    append('message', row);
+    if (row.body_state !== 'unavailable' && row.body_state !== 'omitted') append('message', row);
     if (row.body_state === 'unavailable' || row.body_state === 'omitted') append('gap', {
       id: `body:${row.id}`, from: row.native_id ?? row.id, to: row.native_id ?? row.id,
       source_ts: row.source_ts, reason: row.body_state,
@@ -57,4 +58,11 @@ export function compareEntries(a: TimelineEntry, b: TimelineEntry): number {
   if (!a.time || !b.time) return Number(Boolean(b.time)) - Number(Boolean(a.time)) || tie;
   const difference = Date.parse(a.time) - Date.parse(b.time);
   return (Number.isFinite(difference) ? difference : a.time.localeCompare(b.time)) || tie;
+}
+
+/** テキストの格納形式が違っても、同じ発言を同じものとして扱う。 */
+export function messageSignature(row: Row, time: string): string {
+  const body = decodeStoredValue(row.body);
+  const content = Array.isArray(body) && body.map(readObject).every(block => block.type === 'text') ? readBody(body) : body;
+  return JSON.stringify([readText(row.role) || 'assistant', content, time]);
 }

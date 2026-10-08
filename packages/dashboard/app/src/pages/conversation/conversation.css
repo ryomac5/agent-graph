@@ -139,3 +139,12 @@
 .conv-changed-file > summary { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2); cursor: pointer; background: var(--surface-2); }
 .conv-changed-file[open] > summary .caret { transform: rotate(90deg); }
 .conv-change-meta { display: flex; gap: var(--space-3); padding: var(--space-2); color: var(--text-3); font-size: var(--text-xs); }
+
+/* 共通 CSS の題の伸長を抑え、状態を題の隣に保つ。 */
+.conversation-page .conv-title-row .conv-title { flex: 0 1 auto; min-width: 0; }
+.root-back-placeholder { flex: none; height: 40px; border-bottom: 1px solid var(--border); }
+.delegation-card { display: flex; align-items: center; gap: var(--space-3); width: 100%; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); color: var(--text-1); text-align: left; cursor: pointer; }
+.delegation-card:disabled { cursor: default; opacity: 1; }
+.delegation-title { flex: 1; min-width: 0; }
+.timeline-instructions { color: var(--text-3); font-size: var(--text-sm); }
+.timeline-instructions summary { cursor: pointer; }

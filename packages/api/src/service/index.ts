@@ -10,6 +10,7 @@ import type { HookEvent } from "../hook/index.ts";
 import { observeClaudeHistories } from "./claude-reader.ts";
 import { codexLocationEventId, observeCodex, observeCodexLocations } from "../observe/codex/index.ts";
 import { claudeConversationId, claudeLocationEventId } from "../observe/claude/context.ts";
+import { createClaudeSessionObserver } from "../observe/claude/sessions.ts";
 import { createLocationResolver } from "../observe/location.ts";
 import { createKitObserver } from "../observe/kit/index.ts";
 import { hookOutboxPath, ledgerDbPath } from "../paths.ts";
@@ -235,6 +236,8 @@ export function openObservationService(options: ObservationOptions = {}) {
   const list = createDirectoryReader();
   const listOutbox = createDirectoryReader(false);
   const kit = createKitObserver(scanLedger, checkpoints, refreshSnapshot);
+  const observeClaudeSessions = createClaudeSessionObserver(scanLedger,
+    join(env.CLAUDE_CONFIG_DIR ?? join(home, ".claude"), "sessions"));
   let rollout: ReturnType<typeof createIncrementalRolloutReader> | undefined;
   function hasChanged(path: string): boolean {
     let stat;
@@ -331,6 +334,8 @@ export function openObservationService(options: ObservationOptions = {}) {
           (name) => !name.startsWith(".") && name.endsWith(".json")), buffered.batch);
         refreshSnapshot();
         const aliases = kit.observe();
+        refreshSnapshot();
+        buffered.batch(() => observeClaudeSessions());
         const changedCheckpoints = [...checkpoints].filter(([path, cursor]) => previousCheckpoints.get(path) !== cursor);
         if (changedCheckpoints.length) {
           projectionDb.exec("BEGIN IMMEDIATE");

@@ -83,6 +83,7 @@ export function observeClaudeContext(ledger: Ledger, path: string, options: Clau
   // 場所なしの印の時刻は最初の発言の時刻にし、読む側によらず同じ事実にする。
   let firstMessageTs: string | undefined;
   const locate = options.locate ?? defaultLocationResolver;
+  const handbacks = new Set<string>();
   for (const line of lines) {
     if (!line.text.trim()) continue;
     const row = parseRow(line.text);
@@ -95,8 +96,15 @@ export function observeClaudeContext(ledger: Ledger, path: string, options: Clau
       append({ ...base, kind: "conversation.updated", subject: `conversation:${id}`, source_event_id: locationId, payload: { ...location } });
       located = true;
     }
-    const evidence = turns ? classifyClaudeRecord(row) : undefined;
+    let evidence = turns ? classifyClaudeRecord(row) : undefined;
     if (!evidence) continue;
+    // 子が手を戻す呼び出しと、その呼び出しへの結果は、どちらもターンの終わりである。
+    const blocks = Array.isArray((row.message as { content?: unknown } | undefined)?.content)
+      ? (row.message as { content: { type?: string; name?: string; id?: string; tool_use_id?: string }[] }).content : [];
+    for (const block of blocks) if (block.type === "tool_use" && block.name === "SubagentHandback" && block.id) handbacks.add(block.id);
+    if (evidence.kind === "tool_result" && blocks.some((block) => block.type === "tool_result" && block.tool_use_id && handbacks.has(block.tool_use_id))) {
+      evidence = { ...evidence, state: "idle", kind: "turn_completed" };
+    }
     const time = Date.parse(timestamp);
     // 行より前に始まった実行のうち、最も新しいものに結ぶ。
     let target = [...hooks, ...(own ? [own] : [])].filter((run) => run.started <= time)

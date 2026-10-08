@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, useLocation } from 'react-router';
 import { ChangesPage } from '../pages/changes/ChangesPage.tsx';
 import { buildCommitGraph } from '../pages/changes/graph.ts';
 import { GitChanges } from '../pages/changes/GitChanges.tsx';
@@ -92,4 +92,54 @@ it.each([true, false])('selects the initial source and navigates all three colum
   expect(document.activeElement).toBe(diff);
   fireEvent.keyDown(screen.getByRole('button', { name: dirty ? /Latest/ : /Earlier/ }), { key: 'ArrowUp' });
   await within(diff).findByRole('table', { name: `${dirty ? 'working.ts' : 'src/code.ts'} unified diff` });
+});
+
+it.each(['en', 'ja'] as const)('shows conversation badges and toggles a URL filter with existing names (%s)', async language => {
+  const target = createStore();
+  target.setSnapshot({ seq: 1, generation: 1, projection: {
+    projects: [{ id: 'repo', display_name: 'agent-graph', state: 'registered' }],
+    roots: [{ id: 'root', name: 'agent-graph-001', project: 'repo', conversation_ids: ['root-conversation'] }],
+    conversations: [{ id: 'root-conversation', provider: 'claude', created_ts: '2026-10-01T00:00:00Z' }, { id: 'child', provider: 'claude' }],
+    relations: [{ id: 'edge', type: 'delegated', from_id: 'root-conversation', to_id: 'child', active: 1, evidence: { description: 'Improve changes' } }],
+  } });
+  const commits = [
+    { hash: 'abcdef123456', shortHash: 'abcdef1', subject: 'Root change', conversation_ids: ['root-conversation'], author: 'Git author' },
+    { hash: 'defabc123456', shortHash: 'defabc1', subject: 'Child change', conversation_ids: ['child'], author: 'Git author' },
+    { hash: '123456abcdef', shortHash: '123456a', subject: 'Other change', conversation_ids: [], author: 'Other author' },
+  ].map(commit => ({ ...commit, parents: [], time: '2026-10-08T00:00:00Z', branches: [], tags: [] }));
+  const client = { command: vi.fn(async (name: string) => ({ type: 'ack' as const, cmd_id: 'c', ok: true,
+    result: name === 'files.commits' ? { commits } : name === 'files.changes' ? { entries: [] } : { files: [] },
+  })) };
+  function Location() { return <output data-testid="location">{useLocation().search}</output>; }
+  render(<MemoryRouter initialEntries={['/?worktree=%2Frepo&tab=changes']}><Location/><GitChanges client={client} projectId="repo" target={target} enabled language={language}/></MemoryRouter>);
+  const filter = language === 'en' ? 'Filter by conversation' : '会話で絞り込む';
+  const rootBadge = await screen.findByRole('button', { name: `${filter}: agent-graph-20261001` });
+  const childBadge = screen.getByRole('button', { name: `${filter}: Improve changes` });
+  expect(screen.getByRole('button', { name: /Root change/ }).textContent).toContain('agent-graph-20261001');
+  expect(screen.getByRole('button', { name: /Child change/ }).textContent).toContain('Improve changes');
+  expect(screen.getByRole('button', { name: /Other change/ }).textContent).toContain('Other author');
+  fireEvent.click(childBadge);
+  expect(screen.queryByRole('button', { name: /Root change/ })).toBeNull();
+  expect(screen.queryByRole('button', { name: /Other change/ })).toBeNull();
+  expect(childBadge.getAttribute('aria-pressed')).toBe('true');
+  expect(screen.getByTestId('location').textContent).toContain('agent=child');
+  expect(screen.getByTestId('location').textContent).toContain('worktree=%2Frepo');
+  fireEvent.click(childBadge);
+  expect(screen.getByRole('button', { name: /Root change/ })).toBeTruthy();
+  expect(screen.getByTestId('location').textContent).not.toContain('agent=');
+  fireEvent.click(screen.getByRole('button', { name: rootBadge.getAttribute('aria-label')! }));
+  expect(screen.queryByRole('button', { name: /Child change/ })).toBeNull();
+  expect(screen.getByTestId('location').textContent).toContain('agent=root-conversation');
+});
+
+it('restores the conversation filter from the URL and allows clearing an unknown conversation', async () => {
+  const client = { command: vi.fn(async (name: string) => ({ type: 'ack' as const, cmd_id: 'c', ok: true,
+    result: name === 'files.commits' ? { commits: [{ hash: 'abcdef123456', shortHash: 'abcdef1', subject: 'Hidden', parents: [], time: '2026-10-08T00:00:00Z', author: 'Author', conversation_ids: [] }] }
+      : name === 'files.changes' ? { entries: [] } : { files: [] },
+  })) };
+  render(<MemoryRouter initialEntries={['/?agent=missing']}><GitChanges client={client} projectId="repo" enabled/></MemoryRouter>);
+  expect(await screen.findByText('No commits for this conversation.')).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /Hidden/ })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Clear conversation filter: missing' }));
+  expect(screen.getByRole('button', { name: /Hidden/ })).toBeTruthy();
 });

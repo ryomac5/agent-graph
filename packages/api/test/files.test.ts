@@ -307,6 +307,7 @@ test('git commands return working tree sources, recent commits and redacted boun
   const history = await handleFilesCommand(api, 'files.commits', request) as Awaited<ReturnType<typeof api.commits>>;
   assert.equal(history.commits.length, 1);
   assert.equal(history.commits[0].subject, 'fixture'); assert.equal(history.commits[0].author, 'Files Test');
+  assert.deepEqual(history.commits[0].conversation_ids, []);
   assert.equal(history.commits[0].fileCount, 2); assert.equal(history.commits[0].additions, 2);
   assert.deepEqual(history.commits[0].parents, []);
   assert.ok(history.commits[0].branches.length > 0);

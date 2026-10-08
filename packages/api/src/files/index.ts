@@ -8,6 +8,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { projectProjects } from "../../../core/src/ledger/projections/projects.ts";
 import { redact, type RedactionRules } from "../../../core/src/ledger/redact.ts";
 import type { Fact } from "../../../core/src/ledger/facts.ts";
+import { createCommitConversationIndex } from './conversations.ts';
 
 export { MAX_FILE_BYTES } from './git.ts';
 const MAX_GIT_OUTPUT_BYTES = 64 * MAX_FILE_BYTES;
@@ -140,6 +141,7 @@ async function readCommonDirectory(root: string): Promise<string> {
 }
 
 export function createFilesApi(db: DatabaseSync, readRules: () => RedactionRules = () => ({})) {
+  const conversations = createCommitConversationIndex(db);
   function readProjectRoot(projectId: string): string {
     const facts = db.prepare("SELECT * FROM facts WHERE kind LIKE 'project.%' ORDER BY seq").all()
       .map((row) => ({ ...row, payload: row.payload === null ? null : JSON.parse(String(row.payload)) } as Fact));
@@ -174,7 +176,7 @@ export function createFilesApi(db: DatabaseSync, readRules: () => RedactionRules
     return selected;
   }
   return {
-    ...createGitApi(selectGitRoot, resolveInside, readRules),
+    ...createGitApi(selectGitRoot, resolveInside, readRules, conversations),
     async worktrees(request: FilesRequest) {
       const root = await selectRoot(request);
       return { worktree: root, worktrees: await listWorktrees(root) };

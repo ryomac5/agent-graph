@@ -1,4 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useSearchParams } from 'react-router';
+import { buildRootTree, selectRoots, useRootIndex } from '../../lib/roots.ts';
+import { conversationName } from '../../lib/format.ts';
+import { store, useScreenStore, type ScreenStore } from '../../lib/store.ts';
 import { buildCommitGraph, type GraphRow } from './graph.ts';
 import { formatWhen } from '../../lib/format.ts';
 import { DiffView } from '../../components/diff/DiffView.tsx';
@@ -6,14 +10,14 @@ import { parseDiff, type DiffLayout } from '../../components/diff/model.ts';
 import { GIT_MARKS, type FilesClient, type FilesRequest, type GitMark } from '../files/model.ts';
 
 export interface GitChange { path: string; previousPath?: string; git: GitMark[]; status: string; staged: boolean; unstaged: boolean; additions: number; deletions: number; binary: boolean }
-interface Commit { parents: string[]; branches: string[]; tags: string[]; hash: string; shortHash: string; subject: string; author: string; time: string; fileCount: number; additions: number; deletions: number }
+interface Commit { conversation_ids?: string[]; parents: string[]; branches: string[]; tags: string[]; hash: string; shortHash: string; subject: string; author: string; time: string; fileCount: number; additions: number; deletions: number }
 interface Patch { additions?: number; deletions?: number; previousPath?: string; binary?: boolean; path: string; state: 'text' | 'too_large' | 'binary'; diff?: string }
 const WORDS = {
-  en: { history: 'Git history', refresh: 'Refresh', working: 'Working tree', changed: 'changed files', files: 'files', loadingHistory: 'Loading history…',
+  en: { filter: 'Filter by conversation', clearFilter: 'Clear conversation filter', noMatches: 'No commits for this conversation.', history: 'Git history', refresh: 'Refresh', working: 'Working tree', changed: 'changed files', files: 'files', loadingHistory: 'Loading history…',
     register: 'Register a project to view its Git changes.', noCommits: 'No commits yet.', loadingFiles: 'Loading files…', noFiles: 'No changed files.',
     clean: 'Working tree is clean.', difference: 'Difference', loadingDiff: 'Loading diff…', choose: 'Choose a file to view its diff.',
     staged: 'Staged', unstaged: 'Unstaged', untracked: 'Untracked', unified: 'Unified', split: 'Side by side' },
-  ja: { history: 'Git の履歴', refresh: '更新', working: '作業中の変更', changed: '件の変更', files: 'ファイル', loadingHistory: '履歴を読み込み中…',
+  ja: { filter: '会話で絞り込む', clearFilter: '会話の絞り込みを解除', noMatches: 'この会話のコミットはありません。', history: 'Git の履歴', refresh: '更新', working: '作業中の変更', changed: '件の変更', files: 'ファイル', loadingHistory: '履歴を読み込み中…',
     register: 'プロジェクトを登録すると、Git の変更を見られます。', noCommits: 'まだコミットはありません。', loadingFiles: 'ファイルを読み込み中…', noFiles: '変更したファイルはありません。',
     clean: '作業中の変更はありません。', difference: '差分', loadingDiff: '差分を読み込み中…', choose: 'ファイルを選ぶと差分を表示します。',
     staged: 'ステージ済み', unstaged: '未ステージ', untracked: '未追跡', unified: '1 列', split: '左右' },
@@ -88,8 +92,33 @@ function readCommitEntry(file: Patch): TreeEntry {
     : /\nnew file mode /.test(file.diff ?? '') ? ['added'] : /\ndeleted file mode /.test(file.diff ?? '') ? ['deleted'] : ['modified'];
   return { path: file.path, git, additions: file.additions ?? parsed?.additions ?? 0, deletions: file.deletions ?? parsed?.deletions ?? 0 };
 }
-export function GitChanges({ client, projectId, worktree, enabled, language = 'en' }: { client: FilesClient; projectId: string; worktree?: string; enabled: boolean; language?: 'en' | 'ja' }) {
+export function GitChanges({ client, projectId, worktree, enabled, language = 'en', target = store }: { client: FilesClient; projectId: string; worktree?: string; enabled: boolean; language?: 'en' | 'ja'; target?: ScreenStore }) {
   const w: Words = WORDS[language];
+  const state = useScreenStore(target);
+  const index = useRootIndex(state);
+  const [search, setSearch] = useSearchParams();
+  const agent = search.get('agent') ?? '';
+  const names = useMemo(() => {
+    const names = new Map<string, string>();
+    for (const root of selectRoots(state)) {
+      for (const id of root.conversation_ids) names.set(id, root.name);
+      const tree = buildRootTree(root, index);
+      for (const edge of tree.edges) {
+        const node = tree.nodes.find(node => node.id === edge.target);
+        if (node?.conversationId && edge.title) names.set(node.conversationId, edge.title);
+      }
+    }
+    return names;
+  }, [state, index]);
+  const nameConversation = (id: string) => names.get(id) || conversationName(state, id) || id;
+  function toggleAgent(id: string) {
+    setSearch(previous => {
+      const next = new URLSearchParams(previous);
+      if (next.get('agent') === id) next.delete('agent'); else next.set('agent', id);
+      return next;
+    });
+  }
+
   const [entries, setEntries] = useState<GitChange[]>([]);
   const [commits, setCommits] = useState<Commit[]>([]);
   const [hash, setHash] = useState('');
@@ -134,7 +163,11 @@ export function GitChanges({ client, projectId, worktree, enabled, language = 'e
     }, error => { if (!cancelled) { setCommitError(String(error.message ?? error)); setCommitLoading(false); } });
     return () => { cancelled = true; };
   }, [client, projectId, worktree, hash, revision]);
-  const graph = useMemo(() => buildCommitGraph(commits.map(commit => ({ hash: commit.hash, parents: commit.parents ?? [] }))), [commits]);
+  const visibleCommits = useMemo(() => agent ? commits.filter(commit => commit.conversation_ids?.includes(agent)) : commits, [commits, agent]);
+  useEffect(() => {
+    if (agent) setHash(current => visibleCommits.some(commit => commit.hash === current) ? current : visibleCommits[0]?.hash ?? '');
+  }, [agent, visibleCommits]);
+  const graph = useMemo(() => buildCommitGraph(visibleCommits.map(commit => ({ hash: commit.hash, parents: commit.parents ?? [] }))), [visibleCommits]);
   const treeEntries = hash ? files.map(readCommitEntry) : entries;
   const change = !hash ? entries.find(entry => entry.path === selected) : undefined;
   const patch = hash ? files.find(file => file.path === selected) : undefined;
@@ -152,7 +185,7 @@ export function GitChanges({ client, projectId, worktree, enabled, language = 'e
     if (event.key === 'ArrowRight') { event.preventDefault(); focusFile(); return; }
     if (!['ArrowDown', 'ArrowUp'].includes(event.key)) return;
     event.preventDefault();
-    const sources = ['', ...commits.map(commit => commit.hash)];
+    const sources = ['', ...visibleCommits.map(commit => commit.hash)];
     const next = Math.max(0, Math.min(sources.length - 1, sources.indexOf(hash) + (event.key === 'ArrowDown' ? 1 : -1)));
     selectSource(sources[next]);
     historyRef.current?.querySelectorAll<HTMLButtonElement>('[data-git-source]')[next]?.focus();
@@ -177,15 +210,18 @@ export function GitChanges({ client, projectId, worktree, enabled, language = 'e
       <header className="git-pane-header"><h2>{w.history}</h2><button className="btn btn-secondary btn-sm" disabled={!enabled || loading} onClick={() => setRevision(value => value + 1)}>{w.refresh}</button></header>
       <button data-git-source className="git-working-choice" aria-pressed={!hash} onClick={() => selectSource('')}><strong>{w.working}</strong><span className="count-pill">{entries.length}</span><span className="muted-text">{w.changed}</span></button>
       {treeError && <p role="alert">{treeError}</p>}
+      {agent && <button className="btn btn-secondary btn-sm" onClick={() => toggleAgent(agent)}>{w.clearFilter}: {nameConversation(agent)}</button>}
       <section aria-label="Commits">
         {historyError && <p role="alert">{historyError}</p>}
-        {loading ? <p>{w.loadingHistory}</p> : !enabled ? <p>{w.register}</p> : !commits.length && !historyError ? <p className="muted-text">{w.noCommits}</p> : null}
-        <ul className="git-commit-list">{commits.map((value, index) => <li key={value.hash}>
+        {loading ? <p>{w.loadingHistory}</p> : !enabled ? <p>{w.register}</p> : !visibleCommits.length && !historyError ? <p className="muted-text">{agent ? w.noMatches : w.noCommits}</p> : null}
+        <ul className="git-commit-list">{visibleCommits.map((value, index) => <li key={value.hash}>
           <button data-git-source className="git-commit-choice" aria-pressed={hash === value.hash} onClick={() => selectSource(value.hash)} title={value.subject}>
             <CommitLines row={graph.rows[index]} columns={graph.columns}/>
             <span className="git-commit-copy"><span className="git-commit-subject">{(value.branches ?? []).map(name => <span key={`branch:${name}`} className="git-ref">{name}</span>)}{(value.tags ?? []).map(name => <span key={`tag:${name}`} className="git-ref git-tag">{name}</span>)}<strong>{value.subject}</strong></span>
-              <span className="git-commit-meta">{value.shortHash} · {value.author} · <time dateTime={value.time} title={value.time}>{formatWhen(value.time)}</time></span></span>
+              <span className="git-commit-meta">{value.shortHash} · {value.conversation_ids?.length ? value.conversation_ids.map(nameConversation).join(', ') : value.author} · <time dateTime={value.time} title={value.time}>{formatWhen(value.time)}</time></span></span>
           </button>
+          {!!value.conversation_ids?.length && <span className="git-conversation-badges">{value.conversation_ids.map(id =>
+            <button key={id} className="git-ref git-conversation-badge" aria-label={`${w.filter}: ${nameConversation(id)}`} title={nameConversation(id)} aria-pressed={agent === id} onClick={() => toggleAgent(id)}>{nameConversation(id)}</button>)}</span>}
         </li>)}</ul>
       </section>
     </div>

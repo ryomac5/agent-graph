@@ -204,7 +204,7 @@ export function ChangesPage(props: ChangesPageProps) {
     {project && <ProjectHeader route={project} name={getProjectName(state, projectId)} language={props.language}/>}
     <section className="page changes-page" aria-label="Project changes">
       {!!reviewable.length && <section aria-label="Agent changes"><AgentChangesPage {...props}/></section>}
-      <GitChanges client={props.client} projectId={projectId} worktree={search.get('worktree') ?? undefined} enabled={registered} language={props.language}/>
+      <GitChanges client={props.client} projectId={projectId} worktree={search.get('worktree') ?? undefined} enabled={registered} language={props.language} target={props.target}/>
     </section>
   </div>;
 }

@@ -3,14 +3,16 @@
   color-scheme: light;
   --font: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
-  --text-xs: 11px; --text-sm: 12px; --text-base: 13px; --text-md: 14px; --text-lg: 16px; --text-xl: 20px; --text-2xl: 24px;
+  /* 文字は 3 段だけ使う。補助 12px、本文 14px、見出し 15px。 */
+  --text-xs: 12px; --text-sm: 12px; --text-base: 14px; --text-md: 14px; --text-lg: 15px; --text-xl: 15px; --text-2xl: 15px;
   --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-10: 40px;
   --radius-xs: 4px; --radius-sm: 6px; --radius-md: 8px; --radius-lg: 12px; --radius-full: 999px;
   --control-xs: 22px; --control-sm: 28px; --control-md: 32px;
-  --sidebar-width: 240px; --topbar-height: 48px;
+  --sidebar-width: 240px; --topbar-height: 48px; --roots-width: 280px; --requests-width: 360px; --row-height: 32px;
 
-  --bg: #fafafb; --bg-sidebar: #f4f4f6; --surface: #ffffff; --surface-2: #f5f6f8; --surface-hover: #f0f1f4;
-  --border: #e5e6ea; --border-strong: #d3d5db; --text: #1b1c20; --text-2: #5c5f6a; --text-3: #8a8d97;
+  --bg: #f7f7f8; --bg-sidebar: #f7f7f8; --surface: #ffffff; --surface-2: #f7f7f8; --surface-hover: #efeff1; --surface-active: #ebebef;
+  --border: #e6e6e9; --border-strong: #dcdce0; --text: #1c1d21; --text-2: #5f616b; --text-3: #8b8d96;
+  --state-running: #1f9d55; --state-waiting: #e0820b; --state-idle: #a1a3ab; --state-failed: #d93a3a;
   --accent: #5b5bd6; --accent-solid: #5b5bd6; --accent-hover: #4b4bc6; --accent-soft: #efeffd; --accent-text: #4747bd; --accent-fg: #ffffff;
   --focus-ring: rgb(91 91 214 / 0.28);
   --success: #1d8049; --success-soft: #e7f5ed;
@@ -25,8 +27,9 @@
 }
 @media (prefers-color-scheme: dark) { :root:not([data-theme='light']) {
   color-scheme: dark;
-  --bg: #111215; --bg-sidebar: #0c0d0f; --surface: #17181c; --surface-2: #1d1f24; --surface-hover: #23252b;
-  --border: #272930; --border-strong: #363941; --text: #e9eaee; --text-2: #a3a6b0; --text-3: #70737d;
+  --bg: #121316; --bg-sidebar: #121316; --surface: #18191d; --surface-2: #121316; --surface-hover: #212227; --surface-active: #26272d;
+  --border: #26272d; --border-strong: #303138; --text: #e8e9ec; --text-2: #a1a3ab; --text-3: #6f717a;
+  --state-running: #3fbf7a; --state-waiting: #f0a03c; --state-idle: #6f717a; --state-failed: #f06464;
   --accent: #8484f2; --accent-solid: #5f5fde; --accent-hover: #6e6ee8; --accent-soft: #25254a; --accent-text: #a9a9fb; --accent-fg: #ffffff;
   --focus-ring: rgb(132 132 242 / 0.35);
   --success: #4fc38a; --success-soft: #142a1f;
@@ -40,8 +43,9 @@
 } }
 :root[data-theme='dark'] {
   color-scheme: dark;
-  --bg: #111215; --bg-sidebar: #0c0d0f; --surface: #17181c; --surface-2: #1d1f24; --surface-hover: #23252b;
-  --border: #272930; --border-strong: #363941; --text: #e9eaee; --text-2: #a3a6b0; --text-3: #70737d;
+  --bg: #121316; --bg-sidebar: #121316; --surface: #18191d; --surface-2: #121316; --surface-hover: #212227; --surface-active: #26272d;
+  --border: #26272d; --border-strong: #303138; --text: #e8e9ec; --text-2: #a1a3ab; --text-3: #6f717a;
+  --state-running: #3fbf7a; --state-waiting: #f0a03c; --state-idle: #6f717a; --state-failed: #f06464;
   --accent: #8484f2; --accent-solid: #5f5fde; --accent-hover: #6e6ee8; --accent-soft: #25254a; --accent-text: #a9a9fb; --accent-fg: #ffffff;
   --focus-ring: rgb(132 132 242 / 0.35);
   --success: #4fc38a; --success-soft: #142a1f;
@@ -275,3 +279,147 @@ details[open] > summary .caret { transform: rotate(90deg); }
 .outcome-chip.outcome-expired { background: transparent; color: var(--unknown); border-style: dashed; border-color: var(--unknown); }
 .outcome-chip.outcome-pending, .outcome-chip.outcome-answered { background: var(--attention-soft); color: var(--attention); border-color: var(--attention-border); }
 .outcome-chip .outcome-icon { color: inherit; }
+
+/* 画面の型。Linear と Notion の中間を目指し、余白は 4 と 8 の倍数、行の高さは 32px に揃える。 */
+body { font-size: var(--text-base); }
+h1 { font-size: var(--text-lg); font-weight: 600; letter-spacing: -0.01em; line-height: 1.4; }
+h2 { font-size: var(--text-lg); font-weight: 600; }
+h3 { font-size: var(--text-base); font-weight: 600; }
+kbd { font-size: 11px; border-bottom-width: 1px; }
+.chip-dashed, .status-unknown, .banner-readonly, .banner-unknown, .notice-unknown, .empty-mini, .unlinked-delegations, .delegation-unresolved, .message-gap { border-style: solid; border-color: var(--border); }
+.empty-state { border: 0; margin: var(--space-8) auto; padding: var(--space-8) var(--space-6); }
+.empty-state h1, .empty-state h2 { font-size: var(--text-lg); }
+.empty-row { padding: var(--space-3) var(--space-4); border: 0; color: var(--text-3); font-size: var(--text-sm); }
+
+/* 状態。小さな色の点と短い語で出す。 */
+.status { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: var(--text-2); font-size: var(--text-sm); font-weight: 400; white-space: nowrap; }
+.status-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--state-idle); }
+.status-running .status-dot { background: var(--state-running); }
+.status-waiting .status-dot { background: var(--state-waiting); }
+.status-failed .status-dot { background: var(--state-failed); }
+.status-failed .status-label { color: var(--state-failed); }
+.state-badge.status { height: auto; padding: 0; border: 0; border-radius: 0; background: none; color: var(--text-2); overflow: hidden; }
+.state-badge.status:hover { border: 0; color: var(--text); }
+.state-badge .state-detail { color: var(--text-3); }
+
+/* 骨組み */
+.sidebar { padding: var(--space-3) var(--space-2); background: var(--bg); }
+.brand { height: 32px; margin-bottom: var(--space-2); font-size: var(--text-base); }
+.brand-mark { width: 20px; height: 20px; border-radius: var(--radius-xs); box-shadow: none; }
+.nav-group a, .settings-link { min-height: var(--row-height); padding: 0 var(--space-2); gap: var(--space-2); font-weight: 400; }
+.nav-group a.active, .settings-link.active { background: var(--surface-active); box-shadow: none; font-weight: 500; }
+.nav-group a.active .icon { color: var(--text); }
+.nav-count { height: 20px; line-height: 20px; border: 0; background: transparent; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.eyebrow { text-transform: none; letter-spacing: 0; font-size: var(--text-sm); font-weight: 500; }
+.sidebar .eyebrow { padding: var(--space-4) var(--space-2) var(--space-1); }
+.sidebar-indent { flex: none; width: 20px; }
+.topbar { height: var(--topbar-height); padding: 0 var(--space-4); background: var(--surface); }
+.connection { height: auto; padding: 0; border: 0 !important; font-size: var(--text-sm); color: var(--text-2); }
+.connection-dot { width: 6px; height: 6px; background: var(--state-idle); box-shadow: none !important; }
+.connection.runner_unavailable .connection-dot { background: var(--state-waiting); }
+.connection.reconnecting .connection-dot, .connection.connecting .connection-dot { background: var(--state-idle); }
+.topbar-actions { gap: var(--space-1); }
+.topbar-actions > .btn-ghost { gap: var(--space-2); color: var(--text-3); }
+.approval-count { gap: var(--space-2); }
+.approval-count strong { border: 0; background: transparent; font-weight: 500; }
+.bell-count { background: var(--text-3); }
+
+/* 頁 */
+.page { max-width: 1120px; padding: var(--space-6) var(--space-8) var(--space-10); }
+.page-header { align-items: center; min-height: 32px; padding-bottom: var(--space-4); margin-bottom: var(--space-6); }
+.page-title { gap: var(--space-1); }
+.page-subtitle { font-size: var(--text-sm); color: var(--text-3); gap: var(--space-3); }
+.page-subtitle strong { font-weight: 500; color: var(--text-2); }
+.tabs a { padding: 0 var(--space-3); height: 40px; display: inline-flex; align-items: center; font-weight: 400; }
+.tabs a.active, .tabs a[aria-current='page'] { font-weight: 500; }
+.settings-card { box-shadow: none; }
+.settings-card label { padding: var(--space-3) var(--space-4); min-height: 56px; }
+.settings-card small { font-size: var(--text-sm); }
+.settings-page h2 { margin: var(--space-8) 0 var(--space-3); }
+
+/* 作業場。左に根の会話、中央に選んだ会話、右に依頼の流れを置く。 */
+.workspace-header { height: 48px; flex: none; display: flex; align-items: center; gap: var(--space-6); padding: 0 var(--space-4); background: var(--surface); border-bottom: 1px solid var(--border); }
+.workspace-title { display: flex; align-items: center; gap: var(--space-2); min-width: 0; max-width: 280px; font-size: var(--text-lg); }
+.workspace-title .icon { color: var(--text-3); }
+.header-tabs { align-self: stretch; margin: 0; border: 0; gap: var(--space-1); }
+.header-tabs a { height: 100%; padding: 0 var(--space-2); margin-bottom: 0; }
+.root-workspace .workspace-columns, .tree-columns { flex: 1; min-height: 0; display: grid; grid-template-areas: none; grid-template-columns: var(--roots-width) minmax(0, 1fr) var(--requests-width); }
+.root-workspace.requests-collapsed .workspace-columns { grid-template-columns: var(--roots-width) minmax(0, 1fr) 40px; }
+.workspace-roots, .workspace-requests { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
+.workspace-roots { border-right: 1px solid var(--border); }
+.workspace-requests { border-left: 1px solid var(--border); }
+.root-workspace .workspace-conversation { grid-area: auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--surface); }
+.column-header { flex: none; display: flex; align-items: center; gap: var(--space-2); height: 40px; padding: 0 var(--space-2) 0 var(--space-4); border-bottom: 0; }
+.column-header h2 { min-width: 0; font-size: var(--text-sm); font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--text-2); }
+.column-count { color: var(--text-3); font-size: var(--text-sm); }
+.requests-collapsed .workspace-requests .column-header { padding: 0; justify-content: center; }
+.workspace-roots .column-scroll, .workspace-requests .column-scroll { padding: 0 var(--space-2) var(--space-4); gap: 0; display: block; }
+.root-back { flex: none; justify-content: flex-start; height: 40px; padding: 0 var(--space-4); border-radius: 0; border-bottom: 1px solid var(--border); }
+.conversation-page { background: var(--surface); }
+.workspace-notices { background: var(--bg); }
+
+/* 1440 未満では横幅を詰め、1024 では左を細くする。 */
+@media (max-width: 1279px) { :root { --roots-width: 240px; --requests-width: 320px; } }
+@media (max-width: 860px) {
+  .root-workspace .workspace-columns, .tree-columns { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; }
+  .workspace-roots { max-height: 200px; border-right: 0; border-bottom: 1px solid var(--border); }
+  .workspace-requests { border-left: 0; border-top: 1px solid var(--border); max-height: 240px; }
+}
+
+/* 依頼の流れの頁。左に根の会話、右に依頼の木と図を置く。 */
+.tree-page { height: 100%; }
+.tree-columns { grid-template-columns: var(--roots-width) minmax(0, 1fr); }
+.tree-main { min-width: 0; min-height: 0; overflow: auto; padding: var(--space-4); display: grid; align-content: start; gap: var(--space-4); background: var(--surface); }
+.delegation-layout { grid-template-columns: minmax(280px, 360px) minmax(0, 1fr); border-radius: var(--radius-md); }
+.delegation-tree { padding: 0; display: flex; flex-direction: column; max-height: 640px; }
+.delegation-tree .column-scroll { padding: 0 var(--space-2) var(--space-3); display: block; }
+.delegation-graph { height: 640px; }
+.delegation-graph-node { width: 280px; padding: var(--space-3); display: grid; gap: var(--space-1); border-radius: var(--radius-md); font-size: var(--text-base); }
+.delegation-graph-node .delegation-select { font-weight: 600; overflow-wrap: anywhere; }
+.delegation-summary { margin-top: 0; }
+.delegation-detail { padding: var(--space-4); display: grid; gap: var(--space-3); }
+.delegation-detail-head { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
+.delegation-actions { margin: 0; }
+
+/* 会話 */
+.conv-header { padding: 0 var(--space-6); height: 48px; display: flex; flex-direction: column; justify-content: center; gap: 0; }
+.embedded .conv-header { padding: 0 var(--space-6); }
+.conv-header:has(.conv-details) { height: auto; padding-top: var(--space-2); padding-bottom: var(--space-3); gap: var(--space-2); }
+.conv-title, .embedded .conv-title { font-size: var(--text-lg); }
+.conv-title-row { gap: var(--space-3); min-height: 32px; }
+.conv-agent { color: var(--text-3); font-size: var(--text-sm); }
+.conv-details { background: var(--bg); }
+.conv-timeline-inner, .embedded .conv-timeline-inner { padding: var(--space-6); max-width: 800px; }
+.message-header time { font-size: var(--text-sm); }
+.tool-call > summary { height: var(--row-height); }
+.tool-summary { font-size: var(--text-sm); }
+.timeline-boundary.inferred::before, .timeline-boundary.inferred::after, .timeline-boundary.gap::before, .timeline-boundary.gap::after { border-top-style: solid; border-top-color: var(--border); }
+.timeline-approval.outcome-expired { border-style: solid; border-color: var(--border); }
+.composer, .embedded .composer { padding: var(--space-3) var(--space-6) var(--space-4); background: var(--surface); border-top: 0; }
+.composer > * { max-width: 800px; }
+.composer-box { box-shadow: none; border-color: var(--border-strong); }
+.composer-box.readonly { border-style: solid; border-color: var(--border); background: var(--bg); }
+.composer-hint { font-size: var(--text-sm); gap: var(--space-2); }
+.confidence { display: none; }
+.project-list:not(:has(.expanded)) { flex: 0 1 auto; }
+.status.status-running, .status.status-waiting, .status.status-failed, .status.status-idle { background: transparent; border: 0; color: var(--text-2); }
+.status.status-failed { color: var(--state-failed); }
+.settings-section { max-width: 640px; margin-top: var(--space-8); }
+.settings-section > h2 { margin-bottom: var(--space-3); }
+.settings-card-footer { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); }
+.settings-card label > span:only-child, .settings-card label > span { font-size: var(--text-base); }
+.settings-card input { width: 160px; }
+.message-header:empty { display: none; }
+.search-page .toolbar, .search-page form { align-items: end; }
+/* 同じ送り主が続く発言は時刻を隠し、指を置いたときだけ出す。 */
+.message { position: relative; }
+.message:not(.message-first) > .message-header { position: absolute; top: 0; right: 0; min-height: 0; opacity: 0; transition: opacity .12s; pointer-events: none; }
+.message-user:not(.message-first) > .message-header { right: auto; left: 0; }
+.message:not(.message-first):hover > .message-header { opacity: 1; }
+/* 狭い画面で依頼の流れを開いたときは、会話の名前を優先して残す。 */
+.conv-title, .embedded .conv-title { flex: 1 1 auto; min-width: 96px; }
+@media (max-width: 1279px) {
+  :root { --roots-width: 232px; --requests-width: 280px; }
+  .root-workspace:not(.requests-collapsed) .conv-agent, .root-workspace:not(.requests-collapsed) .state-badge .state-detail { display: none; }
+  .root-workspace:not(.requests-collapsed) .composer-controls select, .root-workspace:not(.requests-collapsed) .composer-controls input { max-width: 100%; }
+}

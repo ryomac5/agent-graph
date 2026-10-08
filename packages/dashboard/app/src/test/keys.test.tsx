@@ -33,7 +33,7 @@ function mount(path = '/') {
   return { target, client, setKeys: (value: typeof keys) => { keys = value; } };
 }
 function press(key: string, target: Element | Document = document, options = {}) { fireEvent.keyDown(target, { key, ...options }); }
-it.each([['h', '/'], ['w', '/p/demo'], ['i', '/inbox'], ['t', '/p/demo/tree'], ['c', '/p/demo/changes']])('navigates with g %s', async (key, path) => {
+it.each([['h', '/'], ['w', '/p/demo'], ['i', '/inbox'], ['t', '/p/demo'], ['c', '/p/demo/changes']])('navigates with g %s', async (key, path) => {
   mount('/p/demo');
   await act(async () => {});
   press('g'); press(key);
@@ -63,7 +63,7 @@ it('shows the current key list with ? and restores focus after dismissal', async
   mount(); await act(async () => {});
   const opener = screen.getByRole('button', { name: /Search and commands/ }); opener.focus();
   press('?', opener, { shiftKey: true });
-  const dialog = screen.getByRole('dialog', { name: 'Keyboard shortcuts' });
+  const dialog = screen.getByRole('dialog', { name: 'Shortcuts' });
   for (const key of Object.values(DEFAULT_KEYS)) expect(within(dialog).getByText(key)).toBeTruthy();
   press('Escape', document.activeElement!); expect(document.activeElement).toBe(opener);
 });
@@ -85,13 +85,13 @@ it('searches and executes commands with keyboard and opens conversations and cre
   fireEvent.change(input, { target: { value: 'console' } }); press('Enter', input);
   expect(screen.getByTestId('location').textContent).toBe('/p/demo'); expect(screen.queryByRole('dialog')).toBeNull();
   press('k', document, { metaKey: true });
-  fireEvent.change(screen.getByRole('combobox', { name: 'Search commands' }), { target: { value: 'create task' } }); press('Enter', screen.getByRole('combobox', { name: 'Search commands' }));
-  expect(screen.getByRole('form', { name: 'Create task' })).toBeTruthy();
+  fireEvent.change(screen.getByRole('combobox', { name: 'Search commands' }), { target: { value: 'new task' } }); press('Enter', screen.getByRole('combobox', { name: 'Search commands' }));
+  expect(screen.getByRole('form', { name: 'New task' })).toBeTruthy();
 });
 it('handles no matches, arrow selection and focus wrapping in the palette', async () => {
   mount(); await act(async () => {}); press('k', document, { metaKey: true });
   const input = screen.getByRole('combobox', { name: 'Search commands' });
-  fireEvent.change(input, { target: { value: 'not a command' } }); expect(screen.getByText('No commands found')).toBeTruthy();
+  fireEvent.change(input, { target: { value: 'not a command' } }); expect(screen.getByText('No commands')).toBeTruthy();
   press('Enter', input); expect(screen.getByRole('dialog')).toBeTruthy();
   fireEvent.change(input, { target: { value: 'go to' } }); press('ArrowDown', input); press('Enter', input);
   expect(screen.getByTestId('location').textContent).toBe('/p/demo');
@@ -112,13 +112,13 @@ it('answers a named approval from the palette on any page', async () => {
 it('saves remapped keys through config, applies immediately and rejects duplicates', async () => {
   const { client } = mount('/settings'); await act(async () => {});
   fireEvent.change(screen.getByLabelText('keys · command'), { target: { value: 'Cmd+P' } });
-  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save keyboard shortcuts' })));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save' })));
   expect(client.command).toHaveBeenCalledWith('settings.write', { store: 'config', patch: { keys: { ...DEFAULT_KEYS, command: 'Cmd+P' } } });
   press('k', document, { metaKey: true }); expect(screen.queryByRole('dialog')).toBeNull();
   press('p', document, { metaKey: true }); expect(screen.getByRole('dialog')).toBeTruthy();
   press('Escape', document.activeElement!);
   fireEvent.change(screen.getByLabelText('keys · command'), { target: { value: 'j' } });
-  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save keyboard shortcuts' })));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save' })));
   expect(screen.getByRole('alert').textContent).toBe('Duplicate key binding');
   expect(client.command.mock.calls.filter(([name]) => name === 'settings.write')).toHaveLength(1);
 });

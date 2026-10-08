@@ -32,7 +32,7 @@ it('renders the file list, numbered additions and removals, attribution and acce
   expect(within(diff).getByRole('button', { name: 'Comment on code.txt old line 2' }).textContent).toBe('old');
   expect(diff.querySelector('.diff-add')?.textContent).toContain('2+new');
   expect(diff.querySelector('.diff-remove')?.textContent).toContain('2−old');
-  const verification = screen.getByRole('region', { name: 'Acceptance verification' });
+  const verification = screen.getByRole('region', { name: 'Verification' });
   expect(within(verification).getByText('Passed', { exact: true })).toBeTruthy();
   fireEvent.click(within(verification).getByText('test -f code.txt · Passed'));
   expect(within(verification).getByText('OK')).toBeTruthy();
@@ -55,7 +55,7 @@ it.each(['confirmed', 'inferred', 'joint', 'unknown'])('shows %s attribution onc
 
 it('switches unified and side by side layouts and keeps line comments on their side', () => {
   setup();
-  fireEvent.click(screen.getByRole('button', { name: 'Side by side' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Split' }));
   expect(screen.queryByRole('table', { name: 'code.txt unified diff' })).toBeNull();
   const split = screen.getByRole('table', { name: 'code.txt split diff' });
   expect(within(split).getByText('Before')).toBeTruthy();
@@ -84,7 +84,7 @@ it('sends a finding cmd pinned to the artifact and selected range', async () => 
   fireEvent.click(screen.getByRole('button', { name: 'Comment on code.txt new line 3' }), { shiftKey: true });
   fireEvent.change(screen.getByRole('textbox', { name: 'Finding' }), { target: { value: 'Fix the range' } });
   fireEvent.change(screen.getByLabelText('Severity'), { target: { value: 'high' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Add finding' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Add' }));
   await waitFor(() => expect(client.command).toHaveBeenCalledWith('review.add_finding', { artifactId: 'a1', file: 'code.txt', side: 'new', startLine: 2, endLine: 3, body: 'Fix the range', severity: 'high' }));
   expect(await screen.findByRole('status')).toBeTruthy();
 });
@@ -93,10 +93,10 @@ it('returns selected open findings together and exposes reverify, approve, revie
   const { client } = setup({ findings: [finding('one'), finding('two', 'needs_check'), finding('sent', 'sent')] });
   expect((screen.getByLabelText('Select finding sent') as HTMLInputElement).disabled).toBe(true);
   fireEvent.click(screen.getByLabelText('Select finding one')); fireEvent.click(screen.getByLabelText('Select finding two'));
-  fireEvent.click(screen.getByRole('button', { name: 'Return selected to agent' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Send' }));
   await waitFor(() => expect(client.command).toHaveBeenCalledWith('review.send', { artifactId: 'a1', findingIds: ['one', 'two'] }));
-  await waitFor(() => expect((screen.getByRole('button', { name: 'Reverify' }) as HTMLButtonElement).disabled).toBe(false));
-  for (const [label, command] of [['Reverify', 'review.reverify'], ['Approve', 'review.approve'], ['Start reviewer', 'review.start']]) {
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Test' }) as HTMLButtonElement).disabled).toBe(false));
+  for (const [label, command] of [['Test', 'review.reverify'], ['Approve', 'review.approve'], ['Review', 'review.start']]) {
     fireEvent.click(screen.getByRole('button', { name: label }));
     await waitFor(() => expect(client.command).toHaveBeenCalledWith(command, { artifactId: 'a1' }));
     await waitFor(() => expect((screen.getByRole('button', { name: label }) as HTMLButtonElement).disabled).toBe(false));
@@ -108,7 +108,7 @@ it('shows stale approval reason, both hashes and patch differences, then revokes
     approvals: [{ id: 'approval', artifact_id: 'a1', patch_hash: 'hash1', state: 'stale', reason: 'artifact patch_hash changed',
       request: JSON.stringify({ result: { verdict: 'approve', comment: 'Reviewer approved original version' }, reviewer: { provider: 'claude', model: 'sonnet' } }) }] });
   const approval = screen.getByRole('article', { name: 'Approval approval' });
-  expect(within(approval).getByText('Stale · Invalid approval')).toBeTruthy();
+  expect(within(approval).getByText('Outdated')).toBeTruthy();
   expect(within(approval).queryByText('artifact patch_hash changed')).toBeNull();
   expect(within(approval).getAllByText('Approved for version 1. Version 2 changed the patch, so this approval no longer applies.')).toHaveLength(1);
   expect(within(approval).getByText('Approved: hash1')).toBeTruthy();
@@ -116,7 +116,7 @@ it('shows stale approval reason, both hashes and patch differences, then revokes
   expect(within(approval).getByRole('table', { name: 'Patch comparison split diff' })).toBeTruthy();
   expect(within(approval).getByText('Reviewer: claude sonnet · approve')).toBeTruthy();
   expect(within(approval).getByText('Reviewer approved original version')).toBeTruthy();
-  fireEvent.click(within(approval).getByRole('button', { name: 'Revoke approval' }));
+  fireEvent.click(within(approval).getByRole('button', { name: 'Revoke' }));
   await waitFor(() => expect(client.command).toHaveBeenCalledWith('review.revoke', { approvalId: 'approval' }));
 });
 
@@ -136,7 +136,7 @@ it('switches versions, clears draft anchors and compares saved patches without a
 it('surfaces command failures and prevents commands while disconnected', async () => {
   const { client, target } = setup();
   client.command.mockResolvedValueOnce({ type: 'ack', cmd_id: 'cmd', ok: false, error: 'Worktree differs from fixed artifact' } as Awaited<ReturnType<typeof client.command>>);
-  fireEvent.click(screen.getByRole('button', { name: 'Reverify' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Test' }));
   expect((await screen.findByRole('alert')).textContent).toBe('Worktree differs from fixed artifact');
   act(() => target.setConnection('runner_unavailable'));
   expect((screen.getByRole('button', { name: 'Approve' }) as HTMLButtonElement).disabled).toBe(true);
@@ -166,7 +166,7 @@ it('parses header-like content, multiple hunks, deleted and binary files, and co
 it('blocks duplicate return before projection updates, but allows a finding remapped to the next version', async () => {
   const { client, target } = setup({ findings: [finding('one')] });
   fireEvent.click(screen.getByLabelText('Select finding one'));
-  fireEvent.click(screen.getByRole('button', { name: 'Return selected to agent' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Send' }));
   await waitFor(() => expect((screen.getByLabelText('Select finding one') as HTMLInputElement).disabled).toBe(true));
   expect(client.command).toHaveBeenCalledTimes(1);
   act(() => target.setSnapshot({ seq: 2, generation: 1, projection: {
@@ -176,7 +176,7 @@ it('blocks duplicate return before projection updates, but allows a finding rema
   } }));
   expect((screen.getByLabelText('Select finding one') as HTMLInputElement).disabled).toBe(false);
   fireEvent.click(screen.getByLabelText('Select finding one'));
-  fireEvent.click(screen.getByRole('button', { name: 'Return selected to agent' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Send' }));
   await waitFor(() => expect(client.command).toHaveBeenCalledWith('review.send', { artifactId: 'a2', findingIds: ['one'] }));
 });
 
@@ -196,7 +196,7 @@ it('shows failed acceptance output, scope violations, real reviewer assignment a
   expect(screen.getByText('Reviewer: claude sonnet (anthropic) · reject')).toBeTruthy();
   fireEvent.click(screen.getByText('exit 1 · Failed'));
   expect(screen.getByText('Acceptance failed')).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: 'Verify finding' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Resolve' }));
   await waitFor(() => expect(client.command).toHaveBeenCalledWith('review.finding_state', { findingId: 'fixed', state: 'verified' }));
 });
 
@@ -237,7 +237,7 @@ it('clears accepted commands only when their results arrive, including a result 
     act(() => target.setSnapshot({ seq: 4, generation: 1, projection: { ...target.getSnapshot().projection, approvals: [{ ...approval, state: 'revoked' }] } }));
     return { type: 'ack', cmd_id: 'cmd', ok: true, result: { ...approval, state: 'revoked' } };
   });
-  fireEvent.click(screen.getByRole('button', { name: 'Revoke approval' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Revoke' }));
   await waitFor(() => expect(screen.queryByRole('status')).toBeNull());
 });
 
@@ -245,7 +245,7 @@ it('clears command notice when version changes and labels the selection exactly 
   setup({ artifacts: [artifact, { ...artifact, id: 'a2', version: 2, previous_artifact_id: 'a1', patch_hash: 'hash2', diff: NEXT }] });
   const version = screen.getByRole('combobox', { name: 'Version' }) as HTMLSelectElement;
   expect(version.selectedOptions[0].textContent).toContain('Version 2');
-  fireEvent.click(screen.getByRole('button', { name: 'Reverify' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Test' }));
   await screen.findByRole('status');
   fireEvent.change(version, { target: { value: 'a1' } });
   expect(screen.queryByRole('status')).toBeNull();
@@ -255,7 +255,7 @@ it('waits for the requested revalidation result rather than the previous verific
   const { client, target } = setup();
   const verification = { passed: false, results: [{ command: 'exit 1', exitCode: 1 }] };
   client.command.mockResolvedValueOnce({ type: 'ack', cmd_id: 'cmd', ok: true, result: { artifactId: 'a1', verification } } as Awaited<ReturnType<typeof client.command>>);
-  fireEvent.click(screen.getByRole('button', { name: 'Reverify' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Test' }));
   await screen.findByRole('status');
   act(() => target.setSnapshot({ seq: 2, generation: 1, projection: { ...target.getSnapshot().projection, messages: [{ id: 'unrelated' }] } }));
   expect(screen.getByRole('status')).toBeTruthy();
@@ -270,7 +270,7 @@ it('waits for the command result fact even when the projected verification is un
   client.command.mockResolvedValueOnce({ type: 'ack', cmd_id: 'cmd', ok: true, result: {
     artifactId: 'a1', verification: JSON.parse(artifact.verification), review_result_seq: 3,
   } } as Awaited<ReturnType<typeof client.command>>);
-  fireEvent.click(screen.getByRole('button', { name: 'Reverify' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Test' }));
   await screen.findByRole('status');
   act(() => target.setSnapshot({ seq: 2, generation: 1, projection: target.getSnapshot().projection }));
   expect(screen.getByRole('status')).toBeTruthy();
@@ -282,7 +282,7 @@ it('clears a reviewer notice when the stored approval has already become stale',
   const { client, target } = setup();
   const approval = { id: 'review-result', artifact_id: 'a1', state: 'approved', patch_hash: 'hash1' };
   client.command.mockResolvedValueOnce({ type: 'ack', cmd_id: 'cmd', ok: true, result: approval } as Awaited<ReturnType<typeof client.command>>);
-  fireEvent.click(screen.getByRole('button', { name: 'Start reviewer' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Review' }));
   await screen.findByRole('status');
   act(() => target.setSnapshot({ seq: 2, generation: 1, projection: {
     ...target.getSnapshot().projection, approvals: [{ ...approval, state: 'stale' }],
@@ -294,7 +294,7 @@ it('clears a return notice after the finding has already moved to the corrected 
   const { client, target } = setup({ findings: [finding('one')] });
   client.command.mockResolvedValueOnce({ type: 'ack', cmd_id: 'cmd', ok: true, result: { runId: 'resumed', findingIds: ['one'] } } as Awaited<ReturnType<typeof client.command>>);
   fireEvent.click(screen.getByLabelText('Select finding one'));
-  fireEvent.click(screen.getByRole('button', { name: 'Return selected to agent' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Send' }));
   await screen.findByRole('status');
   act(() => target.setSnapshot({ seq: 2, generation: 1, projection: {
     ...target.getSnapshot().projection, findings: [{ ...finding('one', 'fixed'), artifact_id: 'a2', version: 2 }],
@@ -317,7 +317,7 @@ it('keeps long acceptance commands inside the wrapping verification section', ()
   document.head.append(style);
   const command = 'node ' + 'very-long-path/'.repeat(30) + 'test.mjs';
   setup({ artifacts: [{ ...artifact, verification: { passed: true, results: [{ command, exitCode: 0 }] } }] });
-  const verification = screen.getByRole('region', { name: 'Acceptance verification' });
+  const verification = screen.getByRole('region', { name: 'Verification' });
   expect(verification.classList.contains('acceptance-verification')).toBe(true);
   expect(within(verification).getByText(command + ' · Passed')).toBeTruthy();
   const chip = within(verification).getByText('Passed', { exact: true });

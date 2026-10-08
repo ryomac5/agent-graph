@@ -5,7 +5,6 @@ import { MemoryRouter } from 'react-router';
 import { createStore, type Row } from '../lib/store.ts';
 import { createProjectMatcher, resolveProjectId } from '../lib/projects.ts';
 import { HomePage } from '../pages/home/HomePage.tsx';
-import { TreePage } from '../pages/tree/TreePage.tsx';
 import { buildDelegationTree } from '../pages/tree/model.ts';
 import { WorkspacePage } from '../pages/workspace/WorkspacePage.tsx';
 import { ChangesPage } from '../pages/changes/ChangesPage.tsx';
@@ -14,10 +13,6 @@ import { buildOverview } from '../components/overview.ts';
 import { summarizeDelegation } from '../components/DelegationLines.tsx';
 import { conversationTitle } from '../lib/format.ts';
 
-vi.mock('@xyflow/react', () => ({
-  ReactFlow: ({ nodes }: { nodes: { id: string; data: { node: { label: string } } }[] }) => <div>{nodes.map(node => <span key={node.id}>{node.data.node.label}</span>)}</div>,
-  Handle: () => null, Background: () => null, Controls: () => null, Position: { Left: 'left', Right: 'right' },
-}));
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 const HASH = '1e1eb3a5a3733554ff2741dd9174456e26a1b887216b1157d29d6903611c886b';
@@ -104,23 +99,23 @@ it('shows roots and only their running descendants on the overview', () => {
  const section = screen.getByRole('region', { name: 'agent-graph' });
  expect(section.querySelector('.root-row')!.textContent).toContain('Unrelated terminal');
  expect(within(section).getByRole('link', { name: /Terminal root/ })).toBeTruthy();
- expect(within(section).getByRole('button', { name: 'Codex gpt-6.1-sol · implement · running' })).toBeTruthy();
+ expect(within(section).getByRole('button', { name: /GPT-6.1 Sol · implement · Running$/ })).toBeTruthy();
  expect(within(section).queryByText('Review the overview')).toBeNull(); expect(screen.queryByText('External conversations')).toBeNull();
- expect(screen.getByText('Unattended').closest('details')!.open).toBe(false);
+ expect(screen.getByText('Background').closest('details')!.open).toBe(false);
 });
 it('filters root views and Changes by a display-name route', () => {
  const target = setup({ artifacts: [{ id: 'artifact', run_id: 'child:2', version: 1, repository_id: HASH, patch_hash: 'h', diff: 'diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-old\n+new\n' }, { id: 'foreign', run_id: 'probe:1', version: 1, repository_id: 'other-hash', patch_hash: 'f', diff: '' }] });
- render(<MemoryRouter><TreePage project="agent-graph" target={target}/></MemoryRouter>);
- expect(screen.queryByLabelText('Delegation graph')).toBeNull(); fireEvent.click(screen.getByRole('button', { name: /Terminal root/ }));
- expect(within(screen.getByRole('region', { name: 'Delegation tree' })).getByText('Implement the overview')).toBeTruthy(); cleanup();
+ vi.stubGlobal('innerWidth', 1440); render(<MemoryRouter><WorkspacePage project="agent-graph" target={target} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: true })) }}/></MemoryRouter>);
+ fireEvent.click(screen.getByRole('button', { name: /Terminal root/ }));
+ expect(within(screen.getByRole('complementary', { name: 'Requests' })).getByText('Implement the overview')).toBeTruthy(); cleanup(); localStorage.clear();
  vi.stubGlobal('innerWidth', 1024); render(<MemoryRouter><WorkspacePage project="agent-graph" target={target} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: true })) }}/></MemoryRouter>);
- expect(screen.getByRole('heading', { name: 'agent-graph' })).toBeTruthy(); expect(within(screen.getByRole('region', { name: 'Root conversations' })).getByRole('button', { name: /Terminal root/ })).toBeTruthy(); cleanup();
+ expect(screen.getByRole('heading', { name: 'agent-graph' })).toBeTruthy(); expect(within(screen.getByRole('region', { name: 'Conversations' })).getByRole('button', { name: /Terminal root/ })).toBeTruthy(); cleanup();
  render(<MemoryRouter><ChangesPage project="agent-graph" target={target} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: true })) }}/></MemoryRouter>); expect(screen.getByRole('button', { name: 'Comment on a.ts new line 1' })).toBeTruthy(); expect(screen.queryByText(/foreign/)).toBeNull();
 });
 it('keeps reason codes out of root rows and translates evidence reasons', async () => {
- const { reasonText } = await import('../lib/reasons.ts'); expect(reasonText('unconfirmed_end_evidence')).toBe('No end recorded'); expect(reasonText('missing_turn_evidence')).toBe('No turn evidence'); expect(reasonText('legacy ended inference: process_exit')).toBe('Ended by process exit (legacy)'); expect(reasonText('some_new_code')).toBe('Some new code'); expect(reasonText('Observation interrupted')).toBe('Observation interrupted');
+ const { reasonText } = await import('../lib/reasons.ts'); expect(reasonText('unconfirmed_end_evidence')).toBe('No end recorded'); expect(reasonText('missing_turn_evidence')).toBe('No turn record'); expect(reasonText('legacy ended inference: process_exit')).toBe('Ended by process exit (legacy)'); expect(reasonText('some_new_code')).toBe('Some new code'); expect(reasonText('Observation interrupted')).toBe('Observation interrupted');
  const target = setup({ runs: [...projection().runs!.filter(run => run.id !== 'lonely:1'), { id: 'lonely:1', conversation_id: 'lonely', generation: 1, state: 'unknown', reason: 'legacy ended inference: process_exit', last_evidence_ts: EARLIER }] });
- render(<MemoryRouter><HomePage target={target}/></MemoryRouter>); const row = screen.getByRole('link', { name: /Unrelated terminal/ }); expect(row.querySelector('.root-state')!.textContent).toBe('unknown'); expect(document.body.textContent).not.toContain('legacy ended inference');
+ render(<MemoryRouter><HomePage target={target}/></MemoryRouter>); const row = screen.getByRole('link', { name: /Unrelated terminal/ }); expect(row.querySelector('.root-state')!.textContent).toBe('Unknown'); expect(document.body.textContent).not.toContain('legacy ended inference');
 });
 it('roots the tree only at tasks that delegated, names untitled conversations and folds repeated runs into attempts', () => {
   const state = setup({
@@ -143,21 +138,22 @@ it('roots the tree only at tasks that delegated, names untitled conversations an
   expect(conversationTitle({ provider: 'codex' }, undefined)).toBe('Codex');
 });
 
-it('shows no graph before root selection and switches between root trees', () => {
+it('switches the request flow between roots in the workspace', () => {
  const target = setup(); const snapshot = target.getSnapshot(); target.setSnapshot({ ...snapshot, projection: { ...snapshot.projection,
  roots: [...snapshot.projection.roots, { id: 'second', name: 'Second root', project: HASH, state: 'ended', last_activity_ts: EARLIER, conversation_ids: ['second'], running_children: 0, total_children: 1 }],
  conversations: [...snapshot.projection.conversations, { id: 'second-child', provider: 'claude', state: 'ended' }],
  relations: [...snapshot.projection.relations, { id: 'second-child-edge', type: 'delegated', from_id: 'second', to_id: 'second-child', evidence: { agentType: 'review', description: 'Second review' } }] } });
- render(<MemoryRouter><TreePage project="agent-graph" target={target}/></MemoryRouter>);
- expect(screen.queryByLabelText('Delegation graph')).toBeNull(); fireEvent.click(screen.getByRole('button', { name: /Terminal root/ }));
- expect(within(screen.getByLabelText('Delegation graph')).getByText('Codex gpt-6.1-sol · implement · running')).toBeTruthy();
- fireEvent.click(screen.getByRole('button', { name: /Second root/ })); expect(within(screen.getByLabelText('Delegation graph')).queryByText('Codex gpt-6.1-sol · implement · running')).toBeNull(); expect(screen.getByText('Second review')).toBeTruthy();
+ vi.stubGlobal('innerWidth', 1440); render(<MemoryRouter><WorkspacePage project="agent-graph" target={target} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: true })) }}/></MemoryRouter>);
+ const flow = screen.getByRole('complementary', { name: 'Requests' });
+ fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getByRole('button', { name: /Terminal root/ }));
+ expect(within(flow).getByText('GPT-6.1 Sol · implement')).toBeTruthy();
+ fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getByRole('button', { name: /Second root/ })); expect(within(flow).queryByText('GPT-6.1 Sol · implement')).toBeNull(); expect(within(flow).getByText('Second review')).toBeTruthy();
 });
 it('lists projected roots with child counts and keeps unknown evidence out of a separate banner', () => {
  vi.stubGlobal('innerWidth', 1024); render(<MemoryRouter><WorkspacePage project="agent-graph" target={setup()} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: true })) }}/></MemoryRouter>);
- const roots = screen.getByRole('region', { name: 'Root conversations' }); expect(roots.querySelectorAll('.root-row')).toHaveLength(3); expect(within(roots).getByText('1 running · 2 total')).toBeTruthy(); expect(screen.queryByText(/Unknown — Last evidence/)).toBeNull();
+ const roots = screen.getByRole('region', { name: 'Conversations' }); expect(roots.querySelectorAll('.root-row')).toHaveLength(3); expect(within(roots).getByText('1 agent running')).toBeTruthy(); expect(screen.queryByText(/Unknown — Last evidence/)).toBeNull();
 });
 it('lists old roots as well as current roots without listing unrelated child conversations', () => {
  vi.stubGlobal('innerWidth', 1024); render(<MemoryRouter><WorkspacePage project="agent-graph" target={setup()} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: true })) }}/></MemoryRouter>);
- const roots = screen.getByRole('region', { name: 'Root conversations' }); expect(within(roots).getByRole('button', { name: /Unrelated terminal/ })).toBeTruthy(); expect(within(roots).getByRole('button', { name: /Old terminal/ })).toBeTruthy(); expect(within(roots).queryByText('Codex child')).toBeNull();
+ const roots = screen.getByRole('region', { name: 'Conversations' }); expect(within(roots).getByRole('button', { name: /Unrelated terminal/ })).toBeTruthy(); expect(within(roots).getByRole('button', { name: /Old terminal/ })).toBeTruthy(); expect(within(roots).queryByText('Codex child')).toBeNull();
 });

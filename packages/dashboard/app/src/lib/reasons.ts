@@ -4,11 +4,11 @@ const REASONS: Record<string, string> = {
   unconfirmed_state_evidence: 'State not confirmed',
   unconfirmed_end_evidence: 'No end recorded',
   missing_failure_cause: 'Failure cause not recorded',
-  missing_turn_evidence: 'No turn evidence',
+  missing_turn_evidence: 'No turn record',
   archive_resume: 'Resumed from archive',
   no_updates: 'No recent updates',
   process_list_failed: 'Process check failed',
-  restart: 'Runner restarted',
+  restart: 'Restarted',
   update: 'Runner updated',
   host_stream_closed_without_exit: 'Host closed without exit code',
   host_or_request_unavailable: 'Host or request unavailable',
@@ -20,7 +20,7 @@ const LEGACY_ENDS: Record<string, string> = {
   process_exit: 'Ended by process exit (legacy)',
   idle: 'Ended while idle (legacy)',
   explicit: 'Ended explicitly (legacy)',
-  'missing evidence': 'Ended without evidence (legacy)',
+  'missing evidence': 'Ended',
 };
 
 /** 理由の符号を読める文にする。表にない機械の語は語の区切りを空白にして、先頭を大文字にする。 */

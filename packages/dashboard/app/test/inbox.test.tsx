@@ -30,15 +30,15 @@ it('orders all projects oldest first, displays commands, expanded diffs, wait an
   expect(within(list).getAllByRole('listitem').map(item => item.dataset.approvalId)).toEqual(['old', 'new']);
   expect(screen.getAllByLabelText('Full command')[0].textContent).toBe('printf "full command"\necho next');
   expect(screen.getAllByLabelText('Expanded file diff')[0].textContent).toBe('-old\n+new');
-  expect(screen.getAllByText(/Waiting:/)[0].textContent).toBe('Waiting: 42s');
-  fireEvent.click(screen.getAllByText('Conversation tail')[0]);
+  expect(screen.getAllByText(/Waiting/)[0].textContent).toBe('Waiting 42s');
+  fireEvent.click(screen.getAllByText('Recent messages')[0]);
   expect(screen.getAllByText('Please review this change.')).toHaveLength(2);
 });
-it.each([['Allow', 'accept'], ['Deny', 'decline'], ['Allow for this conversation', 'acceptForSession']])('answers %s with the offered decision', async (label, decision) => {
+it.each([['Allow', 'accept'], ['Deny', 'decline'], ['Always allow', 'acceptForSession']])('answers %s with the offered decision', async (label, decision) => {
   const { client } = setup([approval('a')]);
   fireEvent.click(screen.getByRole('button', { name: label }));
   await waitFor(() => expect(client.command).toHaveBeenCalledWith('answer', { approvalId: 'a', decision }));
-  await screen.findByText('Answer sent; waiting for resolution.');
+  await screen.findByText('Sent');
   expect((screen.getByRole('button', { name: label }) as HTMLButtonElement).disabled).toBe(true);
 });
 it('answers selected requests once each and excludes expired requests', async () => {
@@ -51,7 +51,7 @@ it('answers selected requests once each and excludes expired requests', async ()
 });
 it('resumes expired requests with a non-empty prompt without answering them', async () => {
   const { client } = setup([approval('expired', { state: 'expired' })]);
-  fireEvent.click(screen.getByRole('button', { name: 'Resume run' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
   await waitFor(() => expect(client.command).toHaveBeenCalledWith('resume', { conversationId: 'conversation', input: { text: 'Continue from where you stopped.' } }));
   expect(screen.queryByRole('button', { name: 'Allow' })).toBeNull();
 });
@@ -65,15 +65,15 @@ it('uses selected rows for shortcuts and ignores text inputs, modifiers and repe
   const { client } = setup([approval('a'), approval('b')]);
   fireEvent.click(screen.getByLabelText('Select all pending'));
   fireEvent.keyDown(screen.getByLabelText('Select a'), { key: 'a' });
-  fireEvent.keyDown(screen.getByRole('region', { name: 'Approval inbox' }), { key: 'a', ctrlKey: true });
-  fireEvent.keyDown(screen.getByRole('region', { name: 'Approval inbox' }), { key: 'a', repeat: true });
+  fireEvent.keyDown(screen.getByRole('region', { name: 'Approvals' }), { key: 'a', ctrlKey: true });
+  fireEvent.keyDown(screen.getByRole('region', { name: 'Approvals' }), { key: 'a', repeat: true });
   expect(client.command).not.toHaveBeenCalled();
-  fireEvent.keyDown(screen.getByRole('region', { name: 'Approval inbox' }), { key: 's' });
+  fireEvent.keyDown(screen.getByRole('region', { name: 'Approvals' }), { key: 's' });
   await waitFor(() => expect(client.command).toHaveBeenCalledTimes(2));
 });
 it('does not invent conversation permissions or expire a long waiting approval', async () => {
   const { client } = setup([approval('a', { available_decisions: ['allow', 'deny'], requested_ts: '2020-01-01T00:00:00Z' })]);
-  expect((screen.getByRole('button', { name: 'Allow for this conversation' }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole('button', { name: 'Always allow' }) as HTMLButtonElement).disabled).toBe(true);
   expect(within(screen.getByRole('list', { name: 'Pending approvals' })).getAllByRole('listitem')).toHaveLength(1);
   await expect(answerApproval(client, approval('a', { available_decisions: ['allow', 'deny'] }), 'session')).rejects.toThrow('not available');
 });

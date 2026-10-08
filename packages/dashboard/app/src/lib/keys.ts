@@ -1,7 +1,7 @@
 export const DEFAULT_KEYS = { command: 'Cmd+K', home: 'g h', workspace: 'g w', inbox: 'g i', tree: 'g t', changes: 'g c', next: 'j', previous: 'k', allow: 'a', deny: 'd', interrupt: 'Esc', help: '?' };
 export type KeyAction = keyof typeof DEFAULT_KEYS;
 export type KeyBindings = Record<KeyAction, string>;
-export const KEY_LABELS: Record<KeyAction, string> = { command: 'Search and commands', home: 'Go to Overview', workspace: 'Go to workspace', inbox: 'Go to approval inbox', tree: 'Go to delegation tree', changes: 'Go to Changes', next: 'Next row', previous: 'Previous row', allow: 'Allow approval', deny: 'Deny approval', interrupt: 'Interrupt run', help: 'Keyboard shortcuts' };
+export const KEY_LABELS: Record<KeyAction, string> = { command: 'Search and commands', home: 'Go to Overview', workspace: 'Go to workspace', inbox: 'Go to approvals', tree: 'Go to requests', changes: 'Go to Changes', next: 'Next row', previous: 'Previous row', allow: 'Allow approval', deny: 'Deny approval', interrupt: 'Interrupt run', help: 'Keyboard shortcuts' };
 export const SEQUENCE_TIMEOUT_MS = 1000;
 function normalizeStroke(value: string): string {
   const parts = value.toLowerCase().split('+').map(part => part.trim());

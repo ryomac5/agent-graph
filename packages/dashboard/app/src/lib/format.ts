@@ -12,7 +12,8 @@ function object(value: unknown): Row {
 function text(value: unknown): string { return typeof value === 'string' ? value : ''; }
 
 export function readTitle(value: unknown): string {
-  const name = text(value).trim();
+  // 名前に紛れた XML 風の札は外し、中の語だけを残す。
+  const name = text(value).replace(/<\/?[a-z][\w-]*>/gi, ' ').replace(/\s+/g, ' ').trim();
   return /^Untitled(?: task| conversation)?$/i.test(name) ? '' : name;
 }
 
@@ -59,8 +60,59 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 function formatLabelTime(value: unknown, now: number): string {
   const time = new Date(text(value));
   if (!Number.isFinite(time.getTime())) return '';
-  const clock = `${String(time.getHours()).padStart(2, '0')}:${String(time.getMinutes()).padStart(2, '0')}`;
+  const clock = `${time.getHours()}:${String(time.getMinutes()).padStart(2, '0')}`;
   return new Date(now).toDateString() === time.toDateString() ? clock : `${MONTHS[time.getMonth()]} ${time.getDate()} ${clock}`;
+}
+function parseTime(value: unknown): Date | undefined {
+  const time = value instanceof Date ? value : typeof value === 'string' || typeof value === 'number' ? new Date(value) : undefined;
+  return time && Number.isFinite(time.getTime()) ? time : undefined;
+}
+/** 時刻は短く出す。今日なら「8:45」、昨日なら「Yesterday 8:45」、それより前は「Oct 6」とする。 */
+export function formatWhen(value: unknown, language: 'en' | 'ja' = 'en', now = Date.now()): string {
+  const time = parseTime(value);
+  if (!time) return '';
+  const clock = `${time.getHours()}:${String(time.getMinutes()).padStart(2, '0')}`;
+  const today = new Date(now);
+  if (today.toDateString() === time.toDateString()) return clock;
+  const yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
+  if (yesterday.toDateString() === time.toDateString()) return language === 'ja' ? `昨日 ${clock}` : `Yesterday ${clock}`;
+  const sameYear = today.getFullYear() === time.getFullYear();
+  if (language === 'ja') return `${sameYear ? '' : `${time.getFullYear()}年`}${time.getMonth() + 1}月${time.getDate()}日`;
+  return `${MONTHS[time.getMonth()]} ${time.getDate()}${sameYear ? '' : `, ${time.getFullYear()}`}`;
+}
+/** 経過は「3 min ago」の形で出す。1 日を超えたら formatWhen に任せる。 */
+export function formatAgo(value: unknown, language: 'en' | 'ja' = 'en', now = Date.now()): string {
+  const time = parseTime(value);
+  if (!time) return '';
+  const seconds = Math.max(0, Math.floor((now - time.getTime()) / 1000));
+  const ja = language === 'ja';
+  if (seconds < 60) return ja ? 'たった今' : 'just now';
+  if (seconds < 3600) return ja ? `${Math.floor(seconds / 60)} 分前` : `${Math.floor(seconds / 60)} min ago`;
+  if (seconds < 86400) return ja ? `${Math.floor(seconds / 3600)} 時間前` : `${Math.floor(seconds / 3600)} h ago`;
+  return formatWhen(time, language, now);
+}
+const MODEL_FAMILIES: Record<string, string> = { gpt: 'GPT', claude: 'Claude', o: 'o' };
+/** モデル名は人の読む形にする。「claude-opus-5-5」は「Claude Opus 5.5」、「gpt-6.1-sol」は「GPT-6.1 Sol」とする。 */
+export function modelName(model: string): string {
+  const value = model.trim();
+  if (!value) return '';
+  const claude = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?$/i.exec(value);
+  if (claude) return `Claude ${claude[1][0].toUpperCase()}${claude[1].slice(1)} ${claude[2]}${claude[3] ? `.${claude[3]}` : ''}`;
+  const claudeOld = /^claude-(\d+)(?:-(\d))?-([a-z]+)(?:-\d{8})?$/i.exec(value);
+  if (claudeOld) return `Claude ${claudeOld[3][0].toUpperCase()}${claudeOld[3].slice(1)} ${claudeOld[1]}${claudeOld[2] ? `.${claudeOld[2]}` : ''}`;
+  const claudeBare = /^claude-([a-z]+)$/i.exec(value);
+  if (claudeBare) return `Claude ${claudeBare[1][0].toUpperCase()}${claudeBare[1].slice(1)}`;
+  const gpt = /^gpt-([\d.]+[a-z]?)(?:-(.+))?$/i.exec(value);
+  if (gpt) return `GPT-${gpt[1]}${gpt[2] ? ' ' + gpt[2].split('-').map(part => part[0].toUpperCase() + part.slice(1)).join(' ') : ''}`;
+  const family = /^([a-z]+)-(.+)$/i.exec(value);
+  if (family && MODEL_FAMILIES[family[1].toLowerCase()]) return `${MODEL_FAMILIES[family[1].toLowerCase()]} ${family[2]}`;
+  return value;
+}
+/** 相手の名前。モデルが分かればモデルの名前を、分からなければ provider の名前を出す。 */
+export function agentName(provider: string, model?: string): string {
+  const name = modelName(model ?? '');
+  if (name && (name.startsWith('Claude') || name.startsWith('GPT') || !provider)) return name;
+  return [providerName(provider), name].filter(Boolean).join(' ');
 }
 /** 会話の始まりは最初の実行の開始とし、実行がなければ最後の発言の時刻を使う。 */
 export function conversationStart(state: ScreenState, conversationId: string): string {
@@ -102,11 +154,7 @@ export function runLabel(state: ScreenState, runId: unknown): string {
 }
 
 export function formatClock(value: unknown): string {
-  const time = typeof value === 'string' ? new Date(value) : undefined;
-  if (!time || !Number.isFinite(time.getTime())) return '';
-  const today = new Date().toDateString() === time.toDateString();
-  return time.toLocaleString(undefined, today ? { hour: '2-digit', minute: '2-digit', second: '2-digit' }
-    : { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return typeof value === 'string' ? formatWhen(value) : '';
 }
 
 export function formatSeconds(seconds: number): string {

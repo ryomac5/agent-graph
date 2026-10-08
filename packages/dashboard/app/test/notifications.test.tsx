@@ -39,7 +39,7 @@ it('does not replay historical completion on initial load or notify merely for e
 });
 it('saves per-kind settings and recovers invalid saved preferences', async () => {
   setup();
-  fireEvent.click(screen.getByText('Notification settings'));
+  fireEvent.click(screen.getByText('Settings'));
   fireEvent.change(screen.getByLabelText('Run unknown'), { target: { value: 'silent' } });
   await waitFor(() => expect(loadPreferences(localStorage).unknown).toBe('silent'));
   expect(loadPreferences(localStorage).completed).toBe('in_app');
@@ -54,7 +54,7 @@ it('answers approvals directly in notifications and marks expired requests unava
   act(() => target.setSnapshot(snapshot({ approvals: [pending] }, 2)));
   fireEvent.click(screen.getByRole('button', { name: 'Allow' }));
   await waitFor(() => expect(client.command).toHaveBeenCalledWith('answer', { approvalId: 'approval', decision: 'allow' }));
-  await screen.findByText('Answer sent; waiting for resolution.');
+  await screen.findByText('Sent');
   act(() => target.setSnapshot(snapshot({ approvals: [{ ...pending, state: 'expired' }] }, 3)));
   expect(screen.getByText('Approval expired')).toBeTruthy();
   expect(screen.queryByRole('button', { name: 'Allow' })).toBeNull();
@@ -68,7 +68,7 @@ it('suppresses silent kinds and renders unknown evidence with a dashed border', 
   const unknown = screen.getByRole('heading', { name: 'Run unknown' }).closest('li')!;
   expect(unknown.className).toContain('notice-unknown');
   expect(unknown.textContent).toContain('Last event'); expect(unknown.textContent).toContain('2026-10-07');
-  expect(screen.getByRole('link', { name: 'Evidence' }).getAttribute('href')).toBe('/c/conversation');
+  expect(screen.getByRole('link', { name: 'Conversation' }).getAttribute('href')).toBe('/c/conversation');
 });
 it('requests browser permission only on preference change and opens inline approval from browser click', async () => {
   const created: FakeNotification[] = [];
@@ -109,10 +109,10 @@ it('emits distinct runner and API faults without duplicate notices during snapsh
   const { target } = setup();
   act(() => target.setConnection('runner_unavailable'));
   act(() => target.setConnection('reconnecting'));
-  expect(screen.getAllByRole('heading', { name: 'Daemon fault' })).toHaveLength(2);
+  expect(screen.getAllByRole('heading', { name: 'Connection error' })).toHaveLength(2);
   act(() => target.setConnection('reconnecting'));
-  expect(screen.getAllByRole('heading', { name: 'Daemon fault' })).toHaveLength(2);
+  expect(screen.getAllByRole('heading', { name: 'Connection error' })).toHaveLength(2);
   act(() => target.setConnection('connected'));
   act(() => target.setConnection('reconnecting'));
-  expect(screen.getAllByRole('heading', { name: 'Daemon fault' })).toHaveLength(3);
+  expect(screen.getAllByRole('heading', { name: 'Connection error' })).toHaveLength(3);
 });

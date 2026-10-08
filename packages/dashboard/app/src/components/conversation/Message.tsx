@@ -45,8 +45,6 @@ export function Message({ row, sender, showName = true, language = 'en', streami
       {showName && <strong className="message-sender">{sender.name}</strong>}
       {time ? <time dateTime={time} title={time}>{formatClock(time)}</time> : !streaming && <span className="message-time-unknown">{t('timeUnknown')}</span>}
       {streaming && <span className="chip chip-accent"><span className="pulse" aria-hidden="true"/>{t('streaming')}</span>}
-      {!streaming && (source || confidence) && <span className="provenance" title={`${t('source')}: ${source || t('unknown')} · ${t('confidence')}: ${confidence || t('unknown')}`}>
-        <span>{sourceLabel(source) || t('unknown')}</span><span className={`confidence confidence-${confidence || 'unknown'}`}>{confidence || t('unknown')}</span></span>}
     </header>
     <div className="message-main">
       {unavailable ? <p className="message-gap">{t(row.body_state === 'omitted' ? 'omitted' : 'unavailable')}</p>

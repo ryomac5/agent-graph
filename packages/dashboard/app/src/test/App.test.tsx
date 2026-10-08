@@ -18,8 +18,8 @@ it('renders navigation, projects, pending approvals, connection state and bell',
   render(<MemoryRouter><App target={store}/></MemoryRouter>);
   expect(screen.getByRole('heading', { name: 'Overview' })).toBeTruthy();
   expect(within(screen.getByRole('complementary')).getByRole('link', { name: 'demo' }).getAttribute('href')).toBe('/p/demo');
-  expect(screen.getByRole('status').textContent).toContain('Runner unavailable');
-  expect(screen.getByRole('link', { name: 'Pending approvals1' })).toBeTruthy();
+  expect(screen.getByRole('status').textContent).toContain('Runner offline');
+  expect(screen.getByRole('link', { name: 'Approvals1' })).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Notifications' }));
   expect(screen.getByRole('heading', { name: 'Approval pending' })).toBeTruthy();
 });
@@ -27,25 +27,25 @@ it('uses the OS theme, reacts to changes, allows explicit overrides and Japanese
   render(<MemoryRouter initialEntries={['/settings']}><App/></MemoryRouter>);
   expect(document.documentElement.dataset.theme).toBe('light');
   dark = true; change?.(); expect(document.documentElement.dataset.theme).toBe('dark');
-  fireEvent.change(screen.getByLabelText('Appearance'), { target: { value: 'light' } });
+  fireEvent.change(screen.getByLabelText('Theme'), { target: { value: 'light' } });
   expect(document.documentElement.dataset.theme).toBe('light');
   expect(localStorage.getItem('agent-graph-theme')).toBe('light');
   fireEvent.change(screen.getByLabelText('Language'), { target: { value: 'ja' } });
   expect(screen.getByRole('heading', { name: '設定' })).toBeTruthy();
   expect(document.documentElement.lang).toBe('ja');
 });
-it.each([['/p/demo', 'Other'], ['/c/demo', 'Conversation'], ['/inbox', 'Approval inbox'],
-  ['/p/demo/tree', 'Delegation tree and graph'], ['/p/demo/changes', 'Changes'], ['/search', 'Search']])('renders route %s', (path, heading) => {
+it.each([['/p/demo', 'Other'], ['/c/demo', 'Conversation'], ['/inbox', 'Approvals'],
+  ['/p/demo/tree', 'Other'], ['/p/demo/changes', 'Changes'], ['/search', 'Search']])('renders route %s', (path, heading) => {
   render(<MemoryRouter initialEntries={[path]}><App/></MemoryRouter>);
   expect(screen.getByRole('heading', { name: heading })).toBeTruthy();
 });
-it('shows unknown with evidence, time, reason and a link instead of relying on color', async () => {
+it('shows unknown as a grey dot and a word, keeps the reason in the title and links to details', async () => {
   const { StateBadge } = await import('../components/StateBadge.tsx');
   render(<MemoryRouter><StateBadge detailed state="unknown" evidenceUrl="/c/demo" evidence="Disconnect" evidenceTime="2026-10-07" reason="Observation interrupted"/></MemoryRouter>);
-  const link = screen.getByRole('link', { name: 'Unknown · Evidence' });
+  const link = screen.getByRole('link', { name: 'Unknown · Details' });
   expect(link.className).toContain('status-unknown');
-  expect(link.textContent).toContain('Disconnect'); expect(link.textContent).toContain('2026-10-07');
-  expect(link.textContent).toContain('Observation interrupted'); expect(link.getAttribute('href')).toBe('/c/demo');
+  expect(link.textContent).toBe('Unknown'); expect(link.querySelector('.status-dot')).toBeTruthy();
+  expect(link.title).toContain('Observation interrupted'); expect(link.getAttribute('href')).toBe('/c/demo');
 });
 it('shares live activity, approval counts, commands and notices across all stage 5 routes', async () => {
   const target = createStore();
@@ -67,24 +67,24 @@ it('shares live activity, approval counts, commands and notices across all stage
   fireEvent.click(within(screen.getByRole('complementary')).getByRole('link', { name: 'demo' }));
   expect(screen.getByRole('heading', { name: 'demo' })).toBeTruthy();
   const header = document.querySelector<HTMLElement>('.workspace-header')!;
-  expect(header.textContent).toBe('demoNew task');
+  expect(header.textContent).toBe('demoConversationsChangesNew task');
   expect(within(header).getAllByRole('button')).toHaveLength(1);
   expect(within(header).getByRole('button', { name: 'New task' }).getAttribute('aria-expanded')).toBe('false');
   expect(within(header).queryByRole('checkbox')).toBeNull();
   expect(within(header).queryByRole('combobox')).toBeNull();
   expect(screen.getByRole('textbox', { name: 'Message' })).toBeTruthy();
-  fireEvent.click(within(screen.getByRole('region', { name: 'Root conversations' })).getByRole('button', { name: /Console conversation/ }));
+  fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getByRole('button', { name: /Console conversation/ }));
   expect(screen.getByRole('heading', { name: 'Console conversation' })).toBeTruthy();
-  fireEvent.click(screen.getByRole('link', { name: 'Pending approvals1' }));
-  expect(screen.getByRole('heading', { name: 'Approval inbox' })).toBeTruthy();
+  fireEvent.click(screen.getByRole('link', { name: 'Approvals1' }));
+  expect(screen.getByRole('heading', { name: 'Approvals' })).toBeTruthy();
   expect(screen.getByRole('heading', { name: 'Approval pending' })).toBeTruthy();
-  const inbox = screen.getByRole('region', { name: 'Approval inbox' });
+  const inbox = screen.getByRole('region', { name: 'Approvals' });
   await act(async () => fireEvent.click(within(inbox).getByRole('button', { name: 'Allow' })));
   expect(client.command).toHaveBeenCalledWith('answer', { approvalId: 'a', decision: 'allow' });
   act(() => target.applyPatch({ type: 'patch', from_seq: 2, seq: 3, generation: 0, changes: {
     approvals: { remove: [], upsert: [{ id: 'a', run_id: 'r', state: 'resolved' }] },
   } }));
-  expect(screen.getByRole('link', { name: 'Pending approvals0' })).toBeTruthy();
+  expect(screen.queryByRole('link', { name: 'Approvals1' })).toBeNull();
 });
 
 it('opens Changes from the root workspace and sends review commands', async () => {
@@ -106,14 +106,14 @@ it('opens Changes from the root workspace and sends review commands', async () =
   expect(screen.getByRole('button', { name: 'Comment on code.txt new line 1' })).toBeTruthy();
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Approve' })));
   expect(client.command).toHaveBeenCalledWith('review.approve', { artifactId: 'a' });
-  expect(screen.getByRole('navigation', { name: 'Project' }).textContent).toContain('Tree');
+  expect(screen.getByRole('navigation', { name: 'Project' }).textContent).toBe('ConversationsChanges');
 });
 
 it('connects sidebar search to the authenticated search client', async () => {
   const search = vi.fn(async (_query: unknown) => ({ mode: 'fts5' as const, total: 0, results: [], unsupported: [] }));
   render(<MemoryRouter><App searchClient={{ search }}/></MemoryRouter>);
   fireEvent.click(screen.getByRole('link', { name: 'Search' }));
-  fireEvent.change(screen.getByLabelText('Search all conversations'), { target: { value: 'review marker' } });
+  fireEvent.change(screen.getByLabelText('Search conversations'), { target: { value: 'review marker' } });
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Search' })));
   expect(search.mock.calls[0][0]).toMatchObject({ query: 'review marker' });
   expect(screen.getByText('No results')).toBeTruthy();

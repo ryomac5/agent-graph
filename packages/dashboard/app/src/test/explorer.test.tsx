@@ -97,16 +97,16 @@ describe('Files explorer', () => {
     expect(item('docs').tabIndex).toBe(0);
     // 木は選択したプロジェクトの行の下に置く。
     expect(screen.queryByRole('link', { name: 'Files' })).toBeNull();
-    expect(within(screen.getByRole('navigation', { name: 'Project' })).getAllByRole('link').map(link => link.textContent)).toEqual(['Project', 'Tree', 'Changes']);
+    expect(within(screen.getByRole('navigation', { name: 'Project' })).getAllByRole('link').map(link => link.textContent)).toEqual(['Conversations', 'Changes']);
     expect(screen.queryByRole('region', { name: 'File viewer' })).toBeNull();
-    expect(screen.getByRole('region', { name: 'Root conversations' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Conversations' })).toBeTruthy();
     const projectRow = screen.getByRole('link', { name: 'repo' }).closest('.sidebar-project')!;
     expect(projectRow.querySelector('[role="tree"]')).toBe(tree());
     expect(projectRow.firstElementChild?.className).toBe('sidebar-project-row');
     expect(document.querySelector('.workspace-files')).toBeNull();
-    expect(document.querySelector('.workspace-columns')?.children).toHaveLength(2);
-    expect(document.querySelector('.workspace-center > .workspace-conversation')).toBeTruthy();
-    expect(screen.getByRole('complementary', { name: 'Delegation tree' })).toBeTruthy();
+    expect(document.querySelector('.workspace-columns')?.children).toHaveLength(3);
+    expect(document.querySelector('.workspace-columns > .workspace-conversation')).toBeTruthy();
+    expect(screen.getByRole('complementary', { name: 'Requests' })).toBeTruthy();
     expect(screen.queryByRole('region', { name: 'Tasks' })).toBeNull();
   });
 
@@ -115,7 +115,7 @@ describe('Files explorer', () => {
     expect(screen.queryByRole('tree', { name: 'Files' })).toBeNull();
     expect(calls(client, 'files.list')).toEqual([]);
     const columns = document.querySelector('.workspace-columns')!;
-    expect(columns.firstElementChild!.className).toBe('workspace-center');
+    expect(columns.firstElementChild!.className).toBe('workspace-roots');
     fireEvent.click(screen.getByRole('button', { name: 'Toggle files for repo' }));
     await screen.findByRole('tree', { name: 'Files' });
     expect(names()).toContain('README.md');
@@ -232,7 +232,7 @@ describe('Files explorer', () => {
     expect(row(item('docs')).querySelector('.tree-changed')).toBeNull();
     fireEvent.click(row(item('gone.txt')));
     expect(await screen.findByText('Deleted file')).toBeTruthy();
-    expect(within(screen.getByRole('region', { name: 'File viewer' })).getByRole('link', { name: /Open Changes/ }).getAttribute('href')).toBe(`/p/${encodeURIComponent(ROOT)}/changes`);
+    expect(within(screen.getByRole('region', { name: 'File viewer' })).getByRole('link', { name: /View changes/ }).getAttribute('href')).toBe(`/p/${encodeURIComponent(ROOT)}/changes`);
   });
 
   it('opens a file with line numbers and syntax colours and keeps the path in the address', async () => {

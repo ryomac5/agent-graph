@@ -2,8 +2,7 @@ import { useMemo } from 'react';
 import type { Row, ScreenState } from './store.ts';
 import { readObject, readText } from '../components/conversation/model.ts';
 import { OTHER_PROJECT } from './projects.ts';
-import { readModel } from './format.ts';
-import { providerName } from '../components/ActivityRow.tsx';
+import { agentName, conversationName, conversationTitle, readModel, readTitle } from './format.ts';
 import { readAttempts, type DelegationTree, type TreeNode } from '../pages/tree/model.ts';
 
 export interface Root {
@@ -11,9 +10,22 @@ export interface Root {
   conversation_ids: string[]; running_children: number; total_children: number;
 }
 export const isRunning = (state: string) => ['starting', 'running', 'assigned', 'verifying', 'reviewing'].includes(state);
+/** 根の名前に内部の識別子が入っていれば、会話の名前の規則で呼び直す。 */
+function rootName(state: ScreenState, root: Root): string {
+  const name = readTitle(root.name);
+  const internal = !name || /^\[\s*"/.test(name) || root.conversation_ids.includes(name) || /^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(name);
+  if (!internal) return name;
+  for (const id of root.conversation_ids) {
+    const named = conversationName(state, id);
+    if (named) return named;
+  }
+  let provider = '';
+  try { const parsed: unknown = JSON.parse(name); if (Array.isArray(parsed)) provider = String(parsed[0] ?? ''); } catch { provider = ''; }
+  return conversationTitle({ provider }, root.last_activity_ts ?? undefined);
+}
 export function selectRoots(state: ScreenState, project?: string): Root[] {
   return (state.projection.roots ?? []).filter(row => project === undefined || row.project === project || project === OTHER_PROJECT && row.project === null)
-    .map(row => row as unknown as Root).toSorted((a, b) => Number(isRunning(b.state)) - Number(isRunning(a.state))
+    .map(row => { const root = { ...(row as unknown as Root) }; root.conversation_ids ??= []; root.name = rootName(state, root); return root; }).toSorted((a, b) => Number(isRunning(b.state)) - Number(isRunning(a.state))
       || (b.last_activity_ts ?? '').localeCompare(a.last_activity_ts ?? '') || a.id.localeCompare(b.id));
 }
 export function useRootIndex(state: ScreenState) {
@@ -42,8 +54,9 @@ export function useRootIndex(state: ScreenState) {
   }, [state.projection.conversations, state.projection.runs, state.projection.relations, state.projection.delegations]);
 }
 export type RootIndex = ReturnType<typeof useRootIndex>;
+/** 相手と役割の 1 行。「Claude Opus 5.5 · general-purpose」の形にする。 */
 export function nodeLine(node: TreeNode): string {
-  return [[providerName(node.provider) || 'Agent', node.model].filter(Boolean).join(' '), node.role, node.state].filter(Boolean).join(' · ');
+  return [agentName(node.provider, node.model) || 'Agent', node.role].filter(Boolean).join(' · ');
 }
 export function buildRootTree(root: Root, index: RootIndex): DelegationTree {
   const nodes: TreeNode[] = [];

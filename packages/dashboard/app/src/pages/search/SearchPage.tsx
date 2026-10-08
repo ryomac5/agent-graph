@@ -8,16 +8,16 @@ import { SEARCH_KINDS, getResultHref, extractSnippet, type SearchClient, type Se
 import './search.css';
 
 const TEXT = {
-  en: { title: 'Search', query: 'Search all conversations', project: 'Project', provider: 'Provider', from: 'From', to: 'To', kind: 'Kind', all: 'All',
+  en: { title: 'Search', query: 'Search conversations', project: 'Project', provider: 'Provider', from: 'From', to: 'To', kind: 'Kind', all: 'All',
     message: 'Messages', tool_output: 'Tool output', diff: 'Diffs', finding: 'Findings', task: 'Task names', alias: 'Aliases',
     loading: 'Searching…', empty: 'No results', conversation: 'Conversation', run: 'Run', unknown: 'Unknown', confidence: 'Confidence',
-    retention: 'Body removed by retention policy.', missing: 'Body unavailable or outside the storage scope.',
-    unsupported: 'Unsupported history formats cannot be searched.', fallback: 'Substring search (FTS5 unavailable)', more: 'Load more', failed: 'Search unavailable' },
-  ja: { title: '検索', query: '会話を横断検索', project: 'プロジェクト', provider: 'プロバイダー', from: '開始日時', to: '終了日時', kind: '種別', all: 'すべて',
-    message: '発言', tool_output: '道具の出力', diff: '差分', finding: '指摘', task: '作業の名前', alias: '別名',
+    retention: 'Body removed by retention policy.', missing: 'Message unavailable.',
+    unsupported: 'Unsupported history formats cannot be searched.', fallback: 'Showing substring matches', more: 'Load more', failed: 'Search unavailable' },
+  ja: { title: '検索', query: '会話を検索', project: 'プロジェクト', provider: 'プロバイダー', from: '開始日時', to: '終了日時', kind: '種別', all: 'すべて',
+    message: 'メッセージ', tool_output: 'ツールの出力', diff: '差分', finding: '指摘', task: 'タスク', alias: '別名',
     loading: '検索中…', empty: '結果なし', conversation: '会話', run: '実行', unknown: '不明', confidence: '確度',
-    retention: '保持期間により本文が削除されました。', missing: '本文は保存範囲外、または取得できません。',
-    unsupported: '形式未対応の会話は検索できません。', fallback: '部分一致検索（FTS5 が利用できません）', more: 'さらに表示', failed: '検索できません' },
+    retention: '保持期間により本文が削除されました。', missing: 'メッセージを取得できません。',
+    unsupported: '形式未対応の会話は検索できません。', fallback: '部分一致で表示しています', more: 'さらに表示', failed: '検索できません' },
 };
 function formatTimestamp(value: string): string {
   const time = Date.parse(value);
@@ -61,7 +61,7 @@ export function SearchPage({ client, target = store, language = 'en' }: { client
     {loading && <p role="status">{t.loading}</p>}{error && <p role="alert">{error}</p>}
     {result && <div aria-live="polite">
       {result.mode === 'substring' && <p>{t.fallback}</p>}
-      {result.unsupported.length > 0 && <aside aria-label={t.unsupported}><p>{t.unsupported}</p><ul>{result.unsupported.map((row, index) => <li key={`${row.subject}:${index}`}>{row.reason}</li>)}</ul></aside>}
+      {result.unsupported.length > 0 && <aside aria-label={t.unsupported} className="muted-text" title={result.unsupported.map(row => row.reason).join('\n')}><span>{t.unsupported}</span> <span className="numeric">({result.unsupported.length})</span></aside>}
       <p role="status">{result.total === 0 ? t.empty : `${result.total} ${language === 'ja' ? '件' : 'results'}`}</p>
       {SEARCH_KINDS.map(kind => {
         const rows = result.results.filter(row => row.kind === kind);
@@ -76,7 +76,7 @@ export function SearchPage({ client, target = store, language = 'en' }: { client
           const title = row.kind === 'diff' ? `Changes · ${taskName}` : row.kind === 'finding' ? `Finding · ${taskName}` : name;
           return <li key={row.id}><article><header>{href ? <Link to={href}>{title}</Link> : <strong>{title}</strong>}</header>
             <dl><div><dt>{t.conversation}</dt><dd>{name}</dd></div><div><dt>Task</dt><dd>{taskName}</dd></div>
-              <div><dt>{t.project}</dt><dd>{projectName}</dd></div><div><dt>{t.confidence}</dt><dd>{row.confidence}</dd></div></dl><time dateTime={row.source_ts} title={row.source_ts}>{formatTimestamp(row.source_ts)}</time>
+              <div><dt>{t.project}</dt><dd>{projectName}</dd></div></dl><time dateTime={row.source_ts} title={row.source_ts}>{formatTimestamp(row.source_ts)}</time>
             {row.body === null ? <p className="muted-text">{row.reason === 'retention' ? t.retention : t.missing}</p> : <p className="search-excerpt">{extractSnippet(row.body, submitted.current.query).map((part, index) => part.match ? <mark key={index}>{part.text}</mark> : part.text)}</p>}
           </article></li>;
         })}</ul></section>;

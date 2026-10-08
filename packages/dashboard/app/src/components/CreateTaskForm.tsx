@@ -33,11 +33,11 @@ export function CreateTaskForm({ project, root, client, disabled = false, langua
     }));
     const errors = outcomes.flatMap(outcome => outcome.status === 'rejected' ? [String(outcome.reason)] : outcome.value.ok ? [] : [outcome.value.error ?? 'Command rejected']);
     const accepted = outcomes.length - errors.length;
-    setResult(`${accepted}/${agents} ${ja ? '受付に送信しました' : 'requests accepted'}${errors.length ? ` · ${errors.join('; ')}` : ''}`);
+    setResult(`${accepted}/${agents} ${ja ? '件の依頼を開始しました' : 'requests started'}${errors.length ? ` · ${errors.join('; ')}` : ''}`);
     setPending(false);
   }
-  return <form className="create-task" onSubmit={event => void submit(event)} aria-label={ja ? '作業を作る' : 'Create task'}>
-    <header className="form-header"><h2>{ja ? '作業を作る' : 'Create task'}</h2><p className="muted-text">{ja ? 'モデルと effort の反映には受付の対応が必要です。' : 'Applying model and effort requires intake support.'}</p></header>
+  return <form className="create-task" onSubmit={event => void submit(event)} aria-label={ja ? '新規タスク' : 'New task'}>
+    <header className="form-header"><h2>{ja ? '新規タスク' : 'New task'}</h2></header>
     <div className="form-grid">
       <label className="field span-2">{ja ? '名前' : 'Title'}<input required value={title} onChange={event => setTitle(event.target.value)} disabled={pending} placeholder={ja ? '例: API の遅延を調べる' : 'e.g. Investigate API latency'}/></label>
       <label className="field span-2">{ja ? '作業ディレクトリ' : 'Working directory'}<input className="mono" required value={cwd} onChange={event => setCwd(event.target.value)} disabled={pending}/></label>
@@ -49,6 +49,6 @@ export function CreateTaskForm({ project, root, client, disabled = false, langua
     </div>
     <footer className="form-footer">{result && <p role="status" className="status-line">{result}</p>}<span className="spacer"/>
       {onCancel && <button type="button" className="btn btn-ghost btn-sm" onClick={onCancel}>{ja ? 'キャンセル' : 'Cancel'}</button>}
-      <button type="submit" className="btn btn-primary btn-sm" disabled={disabled || pending}>{pending ? (ja ? '送信中' : 'Submitting') : (ja ? 'エージェントを起動' : 'Start agents')}</button></footer>
+      <button type="submit" className="btn btn-primary btn-sm" disabled={disabled || pending}>{pending ? (ja ? '送信中' : 'Submitting') : (ja ? '開始' : 'Start')}</button></footer>
   </form>;
 }

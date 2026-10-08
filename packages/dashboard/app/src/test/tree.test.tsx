@@ -1,21 +1,14 @@
 import { projectRoots } from './root-fixture.ts';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { createStore, type Row } from '../lib/store.ts';
 import { buildDelegationTree } from '../pages/tree/model.ts';
-import { TreePage } from '../pages/tree/TreePage.tsx';
-import { createGraphElements } from '../components/graph/DelegationGraph.tsx';
+import { WorkspacePage } from '../pages/workspace/WorkspacePage.tsx';
 
-// グラフの寸法測定だけを置き換え、選択と辺の表示は実際のデータで検証する。
-vi.mock('@xyflow/react', () => ({
-  ReactFlow: ({ nodes, edges, onNodeClick }: { nodes: { id: string; selected: boolean; data: { node: { label: string } } }[];
-    edges: { id: string; label: string; style: { strokeDasharray?: string } }[]; onNodeClick: (event: unknown, node: unknown) => void }) =>
-    <div>{nodes.map(node => <button key={node.id} aria-pressed={node.selected} onClick={event => onNodeClick(event, node)}>{node.data.node.label}</button>)}
-      {edges.map(edge => <span key={edge.id} data-dashed={!!edge.style.strokeDasharray}>{edge.label}</span>)}</div>,
-  Handle: () => null, Background: () => null, Controls: () => null, Position: { Left: 'left', Right: 'right' },
-}));
-afterEach(cleanup);
+// 依頼の流れは作業場の右の列に出る。列は 1280px 以上で開いて始まる。
+beforeEach(() => { vi.stubGlobal('innerWidth', 1440); localStorage.clear(); });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 const PROJECT = '/repo';
 function fixture(extra: Record<string, Row[]> = {}) {
   const target = createStore();
@@ -56,17 +49,15 @@ it('roots a terminal task graph at its origin conversation and includes both pro
   expect(tree.nodes.find(n => n.id === 'run:codex:1')).toMatchObject({ role: 'implement', model: 'gpt', state: 'failed', cost: 0.25 });
   expect(tree.unresolved).toEqual([]);
 });
-it('keeps inferred and missing parents in a separate branch and draws candidates dashed', () => {
+it('keeps inferred and missing parents in a separate branch and marks candidate edges', () => {
   const tree = buildDelegationTree(fixture({ relations: [
     { id: 'candidate', type: 'delegated', active: 1, from_id: 'origin', to_id: 'codex', confidence: 'inferred', evidence: { request_id: 'implementation' } },
     { id: 'unknown', type: 'delegated', active: 1, to_id: 'claude', confidence: 'unknown', evidence: { request_id: 'review' } },
   ] }).getSnapshot());
   expect(tree.unresolved).toEqual(['run:claude:1', 'run:codex:1']);
   expect(tree.nodes.find(n => n.id === 'conversation:origin')!.children).toEqual([]);
-  const graph = createGraphElements(tree);
-  expect(graph.edges.find(e => e.id === 'relation:candidate')!.style?.strokeDasharray).toBe('6 4');
-  expect(graph.edges.find(e => e.id === 'relation:candidate')!.label).toBe('Implement code · inferred');
-  expect(createGraphElements(buildDelegationTree(fixture().getSnapshot())).edges.every(e => !e.style?.strokeDasharray)).toBe(true);
+  expect(tree.edges.find(e => e.id === 'relation:candidate')!.confidence).toBe('inferred');
+  expect(buildDelegationTree(fixture().getSnapshot()).edges.every(e => e.confidence === 'confirmed')).toBe(true);
 });
 it('keeps dependency edges out of parentage and ignores inactive relations', () => {
   const state = fixture().getSnapshot();
@@ -106,28 +97,25 @@ it('resolves confirmed projection parents and isolates cyclic relations without 
   expect(tree.unresolved).toContain('run:codex:1');
   expect(tree.nodes.find(n => n.id === 'run:claude:1')!.children).toEqual([]);
 });
-it('synchronizes selections, shows navigation and attempt history, and sends the retry command', async () => {
+it('shows the flow under its root in the workspace, selects requests and sends the retry command', async () => {
   const target = fixture();
   const command = vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'retry', ok: true }));
-  render(<MemoryRouter><TreePage project={PROJECT} target={target} client={{ command }}/></MemoryRouter>);
-  fireEvent.click(screen.getByRole('button', { name: /Terminal.*unknown|Terminal.*running|Terminal.*idle/ }));
-  const left = screen.getByRole('region', { name: 'Delegation tree' });
-  const graph = screen.getByLabelText('Delegation graph');
-  fireEvent.click(within(left).getByRole('button', { name: /^Codex.*implement/  }));
-  expect(within(graph).getByRole('button', { name: /^Codex.*implement/ }).getAttribute('aria-pressed')).toBe('true');
-  const detail = screen.getByRole('region', { name: 'Selected node' });
-  const actions = within(detail.querySelector<HTMLElement>('.delegation-actions')!);
-  expect(actions.getByRole('link', { name: 'Open conversation' }).getAttribute('href')).toBe('/p/%2Frepo?root=origin&child=codex');
-  expect(actions.getByRole('link', { name: 'Changes' }).getAttribute('href')).toBe('/p/%2Frepo/changes?run=codex%3A1');
-  const history = within(detail).getByText('Attempt history').closest('details')!;
-  expect(history.open).toBe(false);
-  fireEvent.click(within(history).getByText('Attempt history'));
-  expect(history.open).toBe(true);
-  expect(within(history).getByText('Attempt 1 · failed')).toBeTruthy();
-  fireEvent.click(within(detail).getByRole('button', { name: 'Retry delegation' }));
+  render(<MemoryRouter><WorkspacePage project={PROJECT} target={target} client={{ command }}/></MemoryRouter>);
+  const flow = screen.getByRole('complementary', { name: 'Requests' });
+  // 根を頂点に置き、依頼はその下に字下げで続ける。
+  const apex = within(flow).getByRole('button', { name: /^Terminal/ });
+  expect(apex.getAttribute('aria-pressed')).toBe('true');
+  const implement = within(flow).getByRole('button', { name: /(Codex|GPT)[^·]* · implement/ });
+  expect(implement.closest('ul')?.closest('li')?.contains(apex)).toBe(true);
+  fireEvent.click(implement);
+  expect(within(flow).getByRole('button', { name: /(Codex|GPT)[^·]* · implement/ }).getAttribute('aria-pressed')).toBe('true');
+  expect(within(flow).getByRole('button', { name: /^Terminal/ }).getAttribute('aria-pressed')).toBe('false');
+  fireEvent.click(within(flow).getByRole('button', { name: 'Retry' }));
   await waitFor(() => expect(command).toHaveBeenCalledWith('intake.retry', { requestId: 'implementation' }));
-  fireEvent.click(within(graph).getByRole('button', { name: /^Claude.*review/  }));
-  expect(within(left).getByRole('button', { name: /^Claude.*review/ }).getAttribute('aria-pressed')).toBe('true');
+  fireEvent.click(within(flow).getByRole('button', { name: /Claude[^·]* · review/ }));
+  expect(within(flow).getByRole('button', { name: /Claude[^·]* · review/ }).getAttribute('aria-pressed')).toBe('true');
+  fireEvent.click(within(flow).getByRole('button', { name: /^Terminal/ }));
+  expect(within(flow).getByRole('button', { name: /^Terminal/ }).getAttribute('aria-pressed')).toBe('true');
 });
 it('groups retry executions in one delegation node and reports retry errors', async () => {
   const target = fixture();
@@ -146,12 +134,10 @@ it('groups retry executions in one delegation node and reports retry errors', as
   expect(tree.nodes.find(n => n.id === 'run:codex:1')).toBeUndefined();
   expect(tree.nodes.find(n => n.id === 'run:codex:2')!.attempts.map(attempt => attempt.run_id)).toEqual(['codex:1', 'codex:2']);
   const command = vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'retry', ok: false, error: 'Runner unavailable' }));
-  render(<MemoryRouter><TreePage project={PROJECT} target={target} client={{ command }}/></MemoryRouter>);
-  fireEvent.click(screen.getByRole('button', { name: /Terminal.*unknown|Terminal.*running|Terminal.*idle/ }));
-  fireEvent.click(within(screen.getByRole('region', { name: 'Delegation tree' })).getByRole('button', { name: /^Codex.*implement/ }));
-  const detail = screen.getByRole('region', { name: 'Selected node' });
-  expect(within(detail).getByText('Attempt 2 · failed')).toBeTruthy();
-  fireEvent.click(within(detail).getByRole('button', { name: 'Retry delegation' }));
+  render(<MemoryRouter><WorkspacePage project={PROJECT} target={target} client={{ command }}/></MemoryRouter>);
+  const flow = screen.getByRole('complementary', { name: 'Requests' });
+  expect(within(flow).getAllByRole('button', { name: /(Codex|GPT)[^·]* · implement/ })).toHaveLength(1);
+  fireEvent.click(within(flow).getByRole('button', { name: 'Retry' }));
   await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('Runner unavailable'));
 });
 
@@ -172,20 +158,13 @@ it('keeps a resumed delegated conversation under its origin with two attempts an
     { attempt: 1, run_id: 'codex:1', state: 'failed' }, { attempt: 2, run_id: 'codex:2', state: 'ended' },
   ]);
   expect(tree.nodes.filter(node => node.conversationId === 'codex')).toHaveLength(1);
-  const graph = createGraphElements(tree);
-  expect(graph.nodes.map(node => node.id).sort()).toEqual(['conversation:origin', 'run:claude:1', 'run:codex:2']);
-  expect(graph.edges.map(edge => [edge.source, edge.target])).toEqual([
+  expect(tree.nodes.map(node => node.id).sort()).toEqual(['conversation:origin', 'run:claude:1', 'run:codex:2']);
+  expect(tree.edges.map(edge => [edge.source, edge.target])).toEqual([
     ['conversation:origin', 'run:codex:2'], ['run:codex:2', 'run:claude:1'],
   ]);
-  render(<MemoryRouter><TreePage project={PROJECT} target={target}/></MemoryRouter>);
-  fireEvent.click(screen.getByRole('button', { name: /Terminal.*unknown|Terminal.*running|Terminal.*idle/ }));
-  const left = screen.getByRole('region', { name: 'Delegation tree' });
-  expect(within(left).getAllByRole('button', { name: /^Codex.*implement/ })).toHaveLength(1);
-  fireEvent.click(within(left).getByRole('button', { name: /^Codex.*implement/ }));
-  const detail = screen.getByRole('region', { name: 'Selected node' });
-  fireEvent.click(within(detail).getByText('Attempt history'));
-  expect(within(detail).getByText('Attempt 1 · failed')).toBeTruthy();
-  expect(within(detail).getByText('Attempt 2 · ended')).toBeTruthy();
+  render(<MemoryRouter><WorkspacePage project={PROJECT} target={target} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: true })) }}/></MemoryRouter>);
+  const flow = screen.getByRole('complementary', { name: 'Requests' });
+  expect(within(flow).getAllByRole('button', { name: /(Codex|GPT)[^·]* · implement/ })).toHaveLength(1);
 });
 
 it.each(['running', 'ended', 'failed', 'unknown'])('uses the resumed run state %s and resolves original run aliases independently of row order', status => {
@@ -237,8 +216,8 @@ it('keeps delegations with unconfirmed parents out of the selected root tree whi
  const target = fixture({ relations: [] }); target.setConnection('runner_unavailable');
  target.getSnapshot().projection.delegations.forEach(row => { row.root_id = null; }); target.getSnapshot().projection.relations = [];
  expect(buildDelegationTree(target.getSnapshot(), '/elsewhere').nodes).toEqual([]);
- render(<MemoryRouter><TreePage project={PROJECT} target={target} client={{ command: vi.fn() }}/></MemoryRouter>);
- fireEvent.click(screen.getByRole('button', { name: /Terminal.*unknown/ })); expect(screen.getByText('No delegations yet')).toBeTruthy(); expect(screen.queryByRole('button', { name: 'Retry delegation' })).toBeNull();
+ render(<MemoryRouter><WorkspacePage project={PROJECT} target={target} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: true })) }}/></MemoryRouter>);
+ const flow = screen.getByRole('complementary', { name: 'Requests' }); expect(within(flow).getByText('No requests yet')).toBeTruthy(); expect(within(flow).queryByRole('button', { name: 'Retry' })).toBeNull();
 });
 it('nests review_of in the original execution direction with a readable reviewer label', () => {
   const state = fixture().getSnapshot();

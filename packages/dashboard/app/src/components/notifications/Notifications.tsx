@@ -64,11 +64,11 @@ export function Notifications({ client, target = store, initiallyOpen = true, co
     <button className={compact ? 'bell btn btn-ghost btn-sm' : 'btn btn-secondary btn-sm'} aria-label={dictionaries[language].notifications} aria-expanded={open} onClick={() => setOpen(value => !value)}>
       <Icon name="bell" size={16}/>
       {compact ? notices.length > 0 && <span className="bell-count numeric">{notices.length}</span> : `${dictionaries[language].notifications} (${notices.length})`}</button>
-    {!compact && <AppLink className="btn btn-ghost btn-sm" to="/inbox">Pending approvals: {getInbox(state).pending.length}</AppLink>}
+    {!compact && <AppLink className="btn btn-ghost btn-sm" to="/inbox">Approvals: {getInbox(state).pending.length}</AppLink>}
     {open && <section className={compact ? 'notification-panel popover' : 'notification-panel'} ref={panel} tabIndex={-1} aria-label={dictionaries[language].notifications} aria-live="polite">
       <header className="panel-header"><h2>{dictionaries[language].notifications}</h2>
-        {notices.length > 0 && <button className="btn btn-link btn-sm" onClick={() => setNotices([])}>Clear all</button>}</header>
-      <details className="disclosure settings-disclosure"><summary><Icon name="chevronRight" size={12} className="caret"/>Notification settings</summary>
+        {notices.length > 0 && <button className="btn btn-link btn-sm" onClick={() => setNotices([])}>Clear</button>}</header>
+      <details className="disclosure settings-disclosure"><summary><Icon name="chevronRight" size={12} className="caret"/>Settings</summary>
         <div className="settings-grid">{NOTIFICATION_KINDS.map(kind => <label key={kind}>
         <span>{NOTIFICATION_LABELS[kind]}</span><select className="select-sm" value={preferences[kind]} onChange={event => void changePreference(kind, event.target.value as NotificationMode)}>
           <option value="in_app">In app</option><option value="browser">Browser</option><option value="silent">Silent</option>
@@ -82,7 +82,7 @@ export function Notifications({ client, target = store, initiallyOpen = true, co
             {notice.time && <time dateTime={notice.time} title={notice.time}>{formatClock(notice.time) || notice.time}</time>}
             <button className="icon-button" aria-label={`Dismiss ${notice.title}`} title="Dismiss" onClick={() => setNotices(items => items.filter(item => item.id !== notice.id))}><Icon name="x" size={14}/></button></div>
           {!approval && notice.detail && <p className="notice-detail">{notice.detail}</p>}
-          {notice.conversationId && !approval && <AppLink className="btn btn-link btn-sm" to={`/c/${encodeURIComponent(notice.conversationId)}`}>Evidence</AppLink>}
+          {notice.conversationId && !approval && <AppLink className="btn btn-link btn-sm" to={`/c/${encodeURIComponent(notice.conversationId)}`}>Conversation</AppLink>}
           {approval && <><ApprovalDetails row={approval} state={state} compact/>
             {isPending(approval) ? <ApprovalActions row={approval} client={client}/>
               : <p className="status-line approval-outcome" data-outcome={approvalOutcome(approval)}><OutcomeIcon outcome={approvalOutcome(approval)}/>{`Approval ${OUTCOME_LABELS[approvalOutcome(approval)].toLowerCase()}`}</p>}</>}

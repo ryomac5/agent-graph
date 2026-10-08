@@ -1,6 +1,7 @@
 import type { Row, ScreenState } from '../../lib/store.ts';
 import { providerName } from '../ActivityRow.tsx';
-import { decodeStoredValue, isActive, readObject, readText } from './model.ts';
+import { decodeStoredValue, isActive, readBody, readObject, readText } from './model.ts';
+import { harnessKind } from '../../lib/message-body.ts';
 
 /** 会話の両側の名前。子の会話では、右は親のエージェント、左は子のエージェントになる。 */
 export interface Participants { child: boolean; parent: string; self: string }
@@ -78,7 +79,13 @@ function userAuthored(row: Row): boolean {
 
 export function senderOf(row: Row, participants: Participants): Sender {
   const role = readText(row.role) || 'assistant';
-  if (role === 'user' && userAuthored(row)) return { key: 'end', name: participants.parent, side: 'end' };
+  if (role === 'user' && userAuthored(row)) {
+    // 子の報告と裏の作業の通知は、利用者の行として届くが人の発言ではない。エージェントの側に別の形で置く。
+    const kind = harnessKind(readBody(row.body));
+    if (kind === 'agent_report') return { key: 'agent_report', name: 'Agent report', side: 'start' };
+    if (kind === 'notification') return { key: 'notification', name: 'Notification', side: 'start' };
+    return { key: 'end', name: participants.parent, side: 'end' };
+  }
   if (role === 'user' || role === 'assistant') return { key: 'start', name: participants.self, side: 'start' };
   return { key: `role:${role}`, name: role.charAt(0).toUpperCase() + role.slice(1), side: 'start' };
 }

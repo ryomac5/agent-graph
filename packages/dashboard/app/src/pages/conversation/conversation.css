@@ -106,3 +106,11 @@
 .confirm-panel h3 { color: var(--attention); }
 @media (max-width: 760px) { .conv-header, .composer { padding-left: var(--space-4); padding-right: var(--space-4); } .message-user .message-main { max-width: 88%; } .conv-agent .conv-model { display: none; } }
 .conv-timeline:focus-visible { outline-offset: -2px; border-radius: 0; }
+
+/* 子のエージェントの報告。人の発言と分け、エージェントの側に畳んで置く。 */
+.message-report { margin: 8px 0; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); max-width: 100%; }
+.message-report > summary { display: flex; gap: 8px; align-items: baseline; cursor: pointer; list-style: none; }
+.message-report > summary::-webkit-details-marker { display: none; }
+.message-report .message-report-lead { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); font-size: 13px; }
+.message-report time { color: var(--text-2); font-size: 12px; }
+.message-report[open] > summary { margin-bottom: 8px; }

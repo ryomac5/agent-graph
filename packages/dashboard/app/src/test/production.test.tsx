@@ -5,6 +5,7 @@ import { createStore } from '../lib/store.ts';
 import { orderSeries, selectRoots } from '../lib/roots.ts';
 import { visibleText } from '../lib/message-body.ts';
 import { Message } from '../components/conversation/Message.tsx';
+import { senderOf } from '../components/conversation/participants.ts';
 import { WorkspacePage } from '../pages/workspace/WorkspacePage.tsx';
 
 // 本番の画面で見つかった崩れの試験。
@@ -115,4 +116,18 @@ it('opens a child conversation from anywhere on its row, writes it to the URL an
   expect(header().textContent).toMatch(/Elapsed/);
   fireEvent.click(screen.getByRole('button', { name: 'Back to agent-graph-001' }));
   expect(screen.getByTestId('location').textContent).not.toContain('child=');
+});
+
+it('子のエージェントの報告と裏の作業の通知を、利用者の発言として出さない', () => {
+  const participants = { child: false, parent: 'User', self: 'Claude' };
+  const report = { id: 'r', role: 'user', body: 'Another Claude session sent a message:\n<agent-message from="a1">\n[Subagent hand-back] The text below is the final report. The report follows:\n  Done and committed.\n</agent-message>\n\nThat "other Claude session" is an agent working inside this same session.' };
+  const notice = { id: 'n', role: 'user', body: '[SYSTEM NOTIFICATION - NOT USER INPUT]\n<task-notification>done</task-notification>' };
+  expect(senderOf(report, participants)).toMatchObject({ key: 'agent_report', side: 'start' });
+  expect(senderOf(notice, participants)).toMatchObject({ key: 'notification', side: 'start' });
+  expect(senderOf({ id: 'u', role: 'user', body: '早くして' }, participants)).toMatchObject({ side: 'end' });
+  const shown = render(<Message row={report} sender={senderOf(report, participants)}/>);
+  expect(shown.container.textContent).toContain('Done and committed.');
+  expect(shown.container.textContent).not.toContain('other Claude session');
+  const hidden = render(<Message row={notice} sender={senderOf(notice, participants)}/>);
+  expect(hidden.container.textContent).toBe('');
 });

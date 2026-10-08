@@ -4,7 +4,7 @@ import type { Row } from '../../lib/store.ts';
 import { formatClock } from '../../lib/format.ts';
 import { Markdown } from './Markdown.tsx';
 import { PREVIEW_LINES, readBody, readObject, readText } from './model.ts';
-import { visibleText } from '../../lib/message-body.ts';
+import { agentReportText, visibleText } from '../../lib/message-body.ts';
 import type { Sender } from './participants.ts';
 import { translate } from './text.ts';
 import { ToolCall } from './ToolCall.tsx';
@@ -24,6 +24,18 @@ export function Message({ row, sender, showName = true, language = 'en', streami
 }) {
   const [expanded, setExpanded] = useState(false);
   const t = (key: Parameters<typeof translate>[1]) => translate(language, key);
+  // 裏の作業の通知は会話の中に出さない。子の報告は、エージェントの側に畳んだ報告として出す。
+  if (sender.key === 'notification') return null;
+  if (sender.key === 'agent_report') {
+    const report = agentReportText(readBody(row.body));
+    const time = readText(row.source_ts);
+    return <details className="message message-report" id={`message-${encodeURIComponent(String(row.id))}`} aria-label="Agent report">
+      <summary><strong className="message-sender">Agent report</strong>
+        <span className="message-report-lead">{report.split('\n').find(line => line.trim()) ?? ''}</span>
+        {time && <time dateTime={time} title={time}>{formatClock(time)}</time>}</summary>
+      <div className="message-bubble"><Markdown text={report}/></div>
+    </details>;
+  }
   const blocks = (Array.isArray(row.body) ? row.body : []).map(readObject);
   const text = visibleText(Array.isArray(row.body) ? blocks.filter(block => !['tool_use', 'tool_result', 'thinking'].includes(readText(block.type))).map(readBody).filter(Boolean).join('\n') : readBody(row.body));
   const lines = text.split('\n');

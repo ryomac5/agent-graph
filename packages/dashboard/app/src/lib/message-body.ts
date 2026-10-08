@@ -4,6 +4,26 @@ const INJECTED_BLOCKS = /<(system-reminder|local-command-caveat|local-command-st
 export function visibleText(text: string): string {
   return text.replace(INJECTED_BLOCKS, '').replace(/<\/?(command-name|command-args)>/g, ' ').replace(/[ \t]+\n/g, '\n').trim();
 }
+/**
+ * 利用者の行として届くが、人が書いていないもの。子のエージェントの報告と、裏の作業の通知である。
+ * 端末に途中で打った発言は、包みを外して利用者の発言として扱う。
+ */
+export type HarnessKind = 'agent_report' | 'notification' | 'user';
+const AGENT_REPORT = /^(?:Another Claude session sent a message|<agent-message\b|\[Subagent hand-back\])/;
+const NOTIFICATION = /^(?:\[SYSTEM NOTIFICATION|<task-notification>)/;
+export function harnessKind(text: string): HarnessKind {
+  const head = text.trimStart();
+  return AGENT_REPORT.test(head) ? 'agent_report' : NOTIFICATION.test(head) ? 'notification' : 'user';
+}
+/** 子の報告から包みと注意書きを外し、報告の本文だけを返す。 */
+export function agentReportText(text: string): string {
+  const body = text.replace(/^Another Claude session sent a message:\s*/, '').replace(/<\/?agent-message[^>]*>/g, '');
+  const start = body.indexOf('The report follows:');
+  const report = start >= 0 ? body.slice(start + 'The report follows:'.length) : body;
+  // 報告の後ろに続く、ハーネスの注意書きを落とす。
+  const end = report.search(/\n\s*That "other Claude session" is an agent/);
+  return (end >= 0 ? report.slice(0, end) : report).replace(/^ {2}/gm, '').trim();
+}
 /** 保存済み本文と構造化レビュー結果を、一覧と会話で同じ表示にする。 */
 export function readBody(value: unknown): string {
   if (typeof value === 'string') {

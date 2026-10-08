@@ -15,7 +15,7 @@ import { collectSuccessors, collectVersionFamily, readAttribution, readObject, r
 import './changes.css';
 
 export interface ChangesClient { command(command: string, payload?: unknown, cmdId?: string): Promise<Ack> }
-export interface ChangesPageProps { client: ChangesClient; target?: ScreenStore; project?: string; artifactId?: string }
+export interface ChangesPageProps { client: ChangesClient; target?: ScreenStore; project?: string; artifactId?: string; language?: 'en' | 'ja' }
 function hasReviewResult(state: ReturnType<ScreenStore['getSnapshot']>, command: string, value: unknown, artifactId: string): boolean {
   const result = readObject(value);
   if (typeof result.review_result_seq === 'number') return state.seq >= result.review_result_seq;
@@ -200,9 +200,9 @@ export function ChangesPage(props: ChangesPageProps) {
   // 差分を保存できた成果物だけを出す。中身のない成果物の区画は、見る物がないので出さない。
   const reviewable = artifacts.filter(row => typeof row.diff === 'string' ? row.diff.trim() !== '' : Number(row.files ?? row.file_count ?? 0) > 0);
   return <section className="page changes-page" aria-label="Project changes">
-    {project && <ProjectHeader route={project} name={getProjectName(state, projectId)}/>}
+    {project && <ProjectHeader route={project} name={getProjectName(state, projectId)} language={props.language}/>}
     {!!reviewable.length && <section aria-label="Agent changes"><AgentChangesPage {...props}/></section>}
-    <GitChanges client={props.client} projectId={projectId} worktree={search.get('worktree') ?? undefined} enabled={registered}/>
+    <GitChanges client={props.client} projectId={projectId} worktree={search.get('worktree') ?? undefined} enabled={registered} language={props.language}/>
   </section>;
 }
 export default ChangesPage;

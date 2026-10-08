@@ -196,9 +196,9 @@ export function App({ target = store, client = unavailableClient, searchClient =
       <Route path="/" element={<HomePage target={target} client={client} language={language}/>}/>
       <Route path="/p/:project" element={<WorkspacePage target={target} client={client} language={language}/>}/>
       <Route path="/c/:conversation" element={conversation()}/>
-      <Route path="/inbox" element={<Inbox target={target} client={client}/>}/>
+      <Route path="/inbox" element={<Inbox target={target} client={client} language={language}/>}/>
       <Route path="/p/:project/tree" element={<RequestsRedirect/>}/>
-      <Route path="/p/:project/changes" element={<ChangesPage target={target} client={client}/>}/>
+      <Route path="/p/:project/changes" element={<ChangesPage target={target} client={client} language={language}/>}/>
       <Route path="/p/:project/files" element={<div className="files-page"><FileNotices explorer={explorer}/><FileViewerPanel explorer={explorer} actions={<button className="btn btn-ghost btn-xs" onClick={explorer.closeFile}><Icon name="chevronLeft" size={12}/>Back</button>}/></div>}/>
       <Route path="/search" element={<SearchPage target={target} client={searchClient} language={language}/>}/>
       <Route path="/settings" element={<div className="page settings-page"><header className="page-header"><h1>{t('settings')}</h1></header><div className="settings-card">

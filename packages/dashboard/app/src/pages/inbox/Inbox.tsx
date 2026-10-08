@@ -11,18 +11,30 @@ import { answerApproval, APPROVAL_KEYS, getConversation, getDecision, getInbox, 
   type ApprovalAction, type CommandClient } from './model.ts';
 import './inbox.css';
 
-export interface InboxProps { client: CommandClient; target?: ScreenStore }
+export interface InboxProps { client: CommandClient; target?: ScreenStore; language?: 'en' | 'ja' }
+// 画面の文言の対訳。英語を既定にし、日本語を選んだときだけ置き換える。
+const WORDS = {
+  en: { allow: 'Allow', deny: 'Deny', session: 'Always allow', notOffered: 'Not offered by this provider', sent: 'Sent', recent: 'Recent messages',
+    noContent: 'No conversation content available.', user: 'User', agent: 'Agent', streaming: 'Streaming', title: 'Approvals', waiting: 'waiting', expired: 'expired',
+    hint: ['allow', 'deny', 'allow for this conversation'], selectAll: 'Select all pending', selected: 'selected', selectedSuffix: ' selected', wait: 'Waiting',
+    empty: 'Nothing to approve', emptyBody: 'When an agent asks for permission, it shows up here.', expiredTitle: 'Expired', resume: 'Resume' },
+  ja: { allow: '許可', deny: '拒否', session: 'この会話では常に許可', notOffered: 'このエージェントでは選べません', sent: '送信しました', recent: '直近の発言',
+    noContent: '会話の内容はありません。', user: 'ユーザー', agent: 'エージェント', streaming: '出力中', title: '承認待ち', waiting: '件の承認待ち', expired: '件の期限切れ',
+    hint: ['許可', '拒否', 'この会話では常に許可'], selectAll: '承認待ちを全て選ぶ', selected: '件を選択', selectedSuffix: 'をまとめて', wait: '待ち時間',
+    empty: '承認待ちはありません', emptyBody: 'エージェントが許可を求めると、ここに出ます。', expiredTitle: '期限切れ', resume: '再開' },
+};
+type Words = typeof WORDS.en;
 const TAIL_LIMIT = 5;
 const CLOCK_INTERVAL_MS = 1_000;
 const ACTION_LABELS = { allow: 'Allow', deny: 'Deny', session: 'Always allow' };
 // 行の操作は従のボタンにし、主のボタンはまとめての許可の 1 つに限る。
 const ACTION_STYLES = { allow: 'btn-secondary btn-allow', deny: 'btn-secondary', session: 'btn-ghost' };
 const ACTION_ICONS = { allow: 'check', deny: 'x', session: 'check' } as const;
-function ActionButtons({ row, disabled, onAnswer, small = true }: { row: Row; disabled: boolean; onAnswer: (action: ApprovalAction) => void; small?: boolean }) {
+function ActionButtons({ row, disabled, onAnswer, small = true, w = WORDS.en }: { row: Row; disabled: boolean; onAnswer: (action: ApprovalAction) => void; small?: boolean; w?: Words }) {
   return <>{(Object.keys(ACTION_LABELS) as ApprovalAction[]).map(action => <button key={action}
     className={`btn ${ACTION_STYLES[action]}${small ? ' btn-sm' : ''}`}
-    disabled={disabled || !getDecision(row, action)} title={!getDecision(row, action) ? 'Not offered by this provider' : `${ACTION_LABELS[action]} (${APPROVAL_KEYS[action].toUpperCase()})`}
-    onClick={() => onAnswer(action)}>{action !== 'session' && <Icon name={ACTION_ICONS[action]} size={14}/>}{ACTION_LABELS[action]}</button>)}</>;
+    disabled={disabled || !getDecision(row, action)} title={!getDecision(row, action) ? w.notOffered : `${w[action]} (${APPROVAL_KEYS[action].toUpperCase()})`}
+    onClick={() => onAnswer(action)}>{action !== 'session' && <Icon name={ACTION_ICONS[action]} size={14}/>}{w[action]}</button>)}</>;
 }
 export function ApprovalActions({ row, client, disabled = false }: { row: Row; client: CommandClient; disabled?: boolean }) {
   const [busy, setBusy] = useState(false);
@@ -83,7 +95,8 @@ export function ApprovalDetails({ row, state, compact = false }: { row: Row; sta
     <ConversationTail row={row} state={state}/>
   </div>;
 }
-export function Inbox({ client, target = store }: InboxProps) {
+export function Inbox({ client, target = store, language = 'en' }: InboxProps) {
+  const w: Words = WORDS[language] as Words;
   const state = useScreenStore(target);
   const { pending, expired } = getInbox(state);
   const [selected, setSelected] = useState<string[]>([]);
@@ -123,18 +136,18 @@ export function Inbox({ client, target = store }: InboxProps) {
     const rows = active.length ? active : pending.filter(row => String(row.id) === focused && !sent.includes(String(row.id)));
     if (rows.length) { event.preventDefault(); void answer(rows, action); }
   }}>
-    <header className="page-header"><div className="page-title"><h1>Approvals</h1>
-      <p role="status" className="page-subtitle">{pending.length > 0 && <span><strong className="numeric">{pending.length}</strong> waiting</span>}{expired.length > 0 && <span><strong className="numeric">{expired.length}</strong> expired</span>}</p></div>
-      {pending.length > 0 && <p className="shortcut-hint"><kbd>A</kbd> allow <kbd>D</kbd> deny <kbd>S</kbd> allow for this conversation</p>}</header>
+    <header className="page-header"><div className="page-title"><h1>{w.title}</h1>
+      <p role="status" className="page-subtitle">{pending.length > 0 && <span><strong className="numeric">{pending.length}</strong> {w.waiting}</span>}{expired.length > 0 && <span><strong className="numeric">{expired.length}</strong> {w.expired}</span>}</p></div>
+      {pending.length > 0 && <p className="shortcut-hint"><kbd>A</kbd> {w.hint[0]} <kbd>D</kbd> {w.hint[1]} <kbd>S</kbd> {w.hint[2]}</p>}</header>
     {pending.length > 0 && <div className="toolbar bulk-bar">
       <label className="checkbox"><input type="checkbox" disabled={busy || pending.length === 0}
         checked={open.length > 0 && open.every(row => selected.includes(String(row.id)))}
-        onChange={event => setSelected(event.target.checked ? open.map(row => String(row.id)) : [])}/>Select all pending</label>
-      <span className="muted-text numeric">{active.length} selected</span><span className="spacer"/>
+        onChange={event => setSelected(event.target.checked ? open.map(row => String(row.id)) : [])}/>{w.selectAll}</label>
+      <span className="muted-text numeric">{active.length} {w.selected}</span><span className="spacer"/>
       <div className="button-row" role="group" aria-label="Bulk answers">{(Object.keys(ACTION_LABELS) as ApprovalAction[]).map(action => <button key={action}
         className={`btn btn-sm ${action === 'allow' ? 'btn-primary' : ACTION_STYLES[action]}`}
         disabled={busy || !active.length || active.some(row => !getDecision(row, action))}
-        onClick={() => void answer(active, action)}>{ACTION_LABELS[action]} selected</button>)}</div>
+        onClick={() => void answer(active, action)}>{language === 'ja' ? `${w.selectedSuffix}${w[action]}` : `${w[action]}${w.selectedSuffix}`}</button>)}</div>
     </div>}
     {error && <p role="alert" className="banner banner-danger"><Icon name="alert" size={14}/>{error}</p>}
     <ol aria-label="Pending approvals" className="approval-list">{pending.map(row => {
@@ -146,18 +159,18 @@ export function Inbox({ client, target = store }: InboxProps) {
           onChange={event => setSelected(previous => event.target.checked ? [...previous, id] : previous.filter(value => value !== id))}/>
         <div className="approval-main"><ApprovalDetails row={row} state={state}/></div>
         <div className="approval-side">
-          <span className="wait" title={timestamp || undefined}><Icon name="clock" size={13}/>{Number.isFinite(elapsed) ? `Waiting ${formatSeconds(Math.max(0, Math.floor((now - elapsed) / 1000)))}` : 'Waiting'}</span>
+          <span className="wait" title={timestamp || undefined}><Icon name="clock" size={13}/>{Number.isFinite(elapsed) ? `${w.wait} ${formatSeconds(Math.max(0, Math.floor((now - elapsed) / 1000)))}` : w.wait}</span>
           {timestamp && <time className="sr-only" dateTime={timestamp}>{timestamp}</time>}
-          <div className="button-row vertical"><ActionButtons row={row} disabled={busy || sent.includes(id)} onAnswer={action => void answer([row], action)}/></div>
-          {sent.includes(id) && <p className="status-line">Sent</p>}
+          <div className="button-row vertical"><ActionButtons row={row} disabled={busy || sent.includes(id)} onAnswer={action => void answer([row], action)} w={w}/></div>
+          {sent.includes(id) && <p className="status-line">{w.sent}</p>}
         </div>
       </li>;
     })}</ol>
-    {pending.length === 0 && <div className="empty-state"><Icon name="check" size={22}/><h2>Nothing to approve</h2><p>When an agent asks for permission, it shows up here.</p></div>}
-    {expired.length > 0 && <section className="expired-section" aria-label="Expired"><h2>Expired</h2><ol aria-label="Expired approvals" className="approval-list">{expired.map(row => <li key={String(row.id)} className="approval-row expired">
+    {pending.length === 0 && <div className="empty-state"><Icon name="check" size={22}/><h2>{w.empty}</h2><p>{w.emptyBody}</p></div>}
+    {expired.length > 0 && <section className="expired-section" aria-label="Expired"><h2>{w.expiredTitle}</h2><ol aria-label="Expired approvals" className="approval-list">{expired.map(row => <li key={String(row.id)} className="approval-row expired">
       <OutcomeChip row={row}/>
       <div className="approval-main"><ApprovalDetails row={row} state={state}/>{approvalReasonText(readText(row.reason)) && <p className="muted-text">{approvalReasonText(readText(row.reason))}</p>}</div>
-      <div className="approval-side"><button className="btn btn-secondary btn-sm" disabled={busy || !getConversation(row, state)} onClick={() => void resume(row)}><Icon name="play" size={13}/>Resume</button></div>
+      <div className="approval-side"><button className="btn btn-secondary btn-sm" disabled={busy || !getConversation(row, state)} onClick={() => void resume(row)}><Icon name="play" size={13}/>{w.resume}</button></div>
     </li>)}</ol></section>}
   </section>;
 }

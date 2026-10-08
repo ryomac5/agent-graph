@@ -8,6 +8,17 @@ import { GIT_MARKS, type FilesClient, type FilesRequest, type GitMark } from '..
 export interface GitChange { path: string; previousPath?: string; git: GitMark[]; status: string; staged: boolean; unstaged: boolean; additions: number; deletions: number; binary: boolean }
 interface Commit { parents: string[]; branches: string[]; tags: string[]; hash: string; shortHash: string; subject: string; author: string; time: string; fileCount: number; additions: number; deletions: number }
 interface Patch { additions?: number; deletions?: number; previousPath?: string; binary?: boolean; path: string; state: 'text' | 'too_large' | 'binary'; diff?: string }
+const WORDS = {
+  en: { history: 'Git history', refresh: 'Refresh', working: 'Working tree', changed: 'changed files', files: 'files', loadingHistory: 'Loading history…',
+    register: 'Register a project to view its Git changes.', noCommits: 'No commits yet.', loadingFiles: 'Loading files…', noFiles: 'No changed files.',
+    clean: 'Working tree is clean.', difference: 'Difference', loadingDiff: 'Loading diff…', choose: 'Choose a file to view its diff.',
+    staged: 'Staged', unstaged: 'Unstaged', untracked: 'Untracked', unified: 'Unified', split: 'Side by side' },
+  ja: { history: 'Git の履歴', refresh: '更新', working: '作業中の変更', changed: '件の変更', files: 'ファイル', loadingHistory: '履歴を読み込み中…',
+    register: 'プロジェクトを登録すると、Git の変更を見られます。', noCommits: 'まだコミットはありません。', loadingFiles: 'ファイルを読み込み中…', noFiles: '変更したファイルはありません。',
+    clean: '作業中の変更はありません。', difference: '差分', loadingDiff: '差分を読み込み中…', choose: 'ファイルを選ぶと差分を表示します。',
+    staged: 'ステージ済み', unstaged: '未ステージ', untracked: '未追跡', unified: '1 列', split: '左右' },
+} as const;
+type Words = typeof WORDS.en | typeof WORDS.ja;
 export async function callGit<T>(client: FilesClient, command: string, request: FilesRequest & { hash?: string; mode?: string }): Promise<T> {
   const ack = await client.command(command, request);
   if (!ack?.ok || !ack.result) throw new Error(ack?.error ?? 'Could not load Git changes');
@@ -20,7 +31,7 @@ export function GitPatch({ patch, layout }: { patch: Patch; layout: DiffLayout }
       : files.length ? <DiffView files={files} layout={layout} attribution="unknown" evidenceUrl="#git-changes"/>
         : <p>No changes in this diff.</p>;
 }
-export function FileGitDiff({ client, request, change }: { client: FilesClient; request: FilesRequest; change: Pick<GitChange, 'staged' | 'unstaged' | 'git'> }) {
+export function FileGitDiff({ client, request, change, w = WORDS.en }: { client: FilesClient; request: FilesRequest; change: Pick<GitChange, 'staged' | 'unstaged' | 'git'>; w?: Words }) {
   const modes = change.git.includes('untracked') ? ['untracked'] : [...(change.staged ? ['staged'] : []), ...(change.unstaged ? ['unstaged'] : [])];
   const [chosen, setChosen] = useState('');
   const mode = modes.includes(chosen) ? chosen : modes[0] ?? 'unstaged';
@@ -34,13 +45,13 @@ export function FileGitDiff({ client, request, change }: { client: FilesClient; 
     return () => { cancelled = true; };
   }, [client, key, mode]);
   return <div className="git-diff-panel"><div className="toolbar changes-toolbar">
-    <div className="button-row" role="group" aria-label="Change source">{modes.map(value => <button key={value} className="btn btn-secondary btn-sm" aria-pressed={mode === value} onClick={() => setChosen(value)}>{value === 'staged' ? 'Staged' : value === 'unstaged' ? 'Unstaged' : 'Untracked'}</button>)}</div>
-    <Layout value={layout} onChange={setLayout}/></div>
+    <div className="button-row" role="group" aria-label="Change source">{modes.map(value => <button key={value} className="btn btn-secondary btn-sm" aria-pressed={mode === value} onClick={() => setChosen(value)}>{value === 'staged' ? w.staged : value === 'unstaged' ? w.unstaged : w.untracked}</button>)}</div>
+    <Layout value={layout} onChange={setLayout} w={w}/></div>
     {error ? <p role="alert">{error}</p> : patch ? <GitPatch patch={patch} layout={layout}/> : <p>Loading diff…</p>}
   </div>;
 }
-function Layout({ value, onChange }: { value: DiffLayout; onChange: (value: DiffLayout) => void }) {
-  return <div className="button-row" role="group" aria-label="Diff layout">{(['unified', 'split'] as const).map(layout => <button key={layout} className="btn btn-secondary btn-sm" aria-pressed={value === layout} onClick={() => onChange(layout)}>{layout === 'unified' ? 'Unified' : 'Side by side'}</button>)}</div>;
+function Layout({ value, onChange, w = WORDS.en }: { value: DiffLayout; onChange: (value: DiffLayout) => void; w?: Words }) {
+  return <div className="button-row" role="group" aria-label="Diff layout">{(['unified', 'split'] as const).map(layout => <button key={layout} className="btn btn-secondary btn-sm" aria-pressed={value === layout} onClick={() => onChange(layout)}>{layout === 'unified' ? w.unified : w.split}</button>)}</div>;
 }
 interface TreeEntry { path: string; git: GitMark[]; additions: number; deletions: number }
 function ChangeTree({ entries, selected, onSelect }: { entries: TreeEntry[]; selected: string; onSelect: (path: string) => void }) {
@@ -77,7 +88,8 @@ function readCommitEntry(file: Patch): TreeEntry {
     : /\nnew file mode /.test(file.diff ?? '') ? ['added'] : /\ndeleted file mode /.test(file.diff ?? '') ? ['deleted'] : ['modified'];
   return { path: file.path, git, additions: file.additions ?? parsed?.additions ?? 0, deletions: file.deletions ?? parsed?.deletions ?? 0 };
 }
-export function GitChanges({ client, projectId, worktree, enabled }: { client: FilesClient; projectId: string; worktree?: string; enabled: boolean }) {
+export function GitChanges({ client, projectId, worktree, enabled, language = 'en' }: { client: FilesClient; projectId: string; worktree?: string; enabled: boolean; language?: 'en' | 'ja' }) {
+  const w: Words = WORDS[language];
   const [entries, setEntries] = useState<GitChange[]>([]);
   const [commits, setCommits] = useState<Commit[]>([]);
   const [hash, setHash] = useState('');
@@ -162,12 +174,12 @@ export function GitChanges({ client, projectId, worktree, enabled }: { client: F
   }
   return <div id="git-changes" className="git-changes">
     <div className="git-history" ref={historyRef} onKeyDown={moveHistory}>
-      <header className="git-pane-header"><h2>Git history</h2><button className="btn btn-secondary btn-sm" disabled={!enabled || loading} onClick={() => setRevision(value => value + 1)}>Refresh</button></header>
-      <button data-git-source className="git-working-choice" aria-pressed={!hash} onClick={() => selectSource('')}><strong>Working tree</strong><span className="count-pill">{entries.length}</span><span className="muted-text">changed files</span></button>
+      <header className="git-pane-header"><h2>{w.history}</h2><button className="btn btn-secondary btn-sm" disabled={!enabled || loading} onClick={() => setRevision(value => value + 1)}>{w.refresh}</button></header>
+      <button data-git-source className="git-working-choice" aria-pressed={!hash} onClick={() => selectSource('')}><strong>{w.working}</strong><span className="count-pill">{entries.length}</span><span className="muted-text">{w.changed}</span></button>
       {treeError && <p role="alert">{treeError}</p>}
       <section aria-label="Commits">
         {historyError && <p role="alert">{historyError}</p>}
-        {loading ? <p>Loading history…</p> : !enabled ? <p>Register a project to view its Git changes.</p> : !commits.length && !historyError ? <p className="muted-text">No commits yet.</p> : null}
+        {loading ? <p>{w.loadingHistory}</p> : !enabled ? <p>{w.register}</p> : !commits.length && !historyError ? <p className="muted-text">{w.noCommits}</p> : null}
         <ul className="git-commit-list">{commits.map((value, index) => <li key={value.hash}>
           <button data-git-source className="git-commit-choice" aria-pressed={hash === value.hash} onClick={() => selectSource(value.hash)} title={value.subject}>
             <CommitLines row={graph.rows[index]} columns={graph.columns}/>
@@ -178,13 +190,13 @@ export function GitChanges({ client, projectId, worktree, enabled }: { client: F
       </section>
     </div>
     <section className="git-files-pane" aria-label="Changed files" ref={treeRef} onKeyDown={moveFiles}>
-      <header className="git-pane-header"><h2>{hash ? commit?.shortHash : 'Working tree'}</h2><span className="count-pill">{treeEntries.length} files</span></header>
-      {commitError ? <p role="alert">{commitError}</p> : loading || commitLoading ? <p>Loading files…</p> : treeEntries.length ? <ChangeTree entries={treeEntries} selected={selected} onSelect={setSelected}/> : <p className="muted-text">{hash ? 'No changed files.' : 'Working tree is clean.'}</p>}
+      <header className="git-pane-header"><h2>{hash ? commit?.shortHash : w.working}</h2><span className="count-pill">{treeEntries.length} {w.files}</span></header>
+      {commitError ? <p role="alert">{commitError}</p> : loading || commitLoading ? <p>{w.loadingFiles}</p> : treeEntries.length ? <ChangeTree entries={treeEntries} selected={selected} onSelect={setSelected}/> : <p className="muted-text">{hash ? w.noFiles : w.clean}</p>}
     </section>
     <section className="git-diff-pane" aria-label="Difference" ref={diffRef} tabIndex={-1}>
-      <header className="git-pane-header"><h2 title={selected}>{selected || 'Difference'}</h2></header>
-      {change ? <FileGitDiff key={`${projectId}:${worktree}:${revision}:${selected}`} client={client} request={{ ...request, path: selected }} change={change}/>
-        : patch ? <><Layout value={layout} onChange={setLayout}/><GitPatch patch={patch} layout={layout}/></> : <p className="muted-text">{commitLoading ? 'Loading diff…' : 'Choose a file to view its diff.'}</p>}
+      <header className="git-pane-header"><h2 title={selected}>{selected || w.difference}</h2></header>
+      {change ? <FileGitDiff key={`${projectId}:${worktree}:${revision}:${selected}`} client={client} request={{ ...request, path: selected }} change={change} w={w}/>
+        : patch ? <><Layout value={layout} onChange={setLayout} w={w}/><GitPatch patch={patch} layout={layout}/></> : <p className="muted-text">{commitLoading ? w.loadingDiff : w.choose}</p>}
     </section>
   </div>;
 }

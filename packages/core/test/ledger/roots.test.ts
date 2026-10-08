@@ -25,3 +25,12 @@ test('根は継続とキット名を時刻順にまとめ、子と別の根を�
     last_activity_ts: '2026-10-03', conversation_ids: ['a', 'b', 'c'], running_children: 1, total_children: 2 });
   assert.equal(connectRootDelegations([{ kit: { session: 'agent-graph-001' }, repository_id: 'repo' }], roots)[0].root_id, 'a');
 });
+
+test("キットのあるプロジェクトでは、キットの名前のある系列だけを根にする", () => {
+  const roots = projectRoots([
+    { id: "a", type: "interactive", kit_name: "agent-graph-001", project: "p", created_ts: "1" },
+    { id: "b", type: "interactive", name: "横断検索を作る", project: "p", created_ts: "2" },
+    { id: "c", type: "interactive", name: "solo", project: "q", created_ts: "3" },
+  ], []);
+  assert.deepEqual(roots.map(row => row.name).sort(), ["agent-graph-001", "solo"]);
+});

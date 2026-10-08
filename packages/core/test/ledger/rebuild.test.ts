@@ -124,7 +124,7 @@ const BASE = { source: "host-codex", source_ts: TS, confidence: "confirmed" } as
 test("キットの別名だけで名前を投影し、到着順・差分反映・版 8 からの移行で事実を増やさない", (t) => {
   const conversation: FactInput = { ...BASE, source_event_id: "kit-conversation", kind: "conversation.created",
     subject: 'conversation:["claude","kit-session"]',
-    payload: { provider: "claude", native_id: "kit-session", origin: "observed", type: "interactive" } };
+    payload: { provider: "claude", native_id: "kit-session", origin: "observed", type: "interactive", history_format: "jsonl" } };
   const alias: FactInput = { ...BASE, source: "kit", source_event_id: "kit-alias", kind: "alias.created", subject: "alias:kit-alias",
     payload: { entity_id: '["claude","kit-session"]', kind: "kit", name: "example-001" } };
   for (const inputs of [[conversation, alias], [alias, conversation]]) {

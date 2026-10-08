@@ -111,3 +111,15 @@ test("子のエージェントの SubagentHandback と、SubagentStop と Stop �
   assert.equal(classifyClaudeRecord({ type: "attachment", uuid: "d", attachment: { type: "hook_success", hookEvent: "PostToolUse" } }), undefined);
   assert.equal(classifyClaudeRecord({ type: "assistant", uuid: "e", message: { content: [{ type: "tool_use", name: "Bash", input: {} }] } })?.state, "running");
 });
+
+test("同じ実行の状態は、状態の規則の版がいちばん新しい読み方の事実だけを使う", () => {
+  const base = { source: "transcript-claude", confidence: "confirmed", observed_ts: "2026-10-04T15:40:00.000Z", payload_hash: "h", schema_version: 1, cursor: null, supersedes: null };
+  const created = { ...base, fact_id: "c", seq: 1, kind: "run.created", subject: "run:x:1", source_event_id: "run:x", source_ts: "2026-10-04T15:34:00.000Z",
+    payload: { conversation_id: "x", generation: 1, state: "unknown" } };
+  const state = (seq: number, id: string, ts: string, value: string) => ({ ...base, fact_id: `f${seq}`, seq, kind: "run.state_changed", subject: "run:x:1",
+    source_event_id: id, source_ts: ts, payload: { conversation_id: "x", generation: 1, state: value, last_evidence: { kind: "tool_call", turn_id: null } } });
+  const facts = [created,
+    state(2, "turn:v2:x:a", "2026-10-04T15:35:53.437Z", "idle"), state(3, "turn:v2:x:b", "2026-10-04T15:35:53.837Z", "running"),
+    state(4, "turn:v3:x:a", "2026-10-04T15:35:53.437Z", "idle")] as unknown as Fact[];
+  assert.equal(projectRuns(facts)[0].state, "idle");
+});

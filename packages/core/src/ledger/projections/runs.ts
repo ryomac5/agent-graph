@@ -45,8 +45,21 @@ export function projectRuns(facts: readonly Fact[]): RunProjection[] {
   const currentGeneration = new Map<string, number>();
   const interruptedTurns = new Set<string>();
   const active = orderActiveFacts(facts);
+  // 状態の規則の版が上がると、同じ記録の行を新しい版で読み直した事実が足される。実行ごとに最新の版の読み方だけを使う。
+  const ruleVersion = (fact: Fact) => {
+    if (fact.kind !== "run.state_changed" || !fact.source.startsWith("transcript-")) return 0;
+    const match = /^turn:v(\d+):/.exec(fact.source_event_id);
+    return match ? Number(match[1]) : fact.source_event_id.startsWith("turn:") ? 1 : 0;
+  };
+  const latestRule = new Map<string, number>();
+  for (const fact of active) {
+    const version = ruleVersion(fact);
+    if (version > (latestRule.get(fact.subject) ?? 0)) latestRule.set(fact.subject, version);
+  }
   for (const fact of active) {
     if (!fact.kind.startsWith("run.") || !fact.payload) continue;
+    const version = ruleVersion(fact);
+    if (version > 0 && version < (latestRule.get(fact.subject) ?? 0)) continue;
     const subjectId = fact.subject.slice("run:".length);
     const payload = fact.payload as Partial<RunPayload> & { turn_id?: string };
     const generation = payload.generation ?? currentGeneration.get(subjectId);

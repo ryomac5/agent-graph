@@ -51,10 +51,15 @@ export function projectRoots(conversations: readonly RootConversation[], relatio
     const ids = children.get(row.from_id!) ?? new Set<string>();
     ids.add(row.to_id!); children.set(row.from_id!, ids);
   }
+  // キットは、人が最初の指示を出した会話にだけ名前を付ける。キットのあるプロジェクトでは、名前のある系列だけを根にする。
+  // 名前のない会話は、旧い daemon や planner が起こした実装役とレビュー役の会話である。
+  const kitProjects = new Set(conversations.filter(row => row.kit_name).map(row => row.project ?? row.repository_id ?? null));
   const roots: RootProjection[] = [];
   for (const group of groups.values()) {
     const ids = new Set(group.map(row => row.id));
     if (!group.some(row => row.type === 'interactive') || active.some(row => ids.has(row.to_id!) && !ids.has(row.from_id!))) continue;
+    const project = group[0].project ?? group[0].repository_id ?? null;
+    if (kitProjects.has(project) && !group.some(row => row.kit_name)) continue;
     group.sort((a, b) => (a.created_ts ?? '').localeCompare(b.created_ts ?? '') || a.id.localeCompare(b.id));
     const first = group[0];
     const reached = new Set(ids);

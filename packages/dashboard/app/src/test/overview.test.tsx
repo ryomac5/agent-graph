@@ -108,7 +108,7 @@ it('filters root views and Changes by a display-name route', () => {
  const target = setup({ artifacts: [{ id: 'artifact', run_id: 'child:2', version: 1, repository_id: HASH, patch_hash: 'h', diff: 'diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-old\n+new\n' }, { id: 'foreign', run_id: 'probe:1', version: 1, repository_id: 'other-hash', patch_hash: 'f', diff: '' }] });
  vi.stubGlobal('innerWidth', 1440); render(<MemoryRouter><WorkspacePage project="agent-graph" target={target} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: true })) }}/></MemoryRouter>);
  fireEvent.click(screen.getByRole('button', { name: /Terminal root/ }));
- expect(within(screen.getByRole('complementary', { name: 'Requests' })).getByText('Implement the overview')).toBeTruthy(); cleanup(); localStorage.clear();
+ expect(within(screen.getByRole('complementary', { name: 'Sub-agents' })).getByText('Implement the overview')).toBeTruthy(); cleanup(); localStorage.clear();
  vi.stubGlobal('innerWidth', 1024); render(<MemoryRouter><WorkspacePage project="agent-graph" target={target} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: true })) }}/></MemoryRouter>);
  expect(screen.getByRole('heading', { name: 'agent-graph' })).toBeTruthy(); expect(within(screen.getByRole('region', { name: 'Conversations' })).getByRole('button', { name: /Terminal root/ })).toBeTruthy(); cleanup();
  render(<MemoryRouter><ChangesPage project="agent-graph" target={target} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: true })) }}/></MemoryRouter>); expect(screen.getByRole('button', { name: 'Comment on a.ts new line 1' })).toBeTruthy(); expect(screen.queryByText(/foreign/)).toBeNull();
@@ -145,7 +145,7 @@ it('switches the request flow between roots in the workspace', () => {
  conversations: [...snapshot.projection.conversations, { id: 'second-child', provider: 'claude', state: 'ended' }],
  relations: [...snapshot.projection.relations, { id: 'second-child-edge', type: 'delegated', from_id: 'second', to_id: 'second-child', evidence: { agentType: 'review', description: 'Second review' } }] } });
  vi.stubGlobal('innerWidth', 1440); render(<MemoryRouter><WorkspacePage project="agent-graph" target={target} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: true })) }}/></MemoryRouter>);
- const flow = screen.getByRole('complementary', { name: 'Requests' });
+ const flow = screen.getByRole('complementary', { name: 'Sub-agents' });
  fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getByRole('button', { name: /Terminal root/ }));
  expect(within(flow).getByText('GPT-6.1 Sol · implement')).toBeTruthy();
  fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getByRole('button', { name: /Second root/ })); expect(within(flow).queryByText('GPT-6.1 Sol · implement')).toBeNull(); expect(within(flow).getByText('Second review')).toBeTruthy();

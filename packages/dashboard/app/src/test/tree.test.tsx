@@ -101,7 +101,7 @@ it('shows the flow under its root in the workspace, selects requests and sends t
   const target = fixture();
   const command = vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'retry', ok: true }));
   render(<MemoryRouter><WorkspacePage project={PROJECT} target={target} client={{ command }}/></MemoryRouter>);
-  const flow = screen.getByRole('complementary', { name: 'Requests' });
+  const flow = screen.getByRole('complementary', { name: 'Sub-agents' });
   // 根を頂点に置き、依頼はその下に字下げで続ける。
   const apex = within(flow).getByRole('button', { name: /^Terminal/ });
   expect(apex.getAttribute('aria-pressed')).toBe('true');
@@ -135,7 +135,7 @@ it('groups retry executions in one delegation node and reports retry errors', as
   expect(tree.nodes.find(n => n.id === 'run:codex:2')!.attempts.map(attempt => attempt.run_id)).toEqual(['codex:1', 'codex:2']);
   const command = vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'retry', ok: false, error: 'Runner unavailable' }));
   render(<MemoryRouter><WorkspacePage project={PROJECT} target={target} client={{ command }}/></MemoryRouter>);
-  const flow = screen.getByRole('complementary', { name: 'Requests' });
+  const flow = screen.getByRole('complementary', { name: 'Sub-agents' });
   expect(within(flow).getAllByRole('button', { name: /(Codex|GPT)[^·]* · implement/ })).toHaveLength(1);
   fireEvent.click(within(flow).getByRole('button', { name: 'Retry' }));
   await waitFor(() => expect(within(flow).getByRole('alert').textContent).toBe('Runner unavailable'));
@@ -163,7 +163,7 @@ it('keeps a resumed delegated conversation under its origin with two attempts an
     ['conversation:origin', 'run:codex:2'], ['run:codex:2', 'run:claude:1'],
   ]);
   render(<MemoryRouter><WorkspacePage project={PROJECT} target={target} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: true })) }}/></MemoryRouter>);
-  const flow = screen.getByRole('complementary', { name: 'Requests' });
+  const flow = screen.getByRole('complementary', { name: 'Sub-agents' });
   expect(within(flow).getAllByRole('button', { name: /(Codex|GPT)[^·]* · implement/ })).toHaveLength(1);
 });
 
@@ -217,7 +217,7 @@ it('keeps delegations with unconfirmed parents out of the selected root tree whi
  target.getSnapshot().projection.delegations.forEach(row => { row.root_id = null; }); target.getSnapshot().projection.relations = [];
  expect(buildDelegationTree(target.getSnapshot(), '/elsewhere').nodes).toEqual([]);
  render(<MemoryRouter><WorkspacePage project={PROJECT} target={target} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: true })) }}/></MemoryRouter>);
- const flow = screen.getByRole('complementary', { name: 'Requests' }); expect(within(flow).getByText('No requests yet')).toBeTruthy(); expect(within(flow).queryByRole('button', { name: 'Retry' })).toBeNull();
+ const flow = screen.getByRole('complementary', { name: 'Sub-agents' }); expect(within(flow).getByText('No sub-agents yet')).toBeTruthy(); expect(within(flow).queryByRole('button', { name: 'Retry' })).toBeNull();
 });
 it('nests review_of in the original execution direction with a readable reviewer label', () => {
   const state = fixture().getSnapshot();

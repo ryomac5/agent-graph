@@ -57,12 +57,12 @@ it('keeps reviewer conversations out of the root list', () => {
 });
 it('opens the request flow at 1280 pixels or more unless the user collapsed it', () => {
   render(<MemoryRouter><WorkspacePage project="repo" target={store()} client={client}/></MemoryRouter>);
-  const toggle = screen.getByRole('button', { name: 'Hide requests' });
+  const toggle = screen.getByRole('button', { name: 'Hide sub-agents' });
   fireEvent.click(toggle);
   expect(localStorage.getItem('agent-graph-requests-open')).toBe('0');
   cleanup();
   render(<MemoryRouter><WorkspacePage project="repo" target={store()} client={client}/></MemoryRouter>);
-  fireEvent.click(screen.getByRole('button', { name: 'Show requests' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Show sub-agents' }));
   expect(localStorage.getItem('agent-graph-requests-open')).toBeNull();
 });
 it('does not draw a bubble for user rows that only carry injected text or tool results', () => {
@@ -93,7 +93,7 @@ function flowStore(childCount: number) {
 function Location() { return <output data-testid="location">{useLocation().search}</output>; }
 it('puts running children first, then the newest, and folds older children past twenty', () => {
   render(<MemoryRouter><WorkspacePage project="repo" target={flowStore(25)} client={client}/></MemoryRouter>);
-  const flow = screen.getByRole('complementary', { name: 'Requests' });
+  const flow = screen.getByRole('complementary', { name: 'Sub-agents' });
   const titles = () => [...flow.querySelectorAll('.delegation-select .request-title')].map(element => element.textContent);
   expect(titles().slice(0, 3)).toEqual(['Task 0', 'Task 24', 'Task 23']);
   expect(titles()).toHaveLength(21);
@@ -106,7 +106,7 @@ it('opens a child conversation from anywhere on its row, writes it to the URL an
   const header = () => document.querySelector<HTMLElement>('.conv-title-row')!;
   // 根の系列の見出しには経過の時間を出さない。
   expect(header().textContent).not.toMatch(/Elapsed/);
-  const flow = screen.getByRole('complementary', { name: 'Requests' });
+  const flow = screen.getByRole('complementary', { name: 'Sub-agents' });
   fireEvent.click(within(flow).getByText('Task 1').closest('.request-row')!);
   expect(screen.getByTestId('location').textContent).toContain('child=child-1');
   expect(screen.getByRole('button', { name: 'Back to agent-graph-001' }).textContent).toBe('←agent-graph-001');

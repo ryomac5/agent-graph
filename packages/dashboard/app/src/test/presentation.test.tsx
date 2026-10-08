@@ -46,7 +46,7 @@ it.each(['approve', 'request_changes', 'reject'])('formats %s review output cons
   expect(screen.getByRole('link', { name: /Browser fixture task/ })).toBeTruthy(); overview.unmount();
   const workspace = render(<MemoryRouter><WorkspacePage target={target} client={client} project={REPO}/></MemoryRouter>);
   expect(within(screen.getByRole('region', { name: 'Conversations' })).queryByText(name)).toBeNull();
-  fireEvent.click(within(screen.getByRole('complementary', { name: 'Requests' })).getByRole('button', { name: /Codex · review · Done$/ }));
+  fireEvent.click(within(screen.getByRole('complementary', { name: 'Sub-agents' })).getByRole('button', { name: /Codex · review · Done$/ }));
   expect(document.querySelector('.conversation-markdown')!.textContent).toBe(expected);
   workspace.unmount();
   render(<MemoryRouter><ConversationPage conversationId={review} target={target} client={client}/></MemoryRouter>);

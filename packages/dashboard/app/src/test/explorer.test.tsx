@@ -108,7 +108,7 @@ describe('Files explorer', () => {
     expect(document.querySelector('.workspace-files')).toBeNull();
     expect(document.querySelector('.workspace-columns')?.children).toHaveLength(3);
     expect(document.querySelector('.workspace-columns > .workspace-conversation')).toBeTruthy();
-    expect(screen.getByRole('complementary', { name: 'Requests' })).toBeTruthy();
+    expect(screen.getByRole('complementary', { name: 'Sub-agents' })).toBeTruthy();
     expect(screen.queryByRole('region', { name: 'Tasks' })).toBeNull();
   });
 

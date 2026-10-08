@@ -26,6 +26,7 @@ import { WebSocket } from "ws";
 import { createFilesApi, handleFilesCommand, MAX_FILE_BYTES } from "../src/files/index.ts";
 import { openObservationService } from "../src/service/index.ts";
 import { startWebSocketServer } from "../src/ws/index.ts";
+import { parseCommitLog } from '../src/files/git.ts';
 
 const execute = promisify(execFile);
 async function runGit(root: string, ...args: string[]): Promise<string> {
@@ -307,6 +308,9 @@ test('git commands return working tree sources, recent commits and redacted boun
   assert.equal(history.commits.length, 1);
   assert.equal(history.commits[0].subject, 'fixture'); assert.equal(history.commits[0].author, 'Files Test');
   assert.equal(history.commits[0].fileCount, 2); assert.equal(history.commits[0].additions, 2);
+  assert.deepEqual(history.commits[0].parents, []);
+  assert.ok(history.commits[0].branches.length > 0);
+  assert.deepEqual(history.commits[0].tags, []);
   const saved = await handleFilesCommand(api, 'files.commit', { ...request, hash: history.commits[0].hash }) as Awaited<ReturnType<typeof api.commit>>;
   assert.equal(saved.files.length, 2); assert.ok(saved.files.find(entry => entry.path === 'src/file.txt')?.diff?.includes('+before'));
 });
@@ -326,7 +330,7 @@ test('git commands apply project, worktree and path rejection and validate argum
     await assert.rejects(handleFilesCommand(api, command, { ...request, projectId: 'unknown', hash }));
     await assert.rejects(handleFilesCommand(api, command, { ...request, worktree: directory, hash }));
   }
-  for (const payload of [{ mode: 'other' }, { limit: 0 }, { limit: 101 }, { limit: '30' }, { hash: '--all' }, { hash: 'HEAD' }]) {
+  for (const payload of [{ mode: 'other' }, { limit: 0 }, { limit: 201 }, { limit: '30' }, { hash: '--all' }, { hash: 'HEAD' }]) {
     await assert.rejects(handleFilesCommand(api, 'files.commits', { ...request, ...payload }));
   }
   const tree = join(directory, 'second'); await runGit(root, 'worktree', 'add', '-b', 'second', tree);
@@ -335,4 +339,17 @@ test('git commands apply project, worktree and path rejection and validate argum
   service.ledger.append({ source: 'ui', source_event_id: 'linked-root', kind: 'project.updated', subject: 'project:original', source_ts: '2026-10-08T00:00:00Z', confidence: 'confirmed', payload: { root_path: tree } });
   assert.equal((await api.commits({ ...request, worktree: root })).commits[0].hash, hash);
 
+});
+
+test('commit log preserves merge parents, branches, tags and record boundaries', () => {
+  const fields = ['abcdef123456', '1111111 2222222', 'HEAD -> main, tag: v1.0, origin/main, feature', 'Author', '2026-10-08T00:00:00Z', 'Merge feature'];
+  const root = ['1111111', '', '', 'Author', '2026-10-07T00:00:00Z', 'Root'];
+  const commits = parseCommitLog(`${fields.join('\0')}\0\n${root.join('\0')}\0\n`);
+  assert.deepEqual(commits[0].parents, ['1111111', '2222222']);
+  assert.deepEqual(commits[0].branches, ['main', 'origin/main', 'feature']);
+  assert.deepEqual(commits[0].tags, ['v1.0']);
+  assert.equal(commits[0].subject, 'Merge feature');
+  assert.equal(commits[1].hash, '1111111');
+  assert.deepEqual(commits[1].parents, []);
+  assert.deepEqual(parseCommitLog(''), []);
 });

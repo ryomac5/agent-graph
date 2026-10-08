@@ -9,10 +9,24 @@ import type { FilesRequest, GitMark } from './index.ts';
 export const MAX_FILE_BYTES = 1024 * 1024;
 const execute = promisify(execFile);
 const MAX_OUTPUT_BYTES = 64 * MAX_FILE_BYTES;
-const DEFAULT_COMMITS = 30;
-const MAX_COMMITS = 100;
+const DEFAULT_COMMITS = 200;
+const MAX_COMMITS = 200;
 export interface GitRequest extends FilesRequest { hash?: string; limit?: number; mode?: 'staged' | 'unstaged' | 'untracked' }
 export interface ChangeEntry { path: string; previousPath?: string; git: GitMark[]; status: string; staged: boolean; unstaged: boolean; additions: number; deletions: number; binary: boolean }
+export function parseCommitLog(output: string) {
+  const commits = [];
+  const values = output.split('\0');
+  for (let i = 0; i + 5 < values.length; i += 6) {
+    const hash = values[i].trim();
+    if (!hash) continue;
+    const names = values[i + 2].split(', ').filter(Boolean);
+    commits.push({ hash, shortHash: hash.slice(0, 7), parents: values[i + 1].split(' ').filter(Boolean),
+      branches: names.filter(name => !name.startsWith('tag: ')).map(name => name.replace(/^HEAD -> /, '')),
+      tags: names.filter(name => name.startsWith('tag: ')).map(name => name.slice(5)),
+      author: values[i + 3], time: values[i + 4], subject: values[i + 5] });
+  }
+  return commits;
+}
 async function runGit(root: string, args: string[], maxBuffer = MAX_OUTPUT_BYTES) {
   const { stdout } = await execute('git', ['--literal-pathspecs', '-C', root, ...args], {
     encoding: 'utf8', maxBuffer, timeout: 30_000, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
@@ -166,16 +180,14 @@ export function createGitApi(selectRoot: (request: FilesRequest) => Promise<stri
     async commits(request: GitRequest) {
       const root = await selectRoot(request); await check(root, request);
       let output: string;
-      const repository = await locateRepository(root);
-      try { output = await runGit(root, ['log', `-${request.limit ?? DEFAULT_COMMITS}`, '--format=%H%x00%h%x00%s%x00%an%x00%aI%x00', ...(repository.root === root ? [] : ['--', '.'])]); }
+      try { output = await runGit(root, ['log', '--all', '--date-order', `-${request.limit ?? DEFAULT_COMMITS}`, '--decorate=short', '--format=%H%x00%P%x00%D%x00%an%x00%aI%x00%s%x00']); }
       catch (error) { if (error instanceof Error && 'stderr' in error && /does not have any commits yet|unknown revision.*HEAD/.test(String(error.stderr))) return { worktree: root, commits: [] }; throw error; }
       const commits = [];
-      const values = output.split('\0');
-      for (let i = 0; i + 4 < values.length; i += 5) {
-        const hash = values[i].trim(); if (!hash) continue;
-        const files = await readCommitFiles(root, hash);
-        commits.push({ hash, shortHash: values[i + 1], subject: redact(values[i + 2], readRules()).text, author: redact(values[i + 3], readRules()).text,
-          time: values[i + 4], fileCount: files.length, additions: files.reduce((sum, file) => sum + file.additions, 0), deletions: files.reduce((sum, file) => sum + file.deletions, 0) });
+      for (const commit of parseCommitLog(output)) {
+        const files = await readCommitFiles(root, commit.hash);
+        commits.push({ ...commit, branches: commit.branches.map(name => redact(name, readRules()).text), tags: commit.tags.map(name => redact(name, readRules()).text),
+          subject: redact(commit.subject, readRules()).text, author: redact(commit.author, readRules()).text,
+          fileCount: files.length, additions: files.reduce((sum, file) => sum + file.additions, 0), deletions: files.reduce((sum, file) => sum + file.deletions, 0) });
       }
       return { worktree: root, commits };
     },

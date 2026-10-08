@@ -138,7 +138,7 @@ it('groups retry executions in one delegation node and reports retry errors', as
   const flow = screen.getByRole('complementary', { name: 'Requests' });
   expect(within(flow).getAllByRole('button', { name: /(Codex|GPT)[^·]* · implement/ })).toHaveLength(1);
   fireEvent.click(within(flow).getByRole('button', { name: 'Retry' }));
-  await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('Runner unavailable'));
+  await waitFor(() => expect(within(flow).getByRole('alert').textContent).toBe('Runner unavailable'));
 });
 
 it('keeps a resumed delegated conversation under its origin with two attempts and its reviewer as a child', () => {

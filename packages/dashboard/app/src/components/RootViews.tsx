@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { Link } from 'react-router';
 import type { Root } from '../lib/roots.ts';
-import { agentName, formatAgo, formatWhen } from '../lib/format.ts';
+import { agentName, formatAgo, formatWhen, summarizeApproval } from '../lib/format.ts';
+import type { Row } from '../lib/store.ts';
 import { dictionaries, type Language } from '../lib/i18n.ts';
 import type { DelegationTree, TreeNode } from '../pages/tree/model.ts';
 import { StatusDot, stateLabel } from './StateBadge.tsx';
@@ -47,9 +48,11 @@ function lastActivity(node: TreeNode): string {
 }
 
 /** 依頼の流れ。根を頂点に置き、頼んだ内容を 1 行目、依頼先と状態と時刻を 2 行目に出す。子の子は字下げで続ける。 */
-export function RootTree({ tree, selected, onSelect, runningOnly = false, language = 'en', root, onSelectRoot, onRetry }: {
+export function RootTree({ tree, selected, onSelect, runningOnly = false, language = 'en', root, onSelectRoot, onRetry, approvals = [], onAnswer }: {
   tree: DelegationTree; selected?: string; onSelect: (node: TreeNode) => void; runningOnly?: boolean; language?: Language;
   root?: { name: string; state: string }; onSelectRoot?: () => void; onRetry?: (node: TreeNode) => void;
+  /** 承認待ちの行。子の行の中で、何を許すかを見せてその場で答えさせる。 */
+  approvals?: Row[]; onAnswer?: (approval: Row, action: 'allow' | 'deny') => void;
 }) {
   const t = dictionaries[language];
   const [showOlder, setShowOlder] = useState(false);
@@ -82,7 +85,14 @@ export function RootTree({ tree, selected, onSelect, runningOnly = false, langua
           <span className="request-meta"><StatusDot state={node.state} language={language}/><span className="request-who">{[who, node.role].filter(Boolean).join(' · ')}</span>{when && <span className="request-when">{when}</span>}</span>
         </button>
         {retry && <button className="btn btn-ghost btn-xs request-retry" onClick={event => { event.stopPropagation(); onRetry(node); }}>{t.retry}</button>}
-      </div>)}{children.some(Boolean) && <ul>{children}</ul>}</li>;
+      </div>)}{(() => {
+        const pending = approvals.find(row => (node.conversationId && row.conversation_id === node.conversationId) || (node.run && row.run_id === node.run.id));
+        return pending && onAnswer && <div className="request-approval" onClick={event => event.stopPropagation()}>
+          <code className="request-approval-command" title={summarizeApproval(pending.request)}>{summarizeApproval(pending.request)}</code>
+          <span className="button-row"><button className="btn btn-primary btn-xs" onClick={() => onAnswer(pending, 'allow')}>Allow</button>
+            <button className="btn btn-ghost btn-xs" onClick={() => onAnswer(pending, 'deny')}>Deny</button></span>
+        </div>;
+      })()}{children.some(Boolean) && <ul>{children}</ul>}</li>;
   }
   const children = order(tree.nodes.find(node => node.id === tree.roots[0])?.children ?? []);
   const rendered = children.map(id => ({ id, item: branch(id) })).filter(entry => entry.item);

@@ -9,6 +9,7 @@ import { selectRoots, useRootIndex, buildRootTree, orderSeries } from '../../lib
 import { RootList, RootTree } from '../../components/RootViews.tsx';
 import { CreateTaskForm } from '../../components/CreateTaskForm.tsx';
 import { Icon } from '../../components/Icon.tsx';
+import { answerApproval, isPending } from '../inbox/model.ts';
 import '../../components/activity.css';
 import '../files/files.css';
 
@@ -100,6 +101,8 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
         {requestsOpen && <div className="column-scroll">{retryError && <p role="alert" className="status-line danger">{retryError}</p>}{selected && <RootTree tree={tree} language={language} selected={childId} root={selected}
           onSelectRoot={() => { setChild(undefined); const next = new URLSearchParams(search); next.delete('child'); setSearch(next); }}
           onRetry={client && state.connection === 'connected' ? node => void retry(node) : undefined}
+          approvals={(state.projection.approvals ?? []).filter(isPending)}
+          onAnswer={client && state.connection === 'connected' ? (approval, action) => void answerApproval(client, approval, action).catch(error => setRetryError(error instanceof Error ? error.message : String(error))) : undefined}
           onSelect={node => { if (node.conversationId && selected) { setChild({ root: selected.id, id: node.conversationId }); const next = new URLSearchParams(search); next.set('root', selected.id); next.set('child', node.conversationId); setSearch(next); } }}/>}</div>}</aside>
     </div>
   </div>;

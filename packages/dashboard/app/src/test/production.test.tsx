@@ -144,3 +144,18 @@ it('最後に動いた子から 24 時間より前に止まった子は、Earlie
   fireEvent.click(within(flow).getByRole('button', { name: /Show older/ }));
   expect(titles()).toContain('Task 1');
 });
+
+it('承認待ちの子の行で、何を許すかを見せてその場で Allow できる', async () => {
+  const store = flowStore(2);
+  const projection = store.getSnapshot().projection;
+  projection.runs!.find(run => run.id === 'child-0:1')!.state = 'waiting_approval';
+  projection.approvals = [{ id: 'ap', run_id: 'child-0:1', conversation_id: 'child-0', state: 'pending', available_decisions: ['accept', 'cancel'],
+    request: { command: "/bin/zsh -lc 'git status'", kind: 'command' } }];
+  const answer = { command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'x', ok: true })) };
+  store.setConnection('connected');
+  render(<MemoryRouter><WorkspacePage project="repo" target={store} client={answer}/></MemoryRouter>);
+  const flow = screen.getByRole('complementary', { name: 'Sub-agents' });
+  expect(within(flow).getByText(/git status/)).toBeTruthy();
+  fireEvent.click(within(flow).getByRole('button', { name: 'Allow' }));
+  await vi.waitFor(() => expect(answer.command).toHaveBeenCalledWith('answer', { approvalId: 'ap', decision: 'accept' }));
+});

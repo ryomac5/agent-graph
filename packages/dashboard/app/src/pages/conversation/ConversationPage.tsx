@@ -23,6 +23,9 @@ import { collectToolResults } from '../../components/conversation/ToolCall.tsx';
 import { resolveParticipants, senderOf, type Sender } from '../../components/conversation/participants.ts';
 import { ACTIVE_STATES, compareEntries, PENDING_APPROVALS, readObject, readText, selectTimeline, showValue, type TimelineEntry } from '../../components/conversation/model.ts';
 import { translate, type ConversationText } from '../../components/conversation/text.ts';
+import { collectConversationChanges } from '../../lib/conversation-changes.ts';
+import { resolveProjectId } from '../../lib/projects.ts';
+import { ChangedFiles } from './ChangedFiles.tsx';
 import './conversation.css';
 
 export type ConversationClient = Pick<ReturnType<typeof createClient>, 'command'> & Partial<Pick<ReturnType<typeof createClient>, 'watchConversation' | 'fetchConversation'>>;
@@ -157,6 +160,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const [appliedModel, setAppliedModel] = useState<{ model: string; effort: string }>();
   const [now, setNow] = useState(Date.now());
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [filesOpen, setFilesOpen] = useState(false);
   // 入力欄を使おうとするまでは、入力の準備に関わる注意を出さない。
   const [engaged, setEngaged] = useState(false);
   const [handoffBlocked, setHandoffBlocked] = useState(false);
@@ -196,6 +200,14 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     return first ? [entry] : [{ kind: 'boundary', key: 'series:' + id, time: entry.time, row: { type: 'continued', series: true } } satisfies TimelineEntry, entry];
   });
   const messageEntries = allEntries.filter(entry => entry.kind === 'message');
+  const task = state.projection.tasks?.find(row => row.id === conversation?.task_id);
+  const projectId = resolveProjectId(state, readText(conversation?.project ?? task?.project));
+  const project = state.projection.projects?.find(row => row.id === projectId);
+  // 画面に出す発言は新しい窓だけだが、変えたファイルは読み込みで残した古い発言も含めて数える。
+  const editRows = [...new Map([...(local.edit_messages ?? []), ...messageEntries.map(entry => entry.row)].map(row => [readText(row.id), row])).values()];
+  const changedFiles = collectConversationChanges(editRows, {
+    cwd: readText(conversation?.cwd) || savedCwd, projectRoot: readText(project?.root_path),
+  });
   // 動いている間は、最後の人の発言からの経過と、最後に使った道具を末尾に出す。端末の「Cogitating…」に当たる。
   const lastHuman = [...messageEntries].reverse().find(entry => readText(entry.row.role) === 'user' && !isToolOnly(entry.row) && !isBlank(entry.row)
     && harnessKind(readBody(entry.row.body)) === 'user');
@@ -253,7 +265,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   useEffect(() => {
     setInput(''); setError(''); setConfirmation(undefined); setNextConversation('');
     setPending(false); setAnswered(new Set()); setAppliedModel(undefined);
-    setDetailsOpen(false); setEngaged(false); setHandoffBlocked(false);
+    setDetailsOpen(false); setFilesOpen(false); setEngaged(false); setHandoffBlocked(false);
   }, [conversationId]);
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), TICK_MS);
@@ -366,6 +378,8 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
         <span className="spacer"/>
         <button type="button" className="btn btn-ghost btn-sm conv-details-toggle" aria-expanded={detailsOpen} aria-controls="conversation-details"
           onClick={() => setDetailsOpen(value => !value)}>{t('details')}<Icon name="chevronDown" size={14} className="caret"/></button>
+        {changedFiles.length > 0 && <button type="button" className="btn btn-ghost btn-sm conv-details-toggle" aria-expanded={filesOpen} aria-controls="conversation-changed-files"
+          onClick={() => setFilesOpen(value => !value)}>{t('filesChanged')} {changedFiles.length}<Icon name="chevronDown" size={14} className="caret"/></button>}
       </div>
       {detailsOpen && <section id="conversation-details" className="conv-details" aria-label={t('details')}>
         <dl className="conv-meta">
@@ -379,6 +393,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
         </dl>
       </section>}
     </header>
+    {filesOpen && changedFiles.length > 0 && <ChangedFiles key={conversationId} files={changedFiles} language={language}/>}
     <div className="conv-timeline" ref={timeline} aria-label={t('conversation')} tabIndex={0}
       onScroll={event => { if (nearBottom(event.currentTarget)) following.current = true; }}
       onWheel={userScrolled} onTouchMove={userScrolled} onKeyDown={userScrolled} onPointerUp={userScrolled}><div className="conv-timeline-inner" ref={inner}>

@@ -20,7 +20,7 @@ const text = {
     noOutput: 'No output recorded', placeholder: 'Message the agent…', readOnlyPlaceholder: 'This conversation runs in a terminal. Take over to continue here.', sendHint: '⌘ Enter to send',
     noWorktree: 'Not recorded', thinking: 'Thinking', resolved: 'Resolved', expired: 'Expired', stale: 'Outdated', pendingState: 'Pending',
     answered: 'Answered', allowed: 'Allowed', denied: 'Denied',
-    details: 'Details', historyFormat: 'History format', access: 'Access', parentAgent: 'Requesting agent', handoffUnsupported: 'Take over not supported',
+    filesChanged: 'Files changed', difference: 'Diff', details: 'Details', historyFormat: 'History format', access: 'Access', parentAgent: 'Requesting agent', handoffUnsupported: 'Take over not supported',
   },
   ja: {
     conversation: '会話', unknown: '不明', source: '送信元', confidence: '確かさ', streaming: '出力中', toolOutput: 'ツールの出力',
@@ -41,7 +41,7 @@ const text = {
     noOutput: '出力の記録はありません', placeholder: 'メッセージを入力…', readOnlyPlaceholder: 'この会話は端末で動いています。ここで続けるには引き継いでください。', sendHint: '⌘ Enter で送信',
     noWorktree: '記録なし', thinking: '思考', resolved: '解決済み', expired: '期限切れ', stale: '古い要求', pendingState: '待ち',
     answered: '回答済み', allowed: '許可', denied: '拒否',
-    details: '詳細', historyFormat: '履歴の形式', access: '操作', parentAgent: '依頼元', handoffUnsupported: '引き継ぎ非対応',
+    filesChanged: '変更したファイル', difference: '差分', details: '詳細', historyFormat: '履歴の形式', access: '操作', parentAgent: '依頼元', handoffUnsupported: '引き継ぎ非対応',
   },
 };
 export type ConversationText = keyof typeof text.en;

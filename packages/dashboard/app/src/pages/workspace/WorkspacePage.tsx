@@ -94,7 +94,7 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
         {childId && <button className="btn btn-ghost btn-sm root-back" aria-label={`Back to ${selected?.name ?? ""}`} onClick={() => { setChild(undefined); const next = new URLSearchParams(search); next.delete('child'); setSearch(next); }}><span aria-hidden="true">←</span>{selected?.name}</button>}
         {conversationId ? renderConversation && (childId || selected?.conversation_ids.length === 1) ? renderConversation(conversationId)
           : <ConversationPage key={selected?.id + ':' + (childId ?? 'root')} target={target} client={client} conversationId={conversationId} embedded language={language}
-            seriesIds={childId ? undefined : series} seriesState={childId ? undefined : selected?.state} displayName={childId ? childTitle : selected?.name}/>
+            seriesIds={childId ? undefined : series} seriesState={childId ? childNode?.state : selected?.state} displayName={childId ? childTitle : selected?.name}/>
           : <p className="empty-row">{t.selectConversation}</p>}
       </section>
       <aside className="workspace-requests" aria-label={t.requests}><header className="column-header">

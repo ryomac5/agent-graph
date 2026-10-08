@@ -133,3 +133,9 @@
 .working-line { display: flex; align-items: center; gap: 8px; margin: 12px 0 4px; color: var(--text-2); font-size: 13px; font-variant-numeric: tabular-nums; }
 .working-line .pulse { color: var(--accent, #6366f1); }
 .working-tool { color: var(--text-3); }
+
+.conv-changed-files { flex: none; max-height: 40vh; overflow: auto; padding: var(--space-3) var(--space-6); border-bottom: 1px solid var(--border); }
+.conv-changed-file { border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom: var(--space-2); overflow: hidden; }
+.conv-changed-file > summary { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2); cursor: pointer; background: var(--surface-2); }
+.conv-changed-file[open] > summary .caret { transform: rotate(90deg); }
+.conv-change-meta { display: flex; gap: var(--space-3); padding: var(--space-2); color: var(--text-3); font-size: var(--text-xs); }

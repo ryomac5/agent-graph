@@ -50,7 +50,7 @@ export async function startStaticServer(options: StaticOptions) {
       const pathname = decodeURIComponent(url.pathname);
       let file = resolve(root, `.${pathname}`);
       if (file !== root && !file.startsWith(root + sep)) { response.writeHead(403).end(); return; }
-      const isRoute = url.pathname === '/' || /^\/(?:p|c)\/[^/]+(?:\/(?:tree|changes|files))?$/.test(url.pathname)
+      const isRoute = url.pathname === '/' || /^\/(?:p|c)\/[^/]+(?:\/[a-z][a-z-]*)?$/.test(url.pathname)
         || ['/inbox', '/search', '/settings'].includes(url.pathname);
       if (isRoute) file = resolve(root, 'index.html');
       const actual = await realpath(file);

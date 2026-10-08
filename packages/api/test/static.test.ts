@@ -25,7 +25,7 @@ async function fixture(t: TestContext) {
 }
 testSocket('static SPA routes embed token, serve assets and enforce same-origin access', async t => {
   const { server, upstream } = await fixture(t);
-  for (const path of ['/', '/p/demo', '/c/demo', '/inbox', '/p/demo/tree', '/p/demo/changes', '/p/demo/files', '/search', '/settings']) {
+  for (const path of ['/', '/p/demo', '/c/demo', '/inbox', '/p/demo/tree', '/p/demo/changes', '/p/demo/files', '/p/demo/graph', '/search', '/settings']) {
     const response = await fetch(server.url + path);
     assert.equal(response.status, 200);
     assert.match(response.headers.get('content-security-policy')!, /frame-ancestors 'none'/);

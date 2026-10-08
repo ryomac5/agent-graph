@@ -11,7 +11,7 @@ import type { Fact, JsonValue } from "./facts.ts";
 import { collectProjectionDependencies } from "./projections/dependencies.ts";
 import { initializeSearch, refreshSearch } from "./search.ts";
 
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 export const FACT_SCHEMA_VERSION = 1;
 export const FACTS_DDL = `CREATE TABLE facts (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -261,7 +261,28 @@ function migrateToVersion8(db: DatabaseSync): void {
   db.exec(`UPDATE delegations SET kit = (SELECT json_extract(payload, '$.kit') FROM facts
     WHERE kind = 'delegation.created' AND json_extract(payload, '$.request_id') = delegations.request_id ORDER BY seq LIMIT 1)`);
 }
-const MIGRATIONS = [migrateToVersion1, migrateToVersion2, migrateToVersion3, migrateToVersion4, migrateToVersion5, migrateToVersion6, migrateToVersion7, migrateToVersion8] as const;
+function migrateToVersion9(db: DatabaseSync): void {
+  // 既存の別名も会話の差分投影に結び、反映済みの名前を補う。
+  const facts = db.prepare("SELECT * FROM facts WHERE kind LIKE 'conversation.%' OR kind LIKE 'alias.%'").all().map(row => ({
+    ...row, payload: row.payload === null ? null : JSON.parse(String(row.payload)),
+  } as Fact));
+  const insert = db.prepare("INSERT OR IGNORE INTO fact_projection_dependencies VALUES (?, ?, ?, ?, ?)");
+  for (const fact of facts) {
+    for (const dependency of collectProjectionDependencies(fact)) {
+      if (dependency.projection === "conversations") insert.run(dependency.projection, fact.subject, dependency.direction, dependency.key, fact.seq);
+    }
+  }
+  const lastSeq = Number(db.prepare("SELECT last_seq FROM projection_state WHERE id = 1").get()!.last_seq);
+  const update = db.prepare("UPDATE conversations SET kit_name = ? WHERE id = ?");
+  const record = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'projection_records'").get()
+    ? db.prepare("UPDATE projection_records SET data = json_set(data, '$.kit_name', ?) WHERE projection = 'conversations' AND entity_id = ?") : undefined;
+  for (const row of projectConversations(facts.filter(fact => fact.seq <= lastSeq), new Map()).conversations) {
+    if (row.kit_name === undefined) continue;
+    update.run(row.kit_name, row.id);
+    record?.run(row.kit_name, row.id);
+  }
+}
+const MIGRATIONS = [migrateToVersion1, migrateToVersion2, migrateToVersion3, migrateToVersion4, migrateToVersion5, migrateToVersion6, migrateToVersion7, migrateToVersion8, migrateToVersion9] as const;
 
 export function initializeSchema(db: DatabaseSync): void {
   db.exec("BEGIN IMMEDIATE");

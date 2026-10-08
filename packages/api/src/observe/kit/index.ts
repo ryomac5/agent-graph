@@ -109,11 +109,6 @@ export function createKitObserver(ledger: Ledger, checkpoints?: Map<string, File
         const entityId = matches[0];
         const eventId = JSON.stringify(["alias", entry.repository_id, entityId, entry.name]);
         const aliasId = createHash("sha256").update(eventId).digest("hex");
-        const named = ledger.append({ source: "kit", source_event_id: JSON.stringify(["kit-name", entry.repository_id, entityId, entry.name]),
-          kind: "conversation.updated", subject: `conversation:${entityId}`, payload: { kit_name: entry.name },
-          source_ts: entry.source_ts, confidence: "confirmed" });
-        if (named.status === "conflict") throw new Error("Conflicting kit conversation name");
-        if (named.status === "appended") result.appended += 1;
         const appended = ledger.append({
           source: "kit", source_event_id: eventId, kind: "alias.created", subject: `alias:${aliasId}`,
           payload: { entity_id: entityId, kind: "kit", name: entry.name },

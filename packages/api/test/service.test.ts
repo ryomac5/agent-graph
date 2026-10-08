@@ -283,7 +283,10 @@ test("登録されたプロジェクトの別名と hook 送信待ちを取り�
     event_id: "start", hook_event_name: "SessionStart", source_ts: TS, input: {}, managed: false }));
   const service = openObservationService({ env: f.env });
   t.after(() => service.close());
-  assert.equal(service.ingestOnce().appended, 4);
+  assert.equal(service.ingestOnce().appended, 3);
+  const kitFacts = service.ledger.readSince(0, Number.MAX_SAFE_INTEGER).filter(fact => fact.source === "kit");
+  assert.deepEqual(kitFacts.map(fact => fact.kind), ["alias.created"]);
+  assert.equal(project(service.ledger.readSince(0, Number.MAX_SAFE_INTEGER)).conversations[0].kit_name, "example-001");
   assert.equal(service.ingestOnce().appended, 0);
   assert.equal(readFileSync(join(state, "counter"), "utf8"), "999");
   const external = openLedger(f.dbPath);
@@ -291,7 +294,7 @@ test("登録されたプロジェクトの別名と hook 送信待ちを取り�
     payload: { generation: 1, state: "running" }, source_ts: "2026-10-06T11:00:00.000Z", confidence: "confirmed" });
   external.close();
   const stateAfter = service.catchUp();
-  assert.equal(stateAfter.last_seq, 6);
+  assert.equal(stateAfter.last_seq, 5);
 });
 
 test("同じ取り込みで届いたキットの別名を委譲の親の照合に使う", (t) => {

@@ -4,7 +4,7 @@ import { getMessageText, projectMessages } from "./messages.ts";
 import type { MessageProjection } from "./messages.ts";
 import { projectNames } from "./names.ts";
 import type { ProjectedTask } from "./names.ts";
-import { compareText, createNativeId, projectEntities, projectRelations } from "./relations.ts";
+import { compareFacts, compareText, createNativeId, projectEntities, projectRelations } from "./relations.ts";
 import type { ProjectedEntity, ProjectedRelation } from "./relations.ts";
 
 export type ProjectedConversation = ProjectedEntity<"conversation"> & {
@@ -150,7 +150,7 @@ export function collectProvisionalNames(projection: Pick<MessageProjection, "mes
 export function projectConversations(
   facts: readonly Fact[], names?: ReadonlyMap<string, string>,
 ): ConversationProjection {
-  const { tasks } = projectNames(facts);
+  const { tasks, aliases } = projectNames(facts);
   const rows = projectEntities(facts, "conversation", (payload, id) =>
     payload.provider && payload.native_id ? createNativeId(payload.provider, payload.native_id) : id,
   (fact) => [fact.source.startsWith("host-") ? 1 : 0]);
@@ -162,6 +162,15 @@ export function projectConversations(
     if (!created.has(id) || fact.source_ts < created.get(id)!) created.set(id, fact.source_ts);
   }
   const tasksById = new Map(tasks.map((task) => [task.id, task]));
+  // キットの名前の正本は別名の事実。会話の表示用に同じ値を再追記しない。
+  const aliasesById = new Map(aliases.map(alias => [alias.id, alias]));
+  const kitNames = new Map<string, string>();
+  for (const fact of facts.filter(fact => fact.kind.startsWith("alias.")).sort(compareFacts)) {
+    const payload = fact.payload as { entity_id?: string; kind?: string; name?: string } | null;
+    if (!payload?.entity_id || payload.kind !== "kit" || !payload.name) continue;
+    const alias = aliasesById.get(JSON.stringify([payload.entity_id, payload.kind, payload.name]));
+    if (alias?.entity_id && alias.kind === "kit" && alias.name) kitNames.set(alias.entity_id, alias.name);
+  }
   // 差分反映の索引が渡された場合は、本文を再投影しない。依頼の抜粋は無人実行や名前の確定した会話にも付ける。
   const provisionalNames = names ?? (facts.some(fact => fact.kind.startsWith("message"))
     ? collectProvisionalNames(projectMessages(facts)) : new Map<string, string>());
@@ -173,7 +182,8 @@ export function projectConversations(
     const unattended = conversation.type === "unattended";
     const name = unattended ? provisionalName
       : conversation.type === "subagent" ? explicitName ?? task?.name ?? null : task?.name ?? explicitName ?? provisionalName;
-    return { ...conversation, name, created_ts: created.get(conversation.id) ?? null, name_is_provisional: name !== null && (unattended || !explicitName && !task?.name),
+    const kitName = kitNames.get(conversation.id) ?? conversation.kit_name;
+    return { ...conversation, ...(kitName === undefined ? {} : { kit_name: kitName }), name, created_ts: created.get(conversation.id) ?? null, name_is_provisional: name !== null && (unattended || !explicitName && !task?.name),
       first_request_excerpt: provisionalName };
   });
   const relations = projectRelations(facts);

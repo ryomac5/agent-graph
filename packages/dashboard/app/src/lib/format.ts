@@ -67,7 +67,7 @@ function parseTime(value: unknown): Date | undefined {
   const time = value instanceof Date ? value : typeof value === 'string' || typeof value === 'number' ? new Date(value) : undefined;
   return time && Number.isFinite(time.getTime()) ? time : undefined;
 }
-/** 時刻は短く出す。今日なら「8:45」、昨日なら「Yesterday 8:45」、それより前は「Oct 6」とする。 */
+/** 時刻は短く出す。今日なら「8:45」、昨日なら「Yesterday 8:45」、それより前は「Oct 6 8:45」とする。 */
 export function formatWhen(value: unknown, language: 'en' | 'ja' = 'en', now = Date.now()): string {
   const time = parseTime(value);
   if (!time) return '';
@@ -77,8 +77,8 @@ export function formatWhen(value: unknown, language: 'en' | 'ja' = 'en', now = D
   const yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
   if (yesterday.toDateString() === time.toDateString()) return language === 'ja' ? `昨日 ${clock}` : `Yesterday ${clock}`;
   const sameYear = today.getFullYear() === time.getFullYear();
-  if (language === 'ja') return `${sameYear ? '' : `${time.getFullYear()}年`}${time.getMonth() + 1}月${time.getDate()}日`;
-  return `${MONTHS[time.getMonth()]} ${time.getDate()}${sameYear ? '' : `, ${time.getFullYear()}`}`;
+  if (language === 'ja') return `${sameYear ? '' : `${time.getFullYear()}年`}${time.getMonth() + 1}月${time.getDate()}日 ${clock}`;
+  return `${MONTHS[time.getMonth()]} ${time.getDate()}${sameYear ? '' : `, ${time.getFullYear()}`} ${clock}`;
 }
 /** 経過は「3 min ago」の形で出す。1 日を超えたら formatWhen に任せる。 */
 export function formatAgo(value: unknown, language: 'en' | 'ja' = 'en', now = Date.now()): string {
@@ -153,8 +153,8 @@ export function runLabel(state: ScreenState, runId: unknown): string {
   return run.generation === undefined || run.generation === null ? name : `${name} · Run ${String(run.generation)}`;
 }
 
-export function formatClock(value: unknown): string {
-  return typeof value === 'string' ? formatWhen(value) : '';
+export function formatClock(value: unknown, language: 'en' | 'ja' = 'en'): string {
+  return typeof value === 'string' ? formatWhen(value, language) : '';
 }
 
 export function formatSeconds(seconds: number): string {

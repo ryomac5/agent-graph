@@ -22,9 +22,6 @@ function setup({ provider = 'codex', origin = 'managed', status = 'idle', projec
     result: command === 'list_models' ? [{ model: 'model-a', displayName: 'Model A', effort: 'medium' }, { model: 'model-b', displayName: 'Model B', effort: 'low' }] : {} }));
   const client = supplied ?? { command };
   render(<MemoryRouter initialEntries={['/c/c']}><ConversationPage conversationId="c" target={store} client={client}/></MemoryRouter>);
-  // 端末の会話は、Continue here を押したときだけ入力欄が出る。
-  const continueHere = screen.queryByRole('button', { name: 'Continue here' });
-  if (continueHere) fireEvent.click(continueHere);
   return { store, command };
 }
 async function waitModels() { await screen.findByRole('option', { name: 'Model B' }); }
@@ -160,27 +157,27 @@ it('branches with an explicit model, cwd and input', async () => {
     model: { model: 'model-a', effort: 'medium' }, input: { text: 'Try another approach' } }));
 });
 
-it.each([true, false])('keeps external conversations read-only and confirms terminal stopped=%s only when requested', async confirmStopped => {
+it.each([true, false])('replies to an external conversation by taking it over and confirms terminal stopped=%s only when requested', async confirmStopped => {
   const command = vi.fn(async (name: string, payload?: unknown): Promise<Ack> => ({ type: 'ack', cmd_id: 'cmd', ok: true,
     result: name === 'list_models' ? [{ model: 'model-a', displayName: 'Model A' }, { model: 'model-b', displayName: 'Model B' }]
       : name === 'adopt' && !Object.hasOwn(payload as object, 'confirmStopped') ? { confirmation_required: true, fallback: 'fork' }
       : { conversationId: 'adopted', operation: confirmStopped ? 'resume' : 'fork' } }));
   setup({ origin: 'observed', status: 'unknown', client: { command } });
   await waitModels();
+  // 端末の会話も、同じ入力欄に書いて送れる。空のうちは送れない。
   expect(screen.queryByText('Read-only')).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: 'Details' }));
-  expect(within(screen.getByRole('region', { name: 'Details' })).getByText('Read-only')).toBeTruthy();
-  expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).readOnly).toBe(true);
+  const input = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;
+  expect(input.readOnly).toBe(false);
   expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
   expect((screen.getByRole('button', { name: 'Interrupt' }) as HTMLButtonElement).disabled).toBe(true);
   expect(screen.queryByRole('button', { name: 'Apply model and effort' })).toBeNull();
-  fireEvent.keyDown(screen.getByRole('textbox', { name: 'Message' }), { key: 'Enter', metaKey: true });
+  fireEvent.change(input, { target: { value: 'Continue please' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Send' }));
   expect(command.mock.calls.some(call => call[0] === 'send')).toBe(false);
-  fireEvent.click(screen.getByRole('button', { name: 'Take over conversation' }));
   const dialog = await screen.findByRole('dialog', { name: 'Have you stopped the external terminal?' });
   fireEvent.click(within(dialog).getByRole('button', { name: confirmStopped ? 'Yes, resume here' : 'No, continue in a branch' }));
   await waitFor(() => expect(command).toHaveBeenCalledWith('adopt', { conversationId: 'c', cwd: '/workspace/demo',
-    model: { model: 'model-a', effort: 'medium' }, input: { text: '' }, confirmStopped }));
+    model: { model: 'model-a', effort: 'medium' }, input: { text: 'Continue please' }, confirmStopped }));
   expect((await screen.findByRole('link', { name: 'Open conversation' })).getAttribute('href')).toBe('/c/adopted');
 });
 
@@ -229,9 +226,8 @@ it('blocks handoff for unsupported formats only when asked and marks absent mess
   expect(screen.queryByText('This conversation cannot be taken over.')).toBeNull();
   expect(screen.getByText('Message unavailable')).toBeTruthy();
   expect(screen.getByRole('separator').textContent).toContain('missing – missing');
-  fireEvent.click(screen.getByRole('button', { name: 'Details' }));
-  expect(within(screen.getByRole('region', { name: 'Details' })).getByText('Take over not supported')).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: 'Take over conversation' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Hello' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Send' }));
   expect((await screen.findByRole('alert')).textContent).toBe('This conversation cannot be taken over.');
   expect(command.mock.calls.some(call => call[0] === 'adopt')).toBe(false);
 });
@@ -258,8 +254,9 @@ it('takes over an external conversation without a confirmation dialog when runne
     result: name === 'list_models' ? [{ model: 'model-b', displayName: 'Model B' }] : { conversationId: 'c', operation: 'resume' } }));
   setup({ origin: 'observed', status: 'ended', client: { command } });
   await waitModels();
-  fireEvent.click(screen.getByRole('button', { name: 'Take over conversation' }));
-  await waitFor(() => expect(command).toHaveBeenCalledWith('adopt', { conversationId: 'c', cwd: '/workspace/demo', model: { model: 'model-a', effort: 'medium' }, input: { text: '' } }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Next step' } });
+  fireEvent.keyDown(screen.getByRole('textbox', { name: 'Message' }), { key: 'Enter', metaKey: true });
+  await waitFor(() => expect(command).toHaveBeenCalledWith('adopt', { conversationId: 'c', cwd: '/workspace/demo', model: { model: 'model-a', effort: 'medium' }, input: { text: 'Next step' } }));
   expect(screen.queryByRole('dialog')).toBeNull();
 });
 
@@ -268,7 +265,8 @@ it('allows launch configuration for an external running Codex conversation witho
   await waitModels();
   expect(screen.getByRole('combobox', { name: 'Model' })).toBeTruthy();
   expect(screen.queryByRole('button', { name: 'Apply model and effort' })).toBeNull();
-  expect((screen.getByRole('button', { name: 'Take over conversation' }) as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Next step' } });
+  expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(false);
 });
 
 it('does not apply an old command response to a different conversation', async () => {
@@ -393,9 +391,7 @@ it('keeps the header to the name, state, provider with model and elapsed time, a
     fireEvent.click(toggle);
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
     const details = screen.getByRole('region', { name: 'Details' });
-    for (const label of ['Effort', 'Worktree', 'Access']) expect(within(details).getByText(label)).toBeTruthy();
-    expect(within(details).getByText('Read-only')).toBeTruthy();
-    expect(within(details).getByText('Take over not supported')).toBeTruthy();
+    for (const label of ['Effort', 'Worktree']) expect(within(details).getByText(label)).toBeTruthy();
     expect(details.textContent).not.toContain('future-format');
   } finally { vi.useRealTimers(); }
 });
@@ -427,16 +423,14 @@ it('titles the conversation with the projected name and never derives it from me
   expect(store.getSnapshot().projection.conversations.map(row => row.name)).toEqual([null]);
 });
 
-it('端末の会話は見るだけで始め、Continue here を押すまで入力欄を出さない', () => {
+it('端末の会話にも、案内文ではなく普通の入力欄を出す', () => {
   const store = createStore();
   store.setSnapshot({ seq: 1, generation: 0, projection: {
     conversations: [{ id: 'c', name: 'Terminal', provider: 'claude', origin: 'observed', history_format: 'jsonl' }],
     runs: [{ id: 'r', conversation_id: 'c', generation: 1, state: 'running', started_ts: '2026-10-07T00:00:00Z' }], messages: [], message_memberships: [] } });
   store.setConnection('connected');
   render(<MemoryRouter initialEntries={['/c/c']}><ConversationPage conversationId="c" target={store} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'x', ok: true, result: [] })) }}/></MemoryRouter>);
-  // 入力欄の場所には、返信の場所の説明と、ここで続ける操作だけが出る。
-  expect(document.querySelector('.composer-terminal')).not.toBeNull();
-  expect(document.querySelector('.composer:not(.composer-terminal) textarea')).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: 'Continue here' }));
-  expect(document.querySelector('.composer:not(.composer-terminal)')).not.toBeNull();
+  expect(document.querySelector('.composer-terminal')).toBeNull();
+  expect(document.querySelector('.composer')?.textContent ?? '').not.toMatch(/terminal|ターミナル/i);
+  expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).readOnly).toBe(false);
 });

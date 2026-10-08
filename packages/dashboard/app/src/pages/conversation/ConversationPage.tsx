@@ -159,8 +159,6 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const [detailsOpen, setDetailsOpen] = useState(false);
   // 入力欄を使おうとするまでは、入力の準備に関わる注意を出さない。
   const [engaged, setEngaged] = useState(false);
-  // 端末の会話は見るだけで始め、利用者が続けると決めたときだけ入力欄を出す。
-  const [continueHere, setContinueHere] = useState(false);
   const [handoffBlocked, setHandoffBlocked] = useState(false);
   const external = conversation?.origin !== 'managed';
   const active = ACTIVE_STATES.includes(readText(run?.state));
@@ -376,7 +374,6 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
           <div title={worktree?.full || t('worktree')}><dt>{t('worktree')}</dt><dd className="meta-item"><Icon name="branch" size={14}/>
             {worktree ? <><span className="truncate mono">{worktree.place}</span>{worktree.branch && <span className="branch-name mono">{worktree.branch}</span>}</>
               : <span className="muted-text">{t('noWorktree')}</span>}</dd></div>
-          {external && <div><dt>{t('access')}</dt><dd className="meta-item"><span>{t('readOnly')}</span>{!supported && <span className="muted-text">{t('handoffUnsupported')}</span>}</dd></div>}
           {reasonText(run?.cause ?? run?.reason) && <div><dt>{t('reason')}</dt><dd>{reasonText(run?.cause ?? run?.reason)}</dd></div>}
           {readText(run?.last_evidence_ts) && <div><dt>{t('lastEvidence')}</dt><dd><RelativeTime value={readText(run?.last_evidence_ts)} now={now} language={language}/></dd></div>}
         </dl>
@@ -417,14 +414,8 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
         <span className="pulse" aria-hidden="true"/>{language === 'ja' ? '作業中' : 'Working'}… {formatSeconds(Math.max(0, Math.floor((now - Date.parse(lastHuman.time)) / 1000)))}
         {lastTool && <span className="working-tool"> · {lastTool}</span>}</p>}
     </div></div>
-    {/* 端末で動いている会話は、返信の場所と、ここで続ける操作だけを入力欄に出す。押すと通常の入力欄になる。 */}
-    {external && !continueHere && <footer className="composer composer-terminal">
-      <div className="composer-box readonly composer-terminal-box">
-        <p className="composer-terminal-note">{language === 'ja' ? 'この会話はターミナルで動いています。返信はターミナルで行えます。' : 'This conversation is running in your terminal. Reply there, or continue it here.'}</p>
-        <button type="button" className="btn btn-secondary btn-sm" onClick={() => setContinueHere(true)}>{language === 'ja' ? 'ここで続ける' : 'Continue here'}</button>
-      </div>
-    </footer>}
-    {(!external || continueHere) && <footer className="composer" onFocusCapture={() => setEngaged(true)} onPointerDownCapture={() => setEngaged(true)}>
+    {/* 端末で動いている会話も、同じ入力欄から返信する。送ると、この画面がその会話を引き継いで続ける。 */}
+    <footer className="composer" onFocusCapture={() => setEngaged(true)} onPointerDownCapture={() => setEngaged(true)}>
       {(error || pending || nextConversation || modelsError && engaged || handoffBlocked) && <div className="composer-status">
         {error && <p role="alert" className="status-line danger"><Icon name="alert" size={14}/>{error}</p>}
         {pending && <p role="status" className="status-line">{t('pending')}</p>}
@@ -437,10 +428,10 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
           <button className="btn btn-secondary btn-sm" disabled={pending} onClick={() => void launchConversation('adopt', false)}>{t('branchInstead')}</button>
           <button className="btn btn-ghost btn-sm" disabled={pending} onClick={() => setConfirmation(undefined)}>{t('cancel')}</button></div>
       </section>}
-      <div className={`composer-box${external ? ' readonly' : ''}`}>
-        <textarea aria-label={t('input')} rows={2} placeholder={external ? t('readOnlyPlaceholder') : t('placeholder')} value={input} readOnly={external}
+      <div className="composer-box">
+        <textarea aria-label={t('input')} rows={2} placeholder={t('placeholder')} value={input}
           disabled={pending || !connected || !external && !canSend} onChange={event => setInput(event.target.value)} onKeyDown={event => {
-            if (event.key === 'Enter' && event.metaKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); }
+            if (event.key === 'Enter' && event.metaKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (external) { if (input.trim()) void launchConversation('adopt'); } else void send(); }
           }}/>
         <div className="composer-toolbar">
           <div className="composer-controls">
@@ -464,16 +455,14 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
             {!external && <button className="btn btn-ghost btn-sm" aria-label={t('fork')} title={canLaunch ? t('fork') : t('launchReady')} disabled={!canLaunch} onClick={() => void launchConversation('fork')}>
               <Icon name="fork" size={14}/>{t('branchShort')}</button>}
             <button className="btn btn-secondary btn-sm" disabled={!writable || !active} onClick={() => void execute('interrupt', { runId: run!.id })}><Icon name="stop" size={13}/>{t('interrupt')}</button>
-            {external ? <>
-              <button className="btn btn-secondary btn-sm" disabled>{t('send')}</button>
-              <button className="btn btn-primary btn-sm" aria-label={t('handoff')} title={canLaunch ? t('handoff') : t('launchReady')} disabled={!canLaunch || confirmation !== undefined} onClick={() => void launchConversation('adopt')}>
-                <Icon name="play" size={13}/>{t('takeOverShort')}</button></>
+            {external ? <button className="btn btn-primary btn-sm" title={canLaunch ? t('shortcut') : t('launchReady')} disabled={!canLaunch || !input.trim() || confirmation !== undefined} onClick={() => void launchConversation('adopt')}>
+              <Icon name="send" size={14}/>{t('send')}</button>
               : <button className="btn btn-primary btn-sm" title={t('shortcut')} disabled={!canSend || !input.trim()} onClick={() => void send()}><Icon name="send" size={14}/>{t('send')}</button>}
           </div>
         </div>
       </div>
       {(engaged && (!model || !cwd.trim()) || provider === 'codex') && <p className="composer-hint">{provider === 'codex' && <span>{t(hint)}</span>}{engaged && (!model || !cwd.trim()) && <span>{t('launchReady')}</span>}</p>}
-    </footer>}
+    </footer>
   </section>;
 }
 

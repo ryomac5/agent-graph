@@ -4,6 +4,7 @@ import { MemoryRouter, useLocation } from 'react-router';
 import { createStore } from '../lib/store.ts';
 import { orderSeries, selectRoots } from '../lib/roots.ts';
 import { visibleText } from '../lib/message-body.ts';
+import { formatWhen } from '../lib/format.ts';
 import { Message } from '../components/conversation/Message.tsx';
 import { senderOf } from '../components/conversation/participants.ts';
 import { WorkspacePage } from '../pages/workspace/WorkspacePage.tsx';
@@ -158,4 +159,23 @@ it('承認待ちの子の行で、何を許すかを見せてその場で Allow 
   expect(within(flow).getByText(/git status/)).toBeTruthy();
   fireEvent.click(within(flow).getByRole('button', { name: 'Allow' }));
   await vi.waitFor(() => expect(answer.command).toHaveBeenCalledWith('answer', { approvalId: 'ap', decision: 'accept' }));
+});
+
+it('キットの番号の名前を、プロジェクト名と会話を始めた日で呼び、同じ日の 2 つ目に -2 を付ける', () => {
+  const target = createStore();
+  target.setSnapshot({ seq: 1, generation: 0, projection: {
+    projects: [{ id: 'p', display_name: 'agent-graph' }],
+    conversations: [{ id: 'a', created_ts: new Date(2026, 9, 8, 9, 0).toISOString() }, { id: 'b', created_ts: new Date(2026, 9, 8, 13, 0).toISOString() },
+      { id: 'c', created_ts: new Date(2026, 9, 6, 9, 0).toISOString() }],
+    roots: [{ id: 'r1', name: 'agent-graph-014', project: 'p', state: 'idle', conversation_ids: ['b'] }, { id: 'r2', name: 'agent-graph-013', project: 'p', state: 'idle', conversation_ids: ['a'] },
+      { id: 'r3', name: 'agent-graph-001', project: 'p', state: 'idle', conversation_ids: ['c'] }],
+  } });
+  const roots = selectRoots(target.getSnapshot(), 'p');
+  expect(Object.fromEntries(roots.map(root => [root.kit_name, root.name]))).toEqual({
+    'agent-graph-013': 'agent-graph-20261008', 'agent-graph-014': 'agent-graph-20261008-2', 'agent-graph-001': 'agent-graph-20261006' });
+});
+it('前の日の時刻にも、日付に続けて時と分を出す', () => {
+  const now = new Date(2026, 9, 8, 12, 0).getTime();
+  expect(formatWhen(new Date(2026, 9, 6, 9, 5), 'en', now)).toBe('Oct 6 9:05');
+  expect(formatWhen(new Date(2026, 9, 6, 9, 5), 'ja', now)).toBe('10月6日 9:05');
 });

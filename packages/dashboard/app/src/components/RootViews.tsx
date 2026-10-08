@@ -37,7 +37,7 @@ export function RootList({ roots, selected, onSelect, project, language = 'en' }
   const current = roots.filter(recent);
   const older = roots.filter(root => !recent(root));
   const row = (root: Root) => {
-    const content = <><span className="root-row-line"><strong className="root-name">{root.name}</strong></span>
+    const content = <><span className="root-row-line"><strong className="root-name" title={root.kit_name}>{root.name}</strong></span>
       <span className="root-row-meta"><StatusDot className="root-state" state={root.state} language={language}/>
         {root.running_children > 0 && <span className="root-running">{runningText(root.running_children, language)}</span>}
         {root.last_activity_ts && <time className="root-time" dateTime={root.last_activity_ts} title={new Date(root.last_activity_ts).toLocaleString()}>{formatWhen(root.last_activity_ts, language)}</time>}</span></>;
@@ -58,7 +58,7 @@ function lastActivity(node: TreeNode): string {
 /** 依頼の流れ。根を頂点に置き、頼んだ内容を 1 行目、依頼先と状態と時刻を 2 行目に出す。子の子は字下げで続ける。 */
 export function RootTree({ tree, selected, onSelect, runningOnly = false, language = 'en', root, onSelectRoot, onRetry, approvals = [], onAnswer }: {
   tree: DelegationTree; selected?: string; onSelect: (node: TreeNode) => void; runningOnly?: boolean; language?: Language;
-  root?: { name: string; state: string }; onSelectRoot?: () => void; onRetry?: (node: TreeNode) => void;
+  root?: { name: string; state: string; kit_name?: string }; onSelectRoot?: () => void; onRetry?: (node: TreeNode) => void;
   /** 承認待ちの行。子の行の中で、何を許すかを見せてその場で答えさせる。 */
   approvals?: Row[]; onAnswer?: (approval: Row, action: 'allow' | 'deny') => void;
 }) {
@@ -118,7 +118,7 @@ export function RootTree({ tree, selected, onSelect, runningOnly = false, langua
   const empty = !items.some(Boolean);
   if (root) return <div className="root-tree request-flow"><ul><li>
     <div className={`request-row request-apex${selected ? '' : ' selected'}`}><ProviderMark provider="claude"/><button className="request-main" aria-pressed={!selected} onClick={onSelectRoot}>
-      <span className="request-title">{root.name}</span><span className="request-meta"><StatusDot state={root.state} language={language}/></span></button></div>
+      <span className="request-title" title={root.kit_name}>{root.name}</span><span className="request-meta"><StatusDot state={root.state} language={language}/></span></button></div>
     {!empty && <ul>{items}{more}</ul>}</li></ul>{empty && <p className="empty-row">{t.noRequests}</p>}</div>;
   return <div className="root-tree"><ul>{items}{more}</ul>{empty && !runningOnly && <p className="empty-row">{t.noRequests}</p>}</div>;
 }

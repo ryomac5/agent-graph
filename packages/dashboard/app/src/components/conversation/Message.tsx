@@ -49,7 +49,7 @@ export function Message({ row, sender, showName = true, language = 'en', streami
     return <details className="message message-report" id={`message-${encodeURIComponent(String(row.id))}`} aria-label="Agent report">
       <summary><strong className="message-sender">Agent report</strong>
         <span className="message-report-lead">{report.split('\n').find(line => line.trim()) ?? ''}</span>
-        {time && <time dateTime={time} title={time}>{formatClock(time)}</time>}</summary>
+        {time && <time dateTime={time} title={time}>{formatClock(time, language)}</time>}</summary>
       <div className="message-bubble"><Markdown text={report}/></div>
     </details>;
   }
@@ -75,7 +75,7 @@ export function Message({ row, sender, showName = true, language = 'en', streami
     id={`message-${encodeURIComponent(String(row.id))}`} aria-label={`${sender.name} message`} data-side={sender.side}>
     <header className="message-header">
       {showName && <strong className="message-sender">{sender.name}</strong>}
-      {time ? <time dateTime={time} title={time}>{formatClock(time)}</time> : !streaming && <span className="message-time-unknown">{t('timeUnknown')}</span>}
+      {time ? <time dateTime={time} title={time}>{formatClock(time, language)}</time> : !streaming && <span className="message-time-unknown">{t('timeUnknown')}</span>}
       {streaming && <span className="chip chip-accent"><span className="pulse" aria-hidden="true"/>{t('streaming')}</span>}
     </header>
     <div className="message-main">

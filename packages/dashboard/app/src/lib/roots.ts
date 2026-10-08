@@ -8,6 +8,30 @@ import { readAttempts, type DelegationTree, type TreeNode } from '../pages/tree/
 export interface Root {
   id: string; name: string; project: string | null; state: string; last_activity_ts: string | null;
   conversation_ids: string[]; running_children: number; total_children: number;
+  /** キットが付けた番号の名前。画面ではプロジェクト名と始めた日の名前で呼び、番号は補足に出す。 */
+  kit_name?: string;
+}
+/** 会話の系列を始めた時刻。系列の会話のうち最も早く作られた時刻である。 */
+function startedAt(state: ScreenState, root: Root): number | undefined {
+  const times = root.conversation_ids.map(id => state.projection.conversations?.find(row => row.id === id))
+    .map(row => Date.parse(String(row?.created_ts ?? row?.first_message_ts ?? ''))).filter(Number.isFinite);
+  return times.length ? Math.min(...times) : undefined;
+}
+/** キットの番号の名前を、プロジェクト名と始めた日の名前に置き換える。同じ日に複数あれば、始めた順に -2 から付ける。 */
+function renameKitRoots(state: ScreenState, roots: Root[]): Root[] {
+  const groups = new Map<string, { root: Root; start: number }[]>();
+  for (const root of roots) {
+    const kit = /^(.+)-\d{3,}$/.exec(root.name);
+    const start = kit ? startedAt(state, root) : undefined;
+    if (!kit || start === undefined) continue;
+    const day = new Date(start);
+    const project = root.project ? String(state.projection.projects?.find(row => row.id === root.project)?.display_name ?? '') : '';
+    const base = `${project || kit[1]}-${day.getFullYear()}${String(day.getMonth() + 1).padStart(2, '0')}${String(day.getDate()).padStart(2, '0')}`;
+    groups.set(base, [...groups.get(base) ?? [], { root, start }]);
+  }
+  for (const [base, group] of groups) group.toSorted((a, b) => a.start - b.start || a.root.id.localeCompare(b.root.id))
+    .forEach(({ root }, index) => { root.kit_name = root.name; root.name = index === 0 ? base : `${base}-${index + 1}`; });
+  return roots;
 }
 export const isRunning = (state: string) => ['starting', 'running', 'assigned', 'verifying', 'reviewing'].includes(state);
 /** 根の名前に内部の識別子が入っていれば、会話の名前の規則で呼び直す。 */
@@ -34,10 +58,11 @@ export function rootProject(root: { project: string | null }, registered: Set<st
 export function selectRoots(state: ScreenState, project?: string): Root[] {
   const reviews = reviewConversations(state);
   const registered = new Set(getRegisteredProjects(state).map(row => String(row.id)));
-  return (state.projection.roots ?? []).filter(row => project === undefined || row.project === project
+  return renameKitRoots(state, (state.projection.roots ?? []).filter(row => project === undefined || row.project === project
       || project === OTHER_PROJECT && rootProject(row as unknown as Root, registered) === OTHER_PROJECT)
     .filter(row => !((row.conversation_ids as string[] | undefined) ?? []).some(id => reviews.has(id)))
-    .map(row => { const root = { ...(row as unknown as Root) }; root.conversation_ids ??= []; root.name = rootName(state, root); return root; }).toSorted((a, b) => Number(isRunning(b.state)) - Number(isRunning(a.state))
+    .map(row => { const root = { ...(row as unknown as Root) }; root.conversation_ids ??= []; root.name = rootName(state, root); return root; }))
+    .toSorted((a, b) => Number(isRunning(b.state)) - Number(isRunning(a.state))
       || (b.last_activity_ts ?? '').localeCompare(a.last_activity_ts ?? '') || a.id.localeCompare(b.id));
 }
 export function useRootIndex(state: ScreenState) {

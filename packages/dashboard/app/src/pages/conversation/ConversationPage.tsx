@@ -17,7 +17,7 @@ import { Fields } from '../../components/Fields.tsx';
 import { ApprovalRequestView, OutcomeChip, OutcomeIcon } from '../../components/ApprovalRequest.tsx';
 import { providerName } from '../../components/ActivityRow.tsx';
 import { executionStates } from '../../components/activity.ts';
-import { Message } from '../../components/conversation/Message.tsx';
+import { countTools, isBlank, isToolOnly, Message } from '../../components/conversation/Message.tsx';
 import { collectToolResults } from '../../components/conversation/ToolCall.tsx';
 import { resolveParticipants, senderOf, type Sender } from '../../components/conversation/participants.ts';
 import { ACTIVE_STATES, compareEntries, PENDING_APPROVALS, readObject, readText, selectTimeline, showValue, type TimelineEntry } from '../../components/conversation/model.ts';
@@ -43,6 +43,32 @@ const SUPPORTED_FORMATS = ['jsonl', 'legacy', 'paginated'];
 const TICK_MS = 1000;
 const STICK_TO_BOTTOM_PX = 120;
 
+type ToolRunEntry = { kind: 'tools'; key: string; rows: TimelineEntry[] };
+/** 続く道具だけの発言を 1 つにまとめる。本文のある発言と区切りと承認は、そのまま残す。 */
+function groupToolRuns(entries: TimelineEntry[]): (TimelineEntry | ToolRunEntry)[] {
+  const grouped: (TimelineEntry | ToolRunEntry)[] = [];
+  for (const entry of entries) {
+    // 何も出さない行は、畳みの続きとして扱い、まとまりを切らない。
+    if (entry.kind === 'message' && isBlank(entry.row)) {
+      const last = grouped.at(-1);
+      if (last?.kind === 'tools') last.rows.push(entry);
+      continue;
+    }
+    if (entry.kind === 'message' && readText(entry.row.role) !== 'user' && isToolOnly(entry.row)) {
+      const last = grouped.at(-1);
+      if (last?.kind === 'tools') last.rows.push(entry);
+      else grouped.push({ kind: 'tools', key: 'tools:' + entry.key, rows: [entry] });
+      continue;
+    }
+    // 道具の結果だけの利用者の行は、直前の畳みに入れる。
+    if (entry.kind === 'message' && readText(entry.row.role) === 'user' && isToolOnly(entry.row) && grouped.at(-1)?.kind === 'tools') {
+      (grouped.at(-1) as ToolRunEntry).rows.push(entry);
+      continue;
+    }
+    grouped.push(entry);
+  }
+  return grouped;
+}
 function nameOf(state: ScreenState, id: unknown): string {
   const value = readText(id);
   return conversationName(state, value) || (state.projection.runs?.some(row => row.id === value) ? runLabel(state, value) : '') || 'another conversation';
@@ -357,7 +383,15 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
       {historyError && <p role="alert" className="status-line danger">{historyError} <button className="btn btn-secondary btn-sm" onClick={() => setHistoryRevision(value => value + 1)}>Retry</button></p>}
       {(detail?.hasOlder || messageEntries.length > shownMessages.size) && <button className="btn btn-secondary btn-sm" disabled={historyLoading} onClick={() => { following.current = false; if (detail?.hasOlder) void loadHistory(true); else setMessageLimit(value => value + MESSAGE_PAGE_SIZE); }}>Load older</button>}
       {!historyLoading && !historyError && entries.length === 0 && deltas.length === 0 && <p className="timeline-empty"><Icon name="message" size={16}/>{t('empty')}</p>}
-      {entries.map(entry => {
+      {groupToolRuns(entries).map(entry => {
+        if (entry.kind === 'tools') {
+          // 続く道具の呼び出しは 1 行に畳み、開くと 1 つずつ見られる。
+          const count = countTools(entry.rows.map(item => item.row));
+          return <details className="tool-run" key={entry.key}>
+            <summary><Icon name="terminal" size={13}/>{count === 1 ? 'Used 1 tool' : `Used ${count} tools`}</summary>
+            <div className="tool-run-body">{entry.rows.map(item => <Message key={item.key} row={item.row} sender={agentSender} showName={false} language={language} toolResults={toolResults}/>)}</div>
+          </details>;
+        }
         if (entry.kind === 'message') {
           const sender = senderOf(entry.row, participants);
           return <Message key={entry.key} row={entry.row} sender={sender} showName={nameShown(sender)} language={language} toolResults={toolResults}/>;

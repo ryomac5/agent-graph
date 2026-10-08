@@ -15,8 +15,25 @@ const SOURCE_LABELS: Record<string, string> = {
 };
 export function sourceLabel(source: string): string { return SOURCE_LABELS[source] ?? source; }
 
+/** 本文がなく、道具の呼び出しか結果だけの発言。会話の中では、続くものをまとめて 1 行に畳む。 */
+export function isToolOnly(row: Row): boolean {
+  if (!Array.isArray(row.body)) return false;
+  const blocks = row.body.map(readObject);
+  const text = visibleText(blocks.filter(block => !['tool_use', 'tool_result', 'thinking'].includes(readText(block.type))).map(readBody).filter(Boolean).join('\n'));
+  return !text && blocks.some(block => block.type === 'tool_use' || block.type === 'tool_result');
+}
+/** 画面に何も出さない発言。思考だけの行や、本文のない行である。道具の畳みを切らない。 */
+export function isBlank(row: Row): boolean {
+  const blocks = Array.isArray(row.body) ? row.body.map(readObject) : [];
+  const text = visibleText(Array.isArray(row.body) ? blocks.filter(block => !['tool_use', 'tool_result', 'thinking'].includes(readText(block.type))).map(readBody).filter(Boolean).join('\n') : readBody(row.body));
+  return !text && !blocks.some(block => block.type === 'tool_use' || block.type === 'tool_result') && row.body_state !== 'unavailable' && row.body_state !== 'omitted';
+}
+/** 畳んだ道具の呼び出しの数。結果だけの行は数えない。 */
+export function countTools(rows: Row[]): number {
+  return rows.reduce((total, row) => total + (Array.isArray(row.body) ? row.body.map(readObject).filter(block => block.type === 'tool_use').length : 0), 0);
+}
 /**
- * 発言を 1 つ描く。右の列は塗りの吹き出し、左の列は塗りなしの広い本文にする。
+ * 発言を 1 つ描く。右の列は利用者の吹き出し、左の列はエージェントの吹き出しにする。
  * 送り主の名前は、続く同じ送り主の発言では省く。時刻は常に出す。
  */
 export function Message({ row, sender, showName = true, language = 'en', streaming = false, toolResults }: {

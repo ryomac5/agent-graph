@@ -114,3 +114,15 @@
 .message-report .message-report-lead { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); font-size: 13px; }
 .message-report time { color: var(--text-2); font-size: 12px; }
 .message-report[open] > summary { margin-bottom: 8px; }
+
+/* エージェントの返答も吹き出しにする。利用者の右の吹き出しと対にし、左に寄せる。 */
+.message-agent .message-main { max-width: min(88%, 760px); }
+.message-agent .message-bubble { padding: 10px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 14px 14px 14px 4px; }
+
+/* 続く道具の呼び出しは 1 行に畳む。 */
+.tool-run { margin: 4px 0; max-width: min(88%, 760px); }
+.tool-run > summary { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 6px; color: var(--text-3); font-size: 12px; cursor: pointer; list-style: none; user-select: none; }
+.tool-run > summary::-webkit-details-marker { display: none; }
+.tool-run > summary:hover { background: var(--surface-hover); color: var(--text-2); }
+.tool-run[open] > summary { color: var(--text-2); }
+.tool-run-body { display: grid; gap: 4px; margin-top: 4px; padding-left: 12px; border-left: 2px solid var(--border); }

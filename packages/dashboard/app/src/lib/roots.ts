@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import type { Row, ScreenState } from './store.ts';
 import { readObject, readText } from '../components/conversation/model.ts';
-import { OTHER_PROJECT } from './projects.ts';
+import { getRegisteredProjects, OTHER_PROJECT } from './projects.ts';
 import { agentName, conversationName, conversationTitle, readModel, readTitle } from './format.ts';
 import { readAttempts, type DelegationTree, type TreeNode } from '../pages/tree/model.ts';
 
@@ -23,8 +23,20 @@ function rootName(state: ScreenState, root: Root): string {
   try { const parsed: unknown = JSON.parse(name); if (Array.isArray(parsed)) provider = String(parsed[0] ?? ''); } catch { provider = ''; }
   return conversationTitle({ provider }, root.last_activity_ts ?? undefined);
 }
+/** レビュー役として別の会話を見ている会話。人が話す会話ではないので根の一覧に出さない。 */
+export function reviewConversations(state: ScreenState): Set<string> {
+  return new Set((state.projection.relations ?? []).filter(row => row.type === 'review_of' && row.active !== 0 && row.active !== false).map(row => String(row.from_id)));
+}
+/** 登録したプロジェクトに属さない根は、すべて Other の 1 つの区画に集める。 */
+export function rootProject(root: { project: string | null }, registered: Set<string>): string {
+  return root.project !== null && registered.has(root.project) ? root.project : OTHER_PROJECT;
+}
 export function selectRoots(state: ScreenState, project?: string): Root[] {
-  return (state.projection.roots ?? []).filter(row => project === undefined || row.project === project || project === OTHER_PROJECT && row.project === null)
+  const reviews = reviewConversations(state);
+  const registered = new Set(getRegisteredProjects(state).map(row => String(row.id)));
+  return (state.projection.roots ?? []).filter(row => project === undefined || row.project === project
+      || project === OTHER_PROJECT && rootProject(row as unknown as Root, registered) === OTHER_PROJECT)
+    .filter(row => !((row.conversation_ids as string[] | undefined) ?? []).some(id => reviews.has(id)))
     .map(row => { const root = { ...(row as unknown as Root) }; root.conversation_ids ??= []; root.name = rootName(state, root); return root; }).toSorted((a, b) => Number(isRunning(b.state)) - Number(isRunning(a.state))
       || (b.last_activity_ts ?? '').localeCompare(a.last_activity_ts ?? '') || a.id.localeCompare(b.id));
 }
@@ -54,6 +66,18 @@ export function useRootIndex(state: ScreenState) {
   }, [state.projection.conversations, state.projection.runs, state.projection.relations, state.projection.delegations]);
 }
 export type RootIndex = ReturnType<typeof useRootIndex>;
+/** 会話の最後の動きの時刻。core の根の投影と同じく、最後の発言と最新の実行の時刻の遅い方を使う。 */
+export function conversationActivity(state: ScreenState, id: string): string {
+  const conversation = state.projection.conversations?.find(row => row.id === id);
+  const run = (state.projection.runs ?? []).filter(row => row.conversation_id === id).toSorted((a, b) => Number(b.generation ?? 0) - Number(a.generation ?? 0))[0];
+  return [conversation?.last_message_ts, run?.last_evidence_ts ?? run?.ended_ts ?? run?.started_ts]
+    .filter((value): value is string => typeof value === 'string' && value !== '').sort().at(-1) ?? '';
+}
+/** 系列の会話を古い順に並べ、最新の会話を末尾に置く。時刻の分からない会話は元の順で先に置く。 */
+export function orderSeries(state: ScreenState, ids: readonly string[]): string[] {
+  const activity = new Map(ids.map(id => [id, conversationActivity(state, id)]));
+  return ids.map((id, index) => ({ id, index })).toSorted((a, b) => activity.get(a.id)!.localeCompare(activity.get(b.id)!) || a.index - b.index).map(item => item.id);
+}
 /** 相手と役割の 1 行。「Claude Opus 5.5 · general-purpose」の形にする。 */
 export function nodeLine(node: TreeNode): string {
   return [agentName(node.provider, node.model) || 'Agent', node.role].filter(Boolean).join(' · ');

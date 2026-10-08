@@ -5,7 +5,7 @@ import { dictionaries, type Language } from '../../lib/i18n.ts';
 import { getProjectName, resolveProjectId } from '../../lib/projects.ts';
 import type { ConversationClient } from '../conversation/ConversationPage.tsx';
 import { ConversationPage } from '../conversation/ConversationPage.tsx';
-import { selectRoots, useRootIndex, buildRootTree } from '../../lib/roots.ts';
+import { selectRoots, useRootIndex, buildRootTree, orderSeries } from '../../lib/roots.ts';
 import { RootList, RootTree } from '../../components/RootViews.tsx';
 import { CreateTaskForm } from '../../components/CreateTaskForm.tsx';
 import { Icon } from '../../components/Icon.tsx';
@@ -14,10 +14,10 @@ import '../files/files.css';
 
 const REQUESTS_KEY = 'agent-graph-requests-open';
 const REQUESTS_MIN_WIDTH = 1280;
+// 依頼の流れの列は 1280px 以上で開いて始まる。利用者が畳んだときだけ、その選択を覚えて従う。
+function userCollapsed(): boolean { return localStorage.getItem(REQUESTS_KEY) === '0'; }
 function initialRequestsOpen(): boolean {
-  const saved = localStorage.getItem(REQUESTS_KEY);
-  if (saved === '1' || saved === '0') return saved === '1';
-  return typeof window === 'undefined' || window.innerWidth >= REQUESTS_MIN_WIDTH;
+  return !userCollapsed() && (typeof window === 'undefined' || window.innerWidth >= REQUESTS_MIN_WIDTH);
 }
 
 /** プロジェクトの見出しと、同じ並びのタブ。作業場と依頼の流れと変更で共有する。 */
@@ -42,7 +42,15 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
   const selected = roots.find(root => root.id === search.get('root')) ?? roots[0];
   const [creating, setCreating] = useState(search.get('create') === '1');
   const [requestsOpen, setRequestsOpenState] = useState(() => search.get('requests') === '1' || initialRequestsOpen());
-  function setRequestsOpen(open: boolean) { setRequestsOpenState(open); localStorage.setItem(REQUESTS_KEY, open ? '1' : '0'); }
+  function setRequestsOpen(open: boolean) {
+    setRequestsOpenState(open);
+    if (open) localStorage.removeItem(REQUESTS_KEY); else localStorage.setItem(REQUESTS_KEY, '0');
+  }
+  useEffect(() => {
+    const resize = () => { if (!userCollapsed()) setRequestsOpenState(window.innerWidth >= REQUESTS_MIN_WIDTH); };
+    window.addEventListener('resize', resize);
+    return () => window.removeEventListener('resize', resize);
+  }, []);
   // 依頼の流れへの移動は、右の列を開いて先頭の行に焦点を置く。
   const requestsWanted = search.get('requests') === '1';
   useEffect(() => {
@@ -63,7 +71,9 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
   const tree = useMemo(() => selected ? buildRootTree(selected, index) : { nodes: [], edges: [], roots: [], unresolved: [] }, [selected, index]);
   const requestedChild = child && child.root === selected?.id ? child.id : search.get('child') ?? undefined;
   const childId = requestedChild && !selected?.conversation_ids.includes(requestedChild) && tree.nodes.some(node => node.conversationId === requestedChild) ? requestedChild : undefined;
-  const conversationId = childId ?? selected?.conversation_ids.at(-1);
+  // 系列は最後に動いた会話を末尾に並べ、その会話を開く。
+  const series = useMemo(() => selected ? orderSeries(state, selected.conversation_ids) : [], [selected, state.projection.conversations, state.projection.runs]);
+  const conversationId = childId ?? series.at(-1);
   return <div className={`workspace root-workspace${requestsOpen ? '' : ' requests-collapsed'}`}>
     <ProjectHeader route={route} name={getProjectName(state, project)} language={language}
       actions={<button className="btn btn-secondary btn-sm" onClick={() => setCreating(value => !value)} aria-expanded={creating}><Icon name="plus" size={14}/>{t.newTask}</button>}/>
@@ -77,7 +87,7 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
         {childId && <button className="btn btn-ghost btn-sm root-back" onClick={() => { setChild(undefined); const next = new URLSearchParams(search); next.delete('child'); setSearch(next); }}><Icon name="chevronLeft" size={14}/>{t.back} {selected?.name}</button>}
         {conversationId ? renderConversation && (childId || selected?.conversation_ids.length === 1) ? renderConversation(conversationId)
           : <ConversationPage key={selected?.id + ':' + (childId ?? 'root')} target={target} client={client} conversationId={conversationId} embedded language={language}
-            seriesIds={childId ? undefined : selected?.conversation_ids} displayName={childId ? undefined : selected?.name}/>
+            seriesIds={childId ? undefined : series} seriesState={childId ? undefined : selected?.state} displayName={childId ? undefined : selected?.name}/>
           : <p className="empty-row">{t.selectConversation}</p>}
       </section>
       <aside className="workspace-requests" aria-label={t.requests}><header className="column-header">

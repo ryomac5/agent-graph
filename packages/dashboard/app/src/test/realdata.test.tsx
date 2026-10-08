@@ -48,13 +48,16 @@ it('shows at most five roots per project with running roots first', () => {
  const target = createLargeStore(); const snapshot = target.getSnapshot();
  target.setSnapshot({ ...snapshot, projection: { ...snapshot.projection, roots: snapshot.projection.roots.map((row, index) => ({ ...row, state: index === 9999 ? 'running' : index === 9998 ? 'waiting_input' : 'ended', last_activity_ts: index === 9998 ? NOW : OLD })) } });
  render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
- const real = screen.getByRole('region', { name: 'Real project' }); const other = screen.getByRole('region', { name: 'Other' });
+ // 登録外のプロジェクトの根は Other の 1 つの区画にまとめ、既定で畳んで件数だけを出す。
+ const real = screen.getByRole('region', { name: 'Real project' }); const other = screen.getByRole('group', { name: 'Other' }) as HTMLDetailsElement;
+ expect(document.querySelectorAll('[aria-label="Other"]')).toHaveLength(1); expect(other.open).toBe(false); expect(Number(other.querySelector('.column-count')!.textContent)).toBeGreaterThan(5);
+ expect(other.querySelectorAll('.root-row')).toHaveLength(0); fireEvent.click(other.querySelector('summary')!);
  expect(real.querySelectorAll('.root-row')).toHaveLength(5); expect(other.querySelectorAll('.root-row')).toHaveLength(5);
  expect(real.querySelector('.root-row')!.textContent).toContain('Task 9999'); expect(other.querySelector('.root-row')!.textContent).toContain('Task 9998');
  expect(within(real).getByRole('link', { name: 'View all conversations' })).toBeTruthy();
 });it('limits ten thousand projected roots to five per project on the overview', () => {
  render(<MemoryRouter><HomePage target={createLargeStore()}/></MemoryRouter>);
- expect(document.querySelectorAll('.root-row')).toHaveLength(10); expect(screen.getAllByRole('link', { name: 'View all conversations' })).toHaveLength(2);
+ expect(document.querySelectorAll('.root-row')).toHaveLength(5); expect(screen.getAllByRole('link', { name: 'View all conversations' })).toHaveLength(1);
 });it.each(['/tmp/test', '/private/tmp/test', '/var/folders/xx/test', '/private/var/folders/xx/test', '/Users/test/.cache/agent-graph/worktrees/test'])('does not invent roots from conversations under %s', root => {
  const target = createStore(); target.setSnapshot({ seq: 1, generation: 0, projection: { projects: [{ id: 'temporary', root_path: root, state: 'unregistered' }], conversations: [{ id: 'c', project: 'temporary', name: 'Temporary fixture', provider: 'codex', origin: 'observed' }], roots: [] } });
  render(<MemoryRouter><HomePage target={target}/></MemoryRouter>); expect(screen.queryByText('Temporary fixture')).toBeNull(); expect(screen.getByText('No conversations yet')).toBeTruthy(); expect(isTemporaryPath('/tmp-project/main')).toBe(false);

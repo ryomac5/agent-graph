@@ -52,6 +52,7 @@ it('selects the running root, joins its continuation and switches to child conve
   expect(await screen.findByText('Continued response')).toBeTruthy();
   expect(screen.getAllByText('Conversation continued')).toHaveLength(1);
   const tree = screen.getByRole('complementary', { name: 'Panel' });
+  fireEvent.click(within(tree).getByRole('button', { name: '1 earlier request' }));
   expect(within(tree).getByText('Check the screen').closest('.graph-card')?.getAttribute('style')).toContain('margin-left: 48px');
   fireEvent.click(within(tree).getByRole('link', { name: 'Build the screen · GPT-6.1 Sol · implement · Running' }));
   expect(await screen.findByText('Child response')).toBeTruthy(); expect(screen.queryByText('Original request')).toBeNull();

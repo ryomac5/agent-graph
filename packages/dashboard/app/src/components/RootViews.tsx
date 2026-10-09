@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { rootHref, useTurnConversations } from '../lib/turns.ts';
 import { isRunning, shownRole, type Root } from '../lib/roots.ts';
-import { agentName, formatWhen, summarizeApproval } from '../lib/format.ts';
+import { agentName, formatWhen, formatSeconds, summarizeApproval } from '../lib/format.ts';
 import type { Row, ScreenState } from '../lib/store.ts';
 import { dictionaries, type Language } from '../lib/i18n.ts';
 import type { DelegationTree, TreeNode } from '../pages/tree/model.ts';
@@ -32,19 +32,19 @@ export function RootList({ roots, selected, onSelect, project, language = 'en', 
   const [showEarlier, setShowEarlier] = useState(false);
   const turns = useTurnConversations();
   const [now, setNow] = useState(Date.now);
-  useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 60_000); return () => clearInterval(timer); }, []);
+  useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 1_000); return () => clearInterval(timer); }, []);
   const yourTurn = (root: Root) => root.conversation_ids.some(id => turns.has(id)) || WAITING.includes(root.state);
   const group = (root: Root) => yourTurn(root) ? 0 : isRunning(root.state) ? 1 : !root.last_activity_ts || Date.parse(root.last_activity_ts) >= now - EARLIER_MS ? 2 : 3;
   const groups = [0, 1, 2, 3].map(value => roots.filter(root => group(root) === value).toSorted((a, b) => (b.last_activity_ts ?? '').localeCompare(a.last_activity_ts ?? '')));
   const labels = language === 'ja' ? ['あなたの番', '実行中', '完了', '以前'] : ['Your turn', 'Running', 'Completed', 'Earlier'];
   const row = (root: Root) => {
-    const started = state?.projection.runs?.filter(run => root.conversation_ids.includes(String(run.conversation_id)) && isRunning(String(run.state)))
-      .map(run => Date.parse(String(run.started_ts ?? ''))).filter(Number.isFinite).sort((a, b) => b - a)[0];
+    const started = state?.projection.runs?.filter(run => root.conversation_ids.includes(String(run.conversation_id)) && run.state === 'running')
+      .map(run => Date.parse(String(run.last_evidence_ts ?? ''))).filter(Number.isFinite).sort((a, b) => b - a)[0];
     const content = <><span className="root-row-line"><strong className="root-name" title={root.kit_name}>{root.name}</strong>{root.conversation_ids.some(id => turns.has(id)) && <span className="root-turn-dot" role="img" aria-label={language === 'ja' ? '自分の番' : 'Your turn'}/>}</span>
       <span className="root-row-meta"><StatusDot className="root-state" state={root.state} language={language}/>
         {root.running_children > 0 && <span className="root-running">{grouped ? language === 'ja' ? `子 ${root.running_children}` : `${root.running_children} ${root.running_children === 1 ? 'child' : 'children'}` : runningText(root.running_children, language)}</span>}
-        {isRunning(root.state) && <span className="root-elapsed numeric" aria-label={language === 'ja' ? '経過時間' : 'Elapsed time'}>{started === undefined ? '—' : `${Math.max(0, Math.floor((now - started) / 60000))}${language === 'ja' ? '分' : 'm'}`}</span>}
-        {root.last_activity_ts && <time className="root-time" dateTime={root.last_activity_ts} title={formatWhen(root.last_activity_ts, language)}>{formatWhen(root.last_activity_ts, language)}</time>}</span></>;
+        {isRunning(root.state) && <span className="root-elapsed numeric" aria-label={language === 'ja' ? '経過時間' : 'Elapsed time'}>{started === undefined ? '—' : formatSeconds(Math.max(0, Math.floor((now - started) / 1000)))}</span>}
+        {!isRunning(root.state) && root.last_activity_ts && <time className="root-time" dateTime={root.last_activity_ts} title={formatWhen(root.last_activity_ts, language)}>{formatWhen(root.last_activity_ts, language)}</time>}</span></>;
     return <Link key={root.id} className="root-row activity-name" aria-label={root.name} aria-current={selected === root.id ? 'page' : undefined}
       to={rootHref({ ...root, project: project ?? root.project })} onClick={event => {
         if (onSelect && event.button === 0 && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {

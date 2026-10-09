@@ -24,7 +24,7 @@ function fixture() {
   target.setSnapshot({ seq: 1, generation: 1, projection: {
     projects: [{ id: 'p', display_name: 'Project', root_path: '/repo', state: 'registered' }], roots,
     conversations: [...roots.map(root => ({ id: root.id, name: root.name, origin: 'managed', provider: 'codex' })), { id: 'child', provider: 'codex', origin: 'managed', type: 'subagent' }],
-    runs: [...roots.map(root => ({ id: `run-${root.id}`, conversation_id: root.id, state: root.state, generation: 1, started_ts: time(2) })), { id: 'child-run', conversation_id: 'child', state: 'waiting_approval', generation: 1 }],
+    runs: [...roots.map(root => ({ id: `run-${root.id}`, conversation_id: root.id, state: root.state, generation: 1, started_ts: time(72), last_evidence_ts: new Date(NOW - 201000).toISOString() })), { id: 'child-run', conversation_id: 'child', state: 'waiting_approval', generation: 1 }],
     relations: [{ id: 'edge', type: 'delegated', from_id: 'active', to_id: 'child', evidence: { description: 'Child work', agentType: 'implement' } }],
     approvals: [{ id: 'pending', conversation_id: 'child', run_id: 'child-run', state: 'pending', available_decisions: ['accept', 'decline'], request: { command: 'git status' } }],
     messages: [{ id: 'root-message', role: 'assistant', body: 'Root response' }, { id: 'child-message', role: 'assistant', body: 'Child response' }],
@@ -52,7 +52,7 @@ it('1: groups sessions by turns and the current 24-hour boundary, collapses proj
   const running = within(sessions).getByRole('link', { name: 'Session active' });
   expect(running.getAttribute('aria-current')).toBe('page');
   expect(running.querySelector('.root-row-meta')?.textContent).toContain('Running');
-  expect(running.querySelector('.root-elapsed')?.textContent).toBe('120m');
+  expect(running.querySelector('.root-elapsed')?.textContent).toBe('3m 21s');
   expect(running.querySelector('.root-running')?.textContent).toBe('1 child');
   const completed = within(sessions).getByRole('region', { name: 'Completed' });
   expect(within(completed).getByRole('link', { name: 'Session boundary' })).toBeTruthy();
@@ -165,4 +165,72 @@ it('5: opens a direct child conversation and returns to its root workspace', () 
   fireEvent.click(screen.getByRole('button', { name: 'Back to Session active' }));
   expect(screen.getByTestId('route').textContent).toBe('/p/p?panel=graph&root=active');
   expect(screen.getByText('Root response')).toBeTruthy();
+});
+
+it('1: counts the current running evidence in seconds, updates it and omits the wall clock', () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(NOW);
+  mount();
+  const row = within(document.querySelector('.sidebar') as HTMLElement).getByRole('link', { name: 'Session active' });
+  expect(row.querySelector('.root-elapsed')?.textContent).toBe('3m 21s');
+  expect(row.querySelector('time')).toBeNull();
+  act(() => vi.advanceTimersByTime(1000));
+  expect(row.querySelector('.root-elapsed')?.textContent).toBe('3m 22s');
+  vi.useRealTimers();
+});
+
+it('2: hides zero counts and keeps closed projects to one row with earlier sessions at the end when opened', () => {
+  const target = fixture();
+  const state = target.getSnapshot();
+  state.projection.projects!.push({ id: 'q', display_name: 'Quiet', root_path: '/quiet', state: 'registered' });
+  state.projection.roots!.push({ id: 'quiet-old', name: 'Quiet old', project: 'q', state: 'ended', conversation_ids: ['quiet-old'], last_activity_ts: time(48), running_children: 0, total_children: 0 });
+  render(<MemoryRouter initialEntries={['/p/p?root=active']}><App target={target} client={client}/></MemoryRouter>);
+  const project = screen.getByRole('button', { name: 'Toggle sessions for Quiet' }).closest('.sidebar-project') as HTMLElement;
+  expect(within(project).queryByLabelText('Running sessions')).toBeNull();
+  expect(project.children).toHaveLength(1);
+  expect(within(project).queryByRole('button', { name: /Earlier/ })).toBeNull();
+  fireEvent.click(within(project).getByRole('button', { name: 'Toggle sessions for Quiet' }));
+  expect(within(project).getByRole('button', { name: 'Earlier 1' }).getAttribute('aria-expanded')).toBe('false');
+  expect(within(project).queryByRole('link', { name: 'Quiet old' })).toBeNull();
+  fireEvent.click(within(project).getByRole('button', { name: 'Earlier 1' }));
+  expect(within(project).getByRole('link', { name: 'Quiet old' })).toBeTruthy();
+  const sessions = document.querySelector('.sidebar-roots .root-list')!;
+  expect(sessions.lastElementChild?.getAttribute('aria-label')).toBe('Earlier');
+});
+
+it('3: removes the repeated graph band only in the panel', () => {
+  const view = mount();
+  expect(document.querySelector('.workspace-panel .graph-toolbar')).toBeNull();
+  expect(document.querySelector('.workspace-panel .graph-root')).toBeTruthy();
+  view.unmount();
+  mount('/p/p/graph?root=active');
+  expect(document.querySelector('.graph-toolbar')).toBeTruthy();
+});
+
+it('4: moves commands and notifications into the brand row and removes the top band', () => {
+  mount();
+  expect(document.querySelector('.topbar')).toBeNull();
+  const brand = document.querySelector('.sidebar-brand-row') as HTMLElement;
+  expect(within(brand).getByRole('link', { name: 'agent-graph' })).toBeTruthy();
+  expect(within(brand).getByRole('button', { name: 'Notifications' })).toBeTruthy();
+  expect(within(brand).getByRole('button', { name: 'Search and commands' })).toBeTruthy();
+  fireEvent.click(within(brand).getByRole('button', { name: 'Search and commands' }));
+  expect(screen.getByRole('dialog')).toBeTruthy();
+});
+
+it('5: opens the compact conversation menu and centers three equal mobile tabs', () => {
+  vi.stubGlobal('innerWidth', 390);
+  mount();
+  const menu = screen.getByRole('button', { name: 'Conversation menu' });
+  expect(menu.getAttribute('aria-expanded')).toBe('false');
+  fireEvent.click(menu);
+  expect(document.querySelector('.conv-action-menu')?.className).toContain('open');
+  fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+  expect(screen.getByRole('region', { name: 'Details' })).toBeTruthy();
+  expect(menu.getAttribute('aria-expanded')).toBe('false');
+  const css = readFileSync('app/src/styles.css', 'utf8');
+  expect(css).toContain('.mobile-tabs button { flex: 1 1 0; min-width: 0; text-align: center;');
+  const conversationCss = readFileSync('app/src/pages/conversation/conversation.css', 'utf8');
+  expect(conversationCss).toContain('.conversation-page .conv-title-row .conv-title { flex: 1; }');
+  expect(conversationCss).toContain('.conv-action-menu { display: none;');
 });

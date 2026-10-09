@@ -173,7 +173,9 @@ export function App({ target = store, client = unavailableClient, searchClient =
   ];
   const fullHeight = /^\/(c|p)\/[^/]+(?:\/(files|graph|tree))?$/.test(location.pathname);
   const icons = { overview: 'overview', inbox: 'inbox', search: 'search' } as const;
-  return <div className={`app-shell mobile-${mobileView}`}><TurnSignals target={target} bindings={bindings}/><aside className="sidebar"><Link className="brand" to="/"><span className="brand-mark"><Icon name="logo" size={16}/></span>{t('brand')}</Link>
+  return <div className={`app-shell mobile-${mobileView}`}><TurnSignals target={target} bindings={bindings}/><aside className="sidebar"><div className="sidebar-brand-row"><Link className="brand" to="/"><span className="brand-mark"><Icon name="logo" size={16}/></span>{t('brand')}</Link><div className="sidebar-actions"><button className="btn btn-ghost btn-sm" aria-label={t('commands')} title={t('commands')} onClick={() => { contextFocus.current = document.activeElement as HTMLElement; setOverlay('commands'); }}><Icon name="search" size={14}/><kbd>{bindings.command}</kbd></button>
+      <Notifications target={target} client={client} initiallyOpen={false} compact language={language}/></div>
+    </div>{state.connection !== 'connected' && <span className={`connection ${state.connection}`} role="status"><span className="connection-dot" aria-hidden="true"/>{t(state.connection)}</span>}
     <nav aria-label={t('workspace')} className="nav-group">
       {(['overview', 'inbox', 'search'] as const).map(key => <NavLink key={key} end to={key === 'overview' ? '/' : `/${key}`}><Icon name={icons[key]} size={16}/><span className="nav-label">{t(key)}</span>
         {key === 'inbox' && approvals > 0 && <span className="nav-count numeric" aria-hidden="true">{approvals}</span>}</NavLink>)}
@@ -181,21 +183,19 @@ export function App({ target = store, client = unavailableClient, searchClient =
       {projects.length === 0 && <p className="muted-text sidebar-empty">{t('noProjects')}</p>}
       <nav aria-label={t('projects')} className="nav-group project-list">{[...projects, ...(hasOther ? [{ id: OTHER_PROJECT, name: t('other'), full: t('other'), detail: '' }] : [])].map(row => {
         const items = roots.filter(root => rootProject(root, registeredIds) === row.id);
-        const open = !collapsedProjects[row.id];
+        const open = !(collapsedProjects[row.id] ?? row.id !== project);
+        const runningCount = items.filter(root => isRunning(root.state)).length;
         return <div key={row.id} className="sidebar-project">
           <div className="sidebar-project-row"><button className="icon-button" aria-label={language === 'ja' ? row.name + ' のセッション' : 'Toggle sessions for ' + row.name} aria-expanded={open} onClick={() => setCollapsedProjects(value => ({ ...value, [row.id]: open }))}><Icon name={open ? 'chevronDown' : 'chevronRight'} size={12}/></button>
             <NavLink to={`/p/${encodeURIComponent(row.id)}`} title={row.full}><Icon name="folder" size={14}/><span className="truncate">{row.name}</span></NavLink>
-            <span className="numeric project-running" aria-label={language === 'ja' ? '実行中のセッション' : 'Running sessions'}>{items.filter(root => isRunning(root.state)).length}</span>
+            {runningCount > 0 && <span className="numeric project-running" aria-label={language === 'ja' ? '実行中のセッション' : 'Running sessions'}>{runningCount}</span>}
             <button className="icon-button" aria-label={t('newTask') + ': ' + row.name} onClick={() => { navigate(`/p/${encodeURIComponent(row.id)}?create=1`); setMobileView('conversation'); }}><Icon name="plus" size={14}/></button></div>
           {open && <section className="sidebar-roots" aria-label={language === 'ja' ? row.name + ' のセッション' : row.name + ' sessions'}><RootList grouped state={state} roots={items} selected={selectedRoot?.id} language={language} onSelect={root => { const next = new URLSearchParams(search); next.set('root', root.id); next.delete('child'); next.delete('path'); next.delete('create'); navigate(`/p/${encodeURIComponent(row.id)}?${next}`); setMobileView('conversation'); }}/></section>}
         </div>;
       })}</nav>
     </div><NavLink className="settings-link" to="/settings"><Icon name="settings" size={16}/>{t('settings')}</NavLink></aside>
     <nav className="mobile-tabs" aria-label={language === 'ja' ? '画面' : 'Views'}>{(['sessions', 'conversation', 'panel'] as const).map(view => <button key={view} aria-pressed={mobileView === view} onClick={() => setMobileView(view)}>{language === 'ja' ? { sessions: 'セッション', conversation: '会話', panel: 'パネル' }[view] : { sessions: 'Sessions', conversation: 'Conversation', panel: 'Panel' }[view]}</button>)}</nav>
-    <div className="main-column">{listError && <p role="alert" className="status-line danger list-error">{listError}</p>}<header className="topbar"><span className={`connection ${state.connection}`} role="status">{state.connection !== 'connected' && <><span className="connection-dot" aria-hidden="true"/>{t(state.connection)}</>}</span>
-      <div className="topbar-actions"><button className="btn btn-ghost btn-sm" onClick={() => { contextFocus.current = document.activeElement as HTMLElement; setOverlay('commands'); }}><Icon name="search" size={14}/><span>{t('commands')}</span><kbd>{bindings.command}</kbd></button>{approvals > 0 && <Link className="approval-count" to="/inbox"><span className="status status-waiting"><span className="status-dot" aria-hidden="true"/></span>{t('approvals')}<strong className="numeric">{approvals}</strong></Link>}
-      <Notifications target={target} client={client} initiallyOpen={false} compact language={language}/></div>
-    </header><main ref={mainRef} className={fullHeight ? 'full-height' : undefined}><Routes>
+    <div className="main-column">{listError && <p role="alert" className="status-line danger list-error">{listError}</p>}<main ref={mainRef} className={fullHeight ? 'full-height' : undefined}><Routes>
       <Route path="/" element={<HomePage target={target} client={client} language={language}/>}/>
       <Route path="/p/:project" element={<WorkspacePage target={target} client={client} language={language} showRootList={false}/>}/>
       <Route path="/c/:conversation" element={<WorkspacePage project={project ?? OTHER_PROJECT} conversationId={pathConversation ? decodeURIComponent(pathConversation) : undefined} target={target} client={client} language={language} showRootList={false}/>}/>

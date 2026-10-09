@@ -81,7 +81,10 @@ function GraphCanvas({ tree, root, route, language, approvals, connected, client
   }, [search, requestedChild, tree]);
   function toggleGroup(id: string) {
     const next = new Set(expanded);
-    if (next.has(id)) next.delete(id); else next.add(id);
+    if (next.has(id)) {
+      next.delete(id);
+      if (id.startsWith('batch:')) { next.delete(`earlier:${id.slice(6)}`); next.delete(`completed:${id.slice(6)}`); }
+    } else next.add(id);
     setSearch(current => {
       const params = new URLSearchParams(current); params.delete('expanded');
       next.forEach(group => params.append('expanded', group)); return params;
@@ -91,7 +94,7 @@ function GraphCanvas({ tree, root, route, language, approvals, connected, client
   const [titleHeights, setTitleHeights] = useState(new Map<string, number>());
   const [focused, setFocused] = useState(requestedChild ? tree.nodes.find(node => node.conversationId === requestedChild)?.id ?? root.id : root.id);
   useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 60_000); return () => clearInterval(timer); }, []);
-  const visible = useMemo(() => foldEarlier(tree, expanded, now, requestedChild ? tree.nodes.find(node => node.conversationId === requestedChild)?.id : undefined, language, embedded ? 20 : undefined, embedded), [tree, expanded, now, requestedChild, language, embedded]);
+  const visible = useMemo(() => foldEarlier(tree, expanded, now, requestedChild ? tree.nodes.find(node => node.conversationId === requestedChild)?.id : undefined, language, embedded ? 20 : undefined), [tree, expanded, now, requestedChild, language, embedded]);
   const layout = useMemo(() => calculateLayout(visible, embedded ? Math.min(size.width, 720) : size.width, previous.current, titleHeights), [visible, size.width, titleHeights, embedded]);
   const byId = new Map(visible.nodes.map(node => [node.id, node]));
   const positions = new Map(layout.nodes.map(node => [node.id, node]));
@@ -196,10 +199,10 @@ function GraphCanvas({ tree, root, route, language, approvals, connected, client
   const waiting = tree.nodes.filter(node => node.state === 'waiting_approval').length;
   const earlierLabel = (count: number) => ja ? `以前の依頼 ${count} 件` : `${count} earlier ${count === 1 ? 'request' : 'requests'}`;
   return <>
-    <div className="graph-toolbar"><div className="graph-context"><span className="graph-context-label">{ja ? '根の会話' : 'ROOT CONVERSATION'}</span><strong title={root.name}>{root.name}</strong></div>
+    {!embedded && <div className="graph-toolbar"><div className="graph-context"><span className="graph-context-label">{ja ? '根の会話' : 'ROOT CONVERSATION'}</span><strong title={root.name}>{root.name}</strong></div>
       <div className="graph-summary"><span className="graph-total">{ja ? `依頼 ${tree.nodes.filter(node => node.id !== root.id && node.role !== 'planner').length} 件` : `${tree.nodes.filter(node => node.id !== root.id && node.role !== 'planner').length} requests`}</span>
         {running > 0 && <span><i className="graph-indicator running"/>{ja ? `${running} 実行中` : `${running} running`}</span>}
-        {waiting > 0 && <span><i className="graph-indicator waiting"/>{ja ? `${waiting} 承認待ち` : `${waiting} awaiting approval`}</span>}</div></div>
+        {waiting > 0 && <span><i className="graph-indicator waiting"/>{ja ? `${waiting} 承認待ち` : `${waiting} awaiting approval`}</span>}</div></div>}
     {error && <p className="banner banner-danger" role="alert">{error}</p>}
     <div ref={canvas} className={`graph-canvas${layout.vertical ? ' graph-tree' : ''}${dragging ? ' dragging' : ''}`} role="region" aria-label={ja ? '依頼のグラフ' : 'Request graph'} data-direction={layout.vertical ? 'vertical' : 'horizontal'}
       onPointerDown={event => {
@@ -241,7 +244,7 @@ function GraphCanvas({ tree, root, route, language, approvals, connected, client
               aria-label={title} aria-expanded={node.earlier.expanded} onClick={() => { setFocused(node.earlier!.parent); toggleGroup(node.id); }}><span className="graph-earlier-icon"><Icon name="chevronRight" size={16}/></span><strong>{title}</strong><span>{node.earlier.expanded ? ja ? '押して閉じる' : 'Click to collapse' : ja ? '押して開く' : 'Click to expand'}</span></button>
               : node.conversationId ? <Link className="graph-card-link" to={target} ref={element => { if (element) links.current.set(node.id, element); else links.current.delete(node.id); }} onFocus={focus} onKeyDown={event => move(event, node.id)} aria-current={(requestedChild ? node.conversationId === requestedChild : isRoot) ? 'page' : undefined} aria-label={`${title} · ${who} · ${stateLabel(node.state, language)}`}>{content}</Link>
                 : <button className="graph-card-link" ref={element => { if (element) links.current.set(node.id, element); else links.current.delete(node.id); }} onFocus={focus} onKeyDown={event => move(event, node.id)}
-                  aria-label={title} aria-expanded="true" onClick={() => { const child = node.children.map(id => positions.get(id)).find(Boolean); if (child) { reveal(child); links.current.get(child.id)?.focus(); } }}>{content}</button>}
+                  aria-label={title} aria-expanded={node.batchExpanded ?? true} onClick={() => { if (node.batchCount !== undefined) { toggleGroup(`batch:${node.id}`); return; } const child = node.children.map(id => positions.get(id)).find(Boolean); if (child) { reveal(child); links.current.get(child.id)?.focus(); } }}>{content}</button>}
             {pending.map(row => <div key={String(row.id)} className="graph-approval" data-approval-id={String(row.id)}>
               <code title={summarizeApproval(row.request)}>{summarizeApproval(row.request)}</code><div className="graph-approval-actions">
                 {sent.has(String(row.id)) ? <span role="status">{ja ? '回答済み' : 'Answer sent'}</span> : <>{(['allow', 'deny'] as const).map(action => <button key={action} className={`btn btn-xs ${action === 'allow' ? 'btn-primary' : 'btn-secondary'}`}

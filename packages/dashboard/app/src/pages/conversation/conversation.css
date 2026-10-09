@@ -148,3 +148,15 @@
 .delegation-title { flex: 1; min-width: 0; }
 .timeline-instructions { color: var(--text-3); font-size: var(--text-sm); }
 .timeline-instructions summary { cursor: pointer; }
+
+.conv-header-actions, .conv-action-menu { display: flex; align-items: center; flex: none; }
+.conv-header-actions { position: relative; }
+.conv-more { display: none; }
+@media (max-width: 899px) {
+  .conv-title-row { gap: 8px; }
+  .conversation-page .conv-title-row .conv-title { flex: 1; }
+  .conv-title-row > .conv-agent, .conv-title-row > .spacer { display: none; }
+  .conv-more { display: inline-flex; }
+  .conv-action-menu { display: none; position: absolute; right: 0; top: 100%; z-index: 25; flex-direction: column; align-items: stretch; padding: 4px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow-sm); white-space: nowrap; }
+  .conv-action-menu.open { display: flex; }
+}

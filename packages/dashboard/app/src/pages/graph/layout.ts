@@ -14,7 +14,7 @@ const TITLE_WIDTH = CARD_WIDTH - 58;
 const APPROVAL_HEIGHT = 106;
 const LAYER_GAP = 80;
 const ROW_GAP = 16;
-export interface GraphNode extends TreeNode { activity?: string; approvalCount?: number; batchCount?: number; earlier?: { parent: string; count: number; kind: 'earlier' | 'completed'; expanded: boolean } }
+export interface GraphNode extends TreeNode { activity?: string; approvalCount?: number; batchCount?: number; batchExpanded?: boolean; earlier?: { parent: string; count: number; kind: 'earlier' | 'completed'; expanded: boolean } }
 export interface GraphTree extends Omit<DelegationTree, 'nodes'> { nodes: GraphNode[] }
 export interface PositionedNode { id: string; depth: number; x: number; y: number; width: number; height: number; route?: { y: number; lane: number } }
 export interface GraphLayout { nodes: PositionedNode[]; width: number; height: number; vertical: boolean }
@@ -52,7 +52,7 @@ export function prepareGraphTree(tree: GraphTree, now: number, language: Languag
 }
 
 /** 注意が必要な枝を残し、完了と古い失敗を親ごとに畳む。 */
-export function foldEarlier(tree: GraphTree, expanded: ReadonlySet<string>, now: number, selected?: string, language: Language = 'en', recentLimit = RECENT_LIMIT, keepUndated = false): GraphTree {
+export function foldEarlier(tree: GraphTree, expanded: ReadonlySet<string>, now: number, selected?: string, language: Language = 'en', recentLimit = RECENT_LIMIT): GraphTree {
   tree = prepareGraphTree(tree, now, language);
   const byId = new Map(tree.nodes.map(node => [node.id, node]));
   const endedAt = (id: string) => Date.parse(byId.get(id)!.activity ?? '');
@@ -60,8 +60,8 @@ export function foldEarlier(tree: GraphTree, expanded: ReadonlySet<string>, now:
     const node = byId.get(id);
     if (!node || id === selected || ancestors.has(id) || node.approvalCount) return false;
     if (!node.children.every(child => complete(child, new Set([...ancestors, id])))) return false;
-    // 時刻のないまとまりは残し、中の完了と失敗を別々に畳む。
-    if (node.role === 'planner' && !node.conversationId) return node.children.length > 0 && Number.isFinite(endedAt(id));
+    // まとまりはカードを残し、中の依頼を同じ規則で畳む。
+    if (node.role === 'planner' && !node.conversationId) return false;
     if (toDisplayState(node.state) === 'failed') return !Number.isFinite(endedAt(id)) || endedAt(id) < now - EARLIER_MS;
     return ['ended', 'idle'].includes(toDisplayState(node.state));
   };
@@ -73,16 +73,19 @@ export function foldEarlier(tree: GraphTree, expanded: ReadonlySet<string>, now:
     seen.add(id);
     const finished = node.children.filter(child => complete(child));
     const old = (child: string): boolean => complete(child)
-      && (endedAt(child) < now - EARLIER_MS || !keepUndated && toDisplayState(byId.get(child)!.state) === 'failed' && !Number.isFinite(endedAt(child)))
+      && (endedAt(child) < now - EARLIER_MS || !Number.isFinite(endedAt(child)))
       && byId.get(child)!.children.every(old);
     const earlier = finished.filter(old);
     const recent = finished.filter(child => !earlier.includes(child) && Number.isFinite(endedAt(child))).sort((a, b) => endedAt(b) - endedAt(a) || a.localeCompare(b));
     const undated = finished.filter(child => !earlier.includes(child) && !Number.isFinite(endedAt(child)));
-    const groups = [{ kind: 'completed' as const, children: [...recent.slice(recentLimit), ...(keepUndated ? [] : undated)] }, { kind: 'earlier' as const, children: earlier }]
+    const groups = [{ kind: 'completed' as const, children: [...recent.slice(recentLimit), ...undated] }, { kind: 'earlier' as const, children: earlier }]
       .filter(group => group.children.length).map(group => ({ ...group, id: `${group.kind}:${id}`, expanded: expanded.has(`${group.kind}:${id}`) }));
+    const batchClosed = node.batchCount !== undefined && node.children.length > 0 && earlier.length === node.children.length && !groups.some(group => group.expanded);
+    const batchExpanded = !batchClosed || expanded.has(`batch:${id}`);
+    if (!batchExpanded) { nodes.push({ ...node, children: [], batchExpanded: false }); return; }
     const hidden = new Set(groups.filter(group => !group.expanded).flatMap(group => group.children));
     const children = node.children.filter(child => !hidden.has(child));
-    nodes.push({ ...node, children: [...children, ...groups.map(group => group.id)] });
+    nodes.push({ ...node, batchExpanded: node.batchCount !== undefined ? batchExpanded : undefined, children: [...children, ...groups.map(group => group.id)] });
     children.forEach(visit);
     for (const group of groups) nodes.push({ id: group.id, kind: 'delegation', label: '', provider: '', model: '', role: group.kind, state: 'idle', children: [], attempts: [],
       earlier: { parent: id, count: group.children.length, kind: group.kind, expanded: group.expanded } });

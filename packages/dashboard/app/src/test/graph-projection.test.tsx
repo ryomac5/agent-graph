@@ -79,44 +79,46 @@ it('passes multiple conversations, idle children and undated planner tasks throu
   expect(built.nodes.find(node => node.id === 'graph:batch')!.conversationId).toBeUndefined();
   expect(built.edges.find(edge => edge.target === 'recent-f')!.source).toBe('root');
   const visible = foldEarlier(built, new Set(), NOW);
-  expect(visible.nodes).toHaveLength(11);
-  expect(visible.edges).toHaveLength(10);
-  expect(visible.nodes.find(node => node.id === 'completed:graph:batch')!.earlier!.count).toBe(3);
+  expect(visible.nodes).toHaveLength(9);
+  expect(visible.edges).toHaveLength(8);
+  expect(visible.nodes.find(node => node.id === 'graph:batch')!.batchExpanded).toBe(false);
   for (const edge of visible.edges) {
     expect(visible.nodes.some(node => node.id === edge.source)).toBe(true);
     expect(visible.nodes.some(node => node.id === edge.target)).toBe(true);
   }
 });
 
-it('draws eleven nodes and ten edges with one edge per folded group and aligned child tops', () => {
+it('draws nine nodes and eight edges with one edge per folded group and aligned child tops', () => {
   renderProjection();
   const cards = [...document.querySelectorAll<HTMLElement>('.graph-card')];
-  expect(cards).toHaveLength(11);
-  expect(document.querySelectorAll('.graph-edge')).toHaveLength(10);
+  expect(cards).toHaveLength(9);
+  expect(document.querySelectorAll('.graph-edge')).toHaveLength(8);
   expect(screen.getByRole('button', { name: 'ほかの完了 2 件' }).getAttribute('aria-expanded')).toBe('false');
-  expect(screen.getByRole('button', { name: 'ほかの完了 3 件' }).getAttribute('aria-expanded')).toBe('false');
+  expect(screen.getByRole('button', { name: 'まとめて出した依頼' }).getAttribute('aria-expanded')).toBe('false');
   expect(screen.queryByRole('link', { name: /old-a/ })).toBeNull();
   expect(screen.queryByRole('button', { name: 'Failed task' })).toBeNull();
-  expect(screen.getByRole('button', { name: '以前の依頼 1 件' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'まとめて出した依頼' })).toBeTruthy();
   const root = cards.find(card => card.dataset.nodeId === 'root')!;
   const firstColumn = cards.filter(card => card.style.left === '320px');
   expect(Math.min(...firstColumn.map(card => parseFloat(card.style.top)))).toBe(parseFloat(root.style.top));
   expect(firstColumn[0].style.width).toBe('240px');
   expect(firstColumn[0].style.height).toBe('76px');
-  const group = cards.find(card => card.dataset.nodeId === 'completed:graph:batch')!;
+  const group = cards.find(card => card.dataset.nodeId === 'graph:batch')!;
   const endpoint = ' ' + group.style.left.replace('px', '') + ' ' + (parseFloat(group.style.top) + parseFloat(group.style.height) / 2);
   expect([...document.querySelectorAll('.graph-edge > path')].filter(path => path.getAttribute('d')!.endsWith(endpoint))).toHaveLength(1);
 });
 
 it('expands only the requested group and can reveal a child from an earlier conversation', () => {
   renderProjection();
-  fireEvent.click(screen.getByRole('button', { name: 'ほかの完了 3 件' }));
+  fireEvent.click(screen.getByRole('button', { name: 'まとめて出した依頼' }));
+  expect(screen.getByRole('button', { name: '以前の依頼 4 件' })).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: '以前の依頼 4 件' }));
   expect(document.querySelectorAll('.graph-card')).toHaveLength(14);
   expect(document.querySelectorAll('.graph-edge')).toHaveLength(13);
   expect(screen.getByRole('button', { name: '以前の依頼 3 件' }).getAttribute('aria-expanded')).toBe('false');
   cleanup(); renderProjection('/p/repo/graph?root=root&child=old-a');
   expect(screen.getByRole('link', { name: /old-a/ })).toBeTruthy();
-  expect(screen.getByRole('button', { name: 'ほかの完了 3 件' }).getAttribute('aria-expanded')).toBe('false');
+  expect(screen.getByRole('button', { name: 'まとめて出した依頼' }).getAttribute('aria-expanded')).toBe('false');
 });
 
 it('reserves a second title line only for long titles and uses measured title height', () => {
@@ -162,7 +164,9 @@ it.each(['en', 'ja'] as const)('shows the batch name, count and Codex mark in %s
   expect(batch.querySelector('.provider-codex')).toBeTruthy();
   expect(batch.querySelector('[data-state="ended"]')).toBeTruthy();
   expect(screen.queryByRole('button', { name: 'Request 2' })).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: language === 'ja' ? '以前の依頼 1 件' : '1 earlier request' }));
+  expect(batch.getAttribute('aria-expanded')).toBe('false');
+  fireEvent.click(batch);
+  fireEvent.click(screen.getByRole('button', { name: language === 'ja' ? '以前の依頼 3 件' : '3 earlier requests' }));
   expect(screen.getByRole('button', { name: 'Request 2' })).toBeTruthy();
 });
 
@@ -210,8 +214,40 @@ it.each([
   Object.assign(target.getSnapshot().projection.delegations![2], record);
   render(<MemoryRouter><GraphPage project="repo" target={target} language="ja" client={{ command: vi.fn() }}/></MemoryRouter>);
   expect(screen.queryByRole('button', { name: 'Request 2' })).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: '以前の依頼 1 件' }));
+  fireEvent.click(screen.getByRole('button', { name: '以前の依頼 2 件' }));
   const failure = screen.getByRole('button', { name: 'Request 2' });
   expect(failure.querySelector('time')!.dateTime).toBe('2026-10-06T10:00:00Z');
   expect(failure.querySelector('[data-state="failed"]')).toBeTruthy();
+});
+
+it('3: starts an embedded undated batch as one closed card and folds all its children together', () => {
+  const target = createBatchFixture(['done', 'done', 'done', 'failed']);
+  render(<MemoryRouter><GraphPage embedded project="repo" target={target} language="ja" client={{ command: vi.fn() }}/></MemoryRouter>);
+  const batch = screen.getByRole('button', { name: 'まとめて出した依頼' });
+  expect(batch.getAttribute('aria-expanded')).toBe('false');
+  expect(document.querySelectorAll('.graph-card')).toHaveLength(2);
+  expect(document.querySelector('.graph-toolbar')).toBeNull();
+  fireEvent.click(batch);
+  expect(screen.getByRole('button', { name: '以前の依頼 4 件' }).getAttribute('aria-expanded')).toBe('false');
+  expect(screen.queryByRole('button', { name: 'Request 3' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: '以前の依頼 4 件' }));
+  for (let index = 0; index < 4; index++) expect(screen.getByRole('button', { name: `Request ${index}` })).toBeTruthy();
+  fireEvent.click(batch);
+  expect(batch.getAttribute('aria-expanded')).toBe('false');
+  expect(document.querySelectorAll('.graph-card')).toHaveLength(2);
+});
+
+it('3: uses the same 24-hour boundary inside a batch and keeps active undated work visible', () => {
+  const target = createBatchFixture(['done', 'done', 'done', 'running', 'failed']);
+  const snapshot = target.getSnapshot();
+  snapshot.projection.delegations![0].updated_ts = '2026-10-07T11:59:59Z';
+  snapshot.projection.delegations![1].updated_ts = '2026-10-07T12:00:00Z';
+  const { result } = renderHook(() => useRootIndex(snapshot));
+  const built = buildRootTree(selectRoots(snapshot, 'repo')[0], result.current);
+  const original = structuredClone(built);
+  const folded = foldEarlier(built, new Set(), NOW);
+  expect(built).toEqual(original);
+  for (const id of ['request-1', 'request-3']) expect(folded.nodes.some(node => node.delegation?.id === id)).toBe(true);
+  for (const id of ['request-0', 'request-2', 'request-4']) expect(folded.nodes.some(node => node.delegation?.id === id)).toBe(false);
+  expect(folded.nodes.find(node => node.earlier?.kind === 'earlier')?.earlier?.count).toBe(3);
 });

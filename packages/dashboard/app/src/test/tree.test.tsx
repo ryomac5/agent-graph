@@ -168,6 +168,7 @@ it('keeps a resumed delegated conversation under its origin with two attempts an
   ]);
   render(<MemoryRouter><WorkspacePage project={PROJECT} target={target} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: true })) }}/></MemoryRouter>);
   const flow = screen.getByRole('complementary', { name: 'Panel' });
+  fireEvent.click(within(flow).getByRole('button', { name: '1 earlier request' }));
   expect(within(flow).getAllByRole('link', { name: /(Codex|GPT)[^·]* · implement/ })).toHaveLength(1);
 });
 

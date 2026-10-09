@@ -484,7 +484,7 @@ kbd { font-size: 11px; border-bottom-width: 1px; }
   .app-shell > .sidebar, .app-shell > .main-column { width: 100%; flex: 1; min-height: 0; }
   .app-shell > .sidebar { display: none; border-right: 0; }
   .mobile-tabs { position: fixed; display: flex; left: 0; right: 0; bottom: 0; height: 46px; background: var(--surface); border-top: 1px solid var(--border); z-index: 20; }
-  .mobile-tabs button { flex: 1; color: var(--text-3); font-size: var(--text-sm); }
+  .mobile-tabs button { flex: 1 1 0; min-width: 0; text-align: center; padding-inline: 8px; color: var(--text-3); font-size: var(--text-sm); }
   .mobile-tabs button[aria-pressed='true'] { color: var(--accent); background: var(--accent-soft); }
   .mobile-sessions > .sidebar { display: flex; }
   .mobile-sessions > .main-column { display: none; }
@@ -503,3 +503,10 @@ kbd { font-size: 11px; border-bottom-width: 1px; }
 
 .sidebar-roots .root-time { flex: 0 1 auto; font-size: 10px; }
 .sidebar-roots .root-running { flex: none; }
+
+.sidebar-brand-row { display: flex; align-items: center; flex: none; gap: 2px; margin-bottom: var(--space-2); }
+.sidebar-brand-row .brand { flex: 1; min-width: 0; margin-bottom: 0; padding-inline: 4px; gap: 6px; }
+.sidebar-actions { display: flex; align-items: center; gap: 2px; }
+.sidebar-actions > .btn { padding-inline: 2px; gap: 3px; }
+.sidebar-actions kbd { padding-inline: 3px; font-size: 10px; }
+.sidebar-actions .notification-panel.popover { position: fixed; top: 48px; left: 8px; right: auto; }

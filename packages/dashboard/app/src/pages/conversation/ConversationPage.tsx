@@ -148,6 +148,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const [appliedModel, setAppliedModel] = useState<{ model: string; effort: string }>();
   const [now, setNow] = useState(Date.now());
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
   // 入力欄を使おうとするまでは、入力の準備に関わる注意を出さない。
   const [engaged, setEngaged] = useState(false);
@@ -372,10 +373,14 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
           reason={readText(run?.cause ?? run?.reason) || undefined} elapsed={elapsed ? `${t(status.startsWith('waiting') ? 'waiting' : 'elapsed')} ${elapsed}` : undefined}/>
         {provider && <span className="conv-agent truncate" title={[providerName(provider), shownModel].filter(Boolean).join(' · ')}>{agentName(provider, shownModel)}</span>}
         <span className="spacer"/>
+        <div className="conv-header-actions">
+        <button type="button" className="btn btn-ghost btn-sm conv-more" aria-label={language === 'ja' ? '会話のメニュー' : 'Conversation menu'} aria-expanded={menuOpen} aria-controls="conversation-actions" onClick={() => setMenuOpen(value => !value)}>…</button>
+        <div id="conversation-actions" className={`conv-action-menu${menuOpen ? ' open' : ''}`} onKeyDown={event => { if (event.key === 'Escape') { setMenuOpen(false); (event.currentTarget.previousElementSibling as HTMLElement | null)?.focus(); } }}>
         <button type="button" className="btn btn-ghost btn-sm conv-details-toggle" aria-expanded={detailsOpen} aria-controls="conversation-details"
-          onClick={() => setDetailsOpen(value => !value)}>{t('details')}<Icon name="chevronDown" size={14} className="caret"/></button>
+          onClick={() => { setDetailsOpen(value => !value); setMenuOpen(false); }}>{t('details')}<Icon name="chevronDown" size={14} className="caret"/></button>
         {changedFiles.length > 0 && <button type="button" className="btn btn-ghost btn-sm conv-details-toggle" aria-expanded={filesOpen} aria-controls="conversation-changed-files"
-          onClick={() => setFilesOpen(value => !value)}>{t('filesChanged')} {changedFiles.length}<Icon name="chevronDown" size={14} className="caret"/></button>}
+          onClick={() => { setFilesOpen(value => !value); setMenuOpen(false); }}>{t('filesChanged')} {changedFiles.length}<Icon name="chevronDown" size={14} className="caret"/></button>}
+        </div></div>
       </div>
       {detailsOpen && <section id="conversation-details" className="conv-details" aria-label={t('details')}>
         <dl className="conv-meta">

@@ -19,7 +19,7 @@ it('renders navigation, projects, pending approvals, connection state and bell',
   expect(screen.getByRole('heading', { name: 'Overview' })).toBeTruthy();
   expect(within(screen.getByRole('complementary')).getByRole('link', { name: 'demo' }).getAttribute('href')).toBe('/p/demo');
   expect(screen.getByRole('status').textContent).toContain('Runner offline');
-  expect(screen.getByRole('link', { name: 'Approvals1' })).toBeTruthy();
+  expect(within(screen.getByRole('navigation', { name: 'Workspace' })).getByRole('link', { name: 'Approvals' }).querySelector('.nav-count')?.textContent).toBe('1');
   fireEvent.click(screen.getByRole('button', { name: 'Notifications' }));
   expect(screen.getByRole('heading', { name: 'Approval pending' })).toBeTruthy();
 });
@@ -71,7 +71,7 @@ it('shares live activity, approval counts, commands and notices across all stage
   expect(screen.getByRole('textbox', { name: 'Message' })).toBeTruthy();
   fireEvent.click(within(screen.getByRole('region', { name: 'demo sessions' })).getByRole('link', { name: /Console conversation/ }));
   expect(screen.getByRole('heading', { name: 'Console conversation' })).toBeTruthy();
-  fireEvent.click(screen.getByRole('link', { name: 'Approvals1' }));
+  fireEvent.click(within(screen.getByRole('navigation', { name: 'Workspace' })).getByRole('link', { name: 'Approvals' }));
   expect(screen.getByRole('heading', { name: 'Approvals' })).toBeTruthy();
   expect(screen.getByRole('heading', { name: 'Approval pending' })).toBeTruthy();
   const inbox = screen.getByRole('region', { name: 'Approvals' });
@@ -80,7 +80,7 @@ it('shares live activity, approval counts, commands and notices across all stage
   act(() => target.applyPatch({ type: 'patch', from_seq: 2, seq: 3, generation: 0, changes: {
     approvals: { remove: [], upsert: [{ id: 'a', run_id: 'r', state: 'resolved' }] },
   } }));
-  expect(screen.queryByRole('link', { name: 'Approvals1' })).toBeNull();
+  expect(within(screen.getByRole('navigation', { name: 'Workspace' })).getByRole('link', { name: 'Approvals' }).querySelector('.nav-count')).toBeNull();
 });
 
 it('opens Changes from the root workspace and sends review commands', async () => {

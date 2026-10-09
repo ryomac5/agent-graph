@@ -23,10 +23,15 @@ it.each(['en', 'ja'] as const)('opens changed files and diffs in %s and hides th
   const client = { command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'cmd', ok: true, result: [] })) };
   render(<MemoryRouter><ConversationPage conversationId="c" target={target} client={client} language={language}/></MemoryRouter>);
   const label = language === 'ja' ? '変更したファイル' : 'Files changed';
+  vi.stubGlobal('innerWidth', 390);
+  const menu = screen.getByRole('button', { name: language === 'ja' ? '会話のメニュー' : 'Conversation menu' });
+  fireEvent.click(menu);
+  expect(menu.getAttribute('aria-expanded')).toBe('true');
   const button = screen.getByRole('button', { name: `${label} 1` });
   expect(button.getAttribute('aria-expanded')).toBe('false');
   expect(screen.queryByRole('region', { name: label })).toBeNull();
   fireEvent.click(button);
+  expect(menu.getAttribute('aria-expanded')).toBe('false');
   expect(button.getAttribute('aria-expanded')).toBe('true');
   const region = screen.getByRole('region', { name: label });
   const summary = within(region).getByText('src/a.ts').closest('summary')!;

@@ -39,13 +39,13 @@ function GitLetters({ git }: { git: GitMark[] }) {
   return <span className="git-marks" aria-hidden="true">{git.map(mark => <span key={mark} className={`git-letter git-${mark}`} title={GIT_MARKS[mark].label}>{GIT_MARKS[mark].letter}</span>)}</span>;
 }
 
-function CodeView({ path, content }: { path: string; content: string }) {
+function CodeView({ path, content, displayLanguage = 'en' }: { path: string; content: string; displayLanguage?: DisplayLanguage }) {
   const language = detectLanguage(path);
   const colored = content.length <= HIGHLIGHT_LIMIT ? language : undefined;
   const lines = useMemo(() => highlightLines(content, colored), [content, colored]);
   return <>
     {language && !colored && <p className="muted-text explorer-note">Syntax colors are off for files over {formatSize(HIGHLIGHT_LIMIT)}.</p>}
-    <div className="code-view" role="region" aria-label={`Contents of ${path}`} tabIndex={0} data-language={colored ?? 'plain'}>
+    <div className="code-view" role="region" aria-label={displayLanguage === 'ja' ? `${path} の中身` : `Contents of ${path}`} tabIndex={0} data-language={colored ?? 'plain'}>
       <div className="code-lines">{lines.map((tokens, index) => <div className="code-row" key={index}>
         <span className="code-line-number" aria-hidden="true">{index + 1}</span>
         <code className="code-text">{tokens.length ? tokens.map((token, part) => token.type ? <span key={part} className={`tok tok-${token.type}`}>{token.text}</span> : token.text) : '\n'}</code>
@@ -55,16 +55,16 @@ function CodeView({ path, content }: { path: string; content: string }) {
 }
 
 /** Markdown は既定で整形して出し、Raw に切り替えると元の文字を色分けで出す。 */
-function FileContent({ path, content }: { path: string; content: string }) {
+function FileContent({ path, content, displayLanguage = 'en' }: { path: string; content: string; displayLanguage?: DisplayLanguage }) {
   const [raw, setRaw] = useState(false);
-  if (detectLanguage(path) !== 'md') return <CodeView path={path} content={content}/>;
+  if (detectLanguage(path) !== 'md') return <CodeView path={path} content={content} displayLanguage={displayLanguage}/>;
   return <>
-    <div className="viewer-mode" role="group" aria-label="Markdown view">
-      <button type="button" className="viewer-mode-option" aria-pressed={!raw} onClick={() => setRaw(false)}>Preview</button>
-      <button type="button" className="viewer-mode-option" aria-pressed={raw} onClick={() => setRaw(true)}>Raw</button>
+    <div className="viewer-mode" role="group" aria-label={displayLanguage === 'ja' ? 'Markdown の表示' : 'Markdown view'}>
+      <button type="button" className="viewer-mode-option" aria-pressed={!raw} onClick={() => setRaw(false)}>{displayLanguage === 'ja' ? 'プレビュー' : 'Preview'}</button>
+      <button type="button" className="viewer-mode-option" aria-pressed={raw} onClick={() => setRaw(true)}>{displayLanguage === 'ja' ? '原文' : 'Raw'}</button>
     </div>
-    {raw ? <CodeView path={path} content={content}/>
-      : <div className="markdown-view" role="region" aria-label={`Contents of ${path}`} tabIndex={0}>
+    {raw ? <CodeView path={path} content={content} displayLanguage={displayLanguage}/>
+      : <div className="markdown-view" role="region" aria-label={displayLanguage === 'ja' ? `${path} の中身` : `Contents of ${path}`} tabIndex={0}>
         <Markdown text={content} breaks={false} className="markdown-document"/></div>}
   </>;
 }
@@ -74,13 +74,13 @@ export type FileExplorer = ReturnType<typeof useFileExplorer>;
  * プロジェクトの作業ツリーの木と、選んだファイルの中身を読む。サイドバーと中央の表示が同じ状態を共有する。
  * 選んだファイルと作業ツリーはアドレスの path と worktree に持ち、Changes からの移動でも同じ場所を開く。
  */
-export function useFileExplorer({ client, target = store, project, enabled = true }: { client: FilesClient; target?: ScreenStore; project: string; enabled?: boolean }) {
+export function useFileExplorer({ client, target = store, project, enabled = true, embedded = false }: { client: FilesClient; target?: ScreenStore; project: string; enabled?: boolean; embedded?: boolean }) {
   const state = useScreenStore(target);
   const projectId = resolveProjectId(state, project);
   const [search, setSearch] = useSearchParams();
   const location = useLocation();
   const navigate = useNavigate();
-  const selectedPath = location.pathname.endsWith('/files') ? search.get('path') ?? '' : '';
+  const selectedPath = embedded || location.pathname.endsWith('/files') ? search.get('path') ?? '' : '';
   const wantedWorktree = search.get('worktree') ?? '';
   const [revision, setRevision] = useState(0);
   const [trees, setTrees] = useState<Keyed<{ status: 'loading' } | { status: 'loaded'; result: WorktreesResult } | { status: 'error'; error: string }>>({ key: '', value: { status: 'loading' } });
@@ -232,6 +232,7 @@ export function useFileExplorer({ client, target = store, project, enabled = tru
     setFocusedPath(row.entry.path);
     if (row.entry.kind === 'directory') { if (row.open) collapse(row.entry); else expand(row.entry); }
     else {
+      if (embedded) { setParams(next => { next.set('panel', 'files'); next.set('path', row.entry.path); }); return; }
       const next = new URLSearchParams();
       next.set('path', row.entry.path);
       if (wantedWorktree) next.set('worktree', wantedWorktree);
@@ -372,7 +373,8 @@ export function FileNotices({ explorer }: { explorer: FileExplorer }) {
 }
 
 /** 選んだファイルの中身。作業場の中央に、会話の代わりに出す。 */
-export function FileViewerPanel({ explorer, actions }: { explorer: FileExplorer; actions?: ReactNode }) {
+export function FileViewerPanel({ explorer, actions, language: displayLanguage = 'en' }: { explorer: FileExplorer; actions?: ReactNode; language?: DisplayLanguage }) {
+  const text = (en: string, ja: string) => displayLanguage === 'ja' ? ja : en;
   const { selectedPath, selectedEntry, shown, project } = explorer;
   const [view, setView] = useState<'diff' | 'file'>('diff');
   const [change, setChange] = useState<GitChange>();
@@ -388,32 +390,32 @@ export function FileViewerPanel({ explorer, actions }: { explorer: FileExplorer;
   const prefix = `/p/${encodeURIComponent(project)}`;
   const language: Language | undefined = detectLanguage(selectedPath);
   const lineCount = shown?.status === 'loaded' && shown.result.state === 'text' ? highlightLineCount(shown.result.content) : undefined;
-  return <section className="explorer-viewer" aria-label="File viewer">
-    {!selectedPath ? <div className="empty-state"><Icon name="file" size={22}/><h2>No file selected</h2><p>Choose a file in the tree to view its contents.</p></div> : <>
+  return <section className="explorer-viewer" aria-label={text('File viewer', 'ファイルの表示')}>
+    {!selectedPath ? <div className="empty-state"><Icon name="file" size={22}/><h2>{text('No file selected', 'ファイルが選ばれていません')}</h2><p>{text('Choose a file in the tree to view its contents.', '木からファイルを選ぶと中身を表示します。')}</p></div> : <>
       <header className="viewer-header">
-        <nav className="viewer-path" aria-label="File path">{selectedPath.split('/').map((part, index, parts) => <span key={index} className={index === parts.length - 1 ? 'viewer-path-current' : undefined}>{part}</span>)}</nav>
+        <nav className="viewer-path" aria-label={text('File path', 'ファイルの場所')}>{selectedPath.split('/').map((part, index, parts) => <span key={index} className={index === parts.length - 1 ? 'viewer-path-current' : undefined}>{part}</span>)}</nav>
         <div className="viewer-meta">
           {selectedEntry && selectedEntry.git.map(mark => <span key={mark} className={`chip git-chip git-${mark}`}>{GIT_MARKS[mark].label}</span>)}
           {selectedEntry?.previousPath && <span className="chip" title={selectedEntry.previousPath}>From {selectedEntry.previousPath}</span>}
           {shown?.status === 'loaded' && shown.result.state === 'text' && language && <span className="chip">{LANGUAGE_NAMES[language]}</span>}
-          {lineCount !== undefined && <span className="chip numeric">{lineCount} {lineCount === 1 ? 'line' : 'lines'}</span>}
+          {lineCount !== undefined && <span className="chip numeric">{lineCount} {displayLanguage === 'ja' ? '行' : lineCount === 1 ? 'line' : 'lines'}</span>}
           {shown?.status === 'loaded' && <span className="chip numeric">{formatSize(shown.result.size)}</span>}
           {actions}
         </div>
       </header>
-      {changed && <div className="viewer-mode" role="group" aria-label="File view"><button className="viewer-mode-option" aria-pressed={view === 'diff'} onClick={() => setView('diff')}>Diff</button><button className="viewer-mode-option" aria-pressed={view === 'file'} onClick={() => setView('file')}>File</button></div>}
-      {changed && view === 'diff' ? diffError ? <p role="alert">{diffError}</p> : change ? <FileGitDiff key={`${explorer.worktree}:${explorer.revision}:${selectedPath}`} client={explorer.client} request={{ projectId: explorer.projectId, path: selectedPath, ...(explorer.worktree ? { worktree: explorer.worktree } : {}) }} change={change}/> : <p>Loading diff…</p>
-        : !shown || shown.status === 'loading' ? <p className="tree-status viewer-status" role="status">Loading {selectedPath}…</p>
-        : shown.status === 'error' ? <p role="alert" className="banner banner-danger explorer-inline"><Icon name="alert" size={14}/>Could not open {selectedPath}: {shown.error}</p>
-          : shown.status === 'directory' ? <div className="empty-state"><Icon name="folder" size={22}/><h2>Folder</h2><p>Choose a file inside {selectedPath} to view it.</p></div>
-            : shown.status === 'deleted' ? <div className="empty-state"><Icon name="x" size={22}/><h2>Deleted file</h2><p>This file was deleted in the working tree.</p>
-              <AppLink className="btn btn-secondary btn-sm" to={`${prefix}/changes`}><Icon name="diff" size={14}/>View changes</AppLink></div>
-              : shown.result.state === 'binary' ? <div className="empty-state" role="status"><Icon name="file" size={22}/><h2>Binary file</h2><p>Binary content is not shown.</p>
+      {changed && <div className="viewer-mode" role="group" aria-label={text('File view', 'ファイルの表示')}><button className="viewer-mode-option" aria-pressed={view === 'diff'} onClick={() => setView('diff')}>{text('Diff', '差分')}</button><button className="viewer-mode-option" aria-pressed={view === 'file'} onClick={() => setView('file')}>{text('File', 'ファイル')}</button></div>}
+      {changed && view === 'diff' ? diffError ? <p role="alert">{diffError}</p> : change ? <FileGitDiff key={`${explorer.worktree}:${explorer.revision}:${selectedPath}`} language={displayLanguage} client={explorer.client} request={{ projectId: explorer.projectId, path: selectedPath, ...(explorer.worktree ? { worktree: explorer.worktree } : {}) }} change={change}/> : <p>{text('Loading diff…', '差分を読み込み中')}</p>
+        : !shown || shown.status === 'loading' ? <p className="tree-status viewer-status" role="status">{text('Loading', '読み込み中:')} {selectedPath}</p>
+        : shown.status === 'error' ? <p role="alert" className="banner banner-danger explorer-inline"><Icon name="alert" size={14}/>{text('Could not open', '開けません:')} {selectedPath}: {shown.error}</p>
+          : shown.status === 'directory' ? <div className="empty-state"><Icon name="folder" size={22}/><h2>{text('Folder', 'フォルダー')}</h2><p>{text('Choose a file inside', 'ファイルを選んでください:')} {selectedPath}</p></div>
+            : shown.status === 'deleted' ? <div className="empty-state"><Icon name="x" size={22}/><h2>{text('Deleted file', '削除されたファイル')}</h2><p>{text('This file was deleted in the working tree.', 'このファイルは作業ツリーで削除されました。')}</p>
+              <AppLink className="btn btn-secondary btn-sm" to={`${prefix}/changes`}><Icon name="diff" size={14}/>{text('View changes', '変更を見る')}</AppLink></div>
+              : shown.result.state === 'binary' ? <div className="empty-state" role="status"><Icon name="file" size={22}/><h2>{text('Binary file', 'バイナリファイル')}</h2><p>{text('Binary content is not shown.', 'バイナリの中身は表示できません。')}</p>
                 <p className="numeric">Size: {formatSize(shown.result.size)} ({shown.result.size.toLocaleString('en-US')} bytes)</p></div>
-                : shown.result.state === 'too_large' ? <div className="empty-state" role="status"><Icon name="alert" size={22}/><h2>File too large to display</h2><p>Files over 1.0 MiB are not shown.</p>
+                : shown.result.state === 'too_large' ? <div className="empty-state" role="status"><Icon name="alert" size={22}/><h2>{text('File too large to display', 'ファイルが大きすぎます')}</h2><p>{text('Files over 1.0 MiB are not shown.', '1.0 MiB を超えるファイルは表示できません。')}</p>
                   <p className="numeric">Size: {formatSize(shown.result.size)} ({shown.result.size.toLocaleString('en-US')} bytes)</p></div>
-                  : shown.result.content === '' ? <p className="tree-status viewer-status">Empty file</p>
-                    : <FileContent key={selectedPath} path={selectedPath} content={shown.result.content}/>}
+                  : shown.result.content === '' ? <p className="tree-status viewer-status">{text('Empty file', '空のファイル')}</p>
+                    : <FileContent key={selectedPath} path={selectedPath} content={shown.result.content} displayLanguage={displayLanguage}/>}
     </>}
   </section>;
 }

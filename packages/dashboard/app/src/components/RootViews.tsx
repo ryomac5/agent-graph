@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { rootHref, useTurnConversations } from '../lib/turns.ts';
-import { shownRole, type Root } from '../lib/roots.ts';
+import { isRunning, shownRole, type Root } from '../lib/roots.ts';
 import { agentName, formatWhen, summarizeApproval } from '../lib/format.ts';
-import type { Row } from '../lib/store.ts';
+import type { Row, ScreenState } from '../lib/store.ts';
 import { dictionaries, type Language } from '../lib/i18n.ts';
 import type { DelegationTree, TreeNode } from '../pages/tree/model.ts';
 import { StatusDot, stateLabel } from './StateBadge.tsx';
@@ -26,22 +26,24 @@ function runningText(count: number, language: Language): string {
   return language === 'ja' ? `${count} ${t.agentsRunning}` : `${count} ${count === 1 ? t.agentRunning : t.agentsRunning}`;
 }
 
-/** 根の会話の 1 行。1 行目に名前と時刻、2 行目に状態と動いているエージェントの数を出す。 */
-export function RootList({ roots, selected, onSelect, project, language = 'en' }: { roots: Root[]; selected?: string; onSelect?: (root: Root) => void; project?: string; language?: Language }) {
+/** 根の会話の 1 行。1 行目に名前、2 行目に状態と動いている子の数と時刻を出す。 */
+export function RootList({ roots, selected, onSelect, project, language = 'en', grouped = false, state }: { state?: ScreenState; grouped?: boolean; roots: Root[]; selected?: string; onSelect?: (root: Root) => void; project?: string; language?: Language }) {
   const t = dictionaries[language];
   const [showEarlier, setShowEarlier] = useState(false);
   const turns = useTurnConversations();
-  // 動いている会話と、24 時間以内に動いた会話を先に出す。それより前の会話は Earlier に畳む。
-  const newest = Math.max(...roots.map(root => Date.parse(root.last_activity_ts ?? '')).filter(Number.isFinite));
-  const cutoff = Number.isFinite(newest) ? newest - EARLIER_MS : Number.NEGATIVE_INFINITY;
-  const recent = (root: Root) => ACTIVE.includes(root.state) || WAITING.includes(root.state) || root.id === selected
-    || !Number.isFinite(Date.parse(root.last_activity_ts ?? '')) || Date.parse(root.last_activity_ts ?? '') >= cutoff;
-  const current = roots.filter(recent);
-  const older = roots.filter(root => !recent(root));
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 60_000); return () => clearInterval(timer); }, []);
+  const yourTurn = (root: Root) => root.conversation_ids.some(id => turns.has(id)) || WAITING.includes(root.state);
+  const group = (root: Root) => yourTurn(root) ? 0 : isRunning(root.state) ? 1 : !root.last_activity_ts || Date.parse(root.last_activity_ts) >= now - EARLIER_MS ? 2 : 3;
+  const groups = [0, 1, 2, 3].map(value => roots.filter(root => group(root) === value).toSorted((a, b) => (b.last_activity_ts ?? '').localeCompare(a.last_activity_ts ?? '')));
+  const labels = language === 'ja' ? ['あなたの番', '実行中', '完了', '以前'] : ['Your turn', 'Running', 'Completed', 'Earlier'];
   const row = (root: Root) => {
+    const started = state?.projection.runs?.filter(run => root.conversation_ids.includes(String(run.conversation_id)) && isRunning(String(run.state)))
+      .map(run => Date.parse(String(run.started_ts ?? ''))).filter(Number.isFinite).sort((a, b) => b - a)[0];
     const content = <><span className="root-row-line"><strong className="root-name" title={root.kit_name}>{root.name}</strong>{root.conversation_ids.some(id => turns.has(id)) && <span className="root-turn-dot" role="img" aria-label={language === 'ja' ? '自分の番' : 'Your turn'}/>}</span>
-      <span className="root-row-meta">{[...ACTIVE, ...WAITING, 'failed', 'denied', 'ended', 'done'].includes(root.state) && <StatusDot className="root-state" state={root.state} language={language}/>}
-        {root.running_children > 0 && <span className="root-running">{runningText(root.running_children, language)}</span>}
+      <span className="root-row-meta"><StatusDot className="root-state" state={root.state} language={language}/>
+        {root.running_children > 0 && <span className="root-running">{grouped ? language === 'ja' ? `子 ${root.running_children}` : `${root.running_children} ${root.running_children === 1 ? 'child' : 'children'}` : runningText(root.running_children, language)}</span>}
+        {isRunning(root.state) && <span className="root-elapsed numeric" aria-label={language === 'ja' ? '経過時間' : 'Elapsed time'}>{started === undefined ? '—' : `${Math.max(0, Math.floor((now - started) / 60000))}${language === 'ja' ? '分' : 'm'}`}</span>}
         {root.last_activity_ts && <time className="root-time" dateTime={root.last_activity_ts} title={formatWhen(root.last_activity_ts, language)}>{formatWhen(root.last_activity_ts, language)}</time>}</span></>;
     return <Link key={root.id} className="root-row activity-name" aria-label={root.name} aria-current={selected === root.id ? 'page' : undefined}
       to={rootHref({ ...root, project: project ?? root.project })} onClick={event => {
@@ -50,10 +52,16 @@ export function RootList({ roots, selected, onSelect, project, language = 'en' }
         }
       }}>{content}</Link>;
   };
-  return <div className="root-list">{current.map(row)}
-    {older.length > 0 && (showEarlier ? <>{<p className="root-earlier-label">{language === 'ja' ? '以前' : 'Earlier'}</p>}{older.map(row)}</>
-      : <button className="btn btn-ghost btn-sm root-earlier" onClick={() => setShowEarlier(true)}>{language === 'ja' ? '以前の会話' : 'Earlier'} <span className="numeric">({older.length})</span></button>)}
-    {!roots.length && <p className="empty-row">{t.noConversations}</p>}</div>;
+  if (!grouped) {
+    const newest = Math.max(...roots.map(root => Date.parse(root.last_activity_ts ?? '')).filter(Number.isFinite));
+    const cutoff = Number.isFinite(newest) ? newest - EARLIER_MS : Number.NEGATIVE_INFINITY;
+    const recent = (root: Root) => ACTIVE.includes(root.state) || WAITING.includes(root.state) || root.id === selected || !Number.isFinite(Date.parse(root.last_activity_ts ?? '')) || Date.parse(root.last_activity_ts ?? '') >= cutoff;
+    const older = roots.filter(root => !recent(root));
+    return <div className="root-list">{roots.filter(recent).map(row)}{older.length > 0 && <><button className="btn btn-ghost btn-sm root-earlier" aria-expanded={showEarlier} onClick={() => setShowEarlier(value => !value)}>{labels[3]} <span className="numeric">{older.length}</span></button>{showEarlier && older.map(row)}</>}{!roots.length && <p className="empty-row">{t.noConversations}</p>}</div>;
+  }
+  return <div className="root-list">{groups.map((items, index) => items.length > 0 && <section key={index} className="session-group" aria-label={labels[index]}>
+    {index === 3 ? <><button className="btn btn-ghost btn-sm root-earlier" aria-expanded={showEarlier} onClick={() => setShowEarlier(value => !value)}>{labels[index]} <span className="numeric">{items.length}</span></button>{(showEarlier ? items : items.filter(root => root.id === selected)).map(row)}</> : <><p className="root-earlier-label">{labels[index]}</p>{items.map(row)}</>}
+  </section>)}{!roots.length && <p className="empty-row">{t.noConversations}</p>}</div>;
 }
 
 export function lastActivity(node: TreeNode): string {

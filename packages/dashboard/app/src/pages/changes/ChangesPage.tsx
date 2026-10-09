@@ -16,7 +16,7 @@ import { collectSuccessors, collectVersionFamily, readAttribution, readObject, r
 import './changes.css';
 
 export interface ChangesClient { command(command: string, payload?: unknown, cmdId?: string): Promise<Ack> }
-export interface ChangesPageProps { client: ChangesClient; target?: ScreenStore; project?: string; artifactId?: string; language?: 'en' | 'ja' }
+export interface ChangesPageProps { client: ChangesClient; target?: ScreenStore; project?: string; artifactId?: string; language?: 'en' | 'ja'; embedded?: boolean }
 function hasReviewResult(state: ReturnType<ScreenStore['getSnapshot']>, command: string, value: unknown, artifactId: string): boolean {
   const result = readObject(value);
   if (typeof result.review_result_seq === 'number') return state.seq >= result.review_result_seq;
@@ -202,7 +202,7 @@ export function ChangesPage(props: ChangesPageProps) {
   const reviewable = artifacts.filter(row => typeof row.diff === 'string' ? row.diff.trim() !== '' : Number(row.files ?? row.file_count ?? 0) > 0);
   // 見出しは会話の画面と同じ外枠で描き、タブの大きさと位置を揃える。
   return <div className="workspace root-workspace changes-workspace">
-    {project && <ProjectHeader route={project} name={getProjectName(state, projectId)} language={props.language}/>}
+    {project && !props.embedded && <ProjectHeader route={project} name={getProjectName(state, projectId)} language={props.language}/>}
     <section className="page changes-page" aria-label="Project changes">
       {!!reviewable.length && <section aria-label="Agent changes"><AgentChangesPage {...props}/></section>}
       <GitChanges client={props.client} projectId={projectId} worktree={search.get('worktree') ?? undefined} enabled={registered} language={props.language} target={props.target}/>

@@ -74,7 +74,7 @@ it('2: Files starts collapsed, remembers its toggle, groups old worktrees and fi
   const view = render(<MemoryRouter initialEntries={['/p/repo']}><App target={store} client={client}/></MemoryRouter>);
   expect(screen.queryByRole('tree')).toBeNull();
   expect(client.command.mock.calls.some(([command]) => command === 'files.list')).toBe(false);
-  fireEvent.click(screen.getByRole('button', { name: 'Repo のファイル' }));
+  fireEvent.click(screen.getByRole('tab', { name: 'ファイル' }));
   await screen.findByRole('tree', { name: 'ファイル' });
   const select = screen.getByRole('combobox', { name: '作業ツリー' });
   expect(within(select).getAllByRole('option').map(option => option.textContent)).toEqual(['main · repo', 'active · active']);
@@ -85,10 +85,10 @@ it('2: Files starts collapsed, remembers its toggle, groups old worktrees and fi
   act(() => resize?.([{ contentRect: { height: 103 } } as ResizeObserverEntry], {} as ResizeObserver));
   expect((document.querySelector('.explorer-scroll') as HTMLElement).style.height).toBe('78px');
   view.unmount();
-  render(<MemoryRouter initialEntries={['/p/repo']}><App target={store} client={client}/></MemoryRouter>);
+  render(<MemoryRouter initialEntries={['/p/repo?panel=files']}><App target={store} client={client}/></MemoryRouter>);
   await screen.findByRole('tree', { name: 'ファイル' });
-  fireEvent.click(screen.getByRole('button', { name: 'Repo のファイル' }));
-  expect(JSON.parse(localStorage.getItem('agent-graph-files-open')!).repo).toBe(false);
+  fireEvent.click(screen.getByRole('tab', { name: 'グラフ' }));
+  expect(screen.queryByRole('tree')).toBeNull();
 });
 
 function node(id: string, overrides: Partial<TreeNode> = {}): TreeNode {
@@ -112,8 +112,8 @@ it('3: preserves recorded roles and makes retry available after opening the fail
     delegations: [{ id: 'request', root_id: 'root', title: 'Implement UI', role: 'implement', state: 'failed', attempts: [{ run_id: 'child:1' }] }],
     relations: [{ id: 'relation', type: 'delegated', from_id: 'c', to_id: 'child', evidence: { agentType: 'review' } }] });
   render(<MemoryRouter><WorkspacePage project="repo" target={store} client={client} language="ja" renderConversation={() => <p>Child details</p>}/></MemoryRouter>);
-  const flow = screen.getByRole('complementary', { name: 'サブエージェント' });
-  const row = within(flow).getByRole('button', { name: /implement/ });
+  const flow = screen.getByRole('complementary', { name: 'パネル' });
+  const row = within(flow).getByRole('link', { name: /Implement UI/ });
   expect(row.textContent).not.toContain('review');
   expect(screen.queryByRole('button', { name: '再試行' })).toBeNull();
   fireEvent.click(row);
@@ -145,16 +145,16 @@ it('5: names the series after its first statement and lists its last statement i
   snapshot.projection.messages![0].source_ts = RECENT;
   expect(selectRoots(snapshot)[0].name).toBe('Repo-20260926');
 });
-it('6: idle rows show only time and the five visible states have distinct colours and labels', () => {
+it('6: idle rows show their status and time and the five visible states have distinct colours and labels', () => {
   const states = ['running', 'waiting_approval', 'waiting_input', 'failed', 'ended'];
   expect(new Set(states.map(stateTone)).size).toBe(5);
   render(<MemoryRouter><RootList roots={[root, ...states.map((state, index) => ({ ...root, id: `r${index}`, name: state, state }))]} language="ja"/></MemoryRouter>);
-  expect(screen.getByRole('link', { name: new RegExp(root.name) }).querySelector('.root-state')).toBeNull();
+  expect(screen.getByRole('link', { name: new RegExp(root.name) }).querySelector('.root-state')?.textContent).toBe('待機中');
   for (const label of ['実行中', '承認待ち', '返答待ち', '失敗', '完了']) expect(screen.getByText(label)).toBeTruthy();
   const style = document.createElement('style');
   style.textContent = readFileSync('app/src/styles.css', 'utf8'); document.head.append(style);
   const backgrounds = [...document.querySelectorAll('.root-row .status-dot')].map(dot => getComputedStyle(dot).background);
-  expect(new Set(backgrounds).size).toBe(5);
+  expect(new Set(backgrounds).size).toBe(6);
   style.remove();
 });
 

@@ -34,10 +34,10 @@ it('uses the OS theme, reacts to changes, allows explicit overrides and Japanese
   expect(screen.getByRole('heading', { name: '設定' })).toBeTruthy();
   expect(document.documentElement.lang).toBe('ja');
 });
-it.each([['/p/demo', 'Other'], ['/c/demo', 'Conversation'], ['/inbox', 'Approvals'],
+it.each([['/p/demo', null], ['/c/demo', 'Conversation'], ['/inbox', 'Approvals'],
   ['/p/demo/tree', 'Other'], ['/p/demo/changes', 'Other'], ['/search', 'Search']])('renders route %s', (path, heading) => {
   render(<MemoryRouter initialEntries={[path]}><App/></MemoryRouter>);
-  expect(screen.getByRole('heading', { name: heading })).toBeTruthy();
+  if (heading) expect(screen.getByRole('heading', { name: heading })).toBeTruthy(); else { expect(document.querySelector('.workspace-header')).toBeNull(); expect(screen.getByRole('tab', { name: 'Graph' })).toBeTruthy(); }
 });
 it('shows unknown as a grey dot and a word, keeps the reason in the title and links to details', async () => {
   const { StateBadge } = await import('../components/StateBadge.tsx');
@@ -65,15 +65,11 @@ it('shares live activity, approval counts, commands and notices across all stage
   fireEvent.click(screen.getByRole('button', { name: 'Notifications' }));
   expect(screen.getByRole('heading', { name: 'Approval pending' })).toBeTruthy();
   fireEvent.click(within(screen.getByRole('complementary')).getByRole('link', { name: 'demo' }));
-  expect(screen.getByRole('heading', { name: 'demo' })).toBeTruthy();
-  const header = document.querySelector<HTMLElement>('.workspace-header')!;
-  expect(header.textContent).toBe('demoConversationsGraphChangesNew task');
-  expect(within(header).getAllByRole('button')).toHaveLength(1);
-  expect(within(header).getByRole('button', { name: 'New task' }).getAttribute('aria-expanded')).toBe('false');
-  expect(within(header).queryByRole('checkbox')).toBeNull();
-  expect(within(header).queryByRole('combobox')).toBeNull();
+  expect(document.querySelector('.workspace-header')).toBeNull();
+  expect(screen.getByRole('button', { name: 'New task: demo' })).toBeTruthy();
+  expect(screen.getByRole('tab', { name: 'Graph' })).toBeTruthy();
   expect(screen.getByRole('textbox', { name: 'Message' })).toBeTruthy();
-  fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getByRole('link', { name: /Console conversation/ }));
+  fireEvent.click(within(screen.getByRole('region', { name: 'demo sessions' })).getByRole('link', { name: /Console conversation/ }));
   expect(screen.getByRole('heading', { name: 'Console conversation' })).toBeTruthy();
   fireEvent.click(screen.getByRole('link', { name: 'Approvals1' }));
   expect(screen.getByRole('heading', { name: 'Approvals' })).toBeTruthy();
@@ -100,8 +96,9 @@ it('opens Changes from the root workspace and sends review commands', async () =
   target.setConnection('connected');
   const client = { command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'approve', ok: true })) };
   render(<MemoryRouter initialEntries={['/p/%2Frepo']}><App target={target} client={client}/></MemoryRouter>);
-  const link = within(screen.getByRole('navigation', { name: 'Project' })).getByRole('link', { name: 'Changes' });
-  expect(link.getAttribute('href')).toBe('/p/%2Frepo/changes');
+  fireEvent.click(screen.getByRole('tab', { name: 'Changes' }));
+  const link = screen.getByRole('link', { name: 'Open full screen' });
+  expect(link.getAttribute('href')).toContain('/p/%2Frepo/changes');
   fireEvent.click(link);
   expect(screen.getByRole('button', { name: 'Comment on code.txt new line 1' })).toBeTruthy();
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Approve' })));

@@ -35,7 +35,7 @@ export function GitPatch({ patch, layout }: { patch: Patch; layout: DiffLayout }
       : files.length ? <DiffView files={files} layout={layout} attribution="unknown" evidenceUrl="#git-changes"/>
         : <p>No changes in this diff.</p>;
 }
-export function FileGitDiff({ client, request, change, w = WORDS.en }: { client: FilesClient; request: FilesRequest; change: Pick<GitChange, 'staged' | 'unstaged' | 'git'>; w?: Words }) {
+export function FileGitDiff({ client, request, change, language = 'en', w = WORDS[language] }: { language?: 'en' | 'ja'; client: FilesClient; request: FilesRequest; change: Pick<GitChange, 'staged' | 'unstaged' | 'git'>; w?: Words }) {
   const modes = change.git.includes('untracked') ? ['untracked'] : [...(change.staged ? ['staged'] : []), ...(change.unstaged ? ['unstaged'] : [])];
   const [chosen, setChosen] = useState('');
   const mode = modes.includes(chosen) ? chosen : modes[0] ?? 'unstaged';

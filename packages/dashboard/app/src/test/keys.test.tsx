@@ -186,10 +186,10 @@ it('selects delegation tree rows with j and k', async () => {
   await act(async () => {});
   // 会話の一覧はサイドバーにあるので、作業場の j と k はサブエージェントの行だけを移る。
   press('j');
-  expect(document.activeElement?.classList.contains('delegation-select')).toBe(true);
-  expect(document.activeElement?.getAttribute('aria-pressed')).toBe('true');
+  expect(document.activeElement?.classList.contains('graph-card-link')).toBe(true);
+  expect(document.activeElement?.getAttribute('aria-current')).toBe('page');
   press('k');
-  expect(document.activeElement?.classList.contains('delegation-select')).toBe(true);
+  expect(document.activeElement?.classList.contains('graph-card-link')).toBe(true);
 });
 it('skips unavailable commands and clamps selection when live commands change', () => {
   const run = vi.fn(); const onClose = vi.fn();

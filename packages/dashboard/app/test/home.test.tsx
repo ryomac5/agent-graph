@@ -38,7 +38,9 @@ export function openFolds(...names: string[]) {
 }
 it('groups roots by project and leaves conversations that are not roots out', () => {
  render(<MemoryRouter><HomePage target={createActivityStore()}/></MemoryRouter>);
- expect(within(screen.getByRole('region', { name: 'alpha' })).getAllByRole('link').map(row => row.textContent)).toContain('Implement APIRunning');
+ const api = within(screen.getByRole('region', { name: 'alpha' })).getByRole('link', { name: 'Implement API' });
+ expect(api.querySelector('.root-name')?.textContent).toBe('Implement API');
+ expect(api.querySelector('.root-state')?.textContent).toBe('Running');
  expect(screen.getByRole('link', { name: /Review UI/ })).toBeTruthy();
  expect(screen.queryByText('External conversations')).toBeNull(); expect(screen.queryByText('Unsupported conversations')).toBeNull();
  expect(screen.queryByText('Background')).toBeNull(); expect(document.querySelector('a[href="/c/exec"]')).toBeNull();
@@ -49,7 +51,7 @@ it('groups roots by project and leaves conversations that are not roots out', ()
  expect(rows[0].getAttribute('href')).toBe('/p/%2Frepo%2Falpha?root=c1');
 });it('shows projected root state and activity time and applies root patches', () => {
  const target = createActivityStore(); render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
- const row = screen.getByRole('link', { name: /Investigate latency/ }); expect(row.querySelector('.root-state')).toBeNull();
+ const row = screen.getByRole('link', { name: /Investigate latency/ }); expect(row.querySelector('.root-state')?.textContent).toBe('Unknown');
  expect(row.querySelector('time')!.getAttribute('datetime')).toBe('2026-10-07T01:05:00Z');
  act(() => target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: { roots: { remove: [], upsert: [{ ...target.getSnapshot().projection.roots[0], state: 'failed' }] } } }));
  expect(screen.getByRole('link', { name: /Implement API/ }).textContent).toContain('Failed');

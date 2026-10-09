@@ -3,7 +3,7 @@ import { Link, useParams, useSearchParams } from 'react-router';
 import { store, useScreenStore, type Row, type ScreenStore } from '../../lib/store.ts';
 import type { Language } from '../../lib/i18n.ts';
 import { agentName, conversationName, formatWhen, readModel, summarizeApproval } from '../../lib/format.ts';
-import { buildRootTree, orderSeries, selectRoots, useRootIndex, type Root } from '../../lib/roots.ts';
+import { buildRootTree, orderSeries, selectRoots, useRootIndex, shownRole, type Root } from '../../lib/roots.ts';
 import { getProjectName, resolveProjectId } from '../../lib/projects.ts';
 import { ProviderMark, lastActivity } from '../../components/RootViews.tsx';
 import { StatusDot, stateLabel, stateTone, toDisplayState } from '../../components/StateBadge.tsx';
@@ -21,8 +21,8 @@ const VIEW_PADDING = 48;
 interface View { x: number; y: number; scale: number }
 const clampScale = (scale: number) => Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale));
 
-export function GraphPage({ project: suppliedProject, target = store, client, language = 'en' }: {
-  project?: string; target?: ScreenStore; client: ConversationClient; language?: Language;
+export function GraphPage({ project: suppliedProject, target = store, client, language = 'en', embedded = false, rootId }: {
+  project?: string; target?: ScreenStore; client: ConversationClient; language?: Language; embedded?: boolean; rootId?: string;
 }) {
   const params = useParams();
   const [search] = useSearchParams();
@@ -30,7 +30,7 @@ export function GraphPage({ project: suppliedProject, target = store, client, la
   const state = useScreenStore(target);
   const project = resolveProjectId(state, route);
   const roots = useMemo(() => selectRoots(state, project), [state, project]);
-  const root = roots.find(item => item.id === search.get('root')) ?? roots[0];
+  const root = roots.find(item => item.id === (rootId ?? search.get('root'))) ?? roots[0];
   const index = useRootIndex(state);
   const approvals = (state.projection.approvals ?? []).filter(isPending);
   const tree = useMemo<GraphTree>(() => {
@@ -50,16 +50,16 @@ export function GraphPage({ project: suppliedProject, target = store, client, la
     }) };
   }, [root, index, state]);
   return <div className="graph-page">
-    <ProjectHeader route={route} name={getProjectName(state, project)} language={language}/>
+    {!embedded && <ProjectHeader route={route} name={getProjectName(state, project)} language={language}/>}
     {root ? <GraphCanvas key={root.id} tree={tree} root={root} route={route} language={language} approvals={approvals}
-      connected={state.connection === 'connected'} client={client} requestedChild={search.get('child') ?? undefined}/>
+      connected={state.connection === 'connected'} client={client} embedded={embedded} requestedChild={search.get('child') ?? undefined}/>
       : <div className="graph-empty"><Icon name="bot" size={28}/><h2>{language === 'ja' ? '会話がありません' : 'No conversations yet'}</h2><p>{language === 'ja' ? '会話を始めると、ここに依頼の流れが表示されます。' : 'Start a conversation to see its requests here.'}</p></div>}
   </div>;
 }
 
-function GraphCanvas({ tree, root, route, language, approvals, connected, client, requestedChild }: {
+function GraphCanvas({ tree, root, route, language, approvals, connected, client, requestedChild, embedded }: {
   tree: GraphTree; root: Root; route: string; language: Language; approvals: Row[]; connected: boolean;
-  client: ConversationClient; requestedChild?: string;
+  client: ConversationClient; requestedChild?: string; embedded: boolean;
 }) {
   const ja = language === 'ja';
   const canvas = useRef<HTMLDivElement>(null);
@@ -91,8 +91,8 @@ function GraphCanvas({ tree, root, route, language, approvals, connected, client
   const [titleHeights, setTitleHeights] = useState(new Map<string, number>());
   const [focused, setFocused] = useState(requestedChild ? tree.nodes.find(node => node.conversationId === requestedChild)?.id ?? root.id : root.id);
   useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 60_000); return () => clearInterval(timer); }, []);
-  const visible = useMemo(() => foldEarlier(tree, expanded, now, requestedChild ? tree.nodes.find(node => node.conversationId === requestedChild)?.id : undefined, language), [tree, expanded, now, requestedChild, language]);
-  const layout = useMemo(() => calculateLayout(visible, size.width, previous.current, titleHeights), [visible, size.width, titleHeights]);
+  const visible = useMemo(() => foldEarlier(tree, expanded, now, requestedChild ? tree.nodes.find(node => node.conversationId === requestedChild)?.id : undefined, language, embedded ? 20 : undefined, embedded), [tree, expanded, now, requestedChild, language, embedded]);
+  const layout = useMemo(() => calculateLayout(visible, embedded ? Math.min(size.width, 720) : size.width, previous.current, titleHeights), [visible, size.width, titleHeights, embedded]);
   const byId = new Map(visible.nodes.map(node => [node.id, node]));
   const positions = new Map(layout.nodes.map(node => [node.id, node]));
   useLayoutEffect(() => {
@@ -153,7 +153,7 @@ function GraphCanvas({ tree, root, route, language, approvals, connected, client
     const element = canvas.current!;
     const measure = () => {
       const rect = element.getBoundingClientRect();
-      setSize({ width: rect.width || window.innerWidth, height: rect.height || 640 });
+      setSize({ width: rect.width || (embedded ? 420 : window.innerWidth), height: rect.height || 640 });
     };
     measure(); window.addEventListener('resize', measure);
     const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(measure);
@@ -226,19 +226,20 @@ function GraphCanvas({ tree, root, route, language, approvals, connected, client
           const isRoot = node.id === root.id;
           const pending = approvals.filter(row => Boolean(node.run && row.run_id === node.run.id) || Boolean(node.conversationId && row.conversation_id === node.conversationId));
           const title = node.earlier ? node.earlier.kind === 'earlier' ? earlierLabel(node.earlier.count) : ja ? `ほかの完了 ${node.earlier.count} 件` : `${node.earlier.count} other completed requests` : node.label;
-          const who = node.batchCount !== undefined ? ja ? `${node.batchCount} 件` : `${node.batchCount} requests` : agentName(node.provider, node.model) || (ja ? 'エージェント' : 'Agent');
+          const who = node.batchCount !== undefined ? ja ? `${node.batchCount} 件` : `${node.batchCount} requests` : [agentName(node.provider, node.model) || (ja ? 'エージェント' : 'Agent'), embedded ? shownRole(node.role) : ''].filter(Boolean).join(' · ');
           const tone = stateTone(toDisplayState(node.state));
-          const target = `/p/${encodeURIComponent(route)}?root=${encodeURIComponent(root.id)}${!isRoot && node.conversationId ? `&child=${encodeURIComponent(node.conversationId)}` : ''}`;
+          const query = new URLSearchParams(search); query.set('root', root.id); query.delete('child'); if (!isRoot && node.conversationId) query.set('child', node.conversationId);
+          const target = `/p/${encodeURIComponent(route)}?${query}`;
           const content = <><div className="graph-card-top">{node.batchCount !== undefined && node.provider !== 'codex'
             ? <span className="request-avatar provider-unknown" title={ja ? 'まとめて出した依頼' : 'Batched requests'} aria-hidden="true"><Icon name="fork" size={13}/></span>
             : <ProviderMark provider={node.provider}/>}<strong className="graph-card-title" title={title}>{title}</strong></div>
             <div className="graph-card-meta"><span className="graph-card-model" title={who}>{who}</span><StatusDot state={node.state} language={language}/><time dateTime={node.activity || undefined}>{formatWhen(node.activity, language) || (ja ? '時刻不明' : 'Unknown time')}</time></div></>;
           const focus = () => { setFocused(node.id); reveal(position); };
           return <article key={node.id} className={`graph-card tone-${tone}${toDisplayState(node.state) === 'unknown' ? ' graph-unknown' : ''}${isRoot ? ' graph-root' : ''}${node.earlier ? ' graph-earlier' : ''}${focused === node.id ? ' graph-selected' : ''}`}
-            style={layout.vertical ? { marginLeft: position.x, width: `calc(100% - ${position.x}px)` } : { left: position.x, top: position.y, width: position.width, height: position.height }} data-node-id={node.id} onFocus={focus}>
+            style={layout.vertical ? { marginLeft: position.x, width: `calc(100% - ${position.x}px)` } : { left: position.x, top: position.y, width: position.width, height: position.height }} data-node-id={node.id} onClick={event => { if (!(event.target as Element).closest('a, button')) event.currentTarget.querySelector<HTMLAnchorElement>('a')?.click(); }} onFocus={focus}>
             {node.earlier ? <button className="graph-card-link" ref={element => { if (element) links.current.set(node.id, element); else links.current.delete(node.id); }} onFocus={focus} onKeyDown={event => move(event, node.id)}
               aria-label={title} aria-expanded={node.earlier.expanded} onClick={() => { setFocused(node.earlier!.parent); toggleGroup(node.id); }}><span className="graph-earlier-icon"><Icon name="chevronRight" size={16}/></span><strong>{title}</strong><span>{node.earlier.expanded ? ja ? '押して閉じる' : 'Click to collapse' : ja ? '押して開く' : 'Click to expand'}</span></button>
-              : node.conversationId ? <Link className="graph-card-link" to={target} ref={element => { if (element) links.current.set(node.id, element); else links.current.delete(node.id); }} onFocus={focus} onKeyDown={event => move(event, node.id)} aria-label={`${title} · ${who} · ${stateLabel(node.state, language)}`}>{content}</Link>
+              : node.conversationId ? <Link className="graph-card-link" to={target} ref={element => { if (element) links.current.set(node.id, element); else links.current.delete(node.id); }} onFocus={focus} onKeyDown={event => move(event, node.id)} aria-current={(requestedChild ? node.conversationId === requestedChild : isRoot) ? 'page' : undefined} aria-label={`${title} · ${who} · ${stateLabel(node.state, language)}`}>{content}</Link>
                 : <button className="graph-card-link" ref={element => { if (element) links.current.set(node.id, element); else links.current.delete(node.id); }} onFocus={focus} onKeyDown={event => move(event, node.id)}
                   aria-label={title} aria-expanded="true" onClick={() => { const child = node.children.map(id => positions.get(id)).find(Boolean); if (child) { reveal(child); links.current.get(child.id)?.focus(); } }}>{content}</button>}
             {pending.map(row => <div key={String(row.id)} className="graph-approval" data-approval-id={String(row.id)}>

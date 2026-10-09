@@ -68,12 +68,13 @@ function createTarget() {
 }
 // 選択中のプロジェクトの下で木を開く。
 function setup(search = '', width = 1280) {
-  localStorage.setItem('agent-graph-files-open', JSON.stringify({ 'repo-id': width > 1024 }));
+  localStorage.removeItem('agent-graph-panel-collapsed');
   vi.stubGlobal('innerWidth', width);
   vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
   const target = createTarget();
   const client = createClient();
-  render(<MemoryRouter initialEntries={[`/p/${encodeURIComponent(ROOT)}${search.includes('path=') ? '/files' : ''}${search}`]}><App target={target} client={client}/><Location/></MemoryRouter>);
+  const query = new URLSearchParams(search); if (width > 1024 || query.has('path')) query.set('panel', 'files');
+  render(<MemoryRouter initialEntries={[`/p/${encodeURIComponent(ROOT)}?${query}`]}><App target={target} client={client}/><Location/></MemoryRouter>);
   return { client, target };
 }
 const tree = () => screen.getByRole('tree', { name: 'Files' });
@@ -100,16 +101,17 @@ describe('Files explorer', () => {
     expect(item('docs').tabIndex).toBe(0);
     // 木は選択したプロジェクトの行の下に置く。
     expect(screen.queryByRole('link', { name: 'Files' })).toBeNull();
-    expect(within(screen.getByRole('navigation', { name: 'Project' })).getAllByRole('link').map(link => link.textContent)).toEqual(['Conversations', 'Graph', 'Changes']);
-    expect(screen.queryByRole('region', { name: 'File viewer' })).toBeNull();
-    expect(screen.getByRole('region', { name: 'Conversations' })).toBeTruthy();
+    expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual(['Graph', 'Changes', 'Files']);
+    expect(screen.getByRole('region', { name: 'File viewer' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'repo sessions' })).toBeTruthy();
     const projectRow = screen.getByRole('link', { name: 'repo' }).closest('.sidebar-project')!;
-    expect(projectRow.querySelector('[role="tree"]')).toBe(tree());
+    expect(projectRow.querySelector('[role="tree"]')).toBeNull();
+    expect(screen.getByRole('complementary', { name: 'Panel' }).contains(tree())).toBe(true);
     expect(projectRow.firstElementChild?.className).toBe('sidebar-project-row');
     expect(document.querySelector('.workspace-files')).toBeNull();
     expect(document.querySelector('.workspace-columns')?.children).toHaveLength(2);
     expect(document.querySelector('.workspace-columns > .workspace-conversation')).toBeTruthy();
-    expect(screen.getByRole('complementary', { name: 'Sub-agents' })).toBeTruthy();
+    expect(screen.getByRole('complementary', { name: 'Panel' })).toBeTruthy();
     expect(screen.queryByRole('region', { name: 'Tasks' })).toBeNull();
   });
 
@@ -119,22 +121,22 @@ describe('Files explorer', () => {
     expect(calls(client, 'files.list')).toEqual([]);
     const columns = document.querySelector('.workspace-columns')!;
     expect(columns.firstElementChild!.className).toBe('workspace-conversation');
-    fireEvent.click(screen.getByRole('button', { name: 'Toggle files for repo' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Files' }));
     await screen.findByRole('tree', { name: 'Files' });
     expect(names()).toContain('README.md');
-    fireEvent.click(screen.getByRole('button', { name: 'Toggle files for repo' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Graph' }));
     expect(screen.queryByRole('tree', { name: 'Files' })).toBeNull();
-    expect(screen.getByRole('button', { name: 'Toggle files for repo' }).getAttribute('aria-expanded')).toBe('false');
+    expect(screen.getByRole('tab', { name: 'Graph' }).getAttribute('aria-selected')).toBe('true');
   });
 
   it('opens a file deep link with the sidebar collapsed and returns to the workspace', async () => {
     setup('?path=README.md', 1024);
     fireEvent.click(await screen.findByRole('button', { name: 'File' }));
     expect(await screen.findByRole('region', { name: 'Contents of README.md' })).toBeTruthy();
-    expect(screen.queryByRole('tree', { name: 'Files' })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
-    expect(screen.queryByRole('region', { name: 'File viewer' })).toBeNull();
-    expect(location()).toBe(`/p/${encodeURIComponent(ROOT)}`);
+    expect(screen.getByRole('tree', { name: 'Files' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Close file' }));
+    expect(screen.getByRole('heading', { name: 'No file selected' })).toBeTruthy();
+    expect(location()).toBe(`/p/${encodeURIComponent(ROOT)}?panel=files`);
   });
 
   it('keeps the Files route and renders the file in the central area', async () => {
@@ -162,6 +164,10 @@ describe('Files explorer', () => {
     expect(second.querySelector('[role="tree"]')).toBeNull();
     fireEvent.click(screen.getByRole('link', { name: 'Search' }));
     expect(screen.getByRole('heading', { name: 'Search' })).toBeTruthy();
+    expect(screen.queryByRole('tree')).toBeNull();
+    fireEvent.click(screen.getByRole('link', { name: 'repo' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Files' }));
+    await screen.findByRole('tree');
     fireEvent.click(row(item('README.md')));
     fireEvent.click(await screen.findByRole('button', { name: 'File' }));
     expect(await screen.findByRole('region', { name: 'Contents of README.md' })).toBeTruthy();
@@ -171,12 +177,13 @@ describe('Files explorer', () => {
     fireEvent.click(row(item('main.ts')));
     fireEvent.click(await screen.findByRole('button', { name: 'File' }));
     await screen.findByRole('region', { name: 'Contents of src/main.ts' });
-    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    fireEvent.click(screen.getByRole('link', { name: 'Search' }));
     expect(location()).toBe('/search');
     expect(screen.getByRole('heading', { name: 'Search' })).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Toggle files for second' }));
+    fireEvent.click(screen.getByRole('link', { name: 'second' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Files' }));
     await waitFor(() => expect(screen.getByRole('link', { name: 'repo' }).closest('.sidebar-project')!.querySelector('[role="tree"]')).toBeNull());
-    expect(screen.getByRole('button', { name: 'Toggle files for second' }).getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByRole('tab', { name: 'Files' }).getAttribute('aria-selected')).toBe('true');
   });
 
   it('loads each level only when a folder is expanded and hides it again on collapse', async () => {
@@ -240,7 +247,7 @@ describe('Files explorer', () => {
     fireEvent.click(row(item('gone.txt')));
     fireEvent.click(await screen.findByRole('button', { name: 'File' }));
     expect(await screen.findByText('Deleted file')).toBeTruthy();
-    expect(within(screen.getByRole('region', { name: 'File viewer' })).getByRole('link', { name: /View changes/ }).getAttribute('href')).toBe(`/p/${encodeURIComponent(ROOT)}/changes`);
+    expect(within(screen.getByRole('region', { name: 'File viewer' })).getByRole('link', { name: /View changes/ }).getAttribute('href')).toBe('/p/repo-id/changes');
   });
 
   it('opens a file with line numbers and syntax colours and keeps the path in the address', async () => {
@@ -256,7 +263,7 @@ describe('Files explorer', () => {
     expect(view.querySelector('.tok-heading')?.textContent).toBe('# Title');
     expect(view.querySelector('.tok-code')?.textContent).toBe('`code`');
     expect(item('README.md').getAttribute('aria-selected')).toBe('true');
-    expect(location()).toBe(`/p/${encodeURIComponent(ROOT)}/files?path=README.md`);
+    expect(location()).toBe(`/p/${encodeURIComponent(ROOT)}?panel=files&path=README.md`);
     const viewer = screen.getByRole('region', { name: 'File viewer' });
     expect(within(viewer).getByText('Markdown')).toBeTruthy();
     expect(within(viewer).getByText('3 lines')).toBeTruthy();

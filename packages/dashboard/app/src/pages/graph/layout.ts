@@ -52,7 +52,7 @@ export function prepareGraphTree(tree: GraphTree, now: number, language: Languag
 }
 
 /** 注意が必要な枝を残し、完了と古い失敗を親ごとに畳む。 */
-export function foldEarlier(tree: GraphTree, expanded: ReadonlySet<string>, now: number, selected?: string, language: Language = 'en'): GraphTree {
+export function foldEarlier(tree: GraphTree, expanded: ReadonlySet<string>, now: number, selected?: string, language: Language = 'en', recentLimit = RECENT_LIMIT, keepUndated = false): GraphTree {
   tree = prepareGraphTree(tree, now, language);
   const byId = new Map(tree.nodes.map(node => [node.id, node]));
   const endedAt = (id: string) => Date.parse(byId.get(id)!.activity ?? '');
@@ -73,12 +73,12 @@ export function foldEarlier(tree: GraphTree, expanded: ReadonlySet<string>, now:
     seen.add(id);
     const finished = node.children.filter(child => complete(child));
     const old = (child: string): boolean => complete(child)
-      && (endedAt(child) < now - EARLIER_MS || toDisplayState(byId.get(child)!.state) === 'failed' && !Number.isFinite(endedAt(child)))
+      && (endedAt(child) < now - EARLIER_MS || !keepUndated && toDisplayState(byId.get(child)!.state) === 'failed' && !Number.isFinite(endedAt(child)))
       && byId.get(child)!.children.every(old);
     const earlier = finished.filter(old);
     const recent = finished.filter(child => !earlier.includes(child) && Number.isFinite(endedAt(child))).sort((a, b) => endedAt(b) - endedAt(a) || a.localeCompare(b));
     const undated = finished.filter(child => !earlier.includes(child) && !Number.isFinite(endedAt(child)));
-    const groups = [{ kind: 'completed' as const, children: [...recent.slice(RECENT_LIMIT), ...undated] }, { kind: 'earlier' as const, children: earlier }]
+    const groups = [{ kind: 'completed' as const, children: [...recent.slice(recentLimit), ...(keepUndated ? [] : undated)] }, { kind: 'earlier' as const, children: earlier }]
       .filter(group => group.children.length).map(group => ({ ...group, id: `${group.kind}:${id}`, expanded: expanded.has(`${group.kind}:${id}`) }));
     const hidden = new Set(groups.filter(group => !group.expanded).flatMap(group => group.children));
     const children = node.children.filter(child => !hidden.has(child));

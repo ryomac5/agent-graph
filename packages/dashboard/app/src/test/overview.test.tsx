@@ -108,15 +108,15 @@ it('filters root views and Changes by a display-name route', () => {
  const target = setup({ artifacts: [{ id: 'artifact', run_id: 'child:2', version: 1, repository_id: HASH, patch_hash: 'h', diff: 'diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-old\n+new\n' }, { id: 'foreign', run_id: 'probe:1', version: 1, repository_id: 'other-hash', patch_hash: 'f', diff: '' }] });
  vi.stubGlobal('innerWidth', 1440); render(<MemoryRouter><WorkspacePage project="agent-graph" target={target} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: true })) }}/></MemoryRouter>);
  fireEvent.click(screen.getByRole('link', { name: /Terminal root/ }));
- expect(within(screen.getByRole('complementary', { name: 'Sub-agents' })).getByText('Implement the overview')).toBeTruthy(); cleanup(); localStorage.clear();
+ expect(within(screen.getByRole('complementary', { name: 'Panel' })).getByText('Implement the overview')).toBeTruthy(); cleanup(); localStorage.clear();
  vi.stubGlobal('innerWidth', 1024); render(<MemoryRouter><WorkspacePage project="agent-graph" target={target} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: true })) }}/></MemoryRouter>);
- expect(screen.getByRole('heading', { name: 'agent-graph' })).toBeTruthy(); expect(within(screen.getByRole('region', { name: 'Conversations' })).getByRole('link', { name: /Terminal root/ })).toBeTruthy(); cleanup();
+ expect(document.querySelector('.workspace-header')).toBeNull(); expect(within(screen.getByRole('region', { name: 'Conversations' })).getByRole('link', { name: /Terminal root/ })).toBeTruthy(); cleanup();
  render(<MemoryRouter><ChangesPage project="agent-graph" target={target} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: true })) }}/></MemoryRouter>); expect(screen.getByRole('button', { name: 'Comment on a.ts new line 1' })).toBeTruthy(); expect(screen.queryByText(/foreign/)).toBeNull();
 });
 it('keeps reason codes out of root rows and translates evidence reasons', async () => {
  const { reasonText } = await import('../lib/reasons.ts'); expect(reasonText('unconfirmed_end_evidence')).toBe('No end recorded'); expect(reasonText('missing_turn_evidence')).toBe('No turn record'); expect(reasonText('legacy ended inference: process_exit')).toBe('Ended by process exit (legacy)'); expect(reasonText('some_new_code')).toBe('Some new code'); expect(reasonText('Observation interrupted')).toBe('Observation interrupted');
  const target = setup({ runs: [...projection().runs!.filter(run => run.id !== 'lonely:1'), { id: 'lonely:1', conversation_id: 'lonely', generation: 1, state: 'unknown', reason: 'legacy ended inference: process_exit', last_evidence_ts: EARLIER }] });
- render(<MemoryRouter><HomePage target={target}/></MemoryRouter>); const row = screen.getByRole('link', { name: /Unrelated terminal/ }); expect(row.querySelector('.root-state')).toBeNull(); expect(document.body.textContent).not.toContain('legacy ended inference');
+ render(<MemoryRouter><HomePage target={target}/></MemoryRouter>); const row = screen.getByRole('link', { name: /Unrelated terminal/ }); expect(row.querySelector('.root-state')?.textContent).toBe('Unknown'); expect(document.body.textContent).not.toContain('legacy ended inference');
 });
 it('roots the tree only at tasks that delegated, names untitled conversations and folds repeated runs into attempts', () => {
   const state = setup({
@@ -145,7 +145,7 @@ it('switches the request flow between roots in the workspace', () => {
  conversations: [...snapshot.projection.conversations, { id: 'second-child', provider: 'claude', state: 'ended' }],
  relations: [...snapshot.projection.relations, { id: 'second-child-edge', type: 'delegated', from_id: 'second', to_id: 'second-child', evidence: { agentType: 'review', description: 'Second review' } }] } });
  vi.stubGlobal('innerWidth', 1440); render(<MemoryRouter><WorkspacePage project="agent-graph" target={target} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: true })) }}/></MemoryRouter>);
- const flow = screen.getByRole('complementary', { name: 'Sub-agents' });
+ const flow = screen.getByRole('complementary', { name: 'Panel' });
  fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getByRole('link', { name: /Terminal root/ }));
  expect(within(flow).getByText('GPT-6.1 Sol · implement')).toBeTruthy();
  fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getByRole('link', { name: /Second root/ })); expect(within(flow).queryByText('GPT-6.1 Sol · implement')).toBeNull(); expect(within(flow).getByText('Second review')).toBeTruthy();

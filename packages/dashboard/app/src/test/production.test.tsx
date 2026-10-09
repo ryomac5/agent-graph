@@ -56,15 +56,15 @@ it('orders a series by its last activity and shows the latest message last with 
 it('keeps reviewer conversations out of the root list', () => {
   expect(selectRoots(store().getSnapshot()).map(root => root.id)).toEqual(['old']);
 });
-it('opens the request flow at 1280 pixels or more unless the user collapsed it', () => {
+it('opens the request flow by default unless the user collapsed it', () => {
   render(<MemoryRouter><WorkspacePage project="repo" target={store()} client={client}/></MemoryRouter>);
-  const toggle = screen.getByRole('button', { name: 'Hide sub-agents' });
+  const toggle = screen.getByRole('button', { name: 'Collapse panel' });
   fireEvent.click(toggle);
-  expect(localStorage.getItem('agent-graph-requests-open')).toBe('0');
+  expect(localStorage.getItem('agent-graph-panel-collapsed')).toBe('1');
   cleanup();
   render(<MemoryRouter><WorkspacePage project="repo" target={store()} client={client}/></MemoryRouter>);
-  fireEvent.click(screen.getByRole('button', { name: 'Show sub-agents' }));
-  expect(localStorage.getItem('agent-graph-requests-open')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Expand panel' }));
+  expect(localStorage.getItem('agent-graph-panel-collapsed')).toBe('0');
 });
 it('does not draw a bubble for user rows that only carry injected text or tool results', () => {
   expect(visibleText('<system-reminder>Plan mode</system-reminder>\n')).toBe('');
@@ -95,11 +95,11 @@ function flowStore(childCount: number) {
 function Location() { return <output data-testid="location">{useLocation().search}</output>; }
 it('puts running children first, then the newest, and folds older children past twenty', () => {
   render(<MemoryRouter><WorkspacePage project="repo" target={flowStore(25)} client={client}/></MemoryRouter>);
-  const flow = screen.getByRole('complementary', { name: 'Sub-agents' });
-  const titles = () => [...flow.querySelectorAll('.delegation-select .request-title')].map(element => element.textContent);
+  const flow = screen.getByRole('complementary', { name: 'Panel' });
+  const titles = () => [...flow.querySelectorAll('.graph-card:not(.graph-root):not(.graph-earlier) .graph-card-title')].map(element => element.textContent);
   expect(titles().slice(0, 3)).toEqual(['Task 0', 'Task 24', 'Task 23']);
   expect(titles()).toHaveLength(21);
-  fireEvent.click(within(flow).getByRole('button', { name: /Earlier/ }));
+  fireEvent.click(within(flow).getByRole('button', { name: /other completed requests|earlier/ }));
   expect(titles()).toHaveLength(25);
   expect(titles().at(-1)).toBe('Task 1');
 });
@@ -108,8 +108,8 @@ it('opens a child conversation from anywhere on its row, writes it to the URL an
   const header = () => document.querySelector<HTMLElement>('.conv-title-row')!;
   // 根の系列の見出しには経過の時間を出さない。
   expect(header().textContent).not.toMatch(/Elapsed/);
-  const flow = screen.getByRole('complementary', { name: 'Sub-agents' });
-  fireEvent.click(within(flow).getByText('Task 1').closest('.request-row')!);
+  const flow = screen.getByRole('complementary', { name: 'Panel' });
+  fireEvent.click(within(flow).getByText('Task 1').closest('.graph-card')!);
   expect(screen.getByTestId('location').textContent).toContain('child=child-1');
   expect(screen.getByRole('button', { name: 'Back to Repo-20260925' }).textContent).toBe('←Repo-20260925');
   fireEvent.click(within(flow).getByText('Task 0'));
@@ -139,10 +139,10 @@ it('現在から 24 時間より前に止まった子は、Earlier に畳む', (
   const runs = store.getSnapshot().projection.runs!;
   for (const run of runs) if (run.id === 'child-1:1') { run.last_evidence_ts = '2026-08-01T00:00:00Z'; run.started_ts = '2026-08-01T00:00:00Z'; }
   render(<MemoryRouter><WorkspacePage project="repo" target={store} client={client}/></MemoryRouter>);
-  const flow = screen.getByRole('complementary', { name: 'Sub-agents' });
-  const titles = () => [...flow.querySelectorAll('.delegation-select .request-title')].map(element => element.textContent);
+  const flow = screen.getByRole('complementary', { name: 'Panel' });
+  const titles = () => [...flow.querySelectorAll('.graph-card:not(.graph-root):not(.graph-earlier) .graph-card-title')].map(element => element.textContent);
   expect(titles()).not.toContain('Task 1');
-  fireEvent.click(within(flow).getByRole('button', { name: /Earlier/ }));
+  fireEvent.click(within(flow).getByRole('button', { name: /other completed requests|earlier/ }));
   expect(titles()).toContain('Task 1');
 });
 
@@ -155,7 +155,7 @@ it('承認待ちの子の行で、何を許すかを見せてその場で Allow 
   const answer = { command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'x', ok: true })) };
   store.setConnection('connected');
   render(<MemoryRouter><WorkspacePage project="repo" target={store} client={answer}/></MemoryRouter>);
-  const flow = screen.getByRole('complementary', { name: 'Sub-agents' });
+  const flow = screen.getByRole('complementary', { name: 'Panel' });
   expect(within(flow).getByText(/git status/)).toBeTruthy();
   fireEvent.click(within(flow).getByRole('button', { name: 'Allow' }));
   await vi.waitFor(() => expect(answer.command).toHaveBeenCalledWith('answer', { approvalId: 'ap', decision: 'accept' }));
@@ -183,8 +183,8 @@ it('結果を返して待機に戻った Claude の子は完了と出し、gener
   const target = flowStore(2);
   for (const run of target.getSnapshot().projection.runs!) if (run.id === 'child-1:1') run.state = 'idle';
   render(<MemoryRouter><WorkspacePage project="repo" target={target} client={client}/></MemoryRouter>);
-  const flow = screen.getByRole('complementary', { name: 'Sub-agents' });
-  const row = [...flow.querySelectorAll<HTMLElement>('.delegation-select')].find(element => element.textContent?.includes('Task 1'))!;
+  const flow = screen.getByRole('complementary', { name: 'Panel' });
+  const row = [...flow.querySelectorAll<HTMLElement>('.graph-card-link')].find(element => element.textContent?.includes('Task 1'))!;
   expect(row.getAttribute('aria-label')).toContain('Done');
   expect(row.textContent).not.toContain('general-purpose');
 });

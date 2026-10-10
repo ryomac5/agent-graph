@@ -127,6 +127,7 @@ export function GitChanges({ client, projectId, worktree, enabled, language = 'e
   const openFile = useContext(OpenWorkspaceFile);
   const [entries, setEntries] = useState<GitChange[]>([]);
   const [commits, setCommits] = useState<Commit[]>([]);
+  const [conversationsPending, setConversationsPending] = useState(false);
   const [hash, setHash] = useState('');
   const [selected, setSelected] = useState('');
   const [files, setFiles] = useState<Patch[]>([]);
@@ -147,12 +148,13 @@ export function GitChanges({ client, projectId, worktree, enabled, language = 'e
     setTreeError(''); setHistoryError(''); setCommitError(''); setLoading(enabled);
     if (enabled) Promise.allSettled([
       callGit<{ entries: GitChange[] }>(client, 'files.changes', request),
-      callGit<{ commits: Commit[] }>(client, 'files.commits', request),
+      callGit<{ commits: Commit[]; conversationsPending?: boolean }>(client, 'files.commits', request),
     ]).then(([tree, history]) => {
       if (cancelled) return;
       const changes = tree.status === 'fulfilled' ? tree.value.entries ?? [] : [];
       const log = history.status === 'fulfilled' ? history.value.commits ?? [] : [];
       setEntries(changes); setCommits(log);
+      setConversationsPending(history.status === 'fulfilled' && history.value.conversationsPending === true);
       if (tree.status === 'rejected') setTreeError(String(tree.reason.message ?? tree.reason));
       if (history.status === 'rejected') setHistoryError(String(history.reason.message ?? history.reason));
       if (changes.length) setSelected(changes[0].path);
@@ -161,6 +163,22 @@ export function GitChanges({ client, projectId, worktree, enabled, language = 'e
     });
     return () => { cancelled = true; };
   }, [client, projectId, worktree, revision, enabled]);
+  useEffect(() => {
+    if (!enabled || !conversationsPending) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    async function refreshConversations() {
+      try {
+        const history = await callGit<{ commits: Commit[]; conversationsPending?: boolean }>(client, 'files.commits', request);
+        if (cancelled) return;
+        setCommits(history.commits ?? []);
+        setConversationsPending(history.conversationsPending === true);
+        if (history.conversationsPending) timer = setTimeout(refreshConversations, 1000);
+      } catch { if (!cancelled) timer = setTimeout(refreshConversations, 1000); }
+    }
+    timer = setTimeout(refreshConversations, 1000);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [client, projectId, worktree, enabled, conversationsPending]);
   useEffect(() => {
     let cancelled = false;
     setFiles([]); setCommitError(''); setCommitLoading(Boolean(hash));

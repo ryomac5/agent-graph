@@ -361,7 +361,7 @@ details[open] > summary .caret { transform: rotate(90deg); }
 .workspace-panel { min-height: 0; flex: none; flex-direction: column; display: flex; position: relative; background: var(--bg-0); border-left: var(--border); }
 .panel-header { flex: none; justify-content: space-between; align-items: center; display: flex; position: sticky; top: 0; z-index: 1; background: var(--bg-0); height: var(--header); padding: 0 var(--space-2); gap: var(--space-1); border-bottom: var(--border); }
 .panel-tabs { display: flex; align-items: center; gap: var(--space-1); height: var(--header); min-width: 0; }
-.panel-tabs button { border-bottom: 1px solid transparent; height: var(--control); padding: 0 var(--space-3); border: 0; border-radius: var(--radius-1); font: var(--type-ui); color: var(--fg-2); }
+.panel-tabs button { width: var(--control); display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; border-bottom: 1px solid transparent; height: var(--control); padding: 0; border: 0; border-radius: var(--radius-1); font: var(--type-ui); color: var(--fg-2); }
 .panel-tabs button[aria-selected='true'] { border-bottom-color: var(--accent); background: var(--bg-3); color: var(--fg-1); border: 0; }
 .panel-open-full { align-self: flex-end; width: var(--control); height: var(--control); margin: 0; flex: none; }
 .panel-actions { display: flex; align-items: center; gap: var(--space-1); }

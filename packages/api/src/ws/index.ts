@@ -211,7 +211,7 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
       server.listen(port, "127.0.0.1", () => { server.off("error", reject); resolve(); });
     });
     feed = new ProjectionFeed(service.dbPath, service.catchUp, options.patchRetention);
-  } catch (error) { sessionHosts.close(); runner.close(); feed?.close(); searchDb.close(); wss.close(); server.close(); throw error; }
+  } catch (error) { sessionHosts.close(); runner.close(); feed?.close(); files.close(); searchDb.close(); wss.close(); server.close(); throw error; }
   port = (server.address() as { port: number }).port;
   searchOptions.port = port;
   const timer = setInterval(() => pollObservation(refresh), PROJECTION_POLL_MS);
@@ -225,6 +225,7 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
       clearInterval(timer);
       sessionHosts.close();
       files.clearPreviews();
+      files.close();
       runner.close();
       for (const socket of wss.clients) socket.terminate();
       await new Promise<void>((resolve) => wss.close(() => resolve()));

@@ -101,7 +101,13 @@ describe('Files explorer', () => {
     expect(item('docs').tabIndex).toBe(0);
     // 木は選択したプロジェクトの行の下に置く。
     expect(screen.queryByRole('link', { name: 'Files' })).toBeNull();
-    expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual(['Graph', 'Changes', 'Files']);
+    expect(screen.getAllByRole('tab').map(tab => tab.getAttribute('aria-label'))).toEqual(['Graph', 'Changes', 'Files']);
+    for (const tab of screen.getAllByRole('tab')) {
+      expect(tab.textContent).toBe('');
+      expect(tab.getAttribute('title')).toBe(tab.getAttribute('aria-label'));
+      expect(tab.querySelector('svg')?.getAttribute('width')).toBe('16');
+      expect(tab.querySelector('svg')?.getAttribute('height')).toBe('16');
+    }
     expect(screen.getByRole('region', { name: 'File viewer' })).toBeTruthy();
     expect(screen.getByRole('region', { name: 'repo sessions' })).toBeTruthy();
     const projectRow = screen.getByRole('link', { name: 'repo' }).closest('.sidebar-project')!;

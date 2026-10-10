@@ -144,3 +144,19 @@ it('restores the conversation filter from the URL and allows clearing an unknown
   fireEvent.click(screen.getByRole('button', { name: 'Clear conversation filter: missing' }));
   expect(screen.getByRole('button', { name: /Hidden/ })).toBeTruthy();
 });
+
+it('adds conversation badges after the background index finishes without changing the selected source', async () => {
+  let requests = 0;
+  const commit = { hash: 'abcdef123456', shortHash: 'abcdef1', parents: [], branches: [], tags: [], subject: 'Ready history', author: 'Author', time: '2026-10-08T00:00:00Z', fileCount: 1, additions: 1, deletions: 0 };
+  const client = { command: vi.fn(async (name: string) => ({ type: 'ack' as const, cmd_id: 'c', ok: true,
+    result: name === 'files.commits' ? { commits: [{ ...commit, conversation_ids: ++requests === 1 ? [] : ['agent'] }], conversationsPending: requests === 1 }
+      : name === 'files.changes' ? { entries: [] }
+        : { files: [{ path: 'src/code.ts', state: 'text', diff: PATCH }] },
+  })) };
+  render(<MemoryRouter><GitChanges client={client} projectId="repo" enabled/></MemoryRouter>);
+  const source = await screen.findByRole('button', { name: /Ready history/ });
+  expect(source.getAttribute('aria-pressed')).toBe('true');
+  expect(await screen.findByRole('button', { name: 'Filter by conversation: agent' }, { timeout: 2500 })).toBeTruthy();
+  expect(source.getAttribute('aria-pressed')).toBe('true');
+  expect(requests).toBe(2);
+});

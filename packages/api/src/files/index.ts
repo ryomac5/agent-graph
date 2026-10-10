@@ -179,10 +179,15 @@ async function readCommonDirectory(root: string): Promise<string> {
 
 export function createFilesApi(db: DatabaseSync, readRules: () => RedactionRules = () => ({})) {
   const conversations = createCommitConversationIndex(db);
+  let projectSequence = -1;
+  let projectFacts: Fact[] = [];
   function readProjectRoot(projectId: string): string {
-    const facts = db.prepare("SELECT * FROM facts WHERE kind LIKE 'project.%' ORDER BY seq").all()
+    const latest = Number(db.prepare('SELECT max(seq) AS seq FROM facts').get()?.seq ?? 0);
+    if (latest < projectSequence) { projectFacts = []; projectSequence = -1; }
+    const added = db.prepare("SELECT * FROM facts WHERE seq > ? AND seq IN (SELECT seq FROM fact_projection_dependencies WHERE projection = 'delegations' AND direction = 'offers' AND key = 'projects') AND kind LIKE 'project.%' ORDER BY seq").all(projectSequence)
       .map((row) => ({ ...row, payload: row.payload === null ? null : JSON.parse(String(row.payload)) } as Fact));
-    const project = projectProjects(facts).find((entry) => entry.id === projectId);
+    projectFacts.push(...added); projectSequence = latest;
+    const project = projectProjects(projectFacts).find((entry) => entry.id === projectId);
     if (!project?.root_path || project.state !== "registered") {
       throw new Error("Unknown registered project");
     }
@@ -214,6 +219,7 @@ export function createFilesApi(db: DatabaseSync, readRules: () => RedactionRules
   }
   const writes = new Map<string, Promise<unknown>>();
   const api = {
+    close() { conversations.close(); },
     selectRoot,
     ...createPreviewApi(selectRoot, normalizePath, readPreviewFile),
     ...createGitApi(selectGitRoot, resolveInside, readRules, conversations),

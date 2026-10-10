@@ -1,3 +1,4 @@
 import { createContext } from 'react';
 export const OpenWorkspaceFile = createContext<((path: string, worktree?: string) => void) | undefined>(undefined);
 export const OpenWorkspaceTerminal = createContext<((terminalId: string) => void) | undefined>(undefined);
+export const OpenWorkspaceConversation = createContext<((conversationId: string) => boolean) | undefined>(undefined);

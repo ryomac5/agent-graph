@@ -27,3 +27,7 @@
 .editor-comparison pre { font: var(--type-mono); overflow: auto; }
 
 .workbench-tab .input-sm { width: 160px; margin: var(--space-1); }
+
+.workbench-empty { flex: 1; min-height: 0; display: grid; place-items: center; overflow: auto; }
+.workbench-empty .empty-state { margin: 0; max-width: none; }
+.workbench-empty-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-2); }

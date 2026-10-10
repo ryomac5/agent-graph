@@ -70,7 +70,10 @@ it('syncs preview edits with source, the right panel, split panes and files.writ
   const code = screen.getByRole('textbox', { name: 'Code' });
   expect(code.textContent).toContain('# Edited Original');
   fireEvent.keyDown(code, { key: 'd', metaKey: true });
-  expect(within(work as HTMLElement).getAllByRole('heading', { name: 'Edited Original' })).toHaveLength(2);
+  expect(within(work as HTMLElement).queryAllByRole('tab')).toHaveLength(1);
+  fireEvent.keyDown(document.querySelectorAll('[data-pane-id]')[1], { key: 'p', metaKey: true });
+  fireEvent.click(within(await screen.findByRole('option', { name: 'notes.md' })).getByRole('button'));
+  expect(await within(work as HTMLElement).findAllByRole('heading', { name: 'Edited Original' })).toHaveLength(2);
   for (const button of within(work as HTMLElement).getAllByRole('button', { name: 'Raw' })) fireEvent.click(button);
   const codes = screen.getAllByRole('textbox', { name: 'Code' });
   act(() => { const view = EditorView.findFromDOM(codes[1])!; view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: '# From source\n' } }); });

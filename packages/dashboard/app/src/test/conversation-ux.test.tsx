@@ -13,7 +13,7 @@ import { selectTimeline, type TimelineEntry } from '../components/conversation/m
 import { resolveParticipants } from '../components/conversation/participants.ts';
 import { effortLabel, toolsLabel } from '../components/conversation/text.ts';
 
-beforeEach(() => vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ generation: 0, projection: { messages: [], message_memberships: [] }, next: null }) }))));
+beforeEach(() => { localStorage.clear(); vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ generation: 0, projection: { messages: [], message_memberships: [] }, next: null }) }))); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 const client = { command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'cmd', ok: true, result: [{ model: 'default', displayName: 'Default (recommended)' }] })) };
 function setup(messages: Row[] = [], extra: Record<string, Row[]> = {}) {
@@ -240,4 +240,26 @@ it('keeps a request between the surrounding text blocks and folds neither the re
   expect([...main.children].map(node => node.textContent)).toEqual(['Before request', 'Middle request', 'After request']);
   expect(document.querySelector('.tool-run')).toBeNull();
   await act(async () => {});
+});
+
+it('opens a conversation card in the focused empty pane and keeps the original conversation', async () => {
+  const target = setup([{ id: 'm', role: 'assistant', body: [
+    { type: 'tool_use', id: 'call', name: 'Agent', input: { description: 'Build parser' } },
+  ] }], { relations: [{ id: 'edge', type: 'delegated', from_id: 'c', to_id: 'child', active: 1, evidence: { toolUseId: 'call', description: 'Build parser' } }] });
+  render(<MemoryRouter initialEntries={['/p/p?root=root']}><WorkspacePage project="p" target={target} client={client} language="ja"/><Location/></MemoryRouter>);
+  const card = await screen.findByRole('button', { name: /Build parser/ });
+  fireEvent.keyDown(card, { key: 'd', metaKey: true });
+  const panes = [...document.querySelectorAll<HTMLElement>('[data-pane-id]')];
+  await vi.waitFor(() => expect(document.activeElement).toBe(panes[1]));
+  const currentCard = within(panes[0]).getByRole('button', { name: /Build parser/ });
+  fireEvent.pointerDown(currentCard);
+  fireEvent.focus(currentCard);
+  fireEvent.click(currentCard);
+  expect(panes[1].dataset.focused).toBe('true');
+  expect(within(panes[0]).getByRole('button', { name: /Build parser/ })).toBeTruthy();
+  expect(within(panes[1]).getByRole('tab', { name: '会話' })).toBeTruthy();
+  expect(screen.getByTestId('url').textContent).toBe('?root=root');
+  const saved = JSON.parse(localStorage.getItem('agent-graph-workspace:["p","root"]')!);
+  expect(saved.first.tabs[0].conversationId).toBe('c');
+  expect(saved.second.tabs[0].conversationId).toBe('child');
 });

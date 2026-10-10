@@ -56,7 +56,7 @@ function fixture(editable = true, language: 'en' | 'ja' = 'en') {
 }
 function panes() { return [...document.querySelectorAll<HTMLElement>('[data-pane-id]')]; }
 function tabs(pane = panes()[0]) { return within(pane).getAllByRole('tab'); }
-async function openCode() { const item = await screen.findByRole('treeitem', { name: 'file.ts' }); fireEvent.doubleClick(item.querySelector('.tree-row')!); await screen.findByRole('textbox', { name: 'Code' }); }
+async function openCode() { const item = await screen.findByRole('treeitem', { name: 'file.ts' }); fireEvent.doubleClick(item.querySelector('.tree-row')!); await screen.findAllByRole('textbox', { name: 'Code' }); }
 function edit(text: string) {
   const input = screen.getByRole('textbox', { name: 'Code' });
   const view = EditorView.findFromDOM(input)!;
@@ -65,8 +65,11 @@ function edit(text: string) {
 it('splits with Cmd+D and Cmd+Shift+D inside an input, prevents bookmarks and restores layout', async () => {
   const f = fixture(); const input = screen.getByRole('textbox', { name: 'Message' });
   expect(fireEvent.keyDown(input, { key: 'd', metaKey: true })).toBe(false); expect(panes()).toHaveLength(2);
-  expect(fireEvent.keyDown(within(panes()[1]).getByRole('textbox', { name: 'Message' }), { key: 'd', metaKey: true, shiftKey: true })).toBe(false); expect(panes()).toHaveLength(3);
+  expect(fireEvent.keyDown(panes()[1], { key: 'd', metaKey: true, shiftKey: true })).toBe(false); expect(panes()).toHaveLength(3);
   expect(document.querySelector('.workbench-split.vertical')).toBeTruthy();
+  expect(screen.getAllByRole('tab')).toHaveLength(1);
+  expect(panes().slice(1).every(pane => within(pane).queryAllByRole('tab').length === 0)).toBe(true);
+  await vi.waitFor(() => expect(document.activeElement).toBe(panes()[2]));
   const saved = localStorage.getItem(workspaceKey('p', 'session'));
   f.view.unmount(); render(<MemoryRouter><f.Wrapper/></MemoryRouter>);
   expect(panes()).toHaveLength(3); expect(localStorage.getItem(workspaceKey('p', 'session'))).toBe(saved);
@@ -105,13 +108,14 @@ it('saves with Cmd+S, shows conflict choices, compares and discards changes', as
   await act(async () => fireEvent.keyDown(screen.getByRole('textbox', { name: 'Code' }), { key: 's', metaKey: true }));
   fireEvent.click(screen.getByRole('button', { name: 'Discard' })); expect(screen.getByRole('textbox', { name: 'Code' }).textContent).toBe('latest disk');
 });
-it('confirms closing dirty tabs, closes with middle click, and preserves edits across splits', async () => {
+it('confirms closing dirty tabs and preserves edits when closing an empty split', async () => {
   fixture(); await openCode(); edit('unsaved');
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
   fireEvent.click(screen.getByRole('button', { name: 'Close file.ts' })); expect(tabs()).toHaveLength(2);
   fireEvent.keyDown(screen.getByRole('textbox', { name: 'Code' }), { key: 'd', metaKey: true });
-  expect(panes()).toHaveLength(2); expect(within(panes()[1]).getByRole('textbox', { name: 'Code' }).textContent).toBe('unsaved');
-  confirm.mockReturnValue(true); fireEvent(panes()[1].querySelector('.workbench-tab')!, new MouseEvent('auxclick', { bubbles: true, button: 1 }));
+  expect(panes()).toHaveLength(2); expect(within(panes()[1]).queryByRole('textbox', { name: 'Code' })).toBeNull();
+  fireEvent.click(within(panes()[1]).getByRole('button', { name: 'Close pane' }));
+  expect(confirm).toHaveBeenCalledTimes(1);
   expect(panes()).toHaveLength(1);
   expect(within(panes()[0]).getByRole('textbox', { name: 'Code' }).textContent).toBe('unsaved');
 });
@@ -143,10 +147,11 @@ it('renders terminal output and exit, reopens and closes terminal sessions', asy
 it('reorders tabs and moves the last tab into its neighbour through drag and drop', async () => {
   fixture(); await openCode(); fireEvent.keyDown(screen.getByRole('textbox', { name: 'Code' }), { key: 'd', metaKey: true });
   const transfer = { setData: vi.fn(), getData: () => '' };
+  fireEvent.click(within(panes()[1]).getByRole('button', { name: 'Open conversation' }));
   const source = panes()[1].querySelector('.workbench-tab')!;
   const destination = panes()[0].querySelector('.workbench-tab')!;
   fireEvent.dragStart(source, { dataTransfer: transfer }); fireEvent.drop(destination, { dataTransfer: transfer });
-  expect(panes()).toHaveLength(1); expect(tabs().map(tab => tab.textContent)).toEqual(['file.ts', 'Conversation', 'file.ts']);
+  expect(panes()).toHaveLength(1); expect(tabs().map(tab => tab.textContent)).toEqual(['Conversation', 'Conversation', 'file.ts']);
 });
 it('resizes a divider with pointer movement and remembers the size', async () => {
   fixture(); fireEvent.keyDown(screen.getByRole('textbox', { name: 'Message' }), { key: 'd', metaKey: true });
@@ -197,4 +202,47 @@ it('fits and resizes the terminal when its host changes size and sends keyboard 
   expect(f.client.command).toHaveBeenCalledWith('terminal.resize', { terminalId: 'terminal-1', cols: 80, rows: 24 });
   expect(f.client.command).toHaveBeenCalledWith('terminal.open', { projectId: 'p', worktree: '/worktree', cols: 80, rows: 24 });
   session.dispose(); host.remove();
+});
+
+it('opens all three empty pane actions and keeps the add menu usable', async () => {
+  const f = fixture();
+  fireEvent.keyDown(screen.getByRole('textbox', { name: 'Message' }), { key: 'd', metaKey: true });
+  const empty = panes()[1];
+  for (const name of ['Open conversation', 'Open terminal', 'Open file']) expect(within(empty).getByRole('button', { name })).toBeTruthy();
+  fireEvent.click(within(empty).getByRole('button', { name: 'Open tab' }));
+  expect(screen.getAllByRole('menuitem')).toHaveLength(3);
+  fireEvent.click(within(empty).getByRole('button', { name: 'Open tab' }));
+  fireEvent.click(within(empty).getByRole('button', { name: 'Open terminal' }));
+  await vi.waitFor(() => expect(f.client.command).toHaveBeenCalledWith('terminal.open', expect.anything()));
+  fireEvent.click(within(empty).getByRole('button', { name: 'Close Terminal' }));
+  expect(panes()).toHaveLength(1);
+  fireEvent.keyDown(screen.getByRole('textbox', { name: 'Message' }), { key: 'd', metaKey: true });
+  fireEvent.click(within(panes()[1]).getByRole('button', { name: 'Open conversation' }));
+  expect(within(panes()[1]).getByRole('textbox', { name: 'Message' })).toBeTruthy();
+  fireEvent.keyDown(panes()[1], { key: 'd', metaKey: true });
+  fireEvent.click(within(panes()[2]).getByRole('button', { name: 'Open file' }));
+  fireEvent.click(within(await screen.findByRole('option', { name: 'other.txt' })).getByRole('button'));
+  await screen.findByRole('textbox', { name: 'Code' });
+  expect(within(panes()[2]).getByRole('tab', { name: 'other.txt' })).toBeTruthy();
+});
+it('opens a double clicked file in the focused empty pane even when the file is already open', async () => {
+  fixture(); await openCode();
+  fireEvent.keyDown(screen.getByRole('textbox', { name: 'Code' }), { key: 'd', metaKey: true });
+  await openCode();
+  expect(panes()).toHaveLength(2);
+  expect(tabs(panes()[0]).map(tab => tab.textContent)).toEqual(['Conversation', 'file.ts']);
+  expect(tabs(panes()[1]).map(tab => tab.textContent)).toEqual(['file.ts']);
+  expect(panes()[1].dataset.focused).toBe('true');
+});
+it('closes the last empty pane and restores the closed workspace', async () => {
+  const f = fixture();
+  fireEvent.keyDown(screen.getByRole('textbox', { name: 'Message' }), { key: 'd', metaKey: true });
+  fireEvent.click(within(panes()[0]).getByRole('button', { name: 'Close Conversation' }));
+  expect(panes()).toHaveLength(1);
+  expect(within(panes()[0]).queryAllByRole('tab')).toHaveLength(0);
+  fireEvent.click(screen.getByRole('button', { name: 'Close pane' }));
+  expect(panes()).toHaveLength(0);
+  expect(localStorage.getItem(workspaceKey('p', 'session'))).toBe('null');
+  f.view.unmount(); render(<MemoryRouter><f.Wrapper/></MemoryRouter>);
+  expect(panes()).toHaveLength(0);
 });

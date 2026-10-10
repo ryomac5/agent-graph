@@ -1,5 +1,5 @@
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { OpenWorkspaceTerminal } from '../../lib/workspace-context.ts';
+import { OpenWorkspaceConversation, OpenWorkspaceTerminal } from '../../lib/workspace-context.ts';
 import { useAutosizeTextarea } from './useAutosizeTextarea.ts';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import { getRegisteredProjects, OTHER_PROJECT } from '../../lib/projects.ts';
@@ -136,7 +136,9 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const roots = selectRoots(state);
   const root = roots.find(item => item.id === search.get('root')) ?? roots.find(item => item.conversation_ids.includes(conversationId));
   const delegationNode = (tool: Row) => resolveDelegationNode(tool, conversationId, state, rootIndex, root);
+  const openWorkspaceConversation = useContext(OpenWorkspaceConversation);
   const selectChild = (id: string) => {
+    if (openWorkspaceConversation?.(id)) return;
     if (embedded) { const next = new URLSearchParams(search); if (root) next.set('root', root.id); next.set('child', id); setSearch(next); }
     else if (onConversation) onConversation(id);
     else navigate(`/c/${encodeURIComponent(id)}?child=${encodeURIComponent(id)}`);

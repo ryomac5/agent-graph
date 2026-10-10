@@ -1,21 +1,27 @@
 export type WorkspaceTab = { name?: string } & ({ id: string; kind: 'conversation'; conversationId: string } | { id: string; kind: 'code'; path: string; worktree?: string } | { id: string; kind: 'terminal'; worktree?: string; terminalId?: string });
-export type Pane = { kind: 'pane'; id: string; tabs: WorkspaceTab[]; active: string };
+export type Pane = { kind: 'pane'; id: string; tabs: WorkspaceTab[]; active?: string };
 export type PaneTree = Pane | { kind: 'split'; id: string; direction: 'horizontal' | 'vertical'; ratio: number; first: PaneTree; second: PaneTree };
 export const MIN_RATIO = 0.1;
 export function listPanes(tree: PaneTree): Pane[] { return tree.kind === 'pane' ? [tree] : [...listPanes(tree.first), ...listPanes(tree.second)]; }
 export function updatePane(tree: PaneTree, id: string, update: (pane: Pane) => Pane): PaneTree {
   return tree.kind === 'pane' ? tree.id === id ? update(tree) : tree : { ...tree, first: updatePane(tree.first, id, update), second: updatePane(tree.second, id, update) };
 }
-export function splitPane(tree: PaneTree, id: string, direction: 'horizontal' | 'vertical', tab: WorkspaceTab, paneId: string, splitId: string): PaneTree {
-  if (tree.kind === 'pane') return tree.id !== id ? tree : { kind: 'split', id: splitId, direction, ratio: 0.5, first: tree, second: { kind: 'pane', id: paneId, tabs: [tab], active: tab.id } };
-  return { ...tree, first: splitPane(tree.first, id, direction, tab, paneId, splitId), second: splitPane(tree.second, id, direction, tab, paneId, splitId) };
+export function splitPane(tree: PaneTree, id: string, direction: 'horizontal' | 'vertical', paneId: string, splitId: string, tab?: WorkspaceTab): PaneTree {
+  if (tree.kind === 'pane') return tree.id !== id ? tree : { kind: 'split', id: splitId, direction, ratio: 0.5, first: tree, second: { kind: 'pane', id: paneId, tabs: tab ? [tab] : [], active: tab?.id } };
+  return { ...tree, first: splitPane(tree.first, id, direction, paneId, splitId, tab), second: splitPane(tree.second, id, direction, paneId, splitId, tab) };
 }
 export function closeTab(tree: PaneTree, tabId: string): PaneTree | null {
   if (tree.kind === 'pane') {
+    if (!tree.tabs.some(tab => tab.id === tabId)) return tree;
     const tabs = tree.tabs.filter(tab => tab.id !== tabId);
     return tabs.length ? { ...tree, tabs, active: tabs.some(tab => tab.id === tree.active) ? tree.active : tabs.at(-1)!.id } : null;
   }
   const first = closeTab(tree.first, tabId), second = closeTab(tree.second, tabId);
+  return first && second ? { ...tree, first, second } : first ?? second;
+}
+export function closePane(tree: PaneTree, paneId: string): PaneTree | null {
+  if (tree.kind === 'pane') return tree.id === paneId ? null : tree;
+  const first = closePane(tree.first, paneId), second = closePane(tree.second, paneId);
   return first && second ? { ...tree, first, second } : first ?? second;
 }
 export function moveTab(tree: PaneTree, tabId: string, destination: string, before?: string): PaneTree {
@@ -62,7 +68,7 @@ export function restoreWorkspace(value: string | null, conversationId: string): 
       const node = value as Record<string, unknown>;
       if (!validId(node.id)) return false;
       if (node.kind === 'split') return (node.direction === 'horizontal' || node.direction === 'vertical') && typeof node.ratio === 'number' && node.ratio >= MIN_RATIO && node.ratio <= 1 - MIN_RATIO && valid(node.first, depth + 1) && valid(node.second, depth + 1);
-      return node.kind === 'pane' && Array.isArray(node.tabs) && node.tabs.length > 0 && node.tabs.some(tab => tab?.id === node.active) && node.tabs.every(validTab);
+      return node.kind === 'pane' && Array.isArray(node.tabs) && (node.tabs.length === 0 ? node.active === undefined : node.tabs.some(tab => tab?.id === node.active)) && node.tabs.every(validTab);
     }
     return valid(tree) ? tree : createWorkspace(conversationId);
   } catch { return createWorkspace(conversationId); }

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { UsageBar } from '../components/usage/UsageBar.tsx';
-import { formatReset, getUsageColor, type ProviderUsage, MANUAL_MS, POLL_MS, RETRY_MS } from '../components/usage/model.ts';
+import { formatReset, formatWindow, getUsageColor, type ProviderUsage, MANUAL_MS, POLL_MS, RETRY_MS } from '../components/usage/model.ts';
 const START = Date.parse('2026-10-11T00:00:00Z');
 const reset = new Date(START + (4 * 60 + 2) * 60_000).toISOString();
 const providers: ProviderUsage[] = [
@@ -11,14 +11,16 @@ const providers: ProviderUsage[] = [
 ];
 function createClient(rows = providers) { return { command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'usage', ok: true, result: { providers: rows } })) }; }
 async function settle() { await act(async () => { await Promise.resolve(); }); }
-beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(START); vi.spyOn(document, 'hasFocus').mockReturnValue(true); });
-afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers(); });
+beforeEach(() => { vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} }); vi.useFakeTimers(); vi.setSystemTime(START); vi.spyOn(document, 'hasFocus').mockReturnValue(true); });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.useRealTimers(); });
 it('shows the most constrained windows, official marks and boundary colors', async () => {
   render(<UsageBar client={createClient()} language="ja"/>); await settle();
-  expect(screen.getByText('31% 使用済み')).toBeTruthy(); expect(screen.queryByText('3% 使用済み')).toBeNull();
-  expect(screen.getByText('80% 使用済み').closest('.usage-summary-item')?.className).toContain('usage-warning');
-  expect(screen.getByText('95% 使用済み').closest('.usage-summary-item')?.className).toContain('usage-danger');
+  expect(screen.getByText('31%')).toBeTruthy(); expect(screen.queryByText('3%')).toBeNull();
+  expect(screen.getByText('80%').closest('.usage-summary-item')?.className).toContain('usage-warning');
+  expect(screen.getByText('95%').closest('.usage-summary-item')?.className).toContain('usage-danger');
   expect(document.querySelectorAll('.usage-bar img').length).toBe(3);
+  expect(screen.getByText('31%').closest('.usage-summary-item')?.getAttribute('title')).toBe('Claude: 31% 使用済み');
+  expect(screen.queryByText(/使用済み/)).toBeNull();
   expect([79, 80, 94, 95].map(getUsageColor)).toEqual(['normal', 'warning', 'warning', 'danger']);
 });
 it('opens details upwards with provider windows, reset times and Antigravity groups; Escape closes it', async () => {
@@ -65,4 +67,44 @@ it('formats elapsed and unknown reset times', () => {
   expect(formatReset(reset, START, 'en')).toBe('Resets in 4h 2m');
   expect(formatReset(reset, START + POLL_MS * 30, 'ja')).toBe('0 分で戻る');
   expect(formatReset(null, START, 'ja')).toBe('戻る時刻は不明');
+});
+
+it.each([
+  [4 * 24 * 60 + 5 * 60 + 39, '4 日 5 時間で戻る', 'Resets in 4d 5h'],
+  [24 * 60, '1 日 0 時間で戻る', 'Resets in 1d 0h'],
+  [24 * 60 - 1, '23 時間 59 分で戻る', 'Resets in 23h 59m'],
+  [4 * 60 + 2, '4 時間 2 分で戻る', 'Resets in 4h 2m'],
+  [60, '1 時間 0 分で戻る', 'Resets in 1h 0m'],
+  [59, '59 分で戻る', 'Resets in 59m'],
+  [12, '12 分で戻る', 'Resets in 12m'],
+])('formats a reset %i minutes away in both languages', (minutes, ja, en) => {
+  const at = new Date(START + minutes * 60_000).toISOString();
+  expect(formatReset(at, START, 'ja')).toBe(ja);
+  expect(formatReset(at, START, 'en')).toBe(en);
+});
+it.each([
+  ['Session', '5 時間', '5h'], ['5h', '5 時間', '5h'],
+  ['Week', '週', 'Week'], ['wk', '週', 'wk'], ['Week Fable', '週 Fable', 'Week Fable'],
+])('formats the window %s in both languages', (label, ja, en) => {
+  expect(formatWindow(label, 'ja')).toBe(ja);
+  expect(formatWindow(label, 'en')).toBe(en);
+});
+it('floats outside the sidebar, stays above the bar and clamps to the viewport on resize', async () => {
+  const view = render(<UsageBar client={createClient()} language="ja"/>); await settle();
+  const root = view.container.querySelector('.usage-root')!;
+  vi.spyOn(root, 'getBoundingClientRect').mockReturnValue({ left: window.innerWidth - 100, top: 500 } as DOMRect);
+  fireEvent.click(screen.getByRole('button', { name: '使用量の詳細' }));
+  const dialog = screen.getByRole('dialog');
+  expect(dialog.parentElement).toBe(document.body);
+  expect(dialog.style.width).toBe('340px');
+  expect(dialog.style.left).toBe(`${window.innerWidth - 348}px`);
+  expect(dialog.style.bottom).toBe(`${window.innerHeight - 492}px`);
+  expect(dialog.style.maxHeight).toBe('484px');
+  fireEvent.pointerDown(within(dialog).getByText('Claude')); expect(screen.getByRole('dialog')).toBe(dialog);
+  const row = within(dialog).getAllByRole('progressbar')[0].parentElement!;
+  expect([...row.children].map(child => child.textContent)).toEqual(['5 時間', '', '3%', '4 時間 2 分で戻る']);
+  vi.stubGlobal('innerWidth', 320); vi.stubGlobal('innerHeight', 400); fireEvent(window, new Event('resize'));
+  expect(dialog.style.width).toBe('304px'); expect(dialog.style.left).toBe('8px');
+  expect(dialog.style.bottom).toBe('8px'); expect(dialog.style.maxHeight).toBe('384px');
+  fireEvent.pointerDown(document.body); expect(screen.queryByRole('dialog')).toBeNull();
 });

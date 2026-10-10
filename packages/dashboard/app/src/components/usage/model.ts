@@ -15,6 +15,8 @@ export function formatReset(reset: string | null, now: number, language: Languag
   if (!reset || !Number.isFinite(Date.parse(reset))) return language === 'ja' ? '戻る時刻は不明' : 'Reset time unknown';
   const minutes = Math.max(0, Math.ceil((Date.parse(reset) - now) / 60_000));
   const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+  if (days) return language === 'ja' ? `${days} 日 ${hours % 24} 時間で戻る` : `Resets in ${days}d ${hours % 24}h`;
   return language === 'ja' ? `${hours ? `${hours} 時間 ` : ''}${minutes % 60} 分で戻る` : `Resets in ${hours ? `${hours}h ` : ''}${minutes % 60}m`;
 }
 const REASONS: Record<string, [string, string]> = {
@@ -35,6 +37,6 @@ export function formatReason(reason: string | undefined, language: Language): st
   return (REASONS[reason ?? ''] ?? REASONS.source_unavailable)[language === 'ja' ? 1 : 0];
 }
 export function formatWindow(label: string, language: Language): string {
-  if (language === 'en') return label;
-  return ({ Session: '今回', Week: '週', '5h': '5 時間', wk: '週' } as Record<string, string>)[label] ?? label.replace(/^Week /, '週 ');
+  if (language === 'en') return label === 'Session' ? '5h' : label;
+  return ({ Session: '5 時間', Week: '週', '5h': '5 時間', wk: '週' } as Record<string, string>)[label] ?? label.replace(/^Week /, '週 ');
 }

@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { basename, relative, resolve } from "node:path";
-import { projectConversations, projectRuns } from "../../../../core/src/ledger/index.ts";
-import type { Ledger, RunPayload } from "../../../../core/src/ledger/index.ts";
+import { createSessionQuery } from "../session-query.ts";
+import type { Ledger } from "../../../../core/src/ledger/index.ts";
 
 const MINUTE_MS = 60_000;
 const PROCESS_POLL_MS = 30_000;
@@ -82,7 +82,7 @@ async function readLiveConversations(reader: CodexProcessReader, codexHome: stri
 
 /** 実機で確認した、Codex が開いている rollout と会話 ID の対応を使う。 */
 export function createCodexSessionObserver(ledger: Ledger, codexHome: string,
-  reader: CodexProcessReader = processReader) {
+  reader: CodexProcessReader = processReader, query = createSessionQuery(ledger)) {
   let lastSignature: string | undefined;
   let lastScanMs = Number.NEGATIVE_INFINITY;
   let lastPollMs = Number.NEGATIVE_INFINITY;
@@ -114,56 +114,15 @@ export function createCodexSessionObserver(ledger: Ledger, codexHome: string,
     lastSignature = signature;
     lastScanMs = now;
 
-    const facts = ledger.readSince(0, Number.MAX_SAFE_INTEGER);
-    const conversations = projectConversations(facts, new Map()).conversations;
-    const eligible = new Map(conversations.filter(row => row.provider === "codex" && row.origin === "observed")
-      .flatMap(row => [[row.id, row], [`codex:${row.native_id}`, row]] as const));
-    const subjects = new Map<string, `run:${string}`>();
-    const subjectConversations = new Map<string, string>();
-    const fileConversations = new Map<string, string>();
-    for (const fact of facts) {
-      if (fact.kind === "run.created" && fact.payload) {
-        const payload = fact.payload as Partial<RunPayload>;
-        subjects.set(JSON.stringify([payload.conversation_id, payload.generation]), fact.subject as `run:${string}`);
-        const conversation = eligible.get(payload.conversation_id!);
-        if (conversation) subjectConversations.set(fact.subject, conversation.id);
-      }
-      if (fact.kind === "conversation.created" || fact.kind === "conversation.corrected") {
-        const id = fact.subject.slice("conversation:".length);
-        const conversation = eligible.get(id);
-        if (!conversation) continue;
-        subjectConversations.set(fact.subject, conversation.id);
-        if (fact.source === "rollout-codex" && fact.cursor) {
-          const fileId = (JSON.parse(fact.cursor) as { file_id?: string }).file_id;
-          if (fileId && ROLLOUT_NAME.exec(basename(fileId))?.[1] === conversation.native_id) {
-            fileConversations.set(fileId, conversation.id);
-          }
-        }
-      }
-    }
-    const lastRecords = new Map<string, number>();
-    for (const fact of facts) {
-      const fileId = fact.source === "rollout-codex" && fact.cursor
-        ? (JSON.parse(fact.cursor) as { file_id?: string }).file_id : undefined;
-      const id = subjectConversations.get(fact.subject) ?? (fileId ? fileConversations.get(fileId) : undefined);
-      if (id) lastRecords.set(id, Math.max(lastRecords.get(id) ?? 0, Date.parse(fact.source_ts)));
-    }
-    const latest = new Map<string, ReturnType<typeof projectRuns>[number]>();
-    for (const run of projectRuns(facts)) {
-      const conversation = eligible.get(run.conversation_id);
-      if (conversation && run.generation > (latest.get(conversation.id)?.generation ?? -1)) latest.set(conversation.id, run);
-    }
-    const known = new Set(facts.filter(fact => fact.source === "rollout-codex").map(fact => fact.source_event_id));
     const minute = Math.floor(now / MINUTE_MS);
     let appended = 0;
-    for (const [id, run] of latest) {
-      const conversation = eligible.get(id)!;
-      if (live.has(conversation.native_id!) || !["running", "waiting_approval", "waiting_input"].includes(run.state)) continue;
-      const lastRecord = Math.max(lastRecords.get(id) ?? 0, Date.parse(run.last_evidence_ts ?? ""));
+    for (const run of query.read("codex")) {
+      const { id, subject } = run;
+      if (live.has(run.nativeId)) continue;
+      const lastRecord = Math.max(run.lastRecord, Date.parse(run.last_evidence_ts ?? ""));
       if (!Number.isFinite(lastRecord) || now - lastRecord <= STARTUP_GRACE_MS) continue;
       const eventId = `process_absent:${id}:${minute}`;
-      const subject = subjects.get(JSON.stringify([run.conversation_id, run.generation]));
-      if (!subject || known.has(eventId)) continue;
+      if (query.hasEvent("rollout-codex", eventId)) continue;
       const result = ledger.append({ source: "rollout-codex", source_event_id: eventId,
         kind: "run.state_changed", subject, confidence: "confirmed", source_ts: checkedTs, observed_ts: checkedTs,
         payload: { conversation_id: run.conversation_id, generation: run.generation, state: "idle",

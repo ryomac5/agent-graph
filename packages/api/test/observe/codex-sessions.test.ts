@@ -11,9 +11,16 @@ import { setImmediate as yieldTurn } from "node:timers/promises";
 import type { TestContext } from "node:test";
 import { createNativeId, openLedger, projectRuns } from "../../../core/src/ledger/index.ts";
 import type { Ledger, RunState } from "../../../core/src/ledger/index.ts";
-import { createCodexSessionObserver } from "../../src/observe/codex/sessions.ts";
+import { createCodexSessionObserver as createObserver } from "../../src/observe/codex/sessions.ts";
 import type { CodexProcessReader } from "../../src/observe/codex/sessions.ts";
 import { openObservationService } from "../../src/service/index.ts";
+
+import { createSessionQuery } from "../../src/observe/session-query.ts";
+
+const queries = new WeakMap<Ledger, ReturnType<typeof createSessionQuery>>();
+function createCodexSessionObserver(ledger: Ledger, home: string, reader?: CodexProcessReader) {
+  return createObserver(ledger, home, reader, queries.get(ledger)!);
+}
 
 const NATIVE_ID = "01a1196d-1d5a-7f91-acbc-8d36fc56b286";
 const START_TS = "2026-10-08T00:00:00.000Z";
@@ -25,6 +32,8 @@ const PS = " 79864 /vendor/bin/codex\n 80399 /vendor/bin/codex-code-mode-host\n"
 function createFixture(t: TestContext, suppliedLedger?: Ledger) {
   const ledger = suppliedLedger ?? openLedger(":memory:");
   if (!suppliedLedger) t.after(() => ledger.close());
+  const query = createSessionQuery(ledger);
+  queries.set(ledger, query);
   function addConversation(nativeId = NATIVE_ID, state: RunState = "running", timestamp = START_TS,
     origin: "observed" | "managed" = "observed", generation = 1) {
     const id = createNativeId("codex", nativeId);
@@ -38,7 +47,7 @@ function createFixture(t: TestContext, suppliedLedger?: Ledger) {
   }
   const readFacts = () => ledger.readSince(0, Number.MAX_SAFE_INTEGER);
   const readStates = () => new Map(projectRuns(readFacts()).map(run => [run.conversation_id, run.state]));
-  return { ledger, addConversation, readFacts, readStates };
+  return { ledger, query, addConversation, readFacts, readStates };
 }
 
 async function observeCompleted(observe: ReturnType<typeof createCodexSessionObserver>, timestamp: string): Promise<number> {
@@ -85,7 +94,7 @@ test("ps・lsof の失敗、形式不正、PID の部分取得では何も読ま
   f.addConversation();
   const before = f.readFacts();
   const fail = () => { throw new Error("Denied"); };
-  const read = t.mock.method(f.ledger, "readSince");
+  const read = t.mock.method(f.query, "read");
   for (const reader of [
     { listProcesses: fail, readOpenFiles: fail },
     { listProcesses: () => PS, readOpenFiles: fail },
@@ -121,12 +130,12 @@ test("ターン開始が古くても rollout の最後の記録が新しけれ�
   assert.deepEqual(f.readFacts(), before);
 });
 
-test("台帳を読むのは生存集合の変化時と1分ごとだけ", async t => {
+test("必要な実行を SQL で読むのは生存集合の変化時と1分ごとだけ", async t => {
   const f = createFixture(t);
   f.addConversation();
   let files = `p79864\nn${HOME}/sessions/2026/10/08/${FILE}\n`;
   const observe = createCodexSessionObserver(f.ledger, HOME, { listProcesses: () => PS, readOpenFiles: () => files });
-  const read = t.mock.method(f.ledger, "readSince");
+  const read = t.mock.method(f.query, "read");
   await observeCompleted(observe, CHECK_TS);
   await observeCompleted(observe, "2026-10-08T00:05:30.000Z");
   assert.equal(read.mock.callCount(), 1);
@@ -175,7 +184,7 @@ test("取得待ちでも周期は戻り、ps・lsof は30秒に一度だけで�
     readOpenFiles: () => { files += 1; return new Promise<string>(resolve => { resolveFiles = resolve; }); },
   });
   t.after(() => observe.close());
-  const read = t.mock.method(f.ledger, "readSince");
+  const read = t.mock.method(f.query, "read");
   assert.equal(observe(CHECK_TS), 0);
   assert.equal(observe("2026-10-08T00:05:30.000Z"), 0);
   assert.equal(processes, 1);
@@ -214,7 +223,7 @@ test("非同期取得の失敗では以前の結果を使わず、30秒後の成
     readOpenFiles: async () => { if (fail) throw new Error("Unavailable"); return files; },
   });
   t.after(() => observe.close());
-  const read = t.mock.method(f.ledger, "readSince");
+  const read = t.mock.method(f.query, "read");
   assert.equal(await observeCompleted(observe, CHECK_TS), 0);
   fail = true;
   assert.equal(await observeCompleted(observe, "2026-10-08T00:06:00.000Z"), 0);
@@ -236,7 +245,7 @@ test("close は取得を中断し、遅れて完了しても台帳に触れな�
     listProcesses: current => { signal = current; return new Promise<string>(resolve => { finish = resolve; }); },
     readOpenFiles: () => { throw new Error("Should not read files"); },
   });
-  const read = t.mock.method(f.ledger, "readSince");
+  const read = t.mock.method(f.query, "read");
   assert.equal(observe(CHECK_TS), 0);
   observe.close();
   assert.equal(signal?.aborted, true);
@@ -268,7 +277,7 @@ for (const failure of [undefined, "stderr", "exit", "error", "signal", "overflow
     syncBuiltinESMExports();
     const observe = createCodexSessionObserver(f.ledger, HOME);
     t.after(() => { observe.close(); t.mock.restoreAll(); syncBuiltinESMExports(); });
-    const read = t.mock.method(f.ledger, "readSince");
+    const read = t.mock.method(f.query, "read");
     assert.equal(observe(CHECK_TS), 0);
     assert.deepEqual(calls, ["ps"]);
     await yieldTurn();

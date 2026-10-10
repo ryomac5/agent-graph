@@ -34,15 +34,14 @@ export function kitEventsPath(rootPath: string): string {
 export function observeKitDelegationsFile(ledger: Ledger, path: string, checkpoints?: Map<string, FileCursor>): AppendResult[] {
   path = resolve(path);
   const checkpoint = checkpoints?.get(path);
-  if (checkpoint) {
-    try {
-      const stat = statSync(path);
-      if (checkpoint.identity === `${stat.dev}:${stat.ino}` && checkpoint.size === stat.size
-        && checkpoint.mtimeMs === stat.mtimeMs && checkpoint.ctimeMs === stat.ctimeMs) return [];
-    } catch (error) {
-      if (error instanceof Error && "code" in error && ["ENOENT", "EACCES", "EPERM"].includes(String(error.code))) return [];
-      throw error;
-    }
+  // 記録がない周期は、台帳の文脈を走査する前に終える。
+  try {
+    const stat = statSync(path);
+    if (checkpoint && checkpoint.identity === `${stat.dev}:${stat.ino}` && checkpoint.size === stat.size
+      && checkpoint.mtimeMs === stat.mtimeMs && checkpoint.ctimeMs === stat.ctimeMs) return [];
+  } catch (error) {
+    if (error instanceof Error && "code" in error && ["ENOENT", "EACCES", "EPERM"].includes(String(error.code))) return [];
+    throw error;
   }
   const facts = ledger.readSince(0, Number.MAX_SAFE_INTEGER);
   const cursors = facts.filter((fact) => fact.source === "kit" && fact.cursor)

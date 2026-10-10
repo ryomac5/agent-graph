@@ -270,3 +270,9 @@ test("新規行の位置衝突は未対応として残し、後続行と後続�
   assert.doesNotThrow(() => createKitObserver(f.ledger).observe());
   assert.equal(f.facts().length, count);
 });
+
+test("キットの記録がない周期は台帳の文脈を読み直さない", t => {
+  const f = createFixture(t);
+  t.mock.method(f.ledger, "readSince", () => { throw new Error("Missing kit file must not scan facts"); });
+  assert.deepEqual(observeKitDelegationsFile(f.ledger, f.path), []);
+});

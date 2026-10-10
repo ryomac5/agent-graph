@@ -10,6 +10,8 @@ import type { HookEvent } from "../hook/index.ts";
 import { observeClaudeHistories } from "./claude-reader.ts";
 import { codexLocationEventId, observeCodex, observeCodexLocations } from "../observe/codex/index.ts";
 import { claudeConversationId, claudeLocationEventId } from "../observe/claude/context.ts";
+import { registerLedgerDatabase } from "../../../core/src/ledger/repository.ts";
+import { createSessionQuery } from "../observe/session-query.ts";
 import { createClaudeSessionObserver } from "../observe/claude/sessions.ts";
 import { createCodexSessionObserver } from "../observe/codex/sessions.ts";
 import type { CodexProcessReader } from "../observe/codex/sessions.ts";
@@ -195,6 +197,7 @@ export function openObservationService(options: ObservationOptions = {}) {
     if (options.readerOnly) throw new Error("Ledger writes belong to the observation worker");
     return ledger.append(decorate(input));
   } };
+  registerLedgerDatabase(projectedLedger, projectionDb);
   const snapshot: Fact[] = [];
   let snapshotSeq = 0;
   function refreshSnapshot(): void {
@@ -240,9 +243,10 @@ export function openObservationService(options: ObservationOptions = {}) {
   const listOutbox = createDirectoryReader(false);
   const kit = createKitObserver(scanLedger, checkpoints, refreshSnapshot);
   const claudeSessionsDirectory = join(env.CLAUDE_CONFIG_DIR ?? join(home, ".claude"), "sessions");
-  const observeClaudeSessions = createClaudeSessionObserver(scanLedger, claudeSessionsDirectory);
+  const sessionQuery = createSessionQuery(scanLedger, projectionDb, !options.readerOnly);
+  const observeClaudeSessions = createClaudeSessionObserver(scanLedger, claudeSessionsDirectory, sessionQuery);
   const observeCodexSessions = createCodexSessionObserver(scanLedger, env.CODEX_HOME ?? join(home, ".codex"),
-    options.codexProcessReader);
+    options.codexProcessReader, sessionQuery);
   let rollout: ReturnType<typeof createIncrementalRolloutReader> | undefined;
   function hasChanged(path: string): boolean {
     let stat;

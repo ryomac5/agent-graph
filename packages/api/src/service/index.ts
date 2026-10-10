@@ -6,7 +6,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { applyIncremental, rebuild } from "../../../core/src/ledger/index.ts";
-import type { Fact, FactInput, Ledger } from "../../../core/src/ledger/index.ts";
+import type { AppendResult, Fact, FactInput, Ledger } from "../../../core/src/ledger/index.ts";
 import { createHookFacts, parseHookEvent } from "../hook/index.ts";
 import type { HookEvent } from "../hook/index.ts";
 import { observeClaudeHistories } from "./claude-reader.ts";
@@ -35,6 +35,8 @@ const SNAPSHOT_READ_FACTS = 1024;
 const INITIAL_PROJECTION_FACTS = 4096;
 export const PROJECTION_POLL_MS = 500;
 export const OBSERVATION_POLL_MS = 1000;
+export type UiFactInput = FactInput & { source: "ui" };
+export type UiAppender = (input: UiFactInput) => AppendResult | Promise<AppendResult>;
 export interface ObservationOptions {
   dbPath?: string;
   home?: string;
@@ -289,8 +291,14 @@ export function openObservationService(options: ObservationOptions = {}) {
     return !readLocated().has(`rollout-codex:${codexLocationEventId(nativeId)}`);
   }
   let ingesting = false;
+  let appendUi: UiAppender = (input) => projectedLedger.append(input);
   return {
     ledger: projectedLedger, dbPath, outbox: hookOutboxPath(env, home), catchUp, batch: buffered.batch,
+    async appendUi(input: UiFactInput): Promise<AppendResult> {
+      if (input.source !== "ui") throw new Error("Only ui facts may be appended from the main thread");
+      return appendUi(input);
+    },
+    setUiAppender(append: UiAppender) { appendUi = append; },
     checkpoint: buffered.checkpoint,
     setObservation(progress: ObservationProgress) { observation = { ...observation, ...progress }; scheduleProjection(); },
     getObservation() { return observation; },

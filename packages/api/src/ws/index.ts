@@ -111,7 +111,7 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
     const terminals = createTerminalSession(files.selectRoot, notify);
     socket.on("error", () => socket.terminate());
     socket.on("close", () => { terminals.close(); sessionHosts.detach(notify); clients.delete(socket); });
-    socket.on("message", (data, binary) => {
+    socket.on("message", async (data, binary) => {
       if (binary) { socket.close(1003, "JSON required"); return; }
       let message;
       try { message = JSON.parse(data.toString()); } catch { socket.close(1008, "Invalid JSON"); return; }
@@ -140,7 +140,7 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
         if (message.command === 'session.rename') {
           try {
             refresh();
-            const result = renameSession(service.ledger, feed.snapshot().projection.roots as unknown as import('../../../core/src/ledger/projections/roots.ts').RootProjection[], message);
+            const result = await renameSession({ append: service.appendUi }, feed.snapshot().projection.roots as unknown as import('../../../core/src/ledger/projections/roots.ts').RootProjection[], message);
             refresh();
             send(socket, { type: 'ack', cmd_id: message.cmd_id, ok: true, result });
           } catch (error) {

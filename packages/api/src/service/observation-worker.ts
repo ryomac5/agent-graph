@@ -38,6 +38,17 @@ function ingest(): void {
   if (!stopped) timer = setTimeout(ingest, OBSERVATION_POLL_MS);
 }
 port.on("message", async (message) => {
+  if (message?.type === "append") {
+    try {
+      if (stopped) throw new Error("Observation worker stopped");
+      if (message.input?.source !== "ui") throw new Error("Only ui facts may be appended from the main thread");
+      const result = service.ledger.append(message.input);
+      port.postMessage({ type: "append-result", id: message.id, result });
+    } catch (error) {
+      port.postMessage({ type: "append-error", id: message.id, message: error instanceof Error ? error.message : String(error) });
+    }
+    return;
+  }
   if (message === "start" && observe && !started) { started = true; ingest(); }
   if (message === "stop") {
     stopped = true;

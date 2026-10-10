@@ -29,7 +29,7 @@ async function createFixture(t: TestContext, waits?: number[]) {
   const waitWrites: string[][] = [];
   const messages: TerminalNotification[] = [];
   const notify = (message: TerminalNotification) => messages.push(message);
-  const hosts = createSessionHosts(async () => '/repo', { openTerminal, sessionsDirectory: directory, attachments: { directory: join(directory, 'attachments') }, submitDelayMs: waits ? 500 : 0, wait: async ms => { waits?.push(ms); waitWrites.push([...children[0].writes]); },
+  const hosts = createSessionHosts(async () => '/repo', { openTerminal, quietMs: 0, warmupMs: 0, sessionsDirectory: directory, attachments: { directory: join(directory, 'attachments') }, submitDelayMs: waits ? 500 : 0, wait: async ms => { waits?.push(ms); waitWrites.push([...children[0].writes]); },
     listProcesses: async () => [{ pid: 2000, ppid: 1000 }, { pid: 3000, ppid: 2000 }, { pid: 9999, ppid: 1 }] });
   t.after(async () => { hosts.close(); await rm(directory, { recursive: true, force: true }); });
   const handle = (command: string, payload: unknown = {}) => hosts.handle(command, payload, notify);

@@ -22,7 +22,7 @@ type Notify = (message: TerminalNotification) => void;
 interface Host {
   terminalId: string; terminal: IPty; startedAt: string; conversationId?: string; resumeId?: string;
   described?: boolean; provider?: 'claude' | 'codex'; projectId?: string; cwd?: string; target?: ExecutionTarget; connection?: SshConnection; remotePid?: number; discoveryBuffer?: string; disconnected?: boolean; mirror?: ReturnType<typeof startRemoteMirror>;
-  scrollback: Buffer; pending: { text: string; paths: Promise<string[]> }[]; listeners: Set<Notify>; sending?: Promise<void>;
+  scrollback: Buffer; pending: { text: string; paths: Promise<string[]> }[]; listeners: Set<Notify>; sending?: Promise<void>; lastOutputAt?: number;
 }
 export interface HostOptions {
   targets?: TargetService;
@@ -32,6 +32,8 @@ export interface HostOptions {
   listProcesses?: () => Promise<{ pid: number; ppid: number }[]>;
   /** 貼り付けのあと Enter を送るまでの待ち。試験では 0 にする。 */
   submitDelayMs?: number;
+  /** 貼る前に、出力が止まってから待つ時間と、起動から待つ時間。試験では 0 にする。 */
+  quietMs?: number; warmupMs?: number;
   attachments?: AttachmentOptions;
   wait?: (ms: number) => Promise<void>;
 }
@@ -57,6 +59,10 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
     const wait = options.wait ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
     host.sending = (host.sending ?? Promise.resolve()).catch(() => {}).then(async () => {
       if (!hosts.has(host.terminalId) || host.disconnected) throw new Error('no_host');
+      // 起動や resume の直後は、画面が入力を受け付ける前に貼ると、bracketed paste が効かず素の文字として入る。
+      // 起動から少し経ち、出力が止まって間が空くまで待ってから貼る。上限を設けて、待ち続けないようにする。
+      const quiet = options.quietMs ?? 800; const warmup = options.warmupMs ?? 2500; const limit = Date.now() + 15_000;
+      while (Date.now() < limit && (Date.now() - Date.parse(host.startedAt) < warmup || Date.now() - (host.lastOutputAt ?? 0) < quiet)) await wait(100);
       const localPaths = await paths;
       const pasted = host.connection ? await Promise.all(localPaths.map(path => uploadRemoteAttachment(targets, host.connection!, path))) : localPaths;
       host.terminal.write('\x15');
@@ -166,6 +172,7 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
               host.discoveryBuffer = marker ? undefined : discovery.slice(-128);
               if (marker) host.remotePid = Number(marker[1]);
             }
+            host.lastOutputAt = Date.now();
             const buffer = Buffer.concat([host.scrollback, Buffer.from(data)]);
             let start = Math.max(0, buffer.length - MAX_SCROLLBACK_BYTES);
             while (start < buffer.length && (buffer[start] & 0xc0) === 0x80) start++;

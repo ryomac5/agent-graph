@@ -234,7 +234,7 @@ test('hosted sessions survive WebSocket disconnect, replay commands once and att
     } as unknown as ReturnType<typeof spawn>;
   };
   let api: Awaited<ReturnType<typeof startWebSocketServer>>;
-  try { api = await startWebSocketServer(service, { port: 0, runnerPath: join(directory, 'missing.sock'), sessionHosts: {
+  try { api = await startWebSocketServer(service, { port: 0, runnerPath: join(directory, 'missing.sock'), sessionHosts: { quietMs: 0, warmupMs: 0,
     openTerminal, sessionsDirectory: directory, listProcesses: async () => [],
   } }); }
   catch (error) { if (skipSandbox(t, error)) return; throw error; }

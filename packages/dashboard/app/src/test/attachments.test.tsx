@@ -91,3 +91,11 @@ it.each(['en', 'ja'] as const)('disables managed attachments with a reason in %s
   expect(screen.getByRole('alert').textContent).toBe(language === 'ja' ? '管理された会話では、まだ画像を添付できません。' : 'Managed conversations do not support image attachments yet.');
   expect(f.command.mock.calls.some(([name]) => name === 'attachment.put')).toBe(false);
 });
+
+it('画像のパスの付いた記録の発言を、送った本文と同じ発言として扱う', async () => {
+  const { sameSent } = await import('../pages/conversation/ConversationPage.tsx');
+  expect(sameSent('/Users/r/.cache/agent-graph/attachments/2026-10-10/a.png この画像の色は', 'この画像の色は')).toBe(true);
+  expect(sameSent('/tmp/a.png /tmp/b.jpeg 2 枚を比べて', '2 枚を比べて')).toBe(true);
+  expect(sameSent('別の発言 この画像の色は', 'この画像の色は')).toBe(false);
+  expect(sameSent('この画像の色は', 'この画像の色は')).toBe(true);
+});

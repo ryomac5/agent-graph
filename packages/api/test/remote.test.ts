@@ -98,7 +98,7 @@ test('SSH hosted terminals safely launch, attach, send, interrupt and report dis
     return `\x1e${Date.now() / 1000}\n${JSON.stringify({ sessionId: SESSION, cwd: '/remote/demo', pid: 300 })}`;
   }, spawnStream: (() => stream) as unknown as typeof spawn });
   await targets.handle('ssh.write', { connections: [connection] });
-  const hosts = createSessionHosts(async () => '/local/demo', { targets, submitDelayMs: 0, openTerminal: ((file: string, args: string[] | string) => {
+  const hosts = createSessionHosts(async () => '/local/demo', { targets, submitDelayMs: 0, quietMs: 0, warmupMs: 0, openTerminal: ((file: string, args: string[] | string) => {
     launches.push({ file, args });
     return { pid: 100, write: (text: string) => writes.push(text), resize() {}, kill() {},
       onData: (fn: typeof output) => { output = fn; return { dispose() {} }; }, onExit: (fn: typeof exit) => { exit = fn; return { dispose() {} }; } };

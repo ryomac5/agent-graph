@@ -464,7 +464,7 @@ test("同じ時刻の旧い rollout の発言は、行の位置を数として�
 
 testSocket('attachment.put accepts a large image through the dashboard proxy, replays IDs and blocks managed attachments', async t => {
   const { directory, service, runnerPath } = createFixture(t);
-  const api = await startWebSocketServer(service, { port: 0, runnerPath, sessionHosts: { attachments: { directory: join(directory, 'attachments') } } });
+  const api = await startWebSocketServer(service, { port: 0, runnerPath, sessionHosts: { quietMs: 0, warmupMs: 0, attachments: { directory: join(directory, 'attachments') } } });
   t.after(() => api.close());
   const { startStaticServer } = await import('../src/static/index.ts');
   const proxy = await startStaticServer({ port: 0, upstream: api }); t.after(() => proxy.close());

@@ -186,10 +186,10 @@ export function App({ target = store, client = unavailableClient, searchClient =
         const open = !(collapsedProjects[row.id] ?? row.id !== project);
         const runningCount = items.filter(root => isRunning(root.state)).length;
         return <div key={row.id} className="sidebar-project">
-          <div className="sidebar-project-row"><button className="icon-button" aria-label={language === 'ja' ? row.name + ' のセッション' : 'Toggle sessions for ' + row.name} aria-expanded={open} onClick={() => setCollapsedProjects(value => ({ ...value, [row.id]: open }))}><Icon name={open ? 'chevronDown' : 'chevronRight'} size={12}/></button>
-            <NavLink to={`/p/${encodeURIComponent(row.id)}`} title={row.full}><Icon name="folder" size={14}/><span className="truncate">{row.name}</span></NavLink>
+          <div className="sidebar-project-row"><button className="icon-button" aria-label={language === 'ja' ? row.name + ' のセッション' : 'Toggle sessions for ' + row.name} aria-expanded={open} onClick={() => setCollapsedProjects(value => ({ ...value, [row.id]: open }))}><Icon name={open ? 'chevronDown' : 'chevronRight'} size={16}/></button>
+            <NavLink to={`/p/${encodeURIComponent(row.id)}`} title={row.full}><Icon name="folder" size={16}/><span className="truncate">{row.name}</span></NavLink>
             {runningCount > 0 && <span className="numeric project-running" aria-label={language === 'ja' ? '実行中のセッション' : 'Running sessions'}>{runningCount}</span>}
-            <button className="icon-button" aria-label={t('newTask') + ': ' + row.name} onClick={() => { navigate(`/p/${encodeURIComponent(row.id)}?create=1`); setMobileView('conversation'); }}><Icon name="plus" size={14}/></button></div>
+            <button className="icon-button project-create" aria-label={t('newTask') + ': ' + row.name} onClick={() => { navigate(`/p/${encodeURIComponent(row.id)}?create=1`); setMobileView('conversation'); }}><Icon name="plus" size={14}/></button></div>
           {open && <section className="sidebar-roots" aria-label={language === 'ja' ? row.name + ' のセッション' : row.name + ' sessions'}><RootList grouped state={state} roots={items} selected={selectedRoot?.id} language={language} onSelect={root => { const next = new URLSearchParams(search); next.set('root', root.id); next.delete('child'); next.delete('path'); next.delete('create'); navigate(`/p/${encodeURIComponent(row.id)}?${next}`); setMobileView('conversation'); }}/></section>}
         </div>;
       })}</nav>

@@ -1,83 +1,72 @@
-/* ファイルの木と中身。色は全て変数から取り、明暗の両方で読めるようにする。 */
-:root {
-  --git-modified: #a35f00; --git-added: #1d8049; --git-untracked: #2f7d5b; --git-deleted: #c4373d; --git-renamed: #3f6fd1;
-  --code-gutter: #9a9da6;
-}
-@media (prefers-color-scheme: dark) { :root:not([data-theme='light']) {
-  --git-modified: #e7ad4f; --git-added: #4fc38a; --git-untracked: #6fd3a5; --git-deleted: #f17d82; --git-renamed: #86a8ff;
-  --code-gutter: #5f636d;
-} }
-:root[data-theme='dark'] {
-  --git-modified: #e7ad4f; --git-added: #4fc38a; --git-untracked: #6fd3a5; --git-deleted: #f17d82; --git-renamed: #86a8ff;
-  --code-gutter: #5f636d;
-}
-
 .explorer-worktree { flex: 1; min-width: 0; max-width: 100%; }
-.explorer-tree { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg-sidebar); border-right: 1px solid var(--border); }
 .explorer-header { gap: var(--space-1); padding-right: var(--space-2); }
-.explorer-worktree-row { flex: none; display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3) 0; color: var(--text-3); }
-.explorer-filter { flex: none; display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); color: var(--text-3); border-bottom: 1px solid var(--border); }
-.explorer-filter input { flex: 1; width: 100%; }
-.explorer-hint { padding: var(--space-1) var(--space-3) 0; font-size: var(--text-xs); }
+.explorer-worktree-row { flex: none; display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3) 0; color: var(--fg-3); }
+.explorer-filter { flex: none; display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); color: var(--fg-3); border-bottom: var(--border); }
+.explorer-hint { padding: var(--space-1) var(--space-3) 0; font: var(--type-meta); }
 .explorer-scroll-space { flex: 1; min-height: 26px; overflow: hidden; }
 .explorer-scroll { height: 100%; overflow: auto; padding: 0; }
 .explorer-inline { margin: var(--space-3); }
-.explorer-note { padding: var(--space-2) var(--space-4); font-size: var(--text-xs); }
-
-.file-tree, .file-tree ul { list-style: none; margin: 0; padding: 0; }
+.explorer-note { padding: var(--space-2) var(--space-4); font: var(--type-ui); }
+.file-tree { list-style: none; margin: 0; padding: 0; }
+.file-tree ul { list-style: none; margin: 0; padding: 0; }
 .file-tree li[role='treeitem'] { outline: none; }
-.tree-row { display: flex; align-items: center; gap: 6px; min-width: 0; height: 26px; padding-right: var(--space-3); color: var(--text-2); font-size: var(--text-sm); cursor: pointer; user-select: none; border-left: 2px solid transparent; }
-.tree-row:hover { background: var(--surface-hover); color: var(--text); }
-.tree-row.is-selected { background: var(--accent-soft); color: var(--text); }
-.file-tree li[role='treeitem']:focus-visible > .tree-row { border-left-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
-.tree-chevron { flex: none; width: 12px; color: var(--text-3); }
-.tree-icon { color: var(--text-3); }
-.tree-row[class*='git-'] .tree-icon { color: currentColor; }
+.tree-row:hover { background: var(--bg-2); color: var(--fg-1); }
 .tree-name { flex: 1; }
-.tree-name mark { background: var(--attention-soft); color: inherit; border-radius: 2px; box-shadow: 0 0 0 1px var(--attention-border); }
-.tree-previous { flex: 0 1 auto; max-width: 40%; color: var(--text-3); font-size: var(--text-xs); }
-.tree-changed { flex: none; width: 7px; height: 7px; margin-right: 3px; border-radius: 50%; background: var(--git-modified); }
-.tree-status { padding: var(--space-1) var(--space-3); color: var(--text-3); font-size: var(--text-sm); }
-.tree-error { color: var(--danger); overflow-wrap: anywhere; }
-.git-marks { display: inline-flex; gap: 2px; flex: none; }
-.git-letter { min-width: 12px; font: 600 var(--text-xs)/1 var(--mono); text-align: center; }
-.tree-row.git-modified, .git-letter.git-modified { color: var(--git-modified); }
-.tree-row.git-added, .git-letter.git-added { color: var(--git-added); }
-.tree-row.git-untracked, .git-letter.git-untracked { color: var(--git-untracked); }
-.tree-row.git-renamed, .git-letter.git-renamed { color: var(--git-renamed); }
-.tree-row.git-deleted, .git-letter.git-deleted { color: var(--git-deleted); }
+.tree-name mark { background: var(--bg-1); color: inherit; border-radius: var(--radius-1); box-shadow: none; }
+.tree-previous { flex: 0 1 auto; max-width: 40%; color: var(--fg-3); font: var(--type-ui); }
+.tree-changed { flex: none; width: 7px; height: 7px; margin-right: var(--space-1); border-radius: 50%; background: var(--state-approval); }
+.tree-status { padding: var(--space-1) var(--space-3); color: var(--fg-3); font: var(--type-ui); }
+.tree-error { color: var(--state-failed); overflow-wrap: anywhere; }
+.git-marks { display: inline-flex; gap: 0; flex: none; }
+.git-letter { min-width: 12px; font: var(--type-mono); text-align: center; }
+.tree-row.git-modified { color: var(--state-approval); }
+.git-letter.git-modified { color: var(--state-approval); }
+.tree-row.git-added { color: var(--state-running); }
+.git-letter.git-added { color: var(--state-running); }
+.tree-row.git-untracked { color: var(--state-running); }
+.git-letter.git-untracked { color: var(--state-running); }
+.tree-row.git-renamed { color: var(--state-reply); }
+.git-letter.git-renamed { color: var(--state-reply); }
+.tree-row.git-deleted { color: var(--state-failed); }
+.git-letter.git-deleted { color: var(--state-failed); }
 .tree-row.git-deleted .tree-name { text-decoration: line-through; }
-.git-chip.git-modified { color: var(--git-modified); border-color: currentColor; background: transparent; }
-.git-chip.git-added { color: var(--git-added); border-color: currentColor; background: transparent; }
-.git-chip.git-untracked { color: var(--git-untracked); border-color: currentColor; background: transparent; border-style: dashed; }
-.git-chip.git-renamed { color: var(--git-renamed); border-color: currentColor; background: transparent; }
-.git-chip.git-deleted { color: var(--git-deleted); border-color: currentColor; background: transparent; }
-
-.explorer-viewer { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--surface); }
-.explorer-viewer > .empty-state { margin: var(--space-10) auto; width: calc(100% - 2 * var(--space-6)); }
-.viewer-header { flex: none; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-2) var(--space-4); min-height: 40px; padding: var(--space-2) var(--space-4); border-bottom: 1px solid var(--border); }
-.viewer-path { display: flex; flex-wrap: wrap; align-items: center; min-width: 0; font: var(--text-sm)/1.4 var(--mono); color: var(--text-3); overflow-wrap: anywhere; }
-.viewer-path span + span::before { content: '/'; margin: 0 4px; color: var(--text-3); }
-.viewer-path-current { color: var(--text); font-weight: 600; }
+.git-chip.git-modified { color: var(--state-approval); border-color: var(--line); background: transparent; }
+.git-chip.git-added { color: var(--state-running); border-color: var(--line); background: transparent; }
+.git-chip.git-untracked { color: var(--state-running); border-color: var(--line); background: transparent; border-style: solid; }
+.git-chip.git-renamed { color: var(--state-reply); border-color: var(--line); background: transparent; }
+.git-chip.git-deleted { color: var(--state-failed); border-color: var(--line); background: transparent; }
+.explorer-viewer > .empty-state { margin: var(--space-12) auto; width: calc(100% - 2 * var(--space-6)); }
+.viewer-header { flex: none; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-2) var(--space-4); min-height: 40px; padding: var(--space-2) var(--space-4); border-bottom: var(--border); }
+.viewer-path { display: flex; flex-wrap: wrap; align-items: center; min-width: 0; font: var(--type-mono); color: var(--fg-3); overflow-wrap: anywhere; }
+.viewer-path span + span::before { content: '/'; margin: 0 var(--space-1); color: var(--fg-3); }
+.viewer-path-current { color: var(--fg-1); font-weight: 600; }
 .viewer-meta { display: flex; flex-wrap: wrap; gap: var(--space-1); }
 .viewer-status { padding: var(--space-4); }
-
-.code-view { flex: 1; min-height: 0; overflow: auto; font: 12px/1.6 var(--mono); color: var(--text); background: var(--surface); tab-size: 4; }
-.code-view:focus-visible { outline-offset: -2px; }
+.code-view { flex: 1; min-height: 0; overflow: auto; font: var(--type-mono); color: var(--fg-1); background: var(--bg-0); tab-size: 4; }
+.code-view:focus-visible { outline-offset: 1px; }
 .code-lines { display: table; min-width: 100%; padding: var(--space-2) 0; }
 .code-row { display: table-row; }
-.code-row:hover { background: var(--surface-2); }
-.code-line-number { display: table-cell; position: sticky; left: 0; min-width: 3ch; padding: 0 var(--space-3) 0 var(--space-4); text-align: right; color: var(--code-gutter); background: inherit; user-select: none; font-variant-numeric: tabular-nums; }
-.code-row .code-line-number { background: var(--surface); }
-.code-row:hover .code-line-number { background: var(--surface-2); }
-.code-text { display: table-cell; padding: 0 var(--space-4) 0 var(--space-2); white-space: pre; font: inherit; border-left: 1px solid var(--border); }
-
-/* Markdown の整形と Raw の切り替え。整形は文書として読める幅に収める。 */
-.viewer-mode { flex: none; display: flex; justify-content: flex-end; gap: 2px; padding: var(--space-2) var(--space-4) 0; }
-.viewer-mode-option { height: 24px; padding: 0 var(--space-2); border-radius: var(--radius-xs); color: var(--text-3); font-size: var(--text-sm); font-weight: 500; }
-.viewer-mode-option:hover { color: var(--text); background: var(--surface-hover); }
-.viewer-mode-option[aria-pressed='true'] { color: var(--text); background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--border); }
-.markdown-view { flex: 1; min-height: 0; overflow: auto; padding: var(--space-4) var(--space-6) var(--space-10); }
-.markdown-view:focus-visible { outline-offset: -2px; }
+.code-row:hover { background: var(--bg-1); }
+.code-line-number { display: table-cell; position: sticky; left: 0; min-width: 3ch; padding: 0 var(--space-3) 0 var(--space-4); text-align: right; color: var(--fg-4); background: inherit; user-select: none; font-variant-numeric: tabular-nums; }
+.code-row .code-line-number { background: var(--bg-0); }
+.code-row:hover .code-line-number { background: var(--bg-1); }
+.code-text { display: table-cell; padding: 0 var(--space-4) 0 var(--space-2); white-space: pre; font: var(--type-mono); border-left: var(--border); }
+.viewer-mode { flex: none; display: flex; justify-content: flex-end; gap: 0; padding: var(--space-2) var(--space-4) 0; }
+.viewer-mode-option { height: 24px; padding: 0 var(--space-2); border-radius: var(--radius-1); color: var(--fg-3); font: var(--type-ui); font-weight: 400; }
+.viewer-mode-option:hover { color: var(--fg-1); background: var(--bg-2); }
+.viewer-mode-option[aria-pressed='true'] { color: var(--fg-1); background: var(--bg-1); box-shadow: none; }
+.markdown-view { flex: 1; min-height: 0; overflow: auto; padding: var(--space-4) var(--space-6) var(--space-12); }
+.markdown-view:focus-visible { outline-offset: 1px; }
 .markdown-view .markdown-document { max-width: 760px; margin: 0 auto; }
-
+.explorer-tree { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: var(--border); background: var(--bg-0); }
+.explorer-viewer { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg-0); }
+.tree-row { border-left: 1px solid transparent; user-select: none; cursor: pointer; padding-right: var(--space-3); min-width: 0; align-items: center; display: flex; height: var(--control); font: var(--type-ui); gap: var(--space-1); color: var(--fg-2); border: 0; }
+.tree-row.is-selected { background: var(--bg-3); color: var(--fg-1); }
+.tree-chevron { flex: none; width: 16px; height: 16px; color: var(--fg-3); }
+.tree-icon { width: 16px; height: 16px; color: var(--fg-3); }
+.tree-row[class*='git-'] .tree-icon { color: var(--fg-3); }
+.file-tree li[role='treeitem']:focus-visible > .tree-row { border-left-color: var(--accent); outline: 2px solid var(--focus); outline-offset: 1px; box-shadow: none; }
+.explorer-filter input { flex: 1; width: 100%; height: var(--control); font: var(--type-ui); }
+.explorer-worktree-row select { height: var(--control); font: var(--type-ui); }
+.git-chip { font: var(--type-mono); background: transparent; border: 0; padding: 0; }
+.code-gutter { color: var(--fg-4); }

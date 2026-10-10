@@ -105,7 +105,7 @@ function orderNodes(nodes: GraphNode[]) {
 }
 
 /** 狭い画面は木の順、広い画面は八行で折り返す。 */
-export function calculateLayout(tree: GraphTree, viewportWidth: number, previous?: GraphLayout, titleHeights?: ReadonlyMap<string, number>): GraphLayout {
+export function calculateLayout(tree: GraphTree, viewportWidth: number, previous?: GraphLayout, titleHeights?: ReadonlyMap<string, number>, cardWidth = CARD_WIDTH): GraphLayout {
   const vertical = viewportWidth < NARROW_WIDTH;
   const byId = new Map(tree.nodes.map(node => [node.id, node]));
   const depths = new Map<string, number>();
@@ -117,8 +117,8 @@ export function calculateLayout(tree: GraphTree, viewportWidth: number, previous
   tree.roots.forEach(id => visit(id, 0));
   const sizeNode = (node: GraphNode, depth: number): PositionedNode => {
     const titleWidth = [...node.label].reduce((width, letter) => width + (/[^\x00-\xff]/.test(letter) ? 13 : 6.5), 0);
-    const titleHeight = titleHeights?.get(node.label) ?? (titleWidth > TITLE_WIDTH ? TITLE_LINE_HEIGHT * 2 : TITLE_LINE_HEIGHT);
-    return { id: node.id, depth, x: 0, y: 0, width: CARD_WIDTH,
+    const titleHeight = titleHeights?.get(node.label) ?? (titleWidth > cardWidth - (CARD_WIDTH - TITLE_WIDTH) ? TITLE_LINE_HEIGHT * 2 : TITLE_LINE_HEIGHT);
+    return { id: node.id, depth, x: 0, y: 0, width: cardWidth,
       height: CARD_HEIGHT + (node.earlier ? 0 : Math.max(0, titleHeight - TITLE_LINE_HEIGHT)) + (node.approvalCount ?? 0) * APPROVAL_HEIGHT };
   };
   const nodes: PositionedNode[] = [];
@@ -127,7 +127,7 @@ export function calculateLayout(tree: GraphTree, viewportWidth: number, previous
     for (const [id, depth] of depths) {
       const node = sizeNode(byId.get(id)!, depth);
       node.x = Math.min(depth * 16, viewportWidth / 3); node.y = y;
-      node.width = Math.max(1, viewportWidth - 32 - node.x); y += node.height + ROW_GAP;
+      node.width = Math.min(cardWidth, Math.max(1, viewportWidth - 32 - node.x)); y += node.height + ROW_GAP;
       nodes.push(node);
     }
   } else {
@@ -143,12 +143,12 @@ export function calculateLayout(tree: GraphTree, viewportWidth: number, previous
       for (let column = 0; column < columns; column++) {
         let y = 0;
         for (const [row, node] of sized.slice(column * COLUMN_ROWS, (column + 1) * COLUMN_ROWS).entries()) {
-          node.x = x + column * (CARD_WIDTH + LAYER_GAP); node.y = y;
+          node.x = x + column * (cardWidth + LAYER_GAP); node.y = y;
           if (column > 0) node.route = { y: -16 - (column * COLUMN_ROWS + row) * 2, lane: row };
           y += node.height + ROW_GAP; nodes.push(node);
         }
       }
-      x += columns * (CARD_WIDTH + LAYER_GAP);
+      x += columns * (cardWidth + LAYER_GAP);
     }
   }
   return { nodes, width: Math.max(0, ...nodes.map(node => node.x + node.width)), height: Math.max(0, ...nodes.map(node => node.y + node.height)), vertical };

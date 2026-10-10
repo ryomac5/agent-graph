@@ -99,9 +99,9 @@ it('draws nine nodes and eight edges with one edge per folded group and aligned 
   expect(screen.queryByRole('button', { name: 'Failed task' })).toBeNull();
   expect(screen.getByRole('button', { name: 'まとめて出した依頼' })).toBeTruthy();
   const root = cards.find(card => card.dataset.nodeId === 'root')!;
-  const firstColumn = cards.filter(card => card.style.left === '320px');
+  const firstColumn = cards.filter(card => card.style.left === '340px');
   expect(Math.min(...firstColumn.map(card => parseFloat(card.style.top)))).toBe(parseFloat(root.style.top));
-  expect(firstColumn[0].style.width).toBe('240px');
+  expect(firstColumn[0].style.width).toBe('260px');
   expect(firstColumn[0].style.height).toBe('76px');
   const group = cards.find(card => card.dataset.nodeId === 'graph:batch')!;
   const endpoint = ' ' + group.style.left.replace('px', '') + ' ' + (parseFloat(group.style.top) + parseFloat(group.style.height) / 2);

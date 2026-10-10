@@ -58,8 +58,8 @@ it('translates effort labels without changing option values and translates the d
     ['既定の深さ', ''], ['なし', 'none'], ['最小', 'minimal'], ['低', 'low'], ['中', 'medium'], ['高', 'high'], ['最高', 'xhigh'],
   ]);
   expect(effortLabel('high', 'en')).toBe('high');
-  expect(toolsLabel(2, 'ja')).toBe('ツールを 2 件使用');
-  expect(toolsLabel(1, 'en')).toBe('Used 1 tool');
+  expect(toolsLabel(2, 'ja')).toBe('ツール 2 件');
+  expect(toolsLabel(1, 'en')).toBe('1 tool');
 });
 
 it('drops leading boundaries and merges boundaries across invisible messages while preserving compaction', () => {
@@ -115,16 +115,16 @@ it('excludes internal records, sorts paths and omits zero change counts', () => 
   expect(screen.getByText('deleted').closest('summary')!.textContent).toContain('−2');
 });
 
-it('reserves the back row in roots and places Codex hints in the composer title with the badge beside the heading', async () => {
+it('omits the back row in roots and places Codex hints in the composer title with the badge beside the heading', async () => {
   const target = setup([], { conversations: [{ id: 'c', name: 'Root', project: 'p', provider: 'codex', origin: 'managed' }] });
   render(<MemoryRouter><WorkspacePage project="p" target={target} client={client} language="ja"/></MemoryRouter>);
-  expect(document.querySelector('.root-back-placeholder')?.getAttribute('aria-hidden')).toBe('true');
+  expect(document.querySelector('.root-back-placeholder')).toBeNull();
   expect(document.querySelector('.composer-hint')).toBeNull();
   expect(document.querySelector('.composer-box')!.getAttribute('title')).toContain('次の返答');
   expect(document.querySelector('.conv-title')!.nextElementSibling!.classList.contains('state-badge')).toBe(true);
   const css = readFileSync(resolve(process.cwd(), 'app/src/pages/conversation/conversation.css'), 'utf8');
   expect(css).toMatch(/\.conversation-page \.conv-title-row \.conv-title \{ flex: 0 1 auto;/);
-  expect(css).toMatch(/\.root-back-placeholder \{ flex: none; height: 40px;/);
+  expect(css).not.toContain('.root-back-placeholder');
   await act(async () => {});
 });
 
@@ -167,7 +167,7 @@ it.each(['ja', 'en'] as const)('renders translated tool counts, history loading,
   });
   render(<MemoryRouter><ConversationPage conversationId="c" target={target} client={client} language={language}/></MemoryRouter>);
   expect(screen.getByRole('button', { name: language === 'ja' ? '古い発言を読み込む' : 'Load older' })).toBeTruthy();
-  expect(screen.getByText(language === 'ja' ? 'ツールを 1 件使用' : 'Used 1 tool').closest('details')!.open).toBe(false);
+  expect(screen.getByText(language === 'ja' ? 'ツール 1 件' : '1 tool').closest('details')!.open).toBe(false);
   expect(screen.getByLabelText(language === 'ja' ? 'エージェントの報告' : 'Agent report').tagName).toBe('DETAILS');
   expect(screen.getByText(language === 'ja' ? 'コマンド' : 'Command', { selector: '.tool-name' })).toBeTruthy();
   expect(screen.getByText(new RegExp(language === 'ja' ? '^続きの会話' : '^Conversation continued')).closest('[role="separator"]')).toBeTruthy();

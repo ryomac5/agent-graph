@@ -4,7 +4,7 @@ const text = {
   en: {
     loadOlder: 'Load older', agentReport: 'Agent report', command: 'Command', oldHistory: 'Older history is unavailable', projectInstructions: 'Project instructions', settingsInstructions: 'Configuration instructions', defaultModel: 'Default', toolsUsed: 'Used',
     conversation: 'Conversation', unknown: 'Unknown', source: 'Source', confidence: 'Confidence', streaming: 'Streaming', toolOutput: 'Tool output',
-    show: 'Show full message', hide: 'Show first 10 lines', approval: 'Approval request', unavailable: 'Message unavailable',
+    show: 'Show full message', hide: 'Show first 8 lines', approval: 'Approval request', unavailable: 'Message unavailable',
     omitted: 'Message omitted by retention or storage policy', missing: 'Missing messages', timeUnknown: 'Time unknown',
     continued: 'Conversation continued', forked: 'Branch', compacted: 'Compaction', adopted: 'Handoff', evidence: 'Evidence',
     model: 'Model', effort: 'Effort', worktree: 'Worktree', coverage: 'Source', noRun: 'No run recorded', reason: 'Reason', lastEvidence: 'Last update',
@@ -26,7 +26,7 @@ const text = {
   ja: {
     loadOlder: '古い発言を読み込む', agentReport: 'エージェントの報告', command: 'コマンド', oldHistory: '古い記録は読めません', projectInstructions: 'プロジェクトの指示', settingsInstructions: '設定の指示', defaultModel: '既定', toolsUsed: 'ツールを使用',
     conversation: '会話', unknown: '不明', source: '送信元', confidence: '確かさ', streaming: '出力中', toolOutput: 'ツールの出力',
-    show: '全文を開く', hide: '最初の 10 行だけ表示', approval: '承認の要求', unavailable: 'メッセージを読み込めません',
+    show: '全文を開く', hide: '最初の 8 行だけ表示', approval: '承認の要求', unavailable: 'メッセージを読み込めません',
     omitted: '保存期間を過ぎたため本文はありません', missing: '読み込めなかったメッセージ', timeUnknown: '時刻不明',
     continued: '続きの会話', forked: '分岐', compacted: '文脈を要約しました', adopted: '引き継ぎ', evidence: '根拠',
     model: 'モデル', effort: '思考の深さ', worktree: 'ワークツリー', coverage: '取得元', noRun: '実行の記録はありません', reason: '理由', lastEvidence: '最終更新',
@@ -54,5 +54,5 @@ export function effortLabel(value: string, language: Language): string {
   return language === 'ja' ? labels[value] ?? value : value;
 }
 export function toolsLabel(count: number, language: Language): string {
-  return language === 'ja' ? `ツールを ${count} 件使用` : `Used ${count} ${count === 1 ? 'tool' : 'tools'}`;
+  return language === 'ja' ? `ツール ${count} 件` : `${count} ${count === 1 ? 'tool' : 'tools'}`;
 }

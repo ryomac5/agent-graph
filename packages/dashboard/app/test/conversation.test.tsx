@@ -45,20 +45,20 @@ it('bundles delta chunks per message, scopes them, and replaces streaming text w
   expect(screen.getAllByText('Completed reply')).toHaveLength(1);
 });
 
-it('shows exactly ten initial lines and expands and collapses the complete message', async () => {
+it('shows exactly eight initial lines and expands and collapses the complete message', async () => {
   setup({ projection: { messages: [{ id: 'm', role: 'assistant', body: Array.from({ length: 12 }, (_, index) => `Line ${index + 1}`).join('\n') }],
     message_memberships: [{ id: 'link', message_id: 'm', conversation_id: 'c', active: true }] } });
   await waitModels();
   // 1 つの改行は改行として見せるので、10 行は 1 つの段落の中で br で区切られる。
   const shownLines = () => [...document.querySelector('.markdown-body p')!.childNodes].filter(node => node.nodeType === Node.TEXT_NODE && node.textContent!.trim()).map(node => node.textContent);
-  expect(shownLines()).toEqual(Array.from({ length: 10 }, (_, index) => `Line ${index + 1}`));
-  expect(document.querySelectorAll('.markdown-body p br')).toHaveLength(9);
+  expect(shownLines()).toEqual(Array.from({ length: 8 }, (_, index) => `Line ${index + 1}`));
+  expect(document.querySelectorAll('.markdown-body p br')).toHaveLength(7);
   const expand = screen.getByRole('button', { name: 'Show full message' });
   expect(expand.getAttribute('aria-expanded')).toBe('false');
   fireEvent.click(expand);
   expect(shownLines().at(-1)).toBe('Line 12');
-  fireEvent.click(screen.getByRole('button', { name: 'Show first 10 lines' }));
-  expect(shownLines()).toHaveLength(10);
+  fireEvent.click(screen.getByRole('button', { name: 'Show first 8 lines' }));
+  expect(shownLines()).toHaveLength(8);
 });
 
 it('renders chronological messages, tool calls, provenance, approval requests, boundaries and gaps', async () => {
@@ -169,7 +169,7 @@ it.each([true, false])('replies to an external conversation by taking it over an
   const input = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;
   expect(input.readOnly).toBe(false);
   expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
-  expect((screen.getByRole('button', { name: 'Interrupt' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.queryByRole('button', { name: 'Interrupt' })).toBeNull();
   expect(screen.queryByRole('button', { name: 'Apply model and effort' })).toBeNull();
   fireEvent.change(input, { target: { value: 'Continue please' } });
   fireEvent.click(screen.getByRole('button', { name: 'Send' }));
@@ -310,16 +310,16 @@ it('puts the user on the right and the agent on the left, naming each run of the
   await waitModels();
   const articles = screen.getAllByRole('article', { name: /message$/ });
   expect(articles.map(article => [article.getAttribute('aria-label'), article.dataset.side])).toEqual([
-    ['User message', 'end'], ['Codex message', 'start'], ['Codex message', 'start'], ['Codex message', 'start'], ['User message', 'end']]);
-  expect(articles.map(article => article.querySelector('.message-sender')?.textContent ?? null)).toEqual(['User', 'Codex', null, null, 'User']);
+    ['User message', 'end'], ['Codex message', 'start'], ['Codex message', 'start'], ['User message', 'end']]);
+  expect(articles.map(article => article.querySelector('.message-sender')?.textContent ?? null)).toEqual([null, 'Codex', null, null]);
   // 名前を省いた発言にも時刻は出す。
-  expect(articles.map(article => article.querySelector('time')?.getAttribute('datetime'))).toEqual([1, 2, 3, 4, 5].map(at));
+  expect(articles.map(article => article.querySelector('time')?.getAttribute('datetime'))).toEqual([1, 2, 3, 5].map(at));
   expect(articles[0]!.className).toContain('message-user');
   expect(articles[1]!.className).toContain('message-agent');
   // 道具の呼び出しは左の列の中に、1 行に畳んだ枠で出す。
-  const tool = within(articles[2]!).getByText('ls', { selector: '.tool-summary' }).closest('details')!;
+  const tool = screen.getByText('ls', { selector: '.tool-summary' }).closest('details')!;
   expect(tool.open).toBe(false);
-  expect(tool.closest('.message-main')).toBeTruthy();
+  expect(tool.closest('.tool-run')).toBeTruthy();
 });
 
 it('shows the parent agent on the right in a child conversation', async () => {
@@ -343,7 +343,8 @@ it('shows the parent agent on the right in a child conversation', async () => {
   await waitModels();
   const parent = screen.getByRole('article', { name: 'Claude · root message' });
   expect(parent.dataset.side).toBe('end');
-  expect(parent.querySelector('.message-sender')!.textContent).toBe('Claude · root');
+  expect(parent.querySelector('.message-sender')).toBeNull();
+  expect(parent.getAttribute('aria-label')).toBe('Claude · root message');
   const child = screen.getByRole('article', { name: 'Codex · implement message' });
   expect(child.dataset.side).toBe('start');
   expect(screen.queryByRole('article', { name: 'User message' })).toBeNull();

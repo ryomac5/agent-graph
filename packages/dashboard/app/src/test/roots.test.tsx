@@ -45,8 +45,8 @@ it('selects the running root, joins its continuation and switches to child conve
   vi.stubGlobal('innerWidth', 1440);
   render(<MemoryRouter><WorkspacePage project="repo" target={fixture()} client={client}/></MemoryRouter>);
   const list = screen.getByRole('region', { name: 'Conversations' });
-  expect(within(list).getAllByRole('link').map(row => row.querySelector('strong')?.textContent)).toEqual(['Repo-20261008', 'agent-graph-002']);
-  expect(within(list).getByText('1 agent running')).toBeTruthy();
+  expect(within(list).getAllByRole('link').map(row => row.querySelector('.root-name')?.textContent)).toEqual(['Repo-20261008', 'agent-graph-002']);
+  expect([...list.querySelectorAll('a')].some(row => row.title.includes('1 agent running'))).toBe(true);
   expect(screen.getByText('Original request').closest('article')?.getAttribute('data-side')).toBe('end');
   expect(screen.getByText('Root response').closest('article')?.getAttribute('data-side')).toBe('start');
   expect(await screen.findByText('Continued response')).toBeTruthy();

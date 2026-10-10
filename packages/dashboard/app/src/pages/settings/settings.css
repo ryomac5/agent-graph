@@ -1,20 +1,31 @@
 .settings-page { max-width: 1060px; }
 .settings-section { margin: 0 0 var(--space-6); }
 .settings-section header { display: grid; gap: var(--space-2); margin-bottom: var(--space-3); }
-.settings-section header h2 { font-size: var(--text-md); }
 .settings-page .settings-card { max-width: none; overflow: hidden; }
-.settings-page .settings-card > p, .settings-page .settings-card > .fields,
-.settings-page .settings-card > .button-row, .settings-models,
-.settings-page .settings-card > [role='region'], .settings-page .settings-card > progress { margin: var(--space-4) var(--space-5); }
-.settings-page fieldset { border: 0; border-bottom: 1px solid var(--border); padding: var(--space-3) 0; min-width: 0; }
-.settings-page legend { padding: 0 var(--space-5); font-weight: 600; color: var(--text-2); }
+.settings-page .settings-card > p { margin: var(--space-4) var(--space-6); }
+.settings-page .settings-card > .fields { margin: var(--space-4) var(--space-6); }
+.settings-page .settings-card > .button-row { margin: var(--space-4) var(--space-6); }
+.settings-models { margin: var(--space-4) var(--space-6); }
+.settings-page .settings-card > [role='region'] { margin: var(--space-4) var(--space-6); }
+.settings-page .settings-card > progress { margin: var(--space-4) var(--space-6); }
+.settings-page fieldset { border: 0; border-bottom: var(--border); padding: var(--space-3) 0; min-width: 0; }
 .settings-page textarea { min-width: 200px; max-width: 50%; }
-.settings-array-row { margin: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.settings-array-row { margin: var(--space-3); border: var(--border); border-radius: var(--radius-1); }
 .settings-array-row .button-row { padding: var(--space-2) var(--space-4); }
 .settings-page table { width: 100%; border-collapse: collapse; text-align: left; }
-.settings-page td, .settings-page th { padding: var(--space-2); border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.settings-page td { padding: var(--space-2); border-bottom: var(--border); overflow-wrap: anywhere; }
+.settings-page th { padding: var(--space-2); border-bottom: var(--border); overflow-wrap: anywhere; }
 .settings-page > .banner { margin-bottom: var(--space-3); }
 .settings-page > .button-row { margin-bottom: var(--space-6); }
-.settings-page .settings-card > .btn { margin: var(--space-3) var(--space-5); }
+.settings-page .settings-card > .btn { margin: var(--space-3) var(--space-6); }
 [data-density='compact'] .settings-page label { padding-top: var(--space-2); padding-bottom: var(--space-2); }
-@media (max-width: 760px) { .settings-page .settings-card label { flex-wrap: wrap; } .settings-page textarea { max-width: 100%; } }
+@media (max-width: 760px) {
+  .settings-page .settings-card label { flex-wrap: wrap; }
+  .settings-page textarea { max-width: 100%; }
+}
+.settings-page legend { font-weight: 400; padding: 0 var(--space-6); font: var(--type-meta); color: var(--fg-3); }
+.settings-section header h2 { font: var(--type-title); }
+.settings-card label > span { font: var(--type-body); }
+.settings-card { border: 0; border-radius: 0; box-shadow: none; }
+.settings-card label { min-height: 48px; padding: var(--space-3) 0; }
+.settings-card label:last-child { border-bottom: var(--border); }

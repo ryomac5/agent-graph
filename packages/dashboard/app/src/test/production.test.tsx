@@ -111,7 +111,7 @@ it('opens a child conversation from anywhere on its row, writes it to the URL an
   const flow = screen.getByRole('complementary', { name: 'Panel' });
   fireEvent.click(within(flow).getByText('Task 1').closest('.graph-card')!);
   expect(screen.getByTestId('location').textContent).toContain('child=child-1');
-  expect(screen.getByRole('button', { name: 'Back to Repo-20260925' }).textContent).toBe('←Repo-20260925');
+  expect(screen.getByRole('button', { name: 'Back to Repo-20260925' }).textContent).toBe('Repo-20260925');
   fireEvent.click(within(flow).getByText('Task 0'));
   expect(screen.getByTestId('location').textContent).toContain('child=child-0');
   // 子の会話は動いている間だけ経過を出す。

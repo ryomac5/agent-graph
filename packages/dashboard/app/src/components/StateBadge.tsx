@@ -24,9 +24,9 @@ export function toDisplayState(state: string): ExecutionState {
 }
 export function stateLabel(state: string, language: Language = 'en'): string { return dictionaries[language][toDisplayState(state)]; }
 /** 小さな色の点と短い語で状態を出す。 */
-export function StatusDot({ state, language = 'en', className = '' }: { state: string; language?: Language; className?: string }) {
+export function StatusDot({ state, language = 'en', className = '', dotOnly = false, dotLabel }: { state: string; language?: Language; className?: string; dotOnly?: boolean; dotLabel?: string }) {
   const shown = toDisplayState(state);
-  return <span className={`status status-${stateTone(shown)} ${className}`.trim()} data-state={shown}><span className="status-dot" aria-hidden="true"/><span className="status-label">{stateLabel(shown, language)}</span></span>;
+  return <span className={`status status-${stateTone(shown)} ${className}`.trim()} data-state={shown}><span className="status-dot" aria-hidden={dotLabel ? undefined : true} role={dotLabel ? 'img' : undefined} aria-label={dotLabel}/>{!dotOnly && <span className="status-label">{stateLabel(shown, language)}</span>}</span>;
 }
 interface StateBadgeProps {
   state: ExecutionState;

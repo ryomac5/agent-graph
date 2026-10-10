@@ -1,3 +1,4 @@
+import { FileTreeRow } from '../../components/FileTreeRow.tsx';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useSearchParams } from 'react-router';
 import { buildRootTree, selectRoots, useRootIndex } from '../../lib/roots.ts';
@@ -59,7 +60,7 @@ function Layout({ value, onChange, w = WORDS.en }: { value: DiffLayout; onChange
 }
 interface TreeEntry { path: string; git: GitMark[]; additions: number; deletions: number }
 function ChangeTree({ entries, selected, onSelect }: { entries: TreeEntry[]; selected: string; onSelect: (path: string) => void }) {
-  function render(prefix: string) {
+  function render(prefix: string, depth = 0) {
     const children = new Map<string, TreeEntry | undefined>();
     for (const entry of entries) if (entry.path.startsWith(prefix)) {
       const tail = entry.path.slice(prefix.length); const name = tail.split('/')[0];
@@ -67,12 +68,12 @@ function ChangeTree({ entries, selected, onSelect }: { entries: TreeEntry[]; sel
     }
     return <ul>{[...children].sort(([a], [b]) => a.localeCompare(b)).map(([name, entry]) => <li key={name}>{entry
       ? <button className="git-file-choice" aria-pressed={selected === entry.path} onClick={() => onSelect(entry.path)} title={entry.path}>
-        <span>{name}</span><span className="git-file-meta">{entry.git.map(mark => <span key={mark} className={`git-${mark}`}>{GIT_MARKS[mark].letter}</span>)}<span className="diff-add-count">+{entry.additions}</span><span className="diff-remove-count">−{entry.deletions}</span></span></button>
-      : <details open><summary>{name}</summary>{render(`${prefix}${name}/`)}</details>}</li>)}</ul>;
+        <FileTreeRow depth={depth} selected={selected === entry.path}><span className="tree-name truncate">{name}</span><span className="git-file-meta">{entry.git.map(mark => <span key={mark} className={`git-${mark}`}>{GIT_MARKS[mark].letter}</span>)}<span className="diff-add-count">+{entry.additions}</span><span className="diff-remove-count">−{entry.deletions}</span></span></FileTreeRow></button>
+      : <details open><summary><FileTreeRow depth={depth} directory><span className="tree-name truncate">{name}</span></FileTreeRow></summary>{render(`${prefix}${name}/`, depth + 1)}</details>}</li>)}</ul>;
   }
   return <nav aria-label="Changed files">{render('')}</nav>;
 }
-const GRAPH_ROW_HEIGHT = 56;
+const GRAPH_ROW_HEIGHT = 44;
 const GRAPH_LANE_WIDTH = 16;
 function CommitLines({ row, columns }: { row: GraphRow; columns: number }) {
   const x = (lane: number) => 10 + lane * GRAPH_LANE_WIDTH;
@@ -81,9 +82,9 @@ function CommitLines({ row, columns }: { row: GraphRow; columns: number }) {
     {row.segments.map((segment, index) => {
       const start = segment.half === 'top' ? 0 : middle;
       const end = segment.half === 'top' ? middle : GRAPH_ROW_HEIGHT;
-      return <path key={index} className={`git-lane-${segment.lane % 3}`} d={`M ${x(segment.from)} ${start} C ${x(segment.from)} ${start + 14}, ${x(segment.to)} ${end - 14}, ${x(segment.to)} ${end}`} fill="none" strokeWidth="1.5"/>;
+      return <path key={index} className={`git-lane-${segment.lane % 3}`} d={`M ${x(segment.from)} ${start} C ${x(segment.from)} ${start + 14}, ${x(segment.to)} ${end - 14}, ${x(segment.to)} ${end}`} fill="none" strokeWidth="1"/>;
     })}
-    <circle className={`git-lane-${row.column % 3}`} cx={x(row.column)} cy={middle} r="4" strokeWidth="1.5"/>
+    <circle className={`git-lane-${row.column % 3}`} cx={x(row.column)} cy={middle} r="4" strokeWidth="1"/>
   </svg>;
 }
 function readCommitEntry(file: Patch): TreeEntry {

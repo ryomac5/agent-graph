@@ -14,6 +14,8 @@ export function groupToolRuns(entries: TimelineEntry[]): DisplayEntry[] {
   const grouped: DisplayEntry[] = [];
   const seen = new Set<string>();
   let hasVisible = false;
+  let responseTools: Extract<DisplayEntry, { kind: 'tools' }> | undefined;
+  let turnId: unknown;
   const calls = new Set(entries.flatMap(entry => entry.kind === 'message' && Array.isArray(entry.row.body) ? entry.row.body.map(readObject).filter(block => block.type === 'tool_use').map(block => block.id) : []));
   for (const entry of entries) {
     if (entry.kind === 'message') {
@@ -32,6 +34,7 @@ export function groupToolRuns(entries: TimelineEntry[]): DisplayEntry[] {
       }
     }
     if (entry.kind === 'boundary') {
+      responseTools = undefined;
       if (!hasVisible) continue;
       const last = grouped.at(-1);
       if (last?.kind === 'boundary') {
@@ -45,10 +48,32 @@ export function groupToolRuns(entries: TimelineEntry[]): DisplayEntry[] {
       last.row = { ...last.row, to: entry.row.to ?? entry.row.id, title: [last.row.title ?? last.row.from ?? last.row.id, entry.row.from ?? entry.row.id, entry.row.to].filter(Boolean).join(' · ') };
       continue;
     }
-    if (entry.kind === 'message' && isToolOnly(entry.row) && !(Array.isArray(entry.row.body) && entry.row.body.map(readObject).some(block => block.type === 'tool_use' && isDelegationTool(block)))) {
-      const last = grouped.at(-1);
-      if (last?.kind === 'tools') { last.rows.push(entry); continue; }
-      if (entry.row.role !== 'user') { grouped.push({ kind: 'tools', key: 'tools:' + entry.key, rows: [entry] }); hasVisible = true; continue; }
+    if (entry.kind !== 'message') {
+      if (entry.kind === 'gap') responseTools = undefined;
+    } else {
+      const row = entry.row;
+      const blocks = Array.isArray(row.body) ? row.body.map(readObject) : [];
+      const resultOnly = blocks.length > 0 && blocks.every(block => block.type === 'tool_result');
+      const nextTurn = row.turn_id ?? row.turnId;
+      if (row.role === 'user' && !resultOnly || nextTurn && turnId && nextTurn !== turnId) responseTools = undefined;
+      if (nextTurn) turnId = nextTurn;
+      const tools = blocks.filter(block => block.type === 'tool_use' && !isDelegationTool(block));
+      const orphanResults = blocks.filter(block => block.type === 'tool_result' && !calls.has(block.tool_use_id));
+      if (tools.length || orphanResults.length) {
+        const toolEntry = { ...entry, key: 'tools:' + entry.key, row: { ...row, id: 'tools:' + row.id, body: [...tools, ...orphanResults] } };
+        if (!responseTools) {
+          responseTools = { kind: 'tools', key: toolEntry.key, rows: [] };
+          grouped.push(responseTools);
+        }
+        responseTools.rows.push(toolEntry);
+        const visible = blocks.filter(block => !tools.includes(block) && block.type !== 'tool_result');
+        const message = { ...entry, row: { ...row, body: visible } };
+        if (!isBlank(message.row)) grouped.push(message);
+        hasVisible = true;
+        if (row.phase === 'final_answer') responseTools = undefined;
+        continue;
+      }
+      if (row.phase === 'final_answer') responseTools = undefined;
     }
     grouped.push(entry);
     hasVisible = true;

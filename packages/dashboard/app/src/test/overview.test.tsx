@@ -116,7 +116,7 @@ it('filters root views and Changes by a display-name route', () => {
 it('keeps reason codes out of root rows and translates evidence reasons', async () => {
  const { reasonText } = await import('../lib/reasons.ts'); expect(reasonText('unconfirmed_end_evidence')).toBe('No end recorded'); expect(reasonText('missing_turn_evidence')).toBe('No turn record'); expect(reasonText('legacy ended inference: process_exit')).toBe('Ended by process exit (legacy)'); expect(reasonText('some_new_code')).toBe('Some new code'); expect(reasonText('Observation interrupted')).toBe('Observation interrupted');
  const target = setup({ runs: [...projection().runs!.filter(run => run.id !== 'lonely:1'), { id: 'lonely:1', conversation_id: 'lonely', generation: 1, state: 'unknown', reason: 'legacy ended inference: process_exit', last_evidence_ts: EARLIER }] });
- render(<MemoryRouter><HomePage target={target}/></MemoryRouter>); const row = screen.getByRole('link', { name: /Unrelated terminal/ }); expect(row.querySelector('.root-state')?.textContent).toBe('Unknown'); expect(document.body.textContent).not.toContain('legacy ended inference');
+ render(<MemoryRouter><HomePage target={target}/></MemoryRouter>); const row = screen.getByRole('link', { name: /Unrelated terminal/ }); expect(row.querySelector('.root-state')?.getAttribute('data-state')).toBe('unknown'); expect(document.body.textContent).not.toContain('legacy ended inference');
 });
 it('roots the tree only at tasks that delegated, names untitled conversations and folds repeated runs into attempts', () => {
   const state = setup({
@@ -152,7 +152,7 @@ it('switches the request flow between roots in the workspace', () => {
 });
 it('lists projected roots with child counts and keeps unknown evidence out of a separate banner', () => {
  vi.stubGlobal('innerWidth', 1024); render(<MemoryRouter><WorkspacePage project="agent-graph" target={setup()} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: true })) }}/></MemoryRouter>);
- const roots = screen.getByRole('region', { name: 'Conversations' }); expect(roots.querySelectorAll('.root-row')).toHaveLength(3); expect(within(roots).getByText('1 agent running')).toBeTruthy(); expect(screen.queryByText(/Unknown — Last evidence/)).toBeNull();
+ const roots = screen.getByRole('region', { name: 'Conversations' }); expect(roots.querySelectorAll('.root-row')).toHaveLength(3); expect([...roots.querySelectorAll('a')].some(row => row.title.includes('1 agent running'))).toBe(true); expect(screen.queryByText(/Unknown — Last evidence/)).toBeNull();
 });
 it('lists old roots as well as current roots without listing unrelated child conversations', () => {
  vi.stubGlobal('innerWidth', 1024); render(<MemoryRouter><WorkspacePage project="agent-graph" target={setup()} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: true })) }}/></MemoryRouter>);

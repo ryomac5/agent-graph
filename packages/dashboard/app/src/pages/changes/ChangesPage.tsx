@@ -36,7 +36,7 @@ function Verification({ value }: { value: unknown }) {
   const result = readObject(value);
   const checks = readValue(result.checks ?? result.results);
   return <section className="review-section acceptance-verification" aria-label="Verification"><h2>Verification</h2>
-    <span className={`chip ${result.passed === false ? 'chip-danger' : result.passed === true ? '' : 'chip-dashed'}`}>
+    <span className={`chip ${result.passed === false ? 'chip-danger' : result.passed === true ? '' : 'chip-inferred'}`}>
       <Icon name={result.passed === true ? 'check' : result.passed === false ? 'alert' : 'unknown'} size={12}/>
       {result.passed === true ? 'Passed' : result.passed === false ? 'Failed' : 'No result'}</span>
     {readText(result.reason ?? result.error) && <p>{readText(result.reason ?? result.error)}</p>}
@@ -141,7 +141,7 @@ function AgentChangesPage({ client, target = store, project, artifactId }: Chang
         <section className="changes-diff" aria-label="Difference">
           {compare ? <><h2>Patch comparison · Version {String(compare.version)} → {String(artifact.version)}</h2><p className="muted-text">Comparing saved patch text. Switch to Base commit to comment on artifact lines.</p>
             {comparisonFiles ? comparisonFiles.length ? <DiffView key={`${compare.id}:${id}`} files={comparisonFiles} layout={layout} attribution="unknown" evidenceUrl={evidenceUrl}/> : <p>No patch changes.</p> : <p>Saved diff unavailable for comparison.</p>}</>
-            : typeof artifact.diff !== 'string' ? <p className="chip chip-dashed">Saved diff unavailable. Content may not have been retained.</p>
+            : typeof artifact.diff !== 'string' ? <p className="chip chip-inferred">Saved diff unavailable. Content may not have been retained.</p>
               : files.length ? <DiffView key={id} files={selectedFile ? files.filter(file => file.path === selectedFile) : files} layout={layout} attribution={attribution} evidenceUrl={evidenceUrl} selection={activeSelection} selectedFile={selectedFile} onSelectLine={selectLine} fileHref={fileHref}/>
                 : <p>No file changes in this version.</p>}
           {selectedFile && !compare && <button className="btn btn-ghost btn-sm" onClick={() => setSelectedFile('')}>Show all files</button>}

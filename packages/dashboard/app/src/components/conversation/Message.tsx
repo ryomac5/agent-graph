@@ -6,7 +6,8 @@ import { Markdown } from './Markdown.tsx';
 import { PREVIEW_LINES, readBody, readObject, readText } from './model.ts';
 import { agentReportText, visibleText } from '../../lib/message-body.ts';
 import type { Sender } from './participants.ts';
-import { translate } from './text.ts';
+import { Icon } from '../Icon.tsx';
+import { toolsLabel, translate } from './text.ts';
 import { DelegationCard, isDelegationTool } from './DelegationCard.tsx';
 import type { TreeNode } from '../../pages/tree/model.ts';
 import { ToolCall } from './ToolCall.tsx';
@@ -38,8 +39,8 @@ export function countTools(rows: Row[]): number {
  * 発言を 1 つ描く。右の列は利用者の吹き出し、左の列はエージェントの吹き出しにする。
  * 送り主の名前は、続く同じ送り主の発言では省く。時刻は常に出す。
  */
-export function Message({ row, sender, showName = true, language = 'en', streaming = false, toolResults, delegationNode, onSelectChild }: {
-  row: Row; sender: Sender; showName?: boolean; language?: Language; streaming?: boolean; toolResults?: Map<string, unknown>; delegationNode?: (tool: Row) => TreeNode | undefined; onSelectChild?: (id: string) => void;
+export function Message({ row, sender, showName = true, language = 'en', streaming = false, parentRequest = false, toolResults, delegationNode, onSelectChild }: {
+  row: Row; sender: Sender; showName?: boolean; language?: Language; streaming?: boolean; parentRequest?: boolean; toolResults?: Map<string, unknown>; delegationNode?: (tool: Row) => TreeNode | undefined; onSelectChild?: (id: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const t = (key: Parameters<typeof translate>[1]) => translate(language, key);
@@ -91,10 +92,11 @@ export function Message({ row, sender, showName = true, language = 'en', streami
   return <article className={`message ${end ? 'message-user' : 'message-agent'}${showName ? ' message-first' : ''}${streaming ? ' streaming' : ''}`}
     id={`message-${encodeURIComponent(String(row.id))}`} aria-label={`${sender.name} message`} data-side={sender.side}>
     <header className="message-header">
-      {showName && <strong className="message-sender">{sender.name}</strong>}
+      {showName && !end && <strong className="message-sender">{sender.name}</strong>}
       {time ? <time dateTime={time} title={time}>{formatClock(time, language)}</time> : !streaming && <span className="message-time-unknown">{t('timeUnknown')}</span>}
       {streaming && <span className="chip chip-accent"><span className="pulse" aria-hidden="true"/>{t('streaming')}</span>}
     </header>
+    {parentRequest && <span className="message-request-label">{language === 'ja' ? '根からの依頼' : 'Request from root'}</span>}
     <div className="message-main">
       {unavailable ? <p className="message-gap">{t(row.body_state === 'omitted' ? 'omitted' : 'unavailable')}</p>
         : hasDelegations ? flow.map((part, index) => {
@@ -116,4 +118,17 @@ export function Message({ row, sender, showName = true, language = 'en', streami
       </div>}
     </div>
   </article>;
+}
+
+/** 返答全体の呼び出しを 1 行に畳み、名前と失敗数を添える。 */
+export function ToolRun({ rows, toolResults, language = 'en' }: { rows: Row[]; toolResults?: Map<string, unknown>; language?: Language }) {
+  const tools = rows.flatMap(row => Array.isArray(row.body) ? row.body.map(readObject).filter(block => block.type === 'tool_use') : []);
+  const names = [...new Set(tools.map(tool => readText(tool.name) || 'Tool'))].slice(0, 3);
+  const failed = tools.filter(tool => readObject(toolResults?.get(readText(tool.id))).is_error === true).length;
+  return <details className="tool-run">
+    <summary><Icon name="chevronRight" size={16} className="caret"/><span>{toolsLabel(tools.length, language)}</span>
+      {failed > 0 && <span className="tool-failed">{language === 'ja' ? '失敗' : 'Failed'} {failed}</span>}
+      {names.length > 0 && <span className="truncate tool-run-names">· {names.join(' · ')}</span>}</summary>
+    <div className="tool-run-body">{rows.flatMap(row => Array.isArray(row.body) ? row.body.map(readObject) : []).map((block, index) => <ToolCall key={readText(block.id) || index} language={language} name={readText(block.name) || translate(language, 'toolOutput')} input={block.input} result={block.type === 'tool_result' ? block : toolResults?.get(readText(block.id))}/>)}</div>
+  </details>;
 }

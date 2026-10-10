@@ -95,7 +95,7 @@ function GraphCanvas({ tree, root, route, language, approvals, connected, client
   const [focused, setFocused] = useState(requestedChild ? tree.nodes.find(node => node.conversationId === requestedChild)?.id ?? root.id : root.id);
   useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 60_000); return () => clearInterval(timer); }, []);
   const visible = useMemo(() => foldEarlier(tree, expanded, now, requestedChild ? tree.nodes.find(node => node.conversationId === requestedChild)?.id : undefined, language, embedded ? 20 : undefined), [tree, expanded, now, requestedChild, language, embedded]);
-  const layout = useMemo(() => calculateLayout(visible, embedded ? Math.min(size.width, 720) : size.width, previous.current, titleHeights), [visible, size.width, titleHeights, embedded]);
+  const layout = useMemo(() => calculateLayout(visible, embedded ? Math.min(size.width, 720) : size.width, previous.current, titleHeights, embedded ? 240 : 260), [visible, size.width, titleHeights, embedded]);
   const byId = new Map(visible.nodes.map(node => [node.id, node]));
   const positions = new Map(layout.nodes.map(node => [node.id, node]));
   useLayoutEffect(() => {
@@ -199,7 +199,7 @@ function GraphCanvas({ tree, root, route, language, approvals, connected, client
   const waiting = tree.nodes.filter(node => node.state === 'waiting_approval').length;
   const earlierLabel = (count: number) => ja ? `以前の依頼 ${count} 件` : `${count} earlier ${count === 1 ? 'request' : 'requests'}`;
   return <>
-    {!embedded && <div className="graph-toolbar"><div className="graph-context"><span className="graph-context-label">{ja ? '根の会話' : 'ROOT CONVERSATION'}</span><strong title={root.name}>{root.name}</strong></div>
+    {!embedded && <div className="graph-toolbar"><div className="graph-context"><strong title={root.name}>{root.name}</strong></div>
       <div className="graph-summary"><span className="graph-total">{ja ? `依頼 ${tree.nodes.filter(node => node.id !== root.id && node.role !== 'planner').length} 件` : `${tree.nodes.filter(node => node.id !== root.id && node.role !== 'planner').length} requests`}</span>
         {running > 0 && <span><i className="graph-indicator running"/>{ja ? `${running} 実行中` : `${running} running`}</span>}
         {waiting > 0 && <span><i className="graph-indicator waiting"/>{ja ? `${waiting} 承認待ち` : `${waiting} awaiting approval`}</span>}</div></div>}
@@ -220,7 +220,6 @@ function GraphCanvas({ tree, root, route, language, approvals, connected, client
             if (!parent || !child || !node) return null;
             const tone = stateTone(toDisplayState(node.state));
             return <g key={edge.id} className={`graph-edge edge-${tone}${edge.confidence === 'inferred' ? ' edge-inferred' : ''}`}><path d={curvePath(parent, child, layout.vertical)}/>
-              {tone === 'running' && <path className="graph-edge-flow" d={curvePath(parent, child, layout.vertical)}/>}
               <circle cx={child.x + (layout.vertical ? child.width / 2 : 0)} cy={child.y + (layout.vertical ? 0 : child.height / 2)} r="3"/></g>;
           })}
         </svg>}
@@ -236,10 +235,10 @@ function GraphCanvas({ tree, root, route, language, approvals, connected, client
           const content = <><div className="graph-card-top">{node.batchCount !== undefined && node.provider !== 'codex'
             ? <span className="request-avatar provider-unknown" title={ja ? 'まとめて出した依頼' : 'Batched requests'} aria-hidden="true"><Icon name="fork" size={13}/></span>
             : <ProviderMark provider={node.provider}/>}<strong className="graph-card-title" title={title}>{title}</strong></div>
-            <div className="graph-card-meta"><span className="graph-card-model" title={who}>{who}</span><StatusDot state={node.state} language={language}/><time dateTime={node.activity || undefined}>{formatWhen(node.activity, language) || (ja ? '時刻不明' : 'Unknown time')}</time></div></>;
+            <div className="graph-card-meta">{isRoot && <span>{ja ? '根' : 'Root'}</span>}{visible.edges.some(edge => edge.target === node.id && edge.confidence === 'inferred') && <span>{ja ? '推定' : 'Inferred'}</span>}<span className="graph-card-model" title={who}>{who}</span><StatusDot state={node.state} language={language}/><time dateTime={node.activity || undefined}>{formatWhen(node.activity, language) || (ja ? '時刻不明' : 'Unknown time')}</time></div></>;
           const focus = () => { setFocused(node.id); reveal(position); };
           return <article key={node.id} className={`graph-card tone-${tone}${toDisplayState(node.state) === 'unknown' ? ' graph-unknown' : ''}${isRoot ? ' graph-root' : ''}${node.earlier ? ' graph-earlier' : ''}${focused === node.id ? ' graph-selected' : ''}`}
-            style={layout.vertical ? { marginLeft: position.x, width: `calc(100% - ${position.x}px)` } : { left: position.x, top: position.y, width: position.width, height: position.height }} data-node-id={node.id} onClick={event => { if (!(event.target as Element).closest('a, button')) event.currentTarget.querySelector<HTMLAnchorElement>('a')?.click(); }} onFocus={focus}>
+            style={layout.vertical ? { marginLeft: position.x, width: position.width, maxWidth: `calc(100% - ${position.x}px)` } : { left: position.x, top: position.y, width: position.width, height: position.height }} data-node-id={node.id} onClick={event => { if (!(event.target as Element).closest('a, button')) event.currentTarget.querySelector<HTMLAnchorElement>('a')?.click(); }} onFocus={focus}>
             {node.earlier ? <button className="graph-card-link" ref={element => { if (element) links.current.set(node.id, element); else links.current.delete(node.id); }} onFocus={focus} onKeyDown={event => move(event, node.id)}
               aria-label={title} aria-expanded={node.earlier.expanded} onClick={() => { setFocused(node.earlier!.parent); toggleGroup(node.id); }}><span className="graph-earlier-icon"><Icon name="chevronRight" size={16}/></span><strong>{title}</strong><span>{node.earlier.expanded ? ja ? '押して閉じる' : 'Click to collapse' : ja ? '押して開く' : 'Click to expand'}</span></button>
               : node.conversationId ? <Link className="graph-card-link" to={target} ref={element => { if (element) links.current.set(node.id, element); else links.current.delete(node.id); }} onFocus={focus} onKeyDown={event => move(event, node.id)} aria-current={(requestedChild ? node.conversationId === requestedChild : isRoot) ? 'page' : undefined} aria-label={`${title} · ${who} · ${stateLabel(node.state, language)}`}>{content}</Link>

@@ -1,24 +1,24 @@
 .diff-view { display: grid; gap: var(--space-3); min-width: 0; }
-.diff-file { min-width: 0; border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; background: var(--surface); }
-.diff-file-selected { border-color: var(--accent); }
-.diff-file-header { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); padding: var(--space-2); background: var(--surface-2); }
-.diff-file-header .btn { margin-right: auto; white-space: normal; overflow-wrap: anywhere; }
-.diff-stat { font: var(--text-xs) var(--mono); }
 .diff-add-count { color: var(--diff-add-fg); }
-.diff-remove-count { color: var(--diff-remove-fg); }
+.diff-remove-count { color: var(--diff-del-fg); }
 .diff-scroll { overflow: auto; }
-.diff-table { width: 100%; border-collapse: collapse; font: var(--text-sm)/1.6 var(--mono); }
-.diff-table th { padding: var(--space-1) var(--space-2); text-align: left; color: var(--text-2); background: var(--surface-2); }
+.diff-table th { padding: var(--space-1) var(--space-2); text-align: left; color: var(--fg-2); background: var(--bg-1); }
 .diff-split { table-layout: fixed; }
 .diff-cell { padding: 0; vertical-align: top; }
-.diff-split .diff-cell + .diff-cell { border-left: 1px solid var(--border); }
+.diff-split .diff-cell + .diff-cell { border-left: var(--border); }
 .diff-content { display: flex; gap: var(--space-2); align-items: baseline; padding: 0 var(--space-2); }
-.diff-number { flex: 0 0 4ch; text-align: right; color: var(--text-3); user-select: none; }
 .diff-sign { flex: 0 0 1ch; }
-.diff-code { flex: 1; min-width: 12ch; white-space: pre; font: inherit; padding: 0; }
+.diff-code { flex: 1; min-width: 12ch; white-space: pre; font: var(--type-mono); padding: 0; }
 .diff-content .chip { font-family: var(--font); margin-left: var(--space-2); }
-.diff-add { background: var(--diff-add-bg); color: var(--diff-add-fg); }
-.diff-remove { background: var(--diff-remove-bg); color: var(--diff-remove-fg); }
-.diff-meta { background: var(--surface-2); color: var(--text-2); }
-.diff-selected { box-shadow: inset 0 0 0 2px var(--accent); }
-.diff-folded { padding: var(--space-3); font-size: var(--text-sm); }
+.diff-folded { padding: var(--space-3); font: var(--type-mono); }
+.diff-file { overflow: hidden; min-width: 0; border: 0; border-radius: 0; background: var(--bg-0); }
+.diff-file-header .btn { overflow-wrap: anywhere; white-space: normal; margin-right: auto; font: var(--type-mono); }
+.diff-stat { font: var(--type-mono); }
+.diff-table { width: 100%; border-collapse: collapse; font: var(--type-mono); }
+.diff-meta { background: var(--bg-1); color: var(--fg-3); }
+.diff-selected { background: var(--bg-3); box-shadow: none; }
+.diff-file-header { font: var(--type-mono); background: var(--bg-1); padding: 0 var(--space-3); min-height: 36px; display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); height: 36px; border-bottom: var(--border); }
+.diff-add { background: var(--diff-add-bg); color: var(--fg-1); }
+.diff-remove { background: var(--diff-del-bg); color: var(--fg-1); }
+.diff-file-selected { border-color: var(--accent); border: 0; }
+.diff-number { flex: 0 0 4ch; text-align: right; user-select: none; color: var(--fg-4); }

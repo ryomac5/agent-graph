@@ -6,9 +6,9 @@ import './diff.css';
 
 const ATTRIBUTION = {
   confirmed: { label: 'Confirmed', icon: 'check', style: 'chip-accent' },
-  inferred: { label: 'Inferred', icon: 'branch', style: 'chip-dashed' },
+  inferred: { label: 'Inferred', icon: 'branch', style: 'chip-inferred' },
   joint: { label: 'Joint', icon: 'fork', style: '' },
-  unknown: { label: 'Unknown', icon: 'unknown', style: 'chip-dashed' },
+  unknown: { label: 'Unknown', icon: 'unknown', style: 'chip-inferred' },
 } as const;
 export function AttributionBadge({ attribution, evidenceUrl }: { attribution: Attribution; evidenceUrl: string }) {
   const item = ATTRIBUTION[attribution];

@@ -45,7 +45,7 @@ it.each(['confirmed', 'inferred', 'joint', 'unknown'])('shows %s attribution onc
   expect(fileBadge.getAttribute('href')).toBe('#artifact-evidence-a1');
   expect(within(screen.getByRole('table')).queryAllByRole('link', { name: label })).toHaveLength(0);
   expect(within(screen.getByRole('article', { name: 'Diff for code.txt' })).getAllByRole('link', { name: label })).toHaveLength(1);
-  if (['unknown', 'inferred'].includes(attribution)) expect(fileBadge.className).toContain('chip-dashed');
+  if (['unknown', 'inferred'].includes(attribution)) expect(fileBadge.className).toContain('chip-inferred');
   if (attribution === 'unknown') {
     expect(fileBadge.getAttribute('title')).toBe('Changes whose author could not be identified');
     expect(screen.getByText('Changes whose author could not be identified')).toBeTruthy();

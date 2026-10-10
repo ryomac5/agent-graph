@@ -149,8 +149,8 @@ it('6: idle rows show their status and time and the five visible states have dis
   const states = ['running', 'waiting_approval', 'waiting_input', 'failed', 'ended'];
   expect(new Set(states.map(stateTone)).size).toBe(5);
   render(<MemoryRouter><RootList roots={[root, ...states.map((state, index) => ({ ...root, id: `r${index}`, name: state, state }))]} language="ja"/></MemoryRouter>);
-  expect(screen.getByRole('link', { name: new RegExp(root.name) }).querySelector('.root-state')?.textContent).toBe('待機中');
-  for (const label of ['実行中', '承認待ち', '返答待ち', '失敗', '完了']) expect(screen.getByText(label)).toBeTruthy();
+  expect(screen.getByRole('link', { name: new RegExp(root.name) }).querySelector('.root-state')?.getAttribute('data-state')).toBe('idle');
+  for (const label of ['実行中', '承認待ち', '返答待ち', '失敗', '完了']) expect(screen.getByRole('img', { name: label })).toBeTruthy();
   const style = document.createElement('style');
   style.textContent = readFileSync('app/src/styles.css', 'utf8'); document.head.append(style);
   const backgrounds = [...document.querySelectorAll('.root-row .status-dot')].map(dot => getComputedStyle(dot).background);

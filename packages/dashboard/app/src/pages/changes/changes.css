@@ -1,77 +1,103 @@
 .changes-toolbar { flex-wrap: wrap; gap: var(--space-3); margin-bottom: var(--space-4); }
 .changes-columns { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(0, 3fr) minmax(260px, 1.5fr); gap: var(--space-4); align-items: start; }
-.changes-files, .changes-review { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--space-3); min-width: 0; }
-.changes-files ul, .finding-list { list-style: none; padding: 0; margin: var(--space-3) 0; display: grid; gap: var(--space-3); }
+.changes-files ul { list-style: none; padding: 0; margin: var(--space-3) 0; display: grid; gap: var(--space-3); }
+.finding-list { list-style: none; padding: 0; margin: var(--space-3) 0; display: grid; gap: var(--space-3); }
 .changes-files li { display: grid; gap: var(--space-1); justify-items: start; }
-.changes-file-button { display: flex; gap: var(--space-1); width: 100%; align-items: center; padding: var(--space-2); border-radius: var(--radius-sm); font-size: var(--text-sm); }
+.changes-file-button { display: flex; gap: var(--space-1); width: 100%; align-items: center; padding: var(--space-2); border-radius: var(--radius-1); font: var(--type-ui); }
 .changes-file-button span { overflow-wrap: anywhere; }
-.changes-file-button[aria-pressed='true'] { background: var(--accent-soft); color: var(--accent-text); }
-.changes-file-button:hover { background: var(--surface-hover); }
+.changes-file-button[aria-pressed='true'] { background: var(--bg-3); color: var(--accent); }
+.changes-file-button:hover { background: var(--bg-2); }
 .changes-diff { display: grid; gap: var(--space-3); min-width: 0; }
-.review-section { display: grid; gap: var(--space-2); padding-bottom: var(--space-4); margin-bottom: var(--space-4); border-bottom: 1px solid var(--border); }
+.review-section { display: grid; gap: var(--space-2); padding-bottom: var(--space-4); margin-bottom: var(--space-4); border-bottom: var(--border); }
 .review-section:last-child { border-bottom: 0; margin-bottom: 0; }
-.changes-review form, .changes-review form label { display: grid; gap: var(--space-2); }
+.changes-review form { display: grid; gap: var(--space-2); }
+.changes-review form label { display: grid; gap: var(--space-2); }
 .changes-review textarea { width: 100%; min-height: 100px; resize: vertical; }
-.finding-list li, .review-approval { display: grid; gap: var(--space-2); padding: var(--space-2); border: 1px solid var(--border); border-radius: var(--radius-sm); overflow-wrap: anywhere; }
-.changes-review pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-xs); }
-.artifact-evidence { margin-top: var(--space-4); overflow-wrap: anywhere; font-size: var(--text-sm); }
+.finding-list li { display: grid; gap: var(--space-2); padding: var(--space-2); border: var(--border); border-radius: var(--radius-1); overflow-wrap: anywhere; }
+.review-approval { display: grid; gap: var(--space-2); padding: var(--space-2); border: var(--border); border-radius: var(--radius-1); overflow-wrap: anywhere; }
+.changes-review pre { white-space: pre-wrap; overflow-wrap: anywhere; font: var(--type-ui); }
+.artifact-evidence { margin-top: var(--space-4); overflow-wrap: anywhere; font: var(--type-ui); }
 .artifact-evidence dl { display: grid; gap: var(--space-2); }
-.artifact-evidence dt { color: var(--text-3); }
+.artifact-evidence dt { color: var(--fg-3); }
 .artifact-evidence dd { margin: 0; font-family: var(--mono); }
 .stale-comparison { display: grid; gap: var(--space-2); }
-.stale-hashes { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2); font-size: var(--text-xs); }
+.stale-hashes { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2); font: var(--type-mono); }
 .stale-comparison .diff-content .chip { display: none; }
-@media (max-width: 1100px) { .changes-columns { grid-template-columns: minmax(160px, 1fr) minmax(0, 3fr); } .changes-review { grid-column: 1 / -1; } }
-@media (max-width: 680px) { .changes-columns { grid-template-columns: minmax(0, 1fr); } .changes-review { grid-column: auto; } }
-
+@media (max-width: 1100px) {
+  .changes-columns { grid-template-columns: minmax(160px, 1fr) minmax(0, 3fr); }
+  .changes-review { grid-column: 1 / -1; }
+}
+@media (max-width: 680px) {
+  .changes-columns { grid-template-columns: minmax(0, 1fr); }
+  .changes-review { grid-column: auto; }
+}
 .acceptance-verification { min-width: 0; overflow-wrap: anywhere; }
 .acceptance-verification > .chip { justify-self: start; max-width: 100%; white-space: normal; }
-.acceptance-verification details, .acceptance-verification summary { min-width: 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
-
+.acceptance-verification details { min-width: 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.acceptance-verification summary { min-width: 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .page.changes-page { max-width: none; padding: var(--space-4); }
-.git-changes { display: grid; grid-template-columns: minmax(260px, 30fr) minmax(200px, 22fr) minmax(0, 48fr); width: 100%; height: calc(100dvh - 180px); min-height: 400px; border: 1px solid var(--border); background: var(--surface); }
 .git-changes > * { min-width: 0; overflow: auto; }
-.git-history, .git-files-pane { border-right: 1px solid var(--border); }
-.git-pane-header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); padding: var(--space-3); border-bottom: 1px solid var(--border); min-height: 48px; }
-.git-pane-header h2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-history { border-right: var(--border); }
+.git-files-pane { border-right: var(--border); }
 .git-changes p { padding: var(--space-3); }
-.git-working-choice { display: flex; align-items: center; gap: var(--space-2); width: 100%; padding: var(--space-3); border-bottom: 1px solid var(--border); text-align: left; }
-.git-working-choice .muted-text { font-size: var(--text-xs); }
-.git-commit-list, .git-files-pane ul { list-style: none; margin: 0; padding: 0; }
-.git-commit-choice { display: flex; align-items: center; width: 100%; height: 56px; padding: 0 var(--space-2); gap: var(--space-2); text-align: left; }
+.git-working-choice .muted-text { font: var(--type-ui); }
+.git-commit-list { list-style: none; margin: 0; padding: 0; }
+.git-files-pane ul { list-style: none; margin: 0; padding: 0; }
 .git-graph-lines { flex-shrink: 0; overflow: visible; }
-.git-graph-lines path { stroke: var(--text-3); }
-.git-graph-lines circle { stroke: var(--text-2); fill: var(--surface); }
-.git-graph-lines .git-lane-1 { stroke: color-mix(in srgb, var(--accent) 65%, var(--text-3)); }
-.git-graph-lines .git-lane-2 { stroke: color-mix(in srgb, var(--attention) 65%, var(--text-3)); }
-.git-commit-copy { display: grid; gap: 3px; min-width: 0; }
-.git-commit-subject { display: flex; align-items: center; gap: 5px; min-width: 0; white-space: nowrap; }
-.git-commit-subject strong, .git-commit-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.git-commit-meta { color: var(--text-3); font-size: var(--text-xs); }
-.git-ref { flex-shrink: 0; max-width: 110px; overflow: hidden; text-overflow: ellipsis; padding: 0 5px; border: 1px solid var(--border-strong); border-radius: var(--radius-xs); background: var(--accent-soft); color: var(--accent-text); font-size: 10px; }
-.git-tag { background: var(--surface-2); color: var(--text-2); }
+.git-graph-lines path { stroke: var(--fg-3); }
+.git-graph-lines circle { stroke: var(--fg-2); fill: var(--bg-0); }
+.git-graph-lines .git-lane-1 { stroke: color-mix(in srgb, var(--accent) 65%, var(--fg-3)); }
+.git-graph-lines .git-lane-2 { stroke: color-mix(in srgb, var(--state-approval) 65%, var(--fg-3)); }
+.git-commit-subject { display: flex; align-items: center; gap: var(--space-1); min-width: 0; white-space: nowrap; }
+.git-commit-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-3); font: var(--type-meta); }
+.git-tag { background: var(--bg-1); color: var(--fg-2); }
 .git-commit-list > li { position: relative; }
 .git-commit-list .git-commit-choice { flex: 1; min-width: 0; }
-/* 会話の印は 2 行目の右に置き、1 行目の件名に幅を全部渡す。 */
-.git-conversation-badges { position: absolute; right: var(--space-2); bottom: 7px; display: flex; gap: 3px; max-width: 55%; overflow: hidden; }
-.git-conversation-badge { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.git-conversation-badges { position: absolute; right: var(--space-2); bottom: 7px; display: flex; gap: var(--space-1); max-width: 55%; overflow: hidden; }
 .git-conversation-badge[aria-pressed='true'] { border-color: var(--accent); }
-.git-files-pane details > ul { padding-left: var(--space-3); }
-.git-files-pane summary { padding: 6px var(--space-3); color: var(--text-2); overflow-wrap: anywhere; cursor: pointer; }
-.git-file-choice { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); width: 100%; padding: 7px var(--space-3); text-align: left; }
-.git-file-choice > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.git-file-meta { display: flex; flex-shrink: 0; gap: var(--space-2); font-size: var(--text-xs); font-family: var(--mono); }
-.git-file-choice[aria-pressed='true'], .git-commit-choice[aria-pressed='true'], .git-working-choice[aria-pressed='true'] { background: var(--accent-soft); }
-.git-file-choice:hover, .git-commit-choice:hover, .git-working-choice:hover { background: var(--surface-hover); }
-.git-diff-pane > .button-row, .git-diff-panel > .toolbar { padding: var(--space-3); margin: 0; }
-.git-commit-diff, .git-diff-panel { min-width: 0; }
-.git-changes .diff-file-header > .chip, .git-diff-panel .diff-file-header > .chip { display: none; }
-@media (max-width: 800px) { .git-changes { grid-template-columns: 260px 200px minmax(320px, 1fr); } .page.changes-page { overflow-x: auto; } }
-.git-file-meta .git-modified { color: var(--attention); }
-.git-file-meta .git-added, .git-file-meta .git-untracked { color: var(--success); }
-.git-file-meta .git-deleted { color: var(--danger); }
+.git-file-choice:hover { background: var(--bg-2); }
+.git-commit-choice:hover { background: var(--bg-2); }
+.git-working-choice:hover { background: var(--bg-2); }
+.git-diff-pane > .button-row { padding: var(--space-3); margin: 0; }
+.git-diff-panel > .toolbar { padding: var(--space-3); margin: 0; }
+.git-commit-diff { min-width: 0; }
+.git-diff-panel { min-width: 0; }
+.git-changes .diff-file-header > .chip { display: none; }
+.git-diff-panel .diff-file-header > .chip { display: none; }
+@media (max-width: 800px) {
+  .git-changes { grid-template-columns: 260px 200px minmax(320px, 1fr); }
+  .page.changes-page { overflow-x: auto; }
+}
+.git-file-meta .git-modified { color: var(--state-approval); }
+.git-file-meta .git-added { color: var(--state-running); }
+.git-file-meta .git-untracked { color: var(--state-running); }
+.git-file-meta .git-deleted { color: var(--state-failed); }
 .git-file-meta .git-renamed { color: var(--accent); }
-
-/* 変更の画面は、見出しを作業場と同じ外枠に置き、その下を全幅で使う。 */
 .changes-workspace { height: 100%; }
 .changes-workspace > .page.changes-page { flex: 1; min-height: 0; overflow: auto; }
+.git-changes { display: grid; grid-template-columns: minmax(260px, 30fr) minmax(200px, 22fr) minmax(0, 48fr); width: 100%; height: calc(100dvh - 180px); min-height: 400px; border: 0; border-radius: 0; background: var(--bg-0); }
+.changes-files { padding: var(--space-3); min-width: 0; border: 0; border-radius: 0; background: var(--bg-0); }
+.changes-review { padding: var(--space-3); min-width: 0; border: 0; border-radius: 0; background: var(--bg-0); }
+.git-pane-header { gap: var(--space-2); justify-content: space-between; align-items: center; display: flex; height: var(--row); min-height: var(--row); padding: 0 var(--space-3); border-bottom: var(--border); }
+.git-pane-header h2 { white-space: nowrap; text-overflow: ellipsis; overflow: hidden; font: var(--type-meta); color: var(--fg-3); }
+.git-commit-choice { text-align: left; gap: var(--space-2); padding: 0 var(--space-2); width: 100%; align-items: center; display: flex; height: 44px; font: var(--type-ui); }
+.git-commit-subject strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--type-ui); }
+.git-commit-copy { min-width: 0; display: grid; gap: var(--space-1); }
+.git-ref { flex-shrink: 0; max-width: 110px; overflow: hidden; text-overflow: ellipsis; border-radius: var(--radius-1); font: var(--type-meta); background: transparent; border: 0; padding: 0; color: var(--fg-3); }
+.git-conversation-badge { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; font: var(--type-meta); background: transparent; border: 0; padding: 0; color: var(--fg-3); }
+.git-working-choice { text-align: left; border-bottom: var(--border); width: 100%; gap: var(--space-2); align-items: center; display: flex; height: var(--row); padding: 0 var(--space-3); font: var(--type-meta); }
+.git-working-choice strong { font: var(--type-meta); }
+.git-files-pane summary { cursor: pointer; overflow-wrap: anywhere; color: var(--fg-2); list-style: none; padding: 0; }
+.git-files-pane summary::-webkit-details-marker { display: none; }
+.git-files-pane details[open] > summary .tree-chevron { transform: rotate(90deg); }
+.git-files-pane details > ul { padding-left: 0; }
+.git-file-choice { text-align: left; width: 100%; gap: var(--space-2); justify-content: space-between; align-items: center; display: flex; padding: 0; height: var(--control); }
+.git-file-choice .tree-row { width: 100%; height: var(--control); }
+.git-changes nav ul { list-style: none; margin: 0; padding: 0; }
+.git-file-choice > span:first-child { white-space: nowrap; text-overflow: ellipsis; overflow: hidden; flex: 1; }
+.git-file-choice[aria-pressed='true'] { background: var(--bg-3); color: var(--fg-1); }
+.git-commit-choice[aria-pressed='true'] { background: var(--bg-3); color: var(--fg-1); }
+.git-working-choice[aria-pressed='true'] { background: var(--bg-3); color: var(--fg-1); }
+.git-file-meta { font-family: var(--mono); gap: var(--space-2); flex-shrink: 0; display: flex; font: var(--type-meta); }
+.changes-review h2 { font: var(--type-meta); color: var(--fg-3); }
+.review-section h3 { font: var(--type-meta); color: var(--fg-3); }

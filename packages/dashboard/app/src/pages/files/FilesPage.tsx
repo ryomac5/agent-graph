@@ -1,3 +1,4 @@
+import { FileTreeRow } from '../../components/FileTreeRow.tsx';
 import { callGit, FileGitDiff, type GitChange } from '../changes/GitChanges.tsx';
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router';
@@ -298,19 +299,17 @@ function TreeLevel({ explorer, path }: { explorer: FileExplorer; path: string })
       tabIndex={entry.path === current ? 0 : -1} data-path={entry.path}
       ref={element => { if (element) items.current.set(entry.path, element); else items.current.delete(entry.path); }}
       onFocus={event => { if (event.target === event.currentTarget) move(row, false); }}>
-      <div className={`tree-row${entry.path === selectedPath ? ' is-selected' : ''}${mark ? ` git-${mark}` : ''}`} style={{ paddingLeft: `calc(var(--space-2) + ${row.depth - 1} * 14px)` }}
+      <FileTreeRow depth={row.depth - 1} directory={entry.kind === 'directory'} open={row.open} selected={entry.path === selectedPath} className={mark ? `git-${mark}` : ''}
         title={entry.previousPath ? `${entry.path} (renamed from ${entry.previousPath})` : entry.path} onClick={() => activate(row)}>
-        {entry.kind === 'directory' ? <Icon className="tree-chevron" name={row.open ? 'chevronDown' : 'chevronRight'} size={12}/> : <span className="tree-chevron"/>}
-        <Icon className="tree-icon" name={entry.kind === 'directory' ? (row.open ? 'folderOpen' : 'folder') : 'file'} size={15}/>
         <span className="tree-name truncate"><Highlighted name={entry.name} query={needle}/></span>
         {entry.previousPath && <span className="tree-previous truncate">← {entry.previousPath.split('/').at(-1)}</span>}
         {entry.kind === 'directory' ? entry.changed && <span className="tree-changed" title="Contains changes" aria-hidden="true"/> : <GitLetters git={entry.git}/>}
-      </div>
+      </FileTreeRow>
       {row.open && <ul role="group">
         <TreeLevel explorer={explorer} path={entry.path}/>
-        {directory?.status === 'loading' && <li role="none" className="tree-status" style={{ paddingLeft: `calc(var(--space-2) + ${row.depth} * 14px + 20px)` }}>Loading…</li>}
-        {directory?.status === 'error' && <li role="none" className="tree-status tree-error" style={{ paddingLeft: `calc(var(--space-2) + ${row.depth} * 14px + 20px)` }}>{directory.error}</li>}
-        {directory?.status === 'loaded' && !directory.entries.length && <li role="none" className="tree-status" style={{ paddingLeft: `calc(var(--space-2) + ${row.depth} * 14px + 20px)` }}>Empty folder</li>}
+        {directory?.status === 'loading' && <li role="none" className="tree-status" style={{ paddingLeft: `calc(var(--space-2) + ${row.depth} * 16px + 32px)` }}>Loading…</li>}
+        {directory?.status === 'error' && <li role="none" className="tree-status tree-error" style={{ paddingLeft: `calc(var(--space-2) + ${row.depth} * 16px + 32px)` }}>{directory.error}</li>}
+        {directory?.status === 'loaded' && !directory.entries.length && <li role="none" className="tree-status" style={{ paddingLeft: `calc(var(--space-2) + ${row.depth} * 16px + 32px)` }}>Empty folder</li>}
       </ul>}
     </li>;
   });

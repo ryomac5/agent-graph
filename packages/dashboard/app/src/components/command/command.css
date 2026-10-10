@@ -1,10 +1,9 @@
-.command-backdrop { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: flex-start; justify-content: center; padding: 10vh 1rem; background: #0008; }
-.command-dialog { width: min(640px, 100%); max-height: 80vh; overflow: auto; background: var(--surface, Canvas); color: var(--text, CanvasText); padding: 1rem; border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 12px 48px #0005; }
-.command-dialog > input { width: 100%; margin: 1rem 0; }
+.command-dialog > input { width: 100%; margin: var(--space-4) 0; }
 .command-dialog ul { list-style: none; padding: 0; }
-.command-dialog [role=option][aria-selected=true] { outline: 2px solid var(--accent, #0031D8); }
-.command-dialog dl { display: grid; grid-template-columns: 1fr auto; gap: 0.5rem; }
+.command-dialog dl { display: grid; grid-template-columns: 1fr auto; gap: var(--space-2); }
 .command-dialog dl > div { display: contents; }
-
 .command-dialog [role=option] { min-width: 0; }
-.command-dialog [role=option] button { display: block; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.command-backdrop { justify-content: center; align-items: flex-start; display: flex; z-index: 1000; inset: 0; position: fixed; padding: var(--space-12) var(--space-4); background: var(--focus); }
+.command-dialog { overflow: auto; max-height: 80vh; width: min(640px, 100%); background: var(--bg-0); color: var(--fg-1); padding: var(--space-4); border: var(--border); border-radius: var(--radius-2); box-shadow: var(--shadow); }
+.command-dialog [role=option][aria-selected=true] { outline: none; background: var(--bg-3); border-radius: var(--radius-2); }
+.command-dialog [role=option] button { text-align: left; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; width: 100%; display: block; height: var(--row); padding: 0 var(--space-2); font: var(--type-ui); }

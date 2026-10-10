@@ -58,6 +58,7 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
   // 子の会話は、頼んだ内容を名前として出す。
   const childNode = selectedNode;
   const childTitle = childNode ? tree.edges.find(edge => edge.target === childNode.id)?.title || undefined : undefined;
+  const breadcrumb = <>{childId && <button className="btn btn-ghost btn-sm root-back" aria-label={`${language === 'ja' ? '戻る:' : 'Back to'} ${selected?.name ?? ""}`} onClick={() => { const next = new URLSearchParams(search); next.delete('child'); if (selected) next.set('root', selected.id); if (suppliedConversation) navigate(`/p/${encodeURIComponent(project)}?${next}`); else setSearch(next); }}>{selected?.name}</button>}{childId && <span aria-hidden="true">/</span>}</>;
   return <div className={`workspace root-workspace three-workspace${showRootList ? ' with-roots' : ''}`}>
     {creating && <div className="workspace-notices"><CreateTaskForm project={project} root={String(state.projection.projects?.find(row => row.id === project)?.root_path ?? '')} client={client} disabled={state.connection !== 'connected'} language={language} onCancel={() => setCreating(false)}/></div>}
     <div className="workspace-columns">
@@ -67,11 +68,12 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
           const next = new URLSearchParams(search); next.set('root', root.id); next.delete('path'); next.delete('child'); setSearch(next);
         }}/></div></section>}
       <section className="workspace-conversation" aria-label={t.conversation}>
-        {childId ? <button className="btn btn-ghost btn-sm root-back" aria-label={`${language === 'ja' ? '戻る:' : 'Back to'} ${selected?.name ?? ""}`} onClick={() => { const next = new URLSearchParams(search); next.delete('child'); if (selected) next.set('root', selected.id); if (suppliedConversation) navigate(`/p/${encodeURIComponent(project)}?${next}`); else setSearch(next); }}><span aria-hidden="true">←</span>{selected?.name}</button> : <div className="root-back root-back-placeholder" aria-hidden="true"/>}
+
         {childNode?.delegation?.state === 'failed' && <div className="request-detail-actions"><strong>{childTitle || childNode.label}</strong><button className="btn btn-secondary btn-sm" disabled={state.connection !== 'connected'} onClick={() => void retry(childNode)}>{t.retry}</button></div>}
         {retryError && <p role="alert" className="status-line danger">{retryError}</p>}
-        {conversationId ? renderConversation && (childId || selected?.conversation_ids.length === 1) ? renderConversation(conversationId)
+        {conversationId ? renderConversation && (childId || selected?.conversation_ids.length === 1) ? <>{childId && <header className="conv-header"><div className="conv-title-row conv-breadcrumb">{breadcrumb}</div></header>}{renderConversation(conversationId)}</>
           : <ConversationPage key={selected?.id + ':' + (childId ?? 'root')} target={target} client={client} conversationId={conversationId} embedded language={language}
+            breadcrumb={childId ? breadcrumb : undefined}
             seriesIds={childId ? undefined : series} seriesState={childId ? childNode?.state : selected?.state} displayName={childId ? childTitle : selected?.name}/>
           : <p className="empty-row">{t.selectConversation}</p>}
       </section>

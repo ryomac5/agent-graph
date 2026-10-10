@@ -49,7 +49,7 @@ it('interrupts the selected root and keeps projected state until a patch arrives
  const client = createCommandClient(); render(<MemoryRouter initialEntries={['/?create=1']}><WorkspacePage project="/repo/alpha" target={createActivityStore()} client={client}/></MemoryRouter>);
  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Interrupt' })));
  expect(client.command).toHaveBeenCalledWith('interrupt', { runId: 'r1' });
- expect(within(screen.getByRole('region', { name: 'Conversations' })).getByText('Running')).toBeTruthy();
+ expect(within(screen.getByRole('region', { name: 'Conversations' })).getByRole('img', { name: 'Running' })).toBeTruthy();
 });it('does not list parallel child conversations among roots', () => {
  const target = createActivityStore(); const snapshot = target.getSnapshot();
  target.setSnapshot({ ...snapshot, projection: { ...snapshot.projection, conversations: [...snapshot.projection.conversations, { id: 'parallel', provider: 'claude', origin: 'managed', name: 'Parallel child' }] } });

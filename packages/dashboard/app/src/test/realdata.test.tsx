@@ -68,7 +68,7 @@ it('shows at most five roots per project with running roots first', () => {
  roots: [{ id: 'c', name: 'Feature worktree', project: 'main', state: 'unknown', last_activity_ts: null, conversation_ids: ['c'], running_children: 0, total_children: 0 }],
  conversations: [{ id: 'c', project: 'main', origin: 'observed' }], runs: [{ id: 'r', conversation_id: 'c', cwd: '/tmp/feature-worktree', state: 'unknown' }] } });
  render(<MemoryRouter><HomePage target={target}/></MemoryRouter>); const row = within(screen.getByRole('region', { name: 'Main' })).getByRole('link', { name: /Feature worktree/ });
- expect(row.querySelector('.root-state')?.textContent).toBe('Unknown'); expect(row.textContent).not.toContain('Activity unknown');
+ expect(row.querySelector('.root-state')?.getAttribute('data-state')).toBe('unknown'); expect(row.textContent).not.toContain('Activity unknown');
 });function createConversationStore() {
   const target = createStore();
   target.setSnapshot({ seq: 1, generation: 0, projection: {

@@ -11,6 +11,7 @@ const NOW = Date.parse('2026-10-10T12:00:00Z');
 const time = (hours: number) => new Date(NOW - hours * 3600000).toISOString();
 beforeEach(() => {
   localStorage.clear();
+  vi.stubGlobal('innerWidth', 1440);
   vi.spyOn(Date, 'now').mockReturnValue(NOW);
   vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
 });
@@ -51,10 +52,11 @@ it('1: groups sessions by turns and the current 24-hour boundary, collapses proj
   expect(within(turn).getByRole('link', { name: 'Session unread' })).toBeTruthy();
   const running = within(sessions).getByRole('link', { name: 'Session active' });
   expect(running.getAttribute('aria-current')).toBe('page');
-  expect(running.querySelector('.root-row-meta')?.textContent).toContain('Running');
+  expect(running.querySelector('.root-state')?.getAttribute('data-state')).toBe('running');
   expect(running.querySelector('.root-elapsed')?.textContent).toBe('3m 21s');
-  expect(running.querySelector('.root-running')?.textContent).toBe('1 child');
-  const completed = within(sessions).getByRole('region', { name: 'Completed' });
+  expect(running.querySelector('.root-running')).toBeNull();
+  expect(running.title).toContain('1 agent running');
+  const completed = within(sessions).getByRole('region', { name: 'Recent' });
   expect(within(completed).getByRole('link', { name: 'Session boundary' })).toBeTruthy();
   expect(within(completed).getByRole('link', { name: 'Session recent' })).toBeTruthy();
   expect(within(sessions).queryByRole('link', { name: 'Session old' })).toBeNull();
@@ -124,7 +126,8 @@ it('4: switches narrow-screen views and defines the 900px breakpoint with one vi
   expect(css).toContain('@media (max-width: 899px)');
   expect(css).toContain('.mobile-sessions > .main-column { display: none; }');
   expect(css).toContain('.mobile-conversation .workspace-panel { display: none; }');
-  expect(css).toContain('.mobile-panel .workspace-conversation, .mobile-panel .workspace-roots { display: none; }');
+  expect(css).toContain('.mobile-panel .workspace-conversation { display: none; }');
+  expect(css).toContain('.mobile-panel .workspace-roots { display: none; }');
 });
 it.each(['/p/p', '/c/active', '/p/p/graph', '/p/p/changes'])('5: retains route %s and uses three panes for project and standalone conversations', route => {
   mount(route);
@@ -233,4 +236,23 @@ it('5: opens the compact conversation menu and centers three equal mobile tabs',
   const conversationCss = readFileSync('app/src/pages/conversation/conversation.css', 'utf8');
   expect(conversationCss).toContain('.conversation-page .conv-title-row .conv-title { flex: 1; }');
   expect(conversationCss).toContain('.conv-action-menu { display: none;');
+});
+
+it.each([[1440, 420, false], [1024, 360, false], [960, 360, true]] as const)('uses the specified initial panel layout at %ipx', (viewport, width, collapsed) => {
+  vi.stubGlobal('innerWidth', viewport);
+  mount();
+  if (collapsed) {
+    expect(screen.queryByRole('tabpanel')).toBeNull();
+    expect((document.querySelector('.workspace-panel') as HTMLElement).style.width).toBe('0px');
+    fireEvent.click(screen.getByRole('button', { name: 'Expand panel' }));
+  }
+  const resize = screen.getByRole('separator', { name: 'Panel width' });
+  expect(resize.getAttribute('aria-valuenow')).toBe(String(width));
+  for (let index = 0; index < 50; index++) fireEvent.keyDown(resize, { key: 'ArrowLeft' });
+  expect(resize.getAttribute('aria-valuenow')).toBe(String(viewport / 2));
+  expect(resize.getAttribute('aria-valuemax')).toBe(String(viewport / 2));
+  vi.stubGlobal('innerWidth', 900);
+  fireEvent(window, new Event('resize'));
+  expect(resize.getAttribute('aria-valuenow')).toBe('450');
+  expect(resize.getAttribute('aria-valuemax')).toBe('450');
 });

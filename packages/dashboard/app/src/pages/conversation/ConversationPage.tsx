@@ -17,16 +17,16 @@ import { Fields } from '../../components/Fields.tsx';
 import { ApprovalRequestView, OutcomeChip, OutcomeIcon } from '../../components/ApprovalRequest.tsx';
 import { providerName } from '../../components/ActivityRow.tsx';
 import { executionStates } from '../../components/activity.ts';
-import { countTools, isBlank, isToolOnly, Message } from '../../components/conversation/Message.tsx';
+import { isBlank, isToolOnly, Message, ToolRun } from '../../components/conversation/Message.tsx';
 import { harnessKind, readBody } from '../../lib/message-body.ts';
 import { collectToolResults } from '../../components/conversation/ToolCall.tsx';
 import { resolveParticipants, senderOf, type Sender } from '../../components/conversation/participants.ts';
 import { ACTIVE_STATES, compareEntries, messageSignature, PENDING_APPROVALS, readObject, readText, selectTimeline, showValue, type TimelineEntry } from '../../components/conversation/model.ts';
-import { effortLabel, toolsLabel, translate, type ConversationText } from '../../components/conversation/text.ts';
+import { effortLabel, translate, type ConversationText } from '../../components/conversation/text.ts';
 import { collectConversationChanges } from '../../lib/conversation-changes.ts';
 import { resolveProjectId } from '../../lib/projects.ts';
 import { ChangedFiles } from './ChangedFiles.tsx';
-import { groupToolRuns } from '../../components/conversation/timeline.ts';
+import { groupToolRuns, instructionKind } from '../../components/conversation/timeline.ts';
 import { resolveDelegationNode } from '../../components/conversation/DelegationCard.tsx';
 import { selectRoots, useRootIndex } from '../../lib/roots.ts';
 import './conversation.css';
@@ -43,6 +43,7 @@ export interface ConversationPageProps {
   /** 系列の状態。一覧と同じ、系列の最新の会話の実行の状態を見出しに出す。 */
   seriesState?: string;
   displayName?: string;
+  breadcrumb?: React.ReactNode;
   onConversation?: (conversationId: string) => void;
 }
 const CODEX_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
@@ -95,7 +96,7 @@ function ApprovalCard({ entry, t, disabled, answered, onAnswer, screen }: {
   </article>;
 }
 
-export function ConversationPage({ client, conversationId: explicitId, target = store, language = 'en', embedded = false, seriesIds, seriesState, displayName, onConversation }: ConversationPageProps) {
+export function ConversationPage({ client, conversationId: explicitId, target = store, language = 'en', embedded = false, seriesIds, seriesState, displayName, breadcrumb, onConversation }: ConversationPageProps) {
   const params = useParams();
   const conversationId = explicitId ?? params.conversation ?? '';
   const visibleConversation = useRef(conversationId);
@@ -367,6 +368,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
         if (!(event.target instanceof Element) || !event.target.closest('.state-badge')) return;
         event.preventDefault(); setDetailsOpen(true);
       }}>
+        {breadcrumb && <div className="conv-breadcrumb">{breadcrumb}</div>}
         <Heading className="conv-title truncate" title={title}>{title}</Heading>
         <StateBadge state={status} language={language} evidenceUrl="#conversation-details"
           evidence={evidenceLabel(evidence) || undefined}
@@ -405,12 +407,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
       {!historyLoading && !historyError && entries.length === 0 && deltas.length === 0 && <p className="timeline-empty"><Icon name="message" size={16}/>{t('empty')}</p>}
       {groupToolRuns(entries).map(entry => {
         if (entry.kind === 'tools') {
-          // 続く道具の呼び出しは 1 行に畳み、開くと 1 つずつ見られる。
-          const count = countTools(entry.rows.map(item => item.row));
-          return <details className="tool-run" key={entry.key}>
-            <summary><Icon name="terminal" size={13}/>{toolsLabel(count, language)}</summary>
-            <div className="tool-run-body">{entry.rows.map(item => <Message key={item.key} row={item.row} sender={agentSender} showName={false} language={language} toolResults={toolResults}/>)}</div>
-          </details>;
+          return <ToolRun key={entry.key} rows={entry.rows.map(item => item.row)} toolResults={toolResults} language={language}/>;
         }
         if (entry.kind === 'instructions' || entry.kind === 'project') return <details className="timeline-instructions" key={entry.key}>
           <summary>{entry.kind === 'project' ? t('projectInstructions') : language === 'ja' ? `${t('settingsInstructions')} ${entry.rows.length} 件` : `${t('settingsInstructions')}: ${entry.rows.length}`}</summary>
@@ -418,7 +415,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
         </details>;
         if (entry.kind === 'message') {
           const sender = senderOf(entry.row, participants);
-          return <Message key={entry.key} row={entry.row} sender={sender} showName={nameShown(sender)} language={language} toolResults={toolResults} delegationNode={delegationNode} onSelectChild={selectChild}/>;
+          return <Message key={entry.key} row={entry.row} sender={sender} showName={nameShown(sender)} parentRequest={participants.child && sender.side === 'end' && entries.find(item => item.kind === 'message' && senderOf(item.row, participants).side === 'end' && !isToolOnly(item.row) && !instructionKind(item.row))?.key === entry.key} language={language} toolResults={toolResults} delegationNode={delegationNode} onSelectChild={selectChild}/>;
         }
         if (entry.kind === 'approval') return <ApprovalCard screen={historyState} key={entry.key} entry={entry} t={t} disabled={!writable} answered={answered.has(entry.row.id)} onAnswer={decision => void answer(entry.row.id, decision)}/>;
         nameShown(undefined);
@@ -476,7 +473,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
           <div className="composer-actions">
             {!external && <button className="btn btn-ghost btn-sm" aria-label={t('fork')} title={canLaunch ? t('fork') : t('launchReady')} disabled={!canLaunch} onClick={() => void launchConversation('fork')}>
               <Icon name="fork" size={14}/>{t('branchShort')}</button>}
-            <button className="btn btn-secondary btn-sm" disabled={!writable || !active} onClick={() => void execute('interrupt', { runId: run!.id })}><Icon name="stop" size={13}/>{t('interrupt')}</button>
+            {active && <button className="btn btn-secondary btn-sm" disabled={!writable} onClick={() => void execute('interrupt', { runId: run!.id })}><Icon name="stop" size={13}/>{t('interrupt')}</button>}
             {external ? <button className="btn btn-primary btn-sm" title={canLaunch ? t('shortcut') : t('launchReady')} disabled={!canLaunch || !input.trim() || confirmation !== undefined} onClick={() => void launchConversation('adopt')}>
               <Icon name="send" size={14}/>{t('send')}</button>
               : <button className="btn btn-primary btn-sm" title={t('shortcut')} disabled={!canSend || !input.trim()} onClick={() => void send()}><Icon name="send" size={14}/>{t('send')}</button>}

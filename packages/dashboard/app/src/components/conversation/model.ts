@@ -21,7 +21,7 @@ export function showValue(value: unknown): string {
 export function isActive(value: unknown): boolean { return value === true || value === 1; }
 export const ACTIVE_STATES = ['starting', 'running', 'waiting_approval', 'waiting_input'];
 export const PENDING_APPROVALS = ['pending', 'requested', 'waiting', 'waiting_approval'];
-export const PREVIEW_LINES = 10;
+export const PREVIEW_LINES = 8;
 
 export interface TimelineEntry { kind: 'message' | 'approval' | 'boundary' | 'gap'; row: Row; time: string; key: string }
 export function selectTimeline(state: ScreenState, conversationId: string): TimelineEntry[] {

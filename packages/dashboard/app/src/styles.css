@@ -338,29 +338,26 @@ details[open] > summary .caret { transform: rotate(90deg); }
 .three-workspace .workspace-roots { width: var(--sidebar-width); flex: none; }
 .three-workspace .workspace-conversation > .conversation { width: 100%; max-width: 880px; margin-inline: auto; }
 .panel-content { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: auto; }
-.panel-resize:hover { background: var(--bg-3); }
-.panel-resize:focus-visible { background: var(--bg-3); }
 .workspace-panel .graph-page { flex: 1; min-height: 0; }
-.workspace-panel .changes-workspace { height: auto; flex: 1; min-height: 0; }
+.workspace-panel .changes-workspace { height: 100%; flex: 1; min-height: 0; }
 .workspace-panel .changes-columns { display: flex; flex-direction: column; height: auto; min-height: 0; }
-.workspace-panel .git-changes { display: flex; flex-direction: column; height: auto; min-height: 0; }
-.workspace-panel .git-changes > * { width: 100%; overflow: visible; border-right: 0; border-bottom: var(--border); }
-.workspace-panel .git-history { max-height: 280px; overflow: auto; }
-.workspace-panel .git-files-pane { max-height: 280px; overflow: auto; }
+.workspace-panel .git-changes { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.workspace-panel .git-changes > * { width: 100%; min-height: 0; }
+.workspace-panel .resizable-section > * { overflow: auto; border-right: 0; border-bottom: 0; }
 .workspace-panel .changes-review { grid-column: auto; }
 .workspace-panel .page.changes-page { padding: var(--space-2); overflow-x: hidden; }
 .panel-files { display: flex; flex-direction: column; min-height: 0; flex: 1; }
-.panel-files .explorer-tree { flex: none; height: 300px; border-bottom: var(--border); }
-.panel-files .explorer-viewer { flex: 1; min-height: 240px; }
+.panel-files .explorer-tree { height: 100%; border: 0; }
+.panel-files .explorer-viewer { flex: 1; min-height: 0; }
 .mobile-tabs { display: none; }
 .sidebar-actions { display: flex; align-items: center; gap: 0; flex: none; }
 .sidebar-actions > .btn { padding-inline: 0; gap: var(--space-1); }
 .sidebar-actions .notification-panel.popover { position: fixed; top: 48px; left: 8px; right: auto; }
-.sidebar { display: flex; flex-direction: column; min-width: 0; overflow: hidden; border-right: var(--border); padding: 0 var(--space-2) var(--space-2); gap: 0; background: var(--bg-1); }
+.sidebar { position: relative; display: flex; flex-direction: column; min-width: 0; overflow: visible; border-right: var(--border); padding: 0 var(--space-2) var(--space-2); gap: 0; background: var(--bg-1); }
 .sidebar-brand-row { margin-bottom: var(--space-2); flex: none; align-items: center; display: flex; height: var(--header); margin: 0 calc(-1 * var(--space-2)); padding: 0 var(--space-2); gap: var(--space-1); border-bottom: var(--border); }
 .sidebar-brand-row .brand { padding-inline: var(--space-1); margin-bottom: 0; min-width: 0; flex: 1; height: var(--header); font: var(--type-title); gap: var(--space-2); white-space: nowrap; }
-.sidebar > .nav-group { flex-shrink: 0; display: flex; flex-direction: column; gap: 0; padding-top: var(--space-2); }
-.sidebar > .nav-group > a { gap: var(--space-1); flex: none; justify-content: flex-start; height: var(--row); padding: 0 var(--space-2); font: var(--type-ui); }
+.sidebar-content > .nav-group { flex-shrink: 0; display: flex; flex-direction: column; gap: 0; padding-top: var(--space-2); }
+.sidebar-content > .nav-group > a { gap: var(--space-1); flex: none; justify-content: flex-start; height: var(--row); padding: 0 var(--space-2); font: var(--type-ui); }
 .workspace-panel { min-height: 0; flex: none; flex-direction: column; display: flex; position: relative; background: var(--bg-0); border-left: var(--border); }
 .panel-header { flex: none; justify-content: space-between; align-items: center; display: flex; position: sticky; top: 0; z-index: 1; background: var(--bg-0); height: var(--header); padding: 0 var(--space-2); gap: var(--space-1); border-bottom: var(--border); }
 .panel-tabs { display: flex; align-items: center; gap: var(--space-1); height: var(--header); min-width: 0; }
@@ -370,7 +367,7 @@ details[open] > summary .caret { transform: rotate(90deg); }
 .panel-actions { display: flex; align-items: center; gap: var(--space-1); }
 .panel-collapsed { border: 0; overflow: visible; }
 .panel-collapsed .panel-header { position: absolute; right: 0; top: 0; border: 0; padding: 0; background: var(--bg-0); }
-.panel-resize { touch-action: none; cursor: col-resize; bottom: 0; top: 0; z-index: 10; position: absolute; width: 8px; left: -4px; }
+.panel-resize { bottom: 0; top: 0; z-index: 10; position: absolute; left: -3px; }
 .three-workspace .workspace-conversation > .conversation-page { margin-inline: auto; width: 100%; max-width: none; margin: 0; }
 .column-header { flex: none; display: flex; align-items: center; gap: var(--space-2); padding: 0 var(--space-2) 0 var(--space-4); height: var(--header); border-bottom: var(--border); }
 .workspace-header { flex: none; display: flex; align-items: center; gap: var(--space-6); padding: 0 var(--space-4); background: var(--bg-0); height: var(--header); border-bottom: var(--border); }
@@ -519,4 +516,18 @@ textarea::placeholder { color: var(--fg-4); }
   .mobile-panel .workspace-panel { width: 100% !important; border-left: 0; position: relative; flex: 1; max-width: 100%; box-shadow: none; }
   .sidebar { padding: 0 var(--space-2); }
   .sidebar-project-row>.btn { visibility: visible; }
+}
+
+.sidebar-content { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
+.sidebar-resize { position: absolute; right: -3px; top: 0; bottom: 0; z-index: 10; }
+.sidebar-restore { display: none; width: 100%; height: 100%; color: var(--fg-3); }
+.tree-toggle { flex: none; text-align: left; }
+@media (min-width: 900px) {
+  .sidebar-collapsed .sidebar { padding: 0; }
+  .sidebar-collapsed .sidebar-content, .sidebar-collapsed .sidebar-resize { display: none; }
+  .sidebar-collapsed .sidebar-restore { display: block; }
+}
+@media (max-width: 899px) {
+  .app-shell { grid-template-columns: minmax(0, 1fr) !important; }
+  .sidebar-resize, .panel-resize { display: none; }
 }

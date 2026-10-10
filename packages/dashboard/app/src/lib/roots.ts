@@ -149,7 +149,7 @@ export function buildRootTree(root: Root, index: RootIndex): DelegationTree {
   const edges: DelegationTree['edges'] = [];
   const visited = new Set(root.conversation_ids);
   const rootNode: TreeNode = { id: root.id, kind: 'conversation', conversationId: root.conversation_ids.at(-1), label: root.name,
-    role: 'root', provider: '', model: '', state: root.state, children: [], attempts: [] };
+    role: 'root', provider: readText(index.conversations.get(root.conversation_ids.at(-1) ?? '')?.provider), model: '', state: root.state, children: [], attempts: [] };
   nodes.push(rootNode);
   function addChildren(parent: TreeNode, conversationId: string) {
     for (const relation of index.children.get(conversationId) ?? []) {

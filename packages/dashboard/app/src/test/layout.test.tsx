@@ -1,3 +1,4 @@
+import { SIDEBAR_WIDTH_KEY, SIDEBAR_COLLAPSED_KEY, FILES_SPLIT_KEY, FILES_COLLAPSED_KEY, CHANGES_SPLIT_KEY } from '../lib/layout.ts';
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
@@ -97,7 +98,7 @@ it('3: stores tabs in the URL, clamps and remembers width, and remembers collaps
   view.unmount(); mount('/p/p?root=active&panel=changes');
   expect(within(screen.getByRole('complementary', { name: 'Panel' })).queryByRole('tabpanel')).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Expand panel' }));
-  expect(screen.getByRole('separator').getAttribute('aria-valuenow')).toBe('320');
+  expect(screen.getByRole('separator', { name: 'Panel width' }).getAttribute('aria-valuenow')).toBe('320');
   expect(screen.getByRole('tab', { name: 'Changes' }).getAttribute('aria-selected')).toBe('true');
 });
 it('3: opens a child in the middle while keeping graph selection and can deny its approval', async () => {
@@ -154,7 +155,7 @@ it('uses Japanese for session groups, panel tabs and mobile navigation', () => {
 it('3: resizes from the left edge by pointer movement and stops after release', () => {
   vi.stubGlobal('PointerEvent', MouseEvent);
   mount();
-  const edge = screen.getByRole('separator');
+  const edge = screen.getByRole('separator', { name: 'Panel width' });
   fireEvent.pointerDown(edge, { clientX: 700 });
   fireEvent.pointerMove(window, { clientX: 600 });
   expect(edge.getAttribute('aria-valuenow')).toBe('520');
@@ -271,4 +272,83 @@ it.each([[1440, 420, false], [1024, 360, false], [960, 360, true]] as const)('us
   fireEvent(window, new Event('resize'));
   expect(resize.getAttribute('aria-valuenow')).toBe('450');
   expect(resize.getAttribute('aria-valuemax')).toBe('450');
+});
+
+it('resizes the sidebar within bounds, resets and restores its size', () => {
+  vi.stubGlobal('PointerEvent', MouseEvent);
+  let view = mount();
+  const edge = screen.getByRole('separator', { name: 'Sidebar width' });
+  fireEvent.pointerDown(edge, { clientX: 248 }); fireEvent.pointerMove(window, { clientX: 320 }); fireEvent.pointerUp(window);
+  expect(edge.getAttribute('aria-valuenow')).toBe('320');
+  expect(localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBe('320');
+  view.unmount(); view = mount();
+  const restored = screen.getByRole('separator', { name: 'Sidebar width' });
+  expect(restored.getAttribute('aria-valuenow')).toBe('320');
+  fireEvent.pointerDown(restored, { clientX: 320 }); fireEvent.pointerMove(window, { clientX: 1000 }); fireEvent.pointerCancel(window);
+  expect(restored.getAttribute('aria-valuenow')).toBe('400');
+  fireEvent.pointerDown(restored, { clientX: 400 }); fireEvent.pointerMove(window, { clientX: 0 }); fireEvent.pointerUp(window);
+  expect(restored.getAttribute('aria-valuenow')).toBe('200');
+  fireEvent.doubleClick(restored); expect(restored.getAttribute('aria-valuenow')).toBe('248');
+});
+it('toggles the sidebar with Cmd+B and its buttons, remembers collapse and keeps the mobile view', () => {
+  let view = mount();
+  fireEvent.keyDown(document, { key: 'b', metaKey: true });
+  expect(document.querySelector('.app-shell')?.className).toContain('sidebar-collapsed');
+  expect(localStorage.getItem(SIDEBAR_COLLAPSED_KEY)).toBe('1');
+  view.unmount(); view = mount();
+  expect(document.querySelector('.app-shell')?.className).toContain('sidebar-collapsed');
+  fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }));
+  expect(localStorage.getItem(SIDEBAR_COLLAPSED_KEY)).toBe('0');
+  fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }));
+  fireEvent.keyDown(document, { key: 'b', metaKey: true });
+  expect(localStorage.getItem(SIDEBAR_COLLAPSED_KEY)).toBe('0');
+});
+it('toggles the right panel with Cmd+Alt+B independently and resets its width', () => {
+  mount();
+  const edge = screen.getByRole('separator', { name: 'Panel width' });
+  fireEvent.keyDown(edge, { key: 'ArrowLeft' }); fireEvent.doubleClick(edge);
+  expect(edge.getAttribute('aria-valuenow')).toBe('420');
+  fireEvent.keyDown(document, { key: 'b', metaKey: true, altKey: true });
+  expect(localStorage.getItem(PANEL_COLLAPSED_KEY)).toBe('1');
+  expect(localStorage.getItem(SIDEBAR_COLLAPSED_KEY)).toBe('0');
+  fireEvent.keyDown(document, { key: 'b', metaKey: true, altKey: true });
+  expect(screen.getByRole('separator', { name: 'Panel width' })).toBeTruthy();
+});
+it('drags, restores and resets the file tree height and remembers its collapse', () => {
+  vi.stubGlobal('PointerEvent', MouseEvent);
+  let view = mount('/p/p?root=active&panel=files');
+  const edge = screen.getByRole('separator', { name: 'File tree height' });
+  vi.spyOn(edge.parentElement!, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 420, 606));
+  fireEvent.pointerDown(edge, { clientY: 270 }); fireEvent.pointerMove(window, { clientY: 330 }); fireEvent.pointerUp(window);
+  expect(edge.getAttribute('aria-valuenow')).toBe('55');
+  expect(JSON.parse(localStorage.getItem(FILES_SPLIT_KEY)!)[0]).toBeCloseTo(0.55);
+  view.unmount(); view = mount('/p/p?root=active&panel=files');
+  expect(screen.getByRole('separator', { name: 'File tree height' }).getAttribute('aria-valuenow')).toBe('55');
+  fireEvent.doubleClick(screen.getByRole('separator', { name: 'File tree height' }));
+  expect(screen.getByRole('separator', { name: 'File tree height' }).getAttribute('aria-valuenow')).toBe('45');
+  fireEvent.click(screen.getByRole('button', { name: 'Collapse file tree' }));
+  expect(screen.queryByRole('separator', { name: 'File tree height' })).toBeNull();
+  expect(localStorage.getItem(FILES_COLLAPSED_KEY)).toBe('1');
+  view.unmount(); mount('/p/p?root=active&panel=files');
+  expect(screen.queryByRole('separator', { name: 'File tree height' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Expand file tree' }));
+  expect(screen.getByRole('separator', { name: 'File tree height' })).toBeTruthy();
+});
+it('resizes both boundaries of the three change sections and restores their ratios', () => {
+  vi.stubGlobal('PointerEvent', MouseEvent);
+  const view = mount('/p/p?root=active&panel=changes');
+  const history = screen.getByRole('separator', { name: 'Commit list height' });
+  vi.spyOn(history.parentElement!, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 420, 612));
+  fireEvent.pointerDown(history, { clientY: 210 }); fireEvent.pointerMove(window, { clientY: 240 }); fireEvent.pointerUp(window);
+  expect(history.getAttribute('aria-valuenow')).toBe('40');
+  const files = screen.getByRole('separator', { name: 'Changed files height' });
+  fireEvent.pointerDown(files, { clientY: 360 }); fireEvent.pointerMove(window, { clientY: 420 }); fireEvent.pointerUp(window);
+  expect(files.getAttribute('aria-valuenow')).toBe('30');
+  const ratios = JSON.parse(localStorage.getItem(CHANGES_SPLIT_KEY)!);
+  [0.4, 0.3, 0.3].forEach((value, index) => expect(ratios[index]).toBeCloseTo(value));
+  view.unmount(); mount('/p/p?root=active&panel=changes');
+  expect(screen.getByRole('separator', { name: 'Commit list height' }).getAttribute('aria-valuenow')).toBe('40');
+  expect(screen.getByRole('separator', { name: 'Changed files height' }).getAttribute('aria-valuenow')).toBe('30');
+  fireEvent.doubleClick(screen.getByRole('separator', { name: 'Commit list height' }));
+  expect(screen.getByRole('separator', { name: 'Changed files height' }).getAttribute('aria-valuenow')).toBe('25');
 });

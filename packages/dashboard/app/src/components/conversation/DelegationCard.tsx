@@ -4,7 +4,7 @@ import type { Language } from '../../lib/i18n.ts';
 import type { RootIndex, Root } from '../../lib/roots.ts';
 import { buildRootTree } from '../../lib/roots.ts';
 import type { TreeNode } from '../../pages/tree/model.ts';
-import { Icon } from '../Icon.tsx';
+import { ProviderMark } from '../RootViews.tsx';
 import { StatusDot } from '../StateBadge.tsx';
 import { readObject, readText } from './model.ts';
 
@@ -36,12 +36,6 @@ export function resolveDelegationNode(tool: Row, conversationId: string, state: 
   return matches.length === 1 ? matches[0] : undefined;
 }
 
-// RootViews の ProviderMark と同じ印。共有元は別の作業者が編集中のためここで保持する。
-function ProviderMark({ provider }: { provider?: string }) {
-  const name = provider === 'claude' ? 'Claude' : provider === 'codex' ? 'Codex' : 'Agent';
-  return <span className={`request-avatar provider-${provider || 'unknown'}`} title={name} aria-hidden="true">
-    <Icon name={provider === 'codex' ? 'terminal' : provider === 'claude' ? 'sparkle' : 'bot'} size={13}/></span>;
-}
 export function DelegationCard({ tool, node, language, onSelect }: { tool: Row; node?: TreeNode; language: Language; onSelect?: (id: string) => void }) {
   const input = readObject(tool.input);
   const provider = node?.provider || readText(input.provider ?? input.executor) || (['Agent', 'Task'].includes(readText(tool.name)) ? 'claude' : 'codex');

@@ -11,9 +11,11 @@ import { Icon } from './Icon.tsx';
 
 /** 依頼先の印。頭文字は Claude と Codex で重なるので、色と形で分ける。 */
 export function ProviderMark({ provider }: { provider?: string }) {
-  const name = provider === 'claude' ? 'Claude' : provider === 'codex' ? 'Codex' : 'Agent';
+  const brand = provider === 'claude' ? 'claude' : provider === 'codex' ? 'chatgpt' : ['antigravity', 'gemini'].includes(provider ?? '') ? 'antigravity' : undefined;
+  const [failed, setFailed] = useState<string>();
+  const name = provider === 'claude' ? 'Claude' : provider === 'codex' ? 'Codex' : brand === 'antigravity' ? 'Antigravity' : 'Agent';
   return <span className={`request-avatar provider-${provider || 'unknown'}`} title={name} aria-hidden="true">
-    <Icon name={provider === 'codex' ? 'terminal' : provider === 'claude' ? 'sparkle' : 'bot'} size={13}/></span>;
+    {brand && failed !== brand ? <img src={`/brand/${brand}.png`} alt="" onError={() => setFailed(brand)}/> : <Icon name={provider === 'codex' ? 'terminal' : provider === 'claude' ? 'sparkle' : 'bot'} size={13}/>}</span>;
 }
 import './roots.css';
 
@@ -140,7 +142,7 @@ export function RootTree({ tree, selected, onSelect, runningOnly = false, langua
   const more = hidden.size > 0 && <li key="older"><button className="btn btn-ghost btn-sm request-older" onClick={() => setShowOlder(true)}>{t.showOlder} <span className="numeric">({hidden.size})</span></button></li>;
   const empty = !items.some(Boolean) && !more;
   if (root) return <div className="root-tree request-flow"><ul><li>
-    <div className={`request-row request-apex${selected ? '' : ' selected'}`}><ProviderMark provider="claude"/><button className="request-main" aria-pressed={!selected} onClick={onSelectRoot}>
+    <div className={`request-row request-apex${selected ? '' : ' selected'}`}><ProviderMark provider={tree.nodes.find(node => node.id === tree.roots[0])?.provider}/><button className="request-main" aria-pressed={!selected} onClick={onSelectRoot}>
       <span className="request-title" title={root.kit_name}>{root.name}</span><span className="request-meta"><StatusDot state={root.state} language={language}/><time dateTime={root.last_activity_ts ?? undefined}>{formatWhen(root.last_activity_ts, language) || (language === 'ja' ? '時刻不明' : 'Unknown time')}</time></span></button></div>
     {(!empty || more) && <ul>{items}{more}</ul>}</li></ul>{empty && <p className="empty-row">{t.noRequests}</p>}</div>;
   return <div className="root-tree"><ul>{items}{more}</ul>{empty && !runningOnly && <p className="empty-row">{t.noRequests}</p>}</div>;

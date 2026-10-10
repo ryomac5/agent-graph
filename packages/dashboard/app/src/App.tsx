@@ -1,3 +1,5 @@
+import { ResizeDivider } from './components/ResizeDivider.tsx';
+import { SIDEBAR_WIDTH_KEY, SIDEBAR_COLLAPSED_KEY, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_INITIAL_WIDTH, SIDEBAR_COMPACT_WIDTH, SIDEBAR_RESTORE_WIDTH, clampSidebar, useStoredToggle } from './lib/layout.ts';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createKeyHandler, isTextInput, keyLabel, type KeyAction } from './lib/keys.ts';
 import { CommandDialog, CommandPalette, KeyboardSettings, useKeySettings, type Command } from './components/command/Commands.tsx';
@@ -126,6 +128,10 @@ export function App({ target = store, client = unavailableClient, searchClient =
   const goBack = () => navigate(returnUrl ?? (project ? `/p/${encodeURIComponent(project)}` : '/'));
   const backAction = <button className="btn btn-ghost" onClick={goBack}>{language === 'ja' ? '← 戻る' : '← Back'}</button>;
   const [collapsedProjects, setCollapsedProjects] = useState<Record<string, boolean>>({});
+  const [sidebarCollapsed, setSidebarCollapsed] = useStoredToggle(SIDEBAR_COLLAPSED_KEY);
+  const sidebarDefault = () => window.innerWidth >= 1280 ? SIDEBAR_INITIAL_WIDTH : SIDEBAR_COMPACT_WIDTH;
+  const [sidebarWidth, setSidebarWidth] = useState(() => { const saved = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY)); return Number.isFinite(saved) && saved > 0 ? clampSidebar(saved) : sidebarDefault(); });
+  useEffect(() => { localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth)); }, [sidebarWidth]);
   const [mobileView, setMobileView] = useState('conversation');
   const [search] = useSearchParams();
   const rootQuery = search.get('root'); const childQuery = search.get('child');
@@ -150,7 +156,8 @@ export function App({ target = store, client = unavailableClient, searchClient =
     button?.click();
   }
   function executeKey(action: KeyAction) {
-    if (action === 'command' || action === 'help') { contextFocus.current = document.activeElement as HTMLElement; setOverlay(action === 'command' ? 'commands' : 'help'); }
+    if (action === 'toggleSidebar') setSidebarCollapsed(value => !value);
+    else if (action === 'command' || action === 'help') { contextFocus.current = document.activeElement as HTMLElement; setOverlay(action === 'command' ? 'commands' : 'help'); }
     else if (action === 'next' || action === 'previous') moveRow(action === 'next' ? 1 : -1);
     else if (action === 'allow' || action === 'deny') answer(action);
     else if (action === 'interrupt') {
@@ -165,7 +172,7 @@ export function App({ target = store, client = unavailableClient, searchClient =
   }
   const executeRef = useRef(executeKey);
   executeRef.current = executeKey;
-  const handleKey = useMemo(() => createKeyHandler(Object.fromEntries(Object.entries(bindings).filter(([action]) => !['splitHorizontal', 'splitVertical', 'openFile', 'saveFile'].includes(action))), action => executeRef.current(action)), [bindings, location.pathname, overlay]);
+  const handleKey = useMemo(() => createKeyHandler(Object.fromEntries(Object.entries(bindings).filter(([action]) => !['splitHorizontal', 'splitVertical', 'openFile', 'saveFile', 'togglePanel'].includes(action))), action => executeRef.current(action)), [bindings, location.pathname, overlay]);
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       if (overlay || (event.key === 'Escape' && event.target instanceof HTMLElement && event.target.matches('.explorer-filter input'))) return;
@@ -178,7 +185,7 @@ export function App({ target = store, client = unavailableClient, searchClient =
     return () => document.removeEventListener('keydown', onKey, true);
   }, [handleKey, overlay, auxiliaryPage, returnUrl, project]);
   const commands: Command[] = [
-    ...(['home', 'workspace', 'inbox', 'tree', 'changes', 'help', 'interrupt'] as const).map(id => ({ id, name: keyLabel(id, language), run: () => executeKey(id), disabled: ['workspace', 'tree', 'changes'].includes(id) && !project })),
+    ...(['home', 'workspace', 'inbox', 'tree', 'changes', 'help', 'interrupt', 'toggleSidebar'] as const).map(id => ({ id, name: keyLabel(id, language), run: () => executeKey(id), disabled: ['workspace', 'tree', 'changes'].includes(id) && !project })),
     { id: 'search', name: language === 'ja' ? '会話を検索' : 'Search conversations', run: () => navigate('/search') },
     { id: 'settings', name: language === 'ja' ? '設定を開く' : 'Open Settings', run: () => navigate('/settings') },
     { id: 'create', name: t('newTask'), run: () => setOverlay('create') },
@@ -197,8 +204,8 @@ export function App({ target = store, client = unavailableClient, searchClient =
   ];
   const fullHeight = /^\/(c|p)\/[^/]+(?:\/(files|graph|tree))?$/.test(location.pathname);
   const icons = { overview: 'overview', inbox: 'inbox', search: 'search' } as const;
-  return <div className={`app-shell mobile-${mobileView}`}><TurnSignals target={target} bindings={bindings}/><aside className="sidebar"><div className="sidebar-brand-row"><Link className="brand" to="/"><span className="brand-mark"><Icon name="logo" size={16}/></span>{t('brand')}</Link><div className="sidebar-actions"><button className="icon-button" aria-label={t('commands')} title={`${t('commands')} (${bindings.command})`} onClick={() => { contextFocus.current = document.activeElement as HTMLElement; setOverlay('commands'); }}><Icon name="search" size={16}/></button>
-      <Notifications target={target} client={client} initiallyOpen={false} compact language={language}/></div>
+  return <div className={`app-shell mobile-${mobileView}${sidebarCollapsed ? ' sidebar-collapsed' : ''}`} style={{ gridTemplateColumns: `${sidebarCollapsed ? SIDEBAR_RESTORE_WIDTH : sidebarWidth}px minmax(0, 1fr)` }}><TurnSignals target={target} bindings={bindings}/><aside className="sidebar"><button className="sidebar-restore" aria-label={language === 'ja' ? 'サイドバーを開く' : 'Expand sidebar'} title={bindings.toggleSidebar} onClick={() => setSidebarCollapsed(false)}><Icon name="chevronRight" size={14}/></button><div className="sidebar-content"><div className="sidebar-brand-row"><Link className="brand" to="/"><span className="brand-mark"><Icon name="logo" size={16}/></span>{t('brand')}</Link><div className="sidebar-actions"><button className="icon-button" aria-label={t('commands')} title={`${t('commands')} (${bindings.command})`} onClick={() => { contextFocus.current = document.activeElement as HTMLElement; setOverlay('commands'); }}><Icon name="search" size={16}/></button>
+      <button className="icon-button" aria-label={language === 'ja' ? 'サイドバーを畳む' : 'Collapse sidebar'} title={bindings.toggleSidebar} onClick={() => setSidebarCollapsed(true)}><Icon name="chevronLeft" size={16}/></button><Notifications target={target} client={client} initiallyOpen={false} compact language={language}/></div>
     </div>{state.connection !== 'connected' && <span className={`connection ${state.connection}`} role="status"><span className="connection-dot" aria-hidden="true"/>{t(state.connection)}</span>}
     <nav aria-label={t('workspace')} className="nav-group">
       {(['overview', 'inbox', 'search'] as const).map(key => <NavLink key={key} end to={key === 'overview' ? '/' : `/${key}`}><Icon name={icons[key]} size={16}/><span className="nav-label">{t(key)}</span>
@@ -217,7 +224,8 @@ export function App({ target = store, client = unavailableClient, searchClient =
           {open && <section className="sidebar-roots" aria-label={language === 'ja' ? row.name + ' のセッション' : row.name + ' sessions'}><RootList grouped state={state} roots={items} selected={selectedRoot?.id} language={language} onSelect={root => { const next = new URLSearchParams(search); next.set('root', root.id); next.delete('child'); next.delete('path'); next.delete('create'); navigate(`/p/${encodeURIComponent(row.id)}?${next}`); setMobileView('conversation'); }}/></section>}
         </div>;
       })}</nav>
-    </div><NavLink className="settings-link" to="/settings"><Icon name="settings" size={16}/>{t('settings')}</NavLink></aside>
+    </div><NavLink className="settings-link" to="/settings"><Icon name="settings" size={16}/>{t('settings')}</NavLink></div><ResizeDivider className="sidebar-resize" label={language === 'ja' ? 'サイドバーの幅' : 'Sidebar width'} orientation="vertical" value={sidebarWidth} min={SIDEBAR_MIN_WIDTH} max={SIDEBAR_MAX_WIDTH} step={20}
+      onChange={value => setSidebarWidth(clampSidebar(value))} onDrag={delta => setSidebarWidth(clampSidebar(sidebarWidth + delta))} onReset={() => setSidebarWidth(sidebarDefault())}/></aside>
     <nav className="mobile-tabs" aria-label={language === 'ja' ? '画面' : 'Views'}>{(['sessions', 'conversation', 'panel'] as const).map(view => <button key={view} aria-pressed={mobileView === view} onClick={() => setMobileView(view)}>{language === 'ja' ? { sessions: 'セッション', conversation: '会話', panel: 'パネル' }[view] : { sessions: 'Sessions', conversation: 'Conversation', panel: 'Panel' }[view]}</button>)}</nav>
     <div className="main-column">{listError && <p role="alert" className="status-line danger list-error">{listError}</p>}<main ref={mainRef} className={fullHeight ? 'full-height' : undefined}><Routes>
       <Route path="/" element={<HomePage target={target} client={client} language={language} backAction={backAction}/>}/>

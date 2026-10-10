@@ -80,7 +80,7 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
                 breadcrumb={childId ? breadcrumb : undefined} seriesIds={tabConversation === conversationId && !childId ? series : undefined} seriesState={childId ? childNode?.state : selected?.state} displayName={childId ? childTitle : selected?.name}/>}
         </>}/>
         : <section className="workspace-conversation" aria-label={t.conversation}><p className="empty-row">{t.selectConversation}</p></section>}
-      <WorkspacePanel project={project} target={target} client={client} language={language} rootId={selected?.id}/>
+      <WorkspacePanel bindings={bindings} project={project} target={target} client={client} language={language} rootId={selected?.id}/>
     </div>
   </div></OpenWorkspaceFile.Provider>;
 }

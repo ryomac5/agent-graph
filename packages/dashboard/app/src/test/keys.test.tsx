@@ -219,3 +219,21 @@ it('finds an active external terminal by its displayed name and opens it with Cm
   press('Enter', input);
   expect(screen.getByTestId('location').textContent).toBe('/p/demo');
 });
+
+it('applies configurable sidebar and panel shortcuts', async () => {
+  vi.useFakeTimers();
+  const { setKeys } = mount('/p/demo');
+  await act(async () => {});
+  press('b', document, { metaKey: true });
+  expect(localStorage.getItem('agent-graph-sidebar-collapsed')).toBe('1');
+  press('b', document, { metaKey: true, altKey: true });
+  expect(localStorage.getItem('agent-graph-panel-collapsed')).toBe('1');
+  setKeys({ ...DEFAULT_KEYS, toggleSidebar: 'Alt+L', togglePanel: 'Alt+R' });
+  await act(async () => { vi.advanceTimersByTime(1500); });
+  press('b', document, { metaKey: true });
+  expect(localStorage.getItem('agent-graph-sidebar-collapsed')).toBe('1');
+  press('l', document, { altKey: true });
+  press('r', document, { altKey: true });
+  expect(localStorage.getItem('agent-graph-sidebar-collapsed')).toBe('0');
+  expect(localStorage.getItem('agent-graph-panel-collapsed')).toBe('0');
+});

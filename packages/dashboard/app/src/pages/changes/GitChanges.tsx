@@ -1,3 +1,5 @@
+import { ResizableStack } from '../../components/ResizableStack.tsx';
+import { CHANGES_SPLIT_KEY } from '../../lib/layout.ts';
 import { useContext } from 'react';
 import { OpenWorkspaceFile } from '../../lib/workspace-context.ts';
 import { FileTreeRow } from '../../components/FileTreeRow.tsx';
@@ -95,7 +97,7 @@ function readCommitEntry(file: Patch): TreeEntry {
     : /\nnew file mode /.test(file.diff ?? '') ? ['added'] : /\ndeleted file mode /.test(file.diff ?? '') ? ['deleted'] : ['modified'];
   return { path: file.path, git, additions: file.additions ?? parsed?.additions ?? 0, deletions: file.deletions ?? parsed?.deletions ?? 0 };
 }
-export function GitChanges({ client, projectId, worktree, enabled, language = 'en', target = store }: { client: FilesClient; projectId: string; worktree?: string; enabled: boolean; language?: 'en' | 'ja'; target?: ScreenStore }) {
+export function GitChanges({ client, projectId, worktree, enabled, language = 'en', target = store, embedded = false }: { client: FilesClient; projectId: string; worktree?: string; enabled: boolean; language?: 'en' | 'ja'; target?: ScreenStore; embedded?: boolean }) {
   const w: Words = WORDS[language];
   const state = useScreenStore(target);
   const index = useRootIndex(state);
@@ -209,8 +211,7 @@ export function GitChanges({ client, projectId, worktree, enabled, language = 'e
     const next = buttons[Math.max(0, Math.min(buttons.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)))];
     next?.focus(); next?.click();
   }
-  return <div id="git-changes" className="git-changes">
-    <div className="git-history" ref={historyRef} onKeyDown={moveHistory}>
+  const sections = [<div key="history" className="git-history" ref={historyRef} onKeyDown={moveHistory}>
       <header className="git-pane-header"><h2>{w.history}</h2><button className="btn btn-secondary btn-sm" disabled={!enabled || loading} onClick={() => setRevision(value => value + 1)}>{w.refresh}</button></header>
       <button data-git-source className="git-working-choice" aria-pressed={!hash} onClick={() => selectSource('')}><strong>{w.working}</strong><span className="count-pill">{entries.length}</span><span className="muted-text">{w.changed}</span></button>
       {treeError && <p role="alert">{treeError}</p>}
@@ -228,15 +229,15 @@ export function GitChanges({ client, projectId, worktree, enabled, language = 'e
             <button key={id} className="git-ref git-conversation-badge" aria-label={`${w.filter}: ${nameConversation(id)}`} title={nameConversation(id)} aria-pressed={agent === id} onClick={() => toggleAgent(id)}>{nameConversation(id)}</button>)}</span>}
         </li>)}</ul>
       </section>
-    </div>
-    <section className="git-files-pane" aria-label="Changed files" ref={treeRef} onKeyDown={moveFiles}>
+    </div>,
+    <section key="files" className="git-files-pane" aria-label="Changed files" ref={treeRef} onKeyDown={moveFiles}>
       <header className="git-pane-header"><h2>{hash ? commit?.shortHash : w.working}</h2><span className="count-pill">{treeEntries.length} {w.files}</span></header>
       {commitError ? <p role="alert">{commitError}</p> : loading || commitLoading ? <p>{w.loadingFiles}</p> : treeEntries.length ? <ChangeTree entries={treeEntries} selected={selected} onSelect={setSelected}/> : <p className="muted-text">{hash ? w.noFiles : w.clean}</p>}
-    </section>
-    <section className="git-diff-pane" aria-label="Difference" ref={diffRef} tabIndex={-1}>
+    </section>,
+    <section key="diff" className="git-diff-pane" aria-label="Difference" ref={diffRef} tabIndex={-1}>
       <header className="git-pane-header"><h2 title={selected} onDoubleClick={() => selected && openFile?.(selected, worktree)}>{selected || w.difference}</h2></header>
       {change ? <FileGitDiff key={`${projectId}:${worktree}:${revision}:${selected}`} client={client} request={{ ...request, path: selected }} change={change} w={w}/>
         : patch ? <><Layout value={layout} onChange={setLayout} w={w}/><GitPatch patch={patch} layout={layout} worktree={worktree}/></> : <p className="muted-text">{commitLoading ? w.loadingDiff : w.choose}</p>}
-    </section>
-  </div>;
+    </section>];
+  return <div id="git-changes" className="git-changes">{embedded ? <ResizableStack storageKey={CHANGES_SPLIT_KEY} defaults={[0.35, 0.25, 0.4]} labels={language === 'ja' ? ['コミットの一覧の高さ', '変更したファイルの高さ'] : ['Commit list height', 'Changed files height']} children={sections}/> : sections}</div>;
 }

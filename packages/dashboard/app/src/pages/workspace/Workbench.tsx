@@ -1,3 +1,4 @@
+import { ResizeDivider } from '../../components/ResizeDivider.tsx';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react';
 import { type CodeDocument } from '../../lib/code-document.ts';
 import { getFileDocument } from '../../lib/file-documents.ts';
@@ -89,13 +90,11 @@ export function Workbench({ project, session, conversationId, client, language, 
   function renderTree(node: PaneTree): ReactNode {
     if (node.kind === 'split') return <div className={`workbench-split ${node.direction}`} key={node.id}>
       <div className="split-child" style={{ flexGrow: node.ratio }}>{renderTree(node.first)}</div>
-      <div role="separator" tabIndex={0} aria-label={ja ? '区画の大きさ' : 'Pane size'} aria-orientation={node.direction === 'horizontal' ? 'vertical' : 'horizontal'} aria-valuemin={10} aria-valuemax={90} aria-valuenow={Math.round(node.ratio * 100)} className="workbench-divider"
-        onKeyDown={event => { if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) { event.preventDefault(); setTree(tree => tree && resizeSplit(tree, node.id, node.ratio + (['ArrowLeft', 'ArrowUp'].includes(event.key) ? -0.05 : 0.05))); } }}
-        onPointerDown={event => { event.preventDefault(); const element = event.currentTarget; const bounds = element.parentElement!.getBoundingClientRect(); element.setPointerCapture?.(event.pointerId);
-          const move = (event: PointerEvent) => { const size = node.direction === 'horizontal' ? bounds.width : bounds.height; if (size) setTree(tree => tree && resizeSplit(tree, node.id, (node.direction === 'horizontal' ? event.clientX - bounds.left : event.clientY - bounds.top) / size)); };
-          const stop = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop); window.removeEventListener('pointercancel', stop); };
-          window.addEventListener('pointermove', move); window.addEventListener('pointerup', stop); window.addEventListener('pointercancel', stop);
-        }}/><div className="split-child" style={{ flexGrow: 1 - node.ratio }}>{renderTree(node.second)}</div></div>;
+      <ResizeDivider label={ja ? '区画の大きさ' : 'Pane size'} orientation={node.direction === 'horizontal' ? 'vertical' : 'horizontal'} value={Math.round(node.ratio * 100)} min={10} max={90}
+        onChange={value => setTree(tree => tree && resizeSplit(tree, node.id, value / 100))}
+        onReset={() => setTree(tree => tree && resizeSplit(tree, node.id, 0.5))}
+        onDrag={(delta, bounds) => { const size = (node.direction === 'horizontal' ? bounds.width : bounds.height) - 6; if (size > 0) setTree(tree => tree && resizeSplit(tree, node.id, node.ratio + delta / size)); }}
+        /><div className="split-child" style={{ flexGrow: 1 - node.ratio }}>{renderTree(node.second)}</div></div>;
     return <section className="workbench-pane" key={node.id} data-pane-id={node.id} data-focused={focusedPane?.id === node.id} onFocusCapture={() => setFocused(node.id)} onPointerDownCapture={() => setFocused(node.id)}>
       <header className="workbench-tabs" onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); const tabId = event.dataTransfer.getData('text/plain') || dragTab.current; if (tabId) { setTree(tree => tree && moveTab(tree, tabId, node.id)); setFocused(node.id); } dragTab.current = undefined; }}>
         <div className="workbench-tablist" role="tablist" aria-label={ja ? '作業場のタブ' : 'Workspace tabs'}>{node.tabs.map(tab => <div className="workbench-tab" key={tab.id} draggable onDragStart={event => { dragTab.current = tab.id; event.dataTransfer.setData('text/plain', tab.id); }} onDragEnd={() => { dragTab.current = undefined; }}

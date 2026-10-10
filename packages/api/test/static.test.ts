@@ -115,10 +115,14 @@ test('static handler serves real files and applies security without a socket', a
   t.mock.method(http, 'createServer', (handler: typeof handle) => { handle = handler; return server as unknown as http.Server; });
   syncBuiltinESMExports();
   t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); rmSync(directory, { recursive: true, force: true }); });
+  let conversions = 0;
   const endpoint = await startStaticServer({ port: 0, dist: directory,
+    brand: { cacheHome: directory, sources: { chatgpt: join(directory, 'app.css'), claude: join(directory, 'absent.icns') },
+      convert: async (_source, destination) => { conversions++; writeFileSync(destination, 'brand-png'); },
+      fetchIcon: async () => { throw new Error('offline'); } },
     upstream: { url: 'http://127.0.0.1:1', wsUrl: 'ws://127.0.0.1:1/ws', token: 'injected-token', runner: { available: false } } });
   t.after(() => endpoint.close());
-  async function get(url: string, headers: Record<string, string> = {}) {
+  async function get(url: string, headers: Record<string, string> = {}, remoteAddress = '127.0.0.1') {
     let status = 0; let body = '';
     const responseHeaders: Record<string, string> = {};
     const response = Object.assign(new EventEmitter(), {
@@ -127,9 +131,19 @@ test('static handler serves real files and applies security without a socket', a
       end: (value?: Buffer | string) => { body = value?.toString() ?? ''; },
     });
     await handle({ method: 'GET', url, headers: { host: '127.0.0.1:12345', ...headers },
-      socket: { remoteAddress: '127.0.0.1' } } as http.IncomingMessage, response as unknown as http.ServerResponse);
+      socket: { remoteAddress } } as http.IncomingMessage, response as unknown as http.ServerResponse);
     return { status, body, headers: responseHeaders };
   }
+  const brand = await get('/brand/chatgpt.png');
+  assert.equal(brand.status, 200); assert.equal(brand.body, 'brand-png');
+  assert.equal(brand.headers['Content-Type'], 'image/png'); assert.equal(brand.headers['Cache-Control'], 'public, max-age=86400');
+  assert.equal((await get('/brand/chatgpt.png')).status, 200); assert.equal(conversions, 1);
+  assert.equal((await get('/brand/claude.png')).status, 404);
+  assert.equal((await get('/brand/antigravity.png')).status, 404);
+  assert.equal((await get('/brand/unknown.png')).status, 404);
+  assert.equal((await get('/brand/chatgpt.png', { host: 'evil.example' })).status, 403);
+  assert.equal((await get('/brand/chatgpt.png', { origin: 'https://evil.example' })).status, 403);
+  assert.equal((await get('/brand/chatgpt.png', {}, '192.168.0.2')).status, 403);
   const route = await get('/p/demo/tree');
   assert.equal(route.status, 200); assert.match(route.body, /injected-token/);
   assert.equal(route.headers['Cache-Control'], 'no-store');

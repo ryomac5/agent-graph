@@ -151,8 +151,8 @@ it('reorders tabs and moves the last tab into its neighbour through drag and dro
 it('resizes a divider with pointer movement and remembers the size', async () => {
   fixture(); fireEvent.keyDown(screen.getByRole('textbox', { name: 'Message' }), { key: 'd', metaKey: true });
   const divider = screen.getByRole('separator', { name: 'Pane size' });
-  vi.spyOn(divider.parentElement!, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 1000, 500));
-  fireEvent.pointerDown(divider, { pointerId: 1 }); fireEvent.pointerMove(window, { clientX: 750 }); fireEvent.pointerUp(window);
+  vi.spyOn(divider.parentElement!, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 1006, 500));
+  fireEvent.pointerDown(divider, { pointerId: 1, clientX: 500 }); fireEvent.pointerMove(window, { clientX: 750 }); fireEvent.pointerUp(window);
   expect(divider.getAttribute('aria-valuenow')).toBe('75');
   expect(JSON.parse(localStorage.getItem(workspaceKey('p', 'session'))!).ratio).toBe(0.75);
 });

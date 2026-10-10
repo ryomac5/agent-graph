@@ -1,6 +1,9 @@
+import { execFile } from 'node:child_process';
+import { homedir } from 'node:os';
+import { promisify } from 'node:util';
 import { createServer, request as requestHttp } from 'node:http';
 import { randomBytes } from 'node:crypto';
-import { readFile, realpath, stat } from 'node:fs/promises';
+import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocket, WebSocketServer } from 'ws';
@@ -21,11 +24,71 @@ const MIME: Record<string, string> = {
   '.wasm': 'application/wasm', '.mp4': 'video/mp4', '.webm': 'video/webm', '.mp3': 'audio/mpeg',
   '.pdf': 'application/pdf', '.txt': 'text/plain; charset=utf-8',
 };
+
+const BRAND_SOURCES = {
+  claude: '/Applications/Claude.app/Contents/Resources/electron.icns',
+  chatgpt: '/Applications/ChatGPT.app/Contents/Resources/electron.icns',
+  antigravity: 'https://antigravity.google/favicon.ico',
+} as const;
+export interface BrandOptions {
+  cacheHome?: string;
+  sources?: Partial<Record<keyof typeof BRAND_SOURCES, string>>;
+  convert?: (source: string, destination: string) => Promise<void>;
+  fetchIcon?: (url: string) => Promise<Uint8Array>;
+}
+const runFile = promisify(execFile);
+export function createBrandReader(options: BrandOptions = {}) {
+  const directory = resolve(options.cacheHome ?? process.env.XDG_CACHE_HOME ?? resolve(homedir(), '.cache'), 'agent-graph/brand');
+  const sources = { ...BRAND_SOURCES, ...options.sources };
+  const convert = options.convert ?? (async (source, destination) => {
+    await runFile('sips', ['-s', 'format', 'png', '--resampleWidth', '64', source, '--out', destination], { timeout: 15000 });
+  });
+  const fetchIcon = options.fetchIcon ?? (async url => {
+    const response = await fetch(url, { signal: AbortSignal.timeout(15000) });
+    if (!response.ok) throw new Error('Icon unavailable');
+    return new Uint8Array(await response.arrayBuffer());
+  });
+  const pending = new Map<string, Promise<Buffer | undefined>>();
+  async function generate(name: keyof typeof BRAND_SOURCES): Promise<Buffer | undefined> {
+    const destination = resolve(directory, name + '.png');
+    try { return await readFile(destination); } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) return undefined;
+    }
+    const temporary = resolve(directory, name + '-' + randomBytes(8).toString('hex') + '.png');
+    try {
+      await mkdir(directory, { recursive: true });
+      let source: string = sources[name];
+      if (name === 'antigravity') {
+        source = resolve(directory, 'antigravity.ico');
+        try { await stat(source); } catch (error) {
+          if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+          await writeFile(source, await fetchIcon(sources[name]));
+        }
+      } else await stat(source);
+      await convert(source, temporary);
+      const content = await readFile(temporary);
+      await rename(temporary, destination);
+      return content;
+    } catch { return undefined; }
+    finally { await rm(temporary, { force: true }).catch(() => {}); }
+  }
+  return async (name: string): Promise<Buffer | undefined> => {
+    if (!Object.hasOwn(BRAND_SOURCES, name)) return undefined;
+    if (!pending.has(name)) {
+      const operation = generate(name as keyof typeof BRAND_SOURCES).finally(() => pending.delete(name));
+      pending.set(name, operation);
+    }
+    return pending.get(name);
+  };
+}
+
 interface StaticOptions {
+  brand?: BrandOptions;
   port?: number; dist?: string; upstream: { url: string; wsUrl: string; token: string; runner: { available: boolean }; previews?: Pick<ReturnType<typeof createPreviewApi>, 'readPreview'> };
 }
 export async function startStaticServer(options: StaticOptions) {
   const { upstream } = options;
+  const readBrand = createBrandReader(options.brand);
   const root = resolve(options.dist ?? DEFAULT_DIST);
   let port = options.port ?? DEFAULT_DASHBOARD_PORT;
   const origin = () => `http://127.0.0.1:${port}`;
@@ -45,6 +108,13 @@ export async function startStaticServer(options: StaticOptions) {
     if (!url || request.method !== 'GET') { response.writeHead(404).end(); return; }
     // URL の正規化で ../ が消える前に、プレビューの境界を判定する。
     const rawPath = request.url?.split('?')[0] ?? '';
+    if (url.pathname === '/brand' || url.pathname.startsWith('/brand/')) {
+      const match = /^\/brand\/(claude|chatgpt|antigravity)\.png$/.exec(rawPath);
+      const content = match && await readBrand(match[1]);
+      if (!content) { response.writeHead(404).end(); return; }
+      response.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' });
+      response.end(content); return;
+    }
     if (rawPath === '/preview' || rawPath.startsWith('/preview/') || url.pathname === '/preview' || url.pathname.startsWith('/preview/')) {
       response.setHeader('Content-Security-Policy', PREVIEW_CSP);
       try {

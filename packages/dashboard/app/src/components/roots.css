@@ -62,3 +62,7 @@
 .root-state.status-running .status-dot { animation: session-pulse 1600ms var(--ease) infinite; }
 .root-card > .root-row { border-bottom: var(--border); border-radius: 0; padding: 0 var(--space-4); }
 .root-row[aria-current='page'] { color: var(--fg-1); background: var(--bg-3); box-shadow: none; }
+
+.request-avatar img { width: 16px; height: 16px; object-fit: contain; }
+
+.request-avatar:has(img) { background: transparent; }

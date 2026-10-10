@@ -25,6 +25,7 @@ import { Notifications } from './components/notifications/Notifications.tsx';
 import { selectRoots, isRunning, rootProject, buildRootTree, useRootIndex } from './lib/roots.ts';
 import { RootList } from './components/RootViews.tsx';
 import { Icon } from './components/Icon.tsx';
+import { UsageBar } from './components/usage/UsageBar.tsx';
 import { fetchProjection } from './lib/projection-client.ts';
 import type { Row } from './lib/store.ts';
 import { getRegisteredProjects, OTHER_PROJECT, resolveProjectId } from './lib/projects.ts';
@@ -133,6 +134,12 @@ export function App({ target = store, client = unavailableClient, searchClient =
   const backAction = <button className="btn btn-ghost" onClick={goBack}>{language === 'ja' ? '← 戻る' : '← Back'}</button>;
   const [collapsedProjects, setCollapsedProjects] = useState<Record<string, boolean>>({});
   const [sidebarCollapsed, setSidebarCollapsed] = useStoredToggle(SIDEBAR_COLLAPSED_KEY);
+  const [compactScreen, setCompactScreen] = useState(() => window.innerWidth <= 899);
+  useEffect(() => {
+    const update = () => setCompactScreen(window.innerWidth <= 899);
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, []);
   const sidebarDefault = () => window.innerWidth >= 1280 ? SIDEBAR_INITIAL_WIDTH : SIDEBAR_COMPACT_WIDTH;
   const [sidebarWidth, setSidebarWidth] = useState(() => { const saved = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY)); return Number.isFinite(saved) && saved > 0 ? clampSidebar(saved) : sidebarDefault(); });
   useEffect(() => { localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth)); }, [sidebarWidth]);
@@ -229,7 +236,7 @@ export function App({ target = store, client = unavailableClient, searchClient =
           {open && <section className="sidebar-roots" aria-label={language === 'ja' ? row.name + ' のセッション' : row.name + ' sessions'}><RootList grouped state={state} roots={items} selected={selectedRoot?.id} language={language} onSelect={root => { const next = new URLSearchParams(search); next.set('root', root.id); next.delete('child'); next.delete('path'); next.delete('create'); next.delete('session'); next.delete('conversation'); navigate(`/p/${encodeURIComponent(row.id)}?${next}`); setMobileView('conversation'); }}/></section>}
         </div>;
       })}</nav>
-    </div><NavLink className="settings-link" to="/settings"><Icon name="settings" size={16}/>{t('settings')}</NavLink></div><ResizeDivider className="sidebar-resize" label={language === 'ja' ? 'サイドバーの幅' : 'Sidebar width'} orientation="vertical" value={sidebarWidth} min={SIDEBAR_MIN_WIDTH} max={SIDEBAR_MAX_WIDTH} step={20}
+    </div><UsageBar client={client} language={language} visible={!sidebarCollapsed && (!compactScreen || mobileView === 'sessions')} connected={state.connection === 'connected' || state.connection === 'runner_unavailable'}/><NavLink className="settings-link" to="/settings"><Icon name="settings" size={16}/>{t('settings')}</NavLink></div><ResizeDivider className="sidebar-resize" label={language === 'ja' ? 'サイドバーの幅' : 'Sidebar width'} orientation="vertical" value={sidebarWidth} min={SIDEBAR_MIN_WIDTH} max={SIDEBAR_MAX_WIDTH} step={20}
       onChange={value => setSidebarWidth(clampSidebar(value))} onDrag={delta => setSidebarWidth(clampSidebar(sidebarWidth + delta))} onReset={() => setSidebarWidth(sidebarDefault())}/></aside>
     <nav className="mobile-tabs" aria-label={language === 'ja' ? '画面' : 'Views'}>{(['sessions', 'conversation', 'panel'] as const).map(view => <button key={view} aria-pressed={mobileView === view} onClick={() => setMobileView(view)}>{language === 'ja' ? { sessions: 'セッション', conversation: '会話', panel: 'パネル' }[view] : { sessions: 'Sessions', conversation: 'Conversation', panel: 'Panel' }[view]}</button>)}</nav>
     <div className="main-column">{listError && <p role="alert" className="status-line danger list-error">{listError}</p>}<main ref={mainRef} className={fullHeight ? 'full-height' : undefined}><Routes>

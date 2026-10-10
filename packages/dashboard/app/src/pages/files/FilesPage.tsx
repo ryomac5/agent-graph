@@ -1,4 +1,8 @@
-import { useContext } from 'react';
+import { useContext, useSyncExternalStore } from 'react';
+import { getFileDocument } from '../../lib/file-documents.ts';
+import { MarkdownDocument } from '../../components/files/MarkdownDocument.tsx';
+import { HtmlDocument } from '../../components/files/HtmlDocument.tsx';
+import type { CodeDocument } from '../../lib/code-document.ts';
 import { OpenWorkspaceFile } from '../../lib/workspace-context.ts';
 import { FileTreeRow } from '../../components/FileTreeRow.tsx';
 import { callGit, FileGitDiff, type GitChange } from '../changes/GitChanges.tsx';
@@ -10,10 +14,9 @@ import type { Language as DisplayLanguage } from '../../lib/i18n.ts';
 import { isRunning } from '../../lib/roots.ts';
 import { worktreeLabel } from '../../lib/format.ts';
 import { store, useScreenStore, type ScreenStore } from '../../lib/store.ts';
-import { Markdown } from '../../components/conversation/Markdown.tsx';
 import { detectLanguage, highlightLines, LANGUAGE_NAMES, type Language } from './highlight.ts';
 import {
-  ancestorPaths, formatSize, GIT_MARKS, listFiles, listWorktrees, matchWorktree, parentPath, primaryMark, readFile, resolveProjectId, worktreeName,
+  ancestorPaths, formatSize, GIT_MARKS, listFiles, listWorktrees, matchWorktree, parentPath, primaryMark, resolveProjectId, worktreeName,
   type FileEntry, type FilesClient, type GitMark, type ReadResult, type WorktreesResult,
 } from './model.ts';
 import '../../components/activity.css';
@@ -58,17 +61,23 @@ function CodeView({ path, content, displayLanguage = 'en' }: { path: string; con
 }
 
 /** Markdown は既定で整形して出し、Raw に切り替えると元の文字を色分けで出す。 */
-function FileContent({ path, content, displayLanguage = 'en' }: { path: string; content: string; displayLanguage?: DisplayLanguage }) {
+function FileContent({ path, document, displayLanguage = 'en' }: { path: string; document: CodeDocument; displayLanguage?: DisplayLanguage }) {
+  const state = useSyncExternalStore(document.subscribe, document.getSnapshot);
+  const content = state.content;
   const [raw, setRaw] = useState(false);
-  if (detectLanguage(path) !== 'md') return <CodeView path={path} content={content} displayLanguage={displayLanguage}/>;
+  const isHtml = /\.html?$/i.test(path);
+  const draft = state.dirty && <p className="document-draft" role="status">{displayLanguage === 'ja' ? '未保存の編集を表示中' : 'Showing unsaved edits'}</p>;
+  if (detectLanguage(path) !== 'md' && !isHtml) return <>{draft}<CodeView path={path} content={content} displayLanguage={displayLanguage}/></>;
   return <>
+    {draft}
     <div className="viewer-mode" role="group" aria-label={displayLanguage === 'ja' ? 'Markdown の表示' : 'Markdown view'}>
-      <button type="button" className="viewer-mode-option" aria-pressed={!raw} onClick={() => setRaw(false)}>{displayLanguage === 'ja' ? 'プレビュー' : 'Preview'}</button>
+      <button type="button" className="viewer-mode-option" aria-pressed={!raw} onClick={() => setRaw(false)}>{isHtml ? displayLanguage === 'ja' ? '表示' : 'Display' : displayLanguage === 'ja' ? 'プレビュー' : 'Preview'}</button>
       <button type="button" className="viewer-mode-option" aria-pressed={raw} onClick={() => setRaw(true)}>{displayLanguage === 'ja' ? '原文' : 'Raw'}</button>
     </div>
     {raw ? <CodeView path={path} content={content} displayLanguage={displayLanguage}/>
+      : isHtml ? <HtmlDocument client={document.client} request={document.request} content={state.dirty ? content : undefined} language={displayLanguage}/>
       : <div className="markdown-view" role="region" aria-label={displayLanguage === 'ja' ? `${path} の中身` : `Contents of ${path}`} tabIndex={0}>
-        <Markdown text={content} breaks={false} className="markdown-document"/></div>}
+        <MarkdownDocument content={content} language={displayLanguage}/></div>}
   </>;
 }
 
@@ -172,7 +181,9 @@ export function useFileExplorer({ client, target = store, project, enabled = tru
       }
       if (entry?.git.includes('deleted')) { setFile({ key, path, status: 'deleted' }); return; }
       setFile({ key, path, status: 'loading' });
-      const result = await readFile(client, { projectId, path, worktree });
+      const document = getFileDocument(client, { projectId, path, worktree });
+      const result = await document.refresh();
+      if (!result) throw new Error(document.getSnapshot().error ?? 'Unable to read file');
       if (!cancelled) setFile({ key, path, status: 'loaded', result });
     })().catch(error => { if (!cancelled) setFile({ key, path, status: 'error', error: message(error) }); });
     return () => { cancelled = true; };
@@ -416,8 +427,7 @@ export function FileViewerPanel({ explorer, actions, language: displayLanguage =
                 <p className="numeric">Size: {formatSize(shown.result.size)} ({shown.result.size.toLocaleString('en-US')} bytes)</p></div>
                 : shown.result.state === 'too_large' ? <div className="empty-state" role="status"><Icon name="alert" size={22}/><h2>{text('File too large to display', 'ファイルが大きすぎます')}</h2><p>{text('Files over 1.0 MiB are not shown.', '1.0 MiB を超えるファイルは表示できません。')}</p>
                   <p className="numeric">Size: {formatSize(shown.result.size)} ({shown.result.size.toLocaleString('en-US')} bytes)</p></div>
-                  : shown.result.content === '' ? <p className="tree-status viewer-status">{text('Empty file', '空のファイル')}</p>
-                    : <FileContent key={selectedPath} path={selectedPath} content={shown.result.content} displayLanguage={displayLanguage}/>}
+                    : <FileContent key={JSON.stringify([explorer.projectId, explorer.worktree, selectedPath])} path={selectedPath} document={getFileDocument(explorer.client, { projectId: explorer.projectId, worktree: explorer.worktree, path: selectedPath })} displayLanguage={displayLanguage}/>}
     </>}
   </section>;
 }

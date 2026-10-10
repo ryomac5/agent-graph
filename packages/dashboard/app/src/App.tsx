@@ -89,6 +89,20 @@ export function App({ target = store, client = unavailableClient, searchClient =
   }, [state.pages, state.generation, target]);
   const approvals = getInbox(state).pending.length;
   const location = useLocation();
+  const auxiliaryPage = ['/', '/settings', '/inbox', '/search'].includes(location.pathname);
+  const previousUrl = useRef<string | undefined>(undefined);
+  const [returnUrl, setReturnUrl] = useState<string>();
+  const [lastWorkspace, setLastWorkspace] = useState(() => localStorage.getItem('agent-graph-last-workspace') ?? '');
+  useEffect(() => {
+    const url = location.pathname + location.search + location.hash;
+    if (previousUrl.current !== url) {
+      if (auxiliaryPage) setReturnUrl(previousUrl.current);
+      previousUrl.current = url;
+    }
+    if (/^\/p\/[^/]+$/.test(location.pathname)) {
+      localStorage.setItem('agent-graph-last-workspace', url); setLastWorkspace(url);
+    }
+  }, [location.pathname, location.search, location.hash, auxiliaryPage]);
   const { bindings, setBindings } = useKeySettings(client);
   const [overlay, setOverlay] = useState<'commands' | 'help' | 'interrupt' | 'create'>();
   const [stopButton, setStopButton] = useState<HTMLButtonElement>();
@@ -101,7 +115,16 @@ export function App({ target = store, client = unavailableClient, searchClient =
 
   const directRoot = pathConversation ? roots.find(root => root.conversation_ids.includes(decodeURIComponent(pathConversation)) || buildRootTree(root, rootIndex).nodes.some(node => node.conversationId === decodeURIComponent(pathConversation))) : undefined;
   // 経路のプロジェクトは表示名でも識別子でも受け、投影の projects の識別子に揃える。
-  const project = pathProject ? resolveProjectId(state, decodeURIComponent(pathProject)) : directRoot?.project || projects[0]?.id;
+  const lastProject = /^\/p\/([^/?#]+)/.exec(lastWorkspace)?.[1];
+  const project = pathProject ? resolveProjectId(state, decodeURIComponent(pathProject)) : directRoot?.project || (lastProject ? resolveProjectId(state, decodeURIComponent(lastProject)) : projects[0]?.id);
+  useEffect(() => {
+    if (pathConversation && project) {
+      const url = `/p/${encodeURIComponent(project)}`;
+      localStorage.setItem('agent-graph-last-workspace', url); setLastWorkspace(url);
+    }
+  }, [pathConversation, project]);
+  const goBack = () => navigate(returnUrl ?? (project ? `/p/${encodeURIComponent(project)}` : '/'));
+  const backAction = <button className="btn btn-ghost" onClick={goBack}>{language === 'ja' ? '← 戻る' : '← Back'}</button>;
   const [collapsedProjects, setCollapsedProjects] = useState<Record<string, boolean>>({});
   const [mobileView, setMobileView] = useState('conversation');
   const [search] = useSearchParams();
@@ -146,13 +169,14 @@ export function App({ target = store, client = unavailableClient, searchClient =
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       if (overlay || (event.key === 'Escape' && event.target instanceof HTMLElement && event.target.matches('.explorer-filter input'))) return;
+      if (auxiliaryPage && event.key === 'Escape' && !isTextInput(event.target)) { event.preventDefault(); event.stopPropagation(); goBack(); return; }
       contextFocus.current = event.target instanceof HTMLElement ? event.target : null;
       if (handleKey(event)) { event.preventDefault(); event.stopPropagation(); }
       else if (!isTextInput(event.target) && !event.metaKey && !event.ctrlKey && !event.altKey && ['a', 'd'].includes(event.key.toLowerCase())) event.stopPropagation();
     }
     document.addEventListener('keydown', onKey, true);
     return () => document.removeEventListener('keydown', onKey, true);
-  }, [handleKey, overlay]);
+  }, [handleKey, overlay, auxiliaryPage, returnUrl, project]);
   const commands: Command[] = [
     ...(['home', 'workspace', 'inbox', 'tree', 'changes', 'help', 'interrupt'] as const).map(id => ({ id, name: keyLabel(id, language), run: () => executeKey(id), disabled: ['workspace', 'tree', 'changes'].includes(id) && !project })),
     { id: 'search', name: language === 'ja' ? '会話を検索' : 'Search conversations', run: () => navigate('/search') },
@@ -196,16 +220,16 @@ export function App({ target = store, client = unavailableClient, searchClient =
     </div><NavLink className="settings-link" to="/settings"><Icon name="settings" size={16}/>{t('settings')}</NavLink></aside>
     <nav className="mobile-tabs" aria-label={language === 'ja' ? '画面' : 'Views'}>{(['sessions', 'conversation', 'panel'] as const).map(view => <button key={view} aria-pressed={mobileView === view} onClick={() => setMobileView(view)}>{language === 'ja' ? { sessions: 'セッション', conversation: '会話', panel: 'パネル' }[view] : { sessions: 'Sessions', conversation: 'Conversation', panel: 'Panel' }[view]}</button>)}</nav>
     <div className="main-column">{listError && <p role="alert" className="status-line danger list-error">{listError}</p>}<main ref={mainRef} className={fullHeight ? 'full-height' : undefined}><Routes>
-      <Route path="/" element={<HomePage target={target} client={client} language={language}/>}/>
+      <Route path="/" element={<HomePage target={target} client={client} language={language} backAction={backAction}/>}/>
       <Route path="/p/:project" element={<WorkspacePage target={target} client={client} language={language} bindings={bindings} showRootList={false}/>}/>
       <Route path="/c/:conversation" element={<WorkspacePage project={project ?? OTHER_PROJECT} conversationId={pathConversation ? decodeURIComponent(pathConversation) : undefined} target={target} client={client} language={language} bindings={bindings} showRootList={false}/>}/>
-      <Route path="/inbox" element={<Inbox target={target} client={client} language={language}/>}/>
+      <Route path="/inbox" element={<Inbox target={target} client={client} language={language} backAction={backAction}/>}/>
       <Route path="/p/:project/tree" element={<RequestsRedirect/>}/>
       <Route path="/p/:project/graph" element={<GraphPage target={target} client={client} language={language}/>}/>
       <Route path="/p/:project/changes" element={<ChangesPage target={target} client={client} language={language}/>}/>
       <Route path="/p/:project/files" element={<div className="files-page"><FileTreePanel explorer={explorer} language={language}/><FileNotices explorer={explorer}/><FileViewerPanel explorer={explorer} actions={<button className="btn btn-ghost btn-xs" onClick={explorer.closeFile}><Icon name="chevronLeft" size={12}/>Back</button>}/></div>}/>
-      <Route path="/search" element={<SearchPage target={target} client={searchClient} language={language}/>}/>
-      <Route path="/settings" element={<div className="page settings-page"><header className="page-header"><h1>{t('settings')}</h1></header><div className="settings-card">
+      <Route path="/search" element={<SearchPage target={target} client={searchClient} language={language} backAction={backAction}/>}/>
+      <Route path="/settings" element={<div className="page settings-page"><header className="page-header">{backAction}<h1>{t('settings')}</h1></header><div className="settings-card">
         <label><span><strong>{t('theme')}</strong><small>{t('themeHint')}</small></span><select aria-label={t('theme')} value={theme} onChange={event => setTheme(event.target.value as Theme)}>{(['system', 'light', 'dark'] as const).map(value => <option key={value} value={value}>{t(value)}</option>)}</select></label>
         <label><span><strong>{t('language')}</strong><small>{t('languageHint')}</small></span><select aria-label={t('language')} value={language} onChange={event => setLanguage(event.target.value as Language)}><option value="en" lang="en">{t('english')}</option><option value="ja" lang="ja">{t('japanese')}</option></select></label>
       </div><KeyboardSettings language={language} bindings={bindings} client={client} onSave={setBindings}/></div>}/>

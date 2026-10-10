@@ -1,5 +1,5 @@
 import { compareMessages } from '../../lib/projection-client.ts';
-import { useEffect, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { AppLink } from '../../components/AppLink.tsx';
 import { StateBadge, type ExecutionState } from '../../components/StateBadge.tsx';
 import { ApprovalRequestView, OutcomeChip } from '../../components/ApprovalRequest.tsx';
@@ -11,7 +11,7 @@ import { answerApproval, APPROVAL_KEYS, getConversation, getDecision, getInbox, 
   type ApprovalAction, type CommandClient } from './model.ts';
 import './inbox.css';
 
-export interface InboxProps { client: CommandClient; target?: ScreenStore; language?: 'en' | 'ja' }
+export interface InboxProps { client: CommandClient; target?: ScreenStore; language?: 'en' | 'ja'; backAction?: ReactNode }
 // 画面の文言の対訳。英語を既定にし、日本語を選んだときだけ置き換える。
 const WORDS = {
   en: { allow: 'Allow', deny: 'Deny', session: 'Always allow', notOffered: 'Not offered by this provider', sent: 'Sent', recent: 'Recent messages',
@@ -95,7 +95,7 @@ export function ApprovalDetails({ row, state, compact = false }: { row: Row; sta
     <ConversationTail row={row} state={state}/>
   </div>;
 }
-export function Inbox({ client, target = store, language = 'en' }: InboxProps) {
+export function Inbox({ client, target = store, language = 'en', backAction }: InboxProps) {
   const w: Words = WORDS[language] as Words;
   const state = useScreenStore(target);
   const { pending, expired } = getInbox(state);
@@ -136,7 +136,7 @@ export function Inbox({ client, target = store, language = 'en' }: InboxProps) {
     const rows = active.length ? active : pending.filter(row => String(row.id) === focused && !sent.includes(String(row.id)));
     if (rows.length) { event.preventDefault(); void answer(rows, action); }
   }}>
-    <header className="page-header"><div className="page-title"><h1>{w.title}</h1>
+    <header className="page-header">{backAction}<div className="page-title"><h1>{w.title}</h1>
       <p role="status" className="page-subtitle">{pending.length > 0 && <span><strong className="numeric">{pending.length}</strong> {w.waiting}</span>}{expired.length > 0 && <span><strong className="numeric">{expired.length}</strong> {w.expired}</span>}</p></div>
       {pending.length > 0 && <p className="shortcut-hint"><kbd>A</kbd> {w.hint[0]} <kbd>D</kbd> {w.hint[1]} <kbd>S</kbd> {w.hint[2]}</p>}</header>
     {pending.length > 0 && <div className="toolbar bulk-bar">

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { store, useScreenStore, type ScreenStore } from '../../lib/store.ts';
 import { conversationName, formatWhen, readTitle } from '../../lib/format.ts';
@@ -25,7 +25,7 @@ function formatTimestamp(value: string, language: Language): string {
   const time = Date.parse(value);
   return Number.isFinite(time) ? formatWhen(value, language) : value;
 }
-export function SearchPage({ client, target = store, language = 'en' }: { client: SearchClient; target?: ScreenStore; language?: Language }) {
+export function SearchPage({ client, target = store, language = 'en', backAction }: { client: SearchClient; target?: ScreenStore; language?: Language; backAction?: ReactNode }) {
   const state = useScreenStore(target);
   const t = TEXT[language];
   const rootNames = new Map(selectRoots(state).flatMap(root => root.conversation_ids.map(id => [id, root.name] as const)));
@@ -52,7 +52,7 @@ export function SearchPage({ client, target = store, language = 'en' }: { client
       if (version === revision.current && !active.signal.aborted) setError(failure instanceof Error ? failure.message : t.failed);
     } finally { if (version === revision.current) setLoading(false); }
   }
-  return <div className="page search-page"><header className="page-header"><h1>{t.title}</h1></header>
+  return <div className="page search-page"><header className="page-header">{backAction}<h1>{t.title}</h1></header>
     <form className="search-form" onSubmit={event => { event.preventDefault(); void search({ ...query, offset: 0 }); }}>
       <label>{t.query}<input type="search" value={query.query} onChange={event => setQuery({ ...query, query: event.target.value })}/></label>
       <label>{t.project}<input value={query.project ?? ''} onChange={event => setQuery({ ...query, project: event.target.value })}/></label>

@@ -1,26 +1,30 @@
 import { readFile, type FilesClient, type FilesRequest, type ReadResult } from '../pages/files/model.ts';
 export const FILE_POLL_MS = 5000;
-export interface DocumentState { content: string; saved: string; hash: string; editable: boolean; loading: boolean; dirty: boolean; external: boolean; conflict?: ReadResult; error?: string; state?: ReadResult['state']; saving: boolean }
+export interface DocumentState { content: string; saved: string; hash: string; editable: boolean; loading: boolean; dirty: boolean; external: boolean; conflict?: ReadResult; result?: ReadResult; error?: string; state?: ReadResult['state']; saving: boolean }
 export function createCodeDocument(client: FilesClient, request: FilesRequest) {
   let state: DocumentState = { content: '', saved: '', hash: '', editable: false, loading: true, dirty: false, external: false, saving: false };
   const listeners = new Set<() => void>();
-  let reading = false;
+  let reading: Promise<ReadResult | undefined> | undefined;
   function update(patch: Partial<DocumentState>) { state = { ...state, ...patch }; for (const listener of listeners) listener(); }
   function adopt(result: ReadResult) {
     const content = result.state === 'text' ? result.content : '';
-    update({ content, saved: content, hash: result.hash ?? '', editable: result.editable === true && result.state === 'text', state: result.state, dirty: false, external: false, conflict: undefined, loading: false, error: undefined });
+    update({ content, saved: content, hash: result.hash ?? '', editable: result.editable === true && result.state === 'text', state: result.state, result, dirty: false, external: false, conflict: undefined, loading: false, error: undefined });
   }
-  async function refresh() {
-    if (reading || state.saving) return;
-    reading = true;
+  function refresh(): Promise<ReadResult | undefined> {
+    if (reading) return reading;
+    if (state.saving) return Promise.resolve(state.result);
     const baseHash = state.hash;
-    try {
-      const result = await readFile(client, request);
-      if (state.saving || state.hash !== baseHash) return;
-      if (state.loading || !state.dirty) adopt(result);
-      else if (result.hash !== state.hash) update({ external: true });
-    } catch (error) { update({ loading: false, error: String(error instanceof Error ? error.message : error) }); }
-    finally { reading = false; }
+    reading = (async () => {
+      try {
+        const result = await readFile(client, request);
+        if (state.saving || state.hash !== baseHash) return state.result;
+        if (state.loading || !state.dirty) adopt(result);
+        else if (result.hash !== state.hash) update({ external: true });
+        return result;
+      } catch (error) { update({ loading: false, error: String(error instanceof Error ? error.message : error) }); }
+      finally { reading = undefined; }
+    })();
+    return reading;
   }
   async function save(overwrite = false) {
     if (state.saving || !state.editable || !state.dirty) return;
@@ -41,10 +45,11 @@ export function createCodeDocument(client: FilesClient, request: FilesRequest) {
     finally { update({ saving: false }); }
   }
   return {
+    client, request,
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     getSnapshot: () => state,
     edit(content: string) { update({ content, dirty: content !== state.saved }); }, refresh, save,
-    discard() { if (state.conflict) adopt(state.conflict); },
+    discard() { if (state.conflict) adopt(state.conflict); else update({ content: state.saved, dirty: false }); },
   };
 }
 export type CodeDocument = ReturnType<typeof createCodeDocument>;

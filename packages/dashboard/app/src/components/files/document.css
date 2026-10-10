@@ -1,0 +1,20 @@
+.markdown-surface { overflow: auto; min-height: 0; flex: 1; color: var(--fg-1); background: var(--bg-0); }
+.document-prose { max-width: 720px; margin: 0 auto; padding: var(--space-8) var(--space-6); font: var(--type-body); overflow-wrap: anywhere; outline: none; }
+.document-prose h1, .document-prose h2, .document-prose h3, .document-prose h4, .document-prose h5, .document-prose h6 { font: var(--type-title); margin: var(--space-6) 0 var(--space-3); }
+.document-prose p { margin: var(--space-2) 0; }
+.document-prose li { margin: var(--space-1) 0; }
+.document-prose blockquote { color: var(--fg-2); border-left: var(--border); margin-left: 0; padding-left: var(--space-4); }
+.document-prose pre { background: var(--bg-1); border: var(--border); border-radius: var(--radius-1); padding: var(--space-3); overflow: auto; }
+.document-prose code { font: var(--type-mono); background: var(--bg-2); color: var(--fg-1); }
+.document-prose a { color: var(--accent); }
+.document-prose table { border-collapse: collapse; width: 100%; }
+.document-prose td, .document-prose th { border: var(--border); padding: var(--space-2); vertical-align: top; }
+.document-prose th { background: var(--bg-1); font-weight: 600; }
+.document-prose .selectedCell { background: var(--bg-3); }
+.document-prose ul[data-type='taskList'] { list-style: none; padding-left: 0; }
+.document-prose li[data-type='taskItem'] { display: flex; gap: var(--space-2); align-items: baseline; }
+.document-prose li[data-type='taskItem'] > div { flex: 1; min-width: 0; }
+.document-toolbar { display: flex; flex-wrap: wrap; gap: var(--space-1); padding: var(--space-2); border-bottom: var(--border); color: var(--fg-2); font: var(--type-ui); }
+.html-surface { display: flex; flex: 1; min-height: 0; flex-direction: column; }
+.html-surface iframe { width: 100%; flex: 1; min-height: 320px; border: 0; background: var(--bg-0); }
+.document-draft { font: var(--type-meta); color: var(--fg-3); margin: var(--space-2) var(--space-3); }

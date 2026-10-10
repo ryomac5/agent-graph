@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { type ReactNode, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import type { ConversationClient } from '../conversation/ConversationPage.tsx';
 import { store, useScreenStore, type ScreenStore } from '../../lib/store.ts';
@@ -11,7 +11,7 @@ import { Icon } from '../../components/Icon.tsx';
 import '../../components/activity.css';
 
 const PROJECT_ROOT_LIMIT = 5;
-export function HomePage({ target = store, language = 'en' }: { target?: ScreenStore; client?: ConversationClient; language?: Language }) {
+export function HomePage({ target = store, language = 'en', backAction }: { target?: ScreenStore; client?: ConversationClient; language?: Language; backAction?: ReactNode }) {
   const t = dictionaries[language];
   const navigate = useNavigate();
   const state = useScreenStore(target);
@@ -34,7 +34,7 @@ export function HomePage({ target = store, language = 'en' }: { target?: ScreenS
   const renderRoot = (project: string, root: (typeof roots)[number]) => <div className="root-block" key={root.id}><RootList roots={[root]} language={language}/><RootTree tree={trees.get(root.id) ?? buildRootTree(root, index)} runningOnly language={language} onSelect={node => {
     if (node.conversationId) navigate(`/p/${encodeURIComponent(project)}?root=${encodeURIComponent(root.id)}&child=${encodeURIComponent(node.conversationId)}`);
   }}/></div>;
-  return <div className="page home-page"><header className="page-header"><h1>{t.overview}</h1></header>
+  return <div className="page home-page"><header className="page-header">{backAction}<h1>{t.overview}</h1></header>
     {[...groups].filter(([project]) => project !== OTHER_PROJECT).map(([project, items]) => <section className="activity-group project-section" aria-label={getProjectName(state, project)} key={project}>
       <header className="section-header"><h2><Link to={`/p/${encodeURIComponent(project)}`}><Icon name="folder" size={14}/>{getProjectName(state, project)}</Link></h2></header>
       <div className="root-card">{items.slice(0, PROJECT_ROOT_LIMIT).map(root => renderRoot(project, root))}</div>

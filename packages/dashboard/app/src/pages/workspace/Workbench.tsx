@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react';
-import { createCodeDocument, type CodeDocument } from '../../lib/code-document.ts';
+import { type CodeDocument } from '../../lib/code-document.ts';
+import { getFileDocument } from '../../lib/file-documents.ts';
 import { DEFAULT_KEYS, createKeyHandler, type KeyBindings } from '../../lib/keys.ts';
 import { closeTab, createWorkspace, listPanes, moveTab, resizeSplit, restoreWorkspace, splitPane, updatePane, workspaceKey, type PaneTree, type WorkspaceTab } from '../../lib/panes.ts';
 import { OpenWorkspaceFile } from '../../lib/workspace-context.ts';
@@ -34,7 +35,7 @@ export function Workbench({ project, session, conversationId, client, language, 
   const activeTab = focusedPane?.tabs.find(tab => tab.id === focusedPane.active);
   function getDocument(tab: Extract<WorkspaceTab, { kind: 'code' }>) {
     const key = fileKey(tab);
-    if (!documents.current.has(key)) documents.current.set(key, createCodeDocument(client, { projectId: project, path: tab.path, ...(tab.worktree ? { worktree: tab.worktree } : {}) }));
+    if (!documents.current.has(key)) documents.current.set(key, getFileDocument(client, { projectId: project, path: tab.path, ...(tab.worktree ? { worktree: tab.worktree } : {}) }));
     return documents.current.get(key)!;
   }
   function getTerminal(tab: Extract<WorkspaceTab, { kind: 'terminal' }>) {
@@ -81,6 +82,7 @@ export function Workbench({ project, session, conversationId, client, language, 
   const handler = useMemo(() => createKeyHandler({ splitHorizontal: bindings.splitHorizontal, splitVertical: bindings.splitVertical, openFile: bindings.openFile, saveFile: bindings.saveFile }, action => actions.current(action)), [bindings]);
   function close(tab: WorkspaceTab) {
     if (tab.kind === 'code' && getDocument(tab).getSnapshot().dirty && !window.confirm(ja ? '保存していない変更を捨てますか？' : 'Discard unsaved changes?')) return;
+    if (tab.kind === 'code' && panes.flatMap(pane => pane.tabs).filter(other => other.kind === 'code' && fileKey(other) === fileKey(tab)).length === 1) getDocument(tab).discard();
     setTree(tree => tree && closeTab(tree, tab.id));
     requestAnimationFrame(() => root.current?.focus());
   }

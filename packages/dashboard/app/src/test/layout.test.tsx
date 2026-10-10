@@ -95,7 +95,7 @@ it('3: stores tabs in the URL, clamps and remembers width, and remembers collaps
   fireEvent.click(screen.getByRole('button', { name: 'Collapse panel' }));
   expect(localStorage.getItem(PANEL_COLLAPSED_KEY)).toBe('1');
   view.unmount(); mount('/p/p?root=active&panel=changes');
-  expect(screen.queryByRole('tabpanel')).toBeNull();
+  expect(within(screen.getByRole('complementary', { name: 'Panel' })).queryByRole('tabpanel')).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Expand panel' }));
   expect(screen.getByRole('separator').getAttribute('aria-valuenow')).toBe('320');
   expect(screen.getByRole('tab', { name: 'Changes' }).getAttribute('aria-selected')).toBe('true');
@@ -258,7 +258,7 @@ it.each([[1440, 420, false], [1024, 360, false], [960, 360, true]] as const)('us
   vi.stubGlobal('innerWidth', viewport);
   mount();
   if (collapsed) {
-    expect(screen.queryByRole('tabpanel')).toBeNull();
+    expect(within(screen.getByRole('complementary', { name: 'Panel' })).queryByRole('tabpanel')).toBeNull();
     expect((document.querySelector('.workspace-panel') as HTMLElement).style.width).toBe('0px');
     fireEvent.click(screen.getByRole('button', { name: 'Expand panel' }));
   }

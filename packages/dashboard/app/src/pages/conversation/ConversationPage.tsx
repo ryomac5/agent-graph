@@ -32,7 +32,7 @@ import { resolveDelegationNode } from '../../components/conversation/DelegationC
 import { selectRoots, useRootIndex } from '../../lib/roots.ts';
 import './conversation.css';
 
-export type ConversationClient = Pick<ReturnType<typeof createClient>, 'command'> & Partial<Pick<ReturnType<typeof createClient>, 'watchConversation' | 'fetchConversation'>>;
+export type ConversationClient = Pick<ReturnType<typeof createClient>, 'command'> & Partial<Pick<ReturnType<typeof createClient>, 'watchConversation' | 'fetchConversation' | 'subscribeTerminal'>>;
 interface Model { model: string; displayName: string; effort?: string }
 export interface ConversationPageProps {
   client: ConversationClient;

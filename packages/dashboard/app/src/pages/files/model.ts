@@ -3,8 +3,8 @@ import type { Ack } from '../../lib/client.ts';
 export type GitMark = 'modified' | 'added' | 'untracked' | 'deleted' | 'renamed';
 export interface FileEntry { name: string; path: string; kind: 'directory' | 'file'; git: GitMark[]; changed: boolean; previousPath?: string }
 export interface ListResult { worktree: string; path: string; entries: FileEntry[] }
-export type ReadResult = { worktree: string; path: string; size: number; state: 'text'; content: string }
-  | { worktree: string; path: string; size: number; state: 'binary' } | { worktree: string; path: string; size: number; state: 'too_large' };
+export type ReadResult = { hash?: string; editable?: boolean } & ( { worktree: string; path: string; size: number; state: 'text'; content: string }
+  | { worktree: string; path: string; size: number; state: 'binary' } | { worktree: string; path: string; size: number; state: 'too_large' });
 export interface Worktree { path: string; head?: string; branch?: string; detached: boolean }
 export interface WorktreesResult { worktree: string; worktrees: Worktree[] }
 export interface FilesRequest { projectId: string; path?: string; worktree?: string }

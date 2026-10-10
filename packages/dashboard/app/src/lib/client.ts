@@ -2,6 +2,7 @@ import { fetchProjection, type ConversationPageData } from './projection-client.
 import { store, type ScreenStore, type Snapshot } from './store.ts';
 
 export interface Ack { type: 'ack'; cmd_id: string; ok: boolean; result?: unknown; error?: string }
+export type TerminalNotice = { type: 'terminal'; event: 'output'; terminalId: string; data: string } | { type: 'terminal'; event: 'exit'; terminalId: string; exitCode: number };
 interface Command { type: 'cmd'; cmd_id: string; command: string; payload?: unknown }
 interface Socket {
   readyState: number;
@@ -32,6 +33,8 @@ export function createClient(options: ClientOptions) {
     if (!response.ok) throw new Error(`Snapshot: ${response.status}`);
     return response.json() as Promise<Snapshot>;
   });
+  const terminalListeners = new Set<(notice: TerminalNotice) => void>();
+  const terminalIds = new Set<string>();
   const opened = new Map<string, number>();
   const pending = new Map<string, { message: Command; resolve: (ack: Ack) => void; reject: (error: Error) => void; promise: Promise<Ack> }>();
   let socket: Socket | undefined;
@@ -100,10 +103,18 @@ export function createClient(options: ClientOptions) {
       let message;
       try { message = JSON.parse(event.data); } catch { ws.close(); return; }
       if (!message || typeof message !== 'object') { ws.close(); return; }
+      if (message.type === 'terminal' && typeof message.terminalId === 'string' && (message.event === 'output' && typeof message.data === 'string' || message.event === 'exit' && typeof message.exitCode === 'number')) {
+        if (message.event === 'exit') terminalIds.delete(message.terminalId);
+        for (const listener of terminalListeners) listener(message);
+        return;
+      }
       if (message.type === 'resync') { void resync(); return; }
       if (message.type === 'ack') {
         const item = pending.get(message.cmd_id);
-        if (item) { pending.delete(message.cmd_id); item.resolve(message); }
+        if (item) {
+          if (item.message.command === 'terminal.open' && message.ok && typeof message.result?.terminalId === 'string') terminalIds.add(message.result.terminalId);
+          pending.delete(message.cmd_id); item.resolve(message);
+        }
         // 知らせの無い接続に限り、応答から runner の有無を推す。成功の応答が来たら戻す。
         if (!runnerReported) {
           const connection = target.getSnapshot().connection;
@@ -123,6 +134,9 @@ export function createClient(options: ClientOptions) {
       if (stopped || current !== epoch) return;
       ++epoch;
       syncing = false;
+      for (const terminalId of terminalIds) for (const listener of terminalListeners) listener({ type: 'terminal', event: 'exit', terminalId, exitCode: -1 });
+      terminalIds.clear();
+      for (const [id, item] of pending) if (item.message.command.startsWith('terminal.')) { pending.delete(id); item.resolve({ type: 'ack', cmd_id: id, ok: false, error: 'Terminal disconnected' }); }
       target.clearDeltas();
       target.setConnection('reconnecting');
       timer = setTimeout(connect, retry);
@@ -130,6 +144,7 @@ export function createClient(options: ClientOptions) {
     };
   }
   return {
+    subscribeTerminal(listener: (notice: TerminalNotice) => void) { terminalListeners.add(listener); return () => { terminalListeners.delete(listener); }; },
     start() { if (stopped) { stopped = false; target.setConnection('connecting'); connect(); } },
     stop() {
       stopped = true; ++epoch; clearTimeout(timer); socket?.close();

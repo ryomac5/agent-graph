@@ -1,3 +1,5 @@
+import { useContext } from 'react';
+import { OpenWorkspaceFile } from '../../lib/workspace-context.ts';
 import { FileTreeRow } from '../../components/FileTreeRow.tsx';
 import { callGit, FileGitDiff, type GitChange } from '../changes/GitChanges.tsx';
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
@@ -287,6 +289,7 @@ export function useFileExplorer({ client, target = store, project, enabled = tru
 }
 
 function TreeLevel({ explorer, path }: { explorer: FileExplorer; path: string }): ReactNode {
+  const openFile = useContext(OpenWorkspaceFile);
   const { rows, dirs, selectedPath, current, needle, items, activate, move } = explorer;
   return rows.filter(row => row.parent === path).map(row => {
     const { entry } = row;
@@ -300,7 +303,7 @@ function TreeLevel({ explorer, path }: { explorer: FileExplorer; path: string })
       ref={element => { if (element) items.current.set(entry.path, element); else items.current.delete(entry.path); }}
       onFocus={event => { if (event.target === event.currentTarget) move(row, false); }}>
       <FileTreeRow depth={row.depth - 1} directory={entry.kind === 'directory'} open={row.open} selected={entry.path === selectedPath} className={mark ? `git-${mark}` : ''}
-        title={entry.previousPath ? `${entry.path} (renamed from ${entry.previousPath})` : entry.path} onClick={() => activate(row)}>
+        title={entry.previousPath ? `${entry.path} (renamed from ${entry.previousPath})` : entry.path} onClick={() => activate(row)} onDoubleClick={() => { if (entry.kind === 'file') openFile?.(entry.path, explorer.worktree); }}>
         <span className="tree-name truncate"><Highlighted name={entry.name} query={needle}/></span>
         {entry.previousPath && <span className="tree-previous truncate">← {entry.previousPath.split('/').at(-1)}</span>}
         {entry.kind === 'directory' ? entry.changed && <span className="tree-changed" title="Contains changes" aria-hidden="true"/> : <GitLetters git={entry.git}/>}

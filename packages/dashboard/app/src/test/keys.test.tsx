@@ -111,11 +111,11 @@ it('answers a named approval from the palette on any page', async () => {
 });
 it('saves remapped keys through config, applies immediately and rejects duplicates', async () => {
   const { client } = mount('/settings'); await act(async () => {});
-  fireEvent.change(screen.getByLabelText('keys · command'), { target: { value: 'Cmd+P' } });
+  fireEvent.change(screen.getByLabelText('keys · command'), { target: { value: 'Cmd+O' } });
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save' })));
-  expect(client.command).toHaveBeenCalledWith('settings.write', { store: 'config', patch: { keys: { ...DEFAULT_KEYS, command: 'Cmd+P' } } });
+  expect(client.command).toHaveBeenCalledWith('settings.write', { store: 'config', patch: { keys: { ...DEFAULT_KEYS, command: 'Cmd+O' } } });
   press('k', document, { metaKey: true }); expect(screen.queryByRole('dialog')).toBeNull();
-  press('p', document, { metaKey: true }); expect(screen.getByRole('dialog')).toBeTruthy();
+  press('o', document, { metaKey: true }); expect(screen.getByRole('dialog')).toBeTruthy();
   press('Escape', document.activeElement!);
   fireEvent.change(screen.getByLabelText('keys · command'), { target: { value: 'j' } });
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save' })));

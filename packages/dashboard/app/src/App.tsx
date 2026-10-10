@@ -142,7 +142,7 @@ export function App({ target = store, client = unavailableClient, searchClient =
   }
   const executeRef = useRef(executeKey);
   executeRef.current = executeKey;
-  const handleKey = useMemo(() => createKeyHandler(bindings, action => executeRef.current(action)), [bindings, location.pathname, overlay]);
+  const handleKey = useMemo(() => createKeyHandler(Object.fromEntries(Object.entries(bindings).filter(([action]) => !['splitHorizontal', 'splitVertical', 'openFile', 'saveFile'].includes(action))), action => executeRef.current(action)), [bindings, location.pathname, overlay]);
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       if (overlay || (event.key === 'Escape' && event.target instanceof HTMLElement && event.target.matches('.explorer-filter input'))) return;
@@ -197,8 +197,8 @@ export function App({ target = store, client = unavailableClient, searchClient =
     <nav className="mobile-tabs" aria-label={language === 'ja' ? '画面' : 'Views'}>{(['sessions', 'conversation', 'panel'] as const).map(view => <button key={view} aria-pressed={mobileView === view} onClick={() => setMobileView(view)}>{language === 'ja' ? { sessions: 'セッション', conversation: '会話', panel: 'パネル' }[view] : { sessions: 'Sessions', conversation: 'Conversation', panel: 'Panel' }[view]}</button>)}</nav>
     <div className="main-column">{listError && <p role="alert" className="status-line danger list-error">{listError}</p>}<main ref={mainRef} className={fullHeight ? 'full-height' : undefined}><Routes>
       <Route path="/" element={<HomePage target={target} client={client} language={language}/>}/>
-      <Route path="/p/:project" element={<WorkspacePage target={target} client={client} language={language} showRootList={false}/>}/>
-      <Route path="/c/:conversation" element={<WorkspacePage project={project ?? OTHER_PROJECT} conversationId={pathConversation ? decodeURIComponent(pathConversation) : undefined} target={target} client={client} language={language} showRootList={false}/>}/>
+      <Route path="/p/:project" element={<WorkspacePage target={target} client={client} language={language} bindings={bindings} showRootList={false}/>}/>
+      <Route path="/c/:conversation" element={<WorkspacePage project={project ?? OTHER_PROJECT} conversationId={pathConversation ? decodeURIComponent(pathConversation) : undefined} target={target} client={client} language={language} bindings={bindings} showRootList={false}/>}/>
       <Route path="/inbox" element={<Inbox target={target} client={client} language={language}/>}/>
       <Route path="/p/:project/tree" element={<RequestsRedirect/>}/>
       <Route path="/p/:project/graph" element={<GraphPage target={target} client={client} language={language}/>}/>

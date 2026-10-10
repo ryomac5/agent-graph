@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { OpenWorkspaceFile } from '../../lib/workspace-context.ts';
+import { useContext, useState } from 'react';
 import { AppLink } from '../AppLink.tsx';
 import { Icon } from '../Icon.tsx';
 import { LARGE_FILE_LINES, pairLines, type Attribution, type DiffFile, type DiffLayout, type DiffLine, type LineLocation } from './model.ts';
@@ -21,9 +22,10 @@ export interface DiffViewProps {
   onSelectLine?: (location: LineLocation, extend: boolean) => void;
   selection?: LineLocation; selectedFile?: string;
   /** 差分のファイル名から Files の該当の位置へ移る先。 */
-  fileHref?: (path: string) => string;
+  fileHref?: (path: string) => string; worktree?: string;
 }
-function FileDiff({ file, layout, attribution, evidenceUrl, selection, onSelectLine, selectedFile, fileHref }: DiffViewProps & { file: DiffFile }) {
+function FileDiff({ file, layout, attribution, evidenceUrl, selection, onSelectLine, selectedFile, fileHref, worktree }: DiffViewProps & { file: DiffFile }) {
+  const openFile = useContext(OpenWorkspaceFile);
   const [expanded, setExpanded] = useState(file.lines.length <= LARGE_FILE_LINES);
   const fileAttribution = file.attribution ?? attribution;
   const mixed = new Set(file.lines.filter(line => line.kind === 'add' || line.kind === 'remove').map(line => line.attribution ?? fileAttribution)).size > 1;
@@ -46,7 +48,7 @@ function FileDiff({ file, layout, attribution, evidenceUrl, selection, onSelectL
     </td>;
   }
   return <article className={`diff-file${selectedFile === file.path ? ' diff-file-selected' : ''}`} aria-label={`Diff for ${file.path}`}>
-    <header className="diff-file-header"><button className="btn btn-ghost btn-sm" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
+    <header className="diff-file-header"><button className="btn btn-ghost btn-sm" aria-expanded={expanded} onDoubleClick={() => openFile?.(file.path, worktree)} onClick={() => setExpanded(!expanded)}>
       <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={14}/><Icon name="file" size={14}/>{file.path}</button>
       {fileHref && <AppLink className="btn btn-link btn-sm" to={fileHref(file.path)} title={`Open ${file.path} in Files`} aria-label={`Open ${file.path} in Files`}><Icon name="external" size={12}/>Files</AppLink>}
       <span className="diff-stat"><span className="diff-add-count">+{file.additions}</span> <span className="diff-remove-count">−{file.deletions}</span></span>

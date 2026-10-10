@@ -140,9 +140,9 @@ function AgentChangesPage({ client, target = store, project, artifactId }: Chang
           <AppLink className="btn btn-link" to={`/c/${encodeURIComponent(readText(state.projection.runs?.find(row => row.id === artifact.run_id)?.conversation_id))}`}>Open conversation</AppLink></details></aside>
         <section className="changes-diff" aria-label="Difference">
           {compare ? <><h2>Patch comparison · Version {String(compare.version)} → {String(artifact.version)}</h2><p className="muted-text">Comparing saved patch text. Switch to Base commit to comment on artifact lines.</p>
-            {comparisonFiles ? comparisonFiles.length ? <DiffView key={`${compare.id}:${id}`} files={comparisonFiles} layout={layout} attribution="unknown" evidenceUrl={evidenceUrl}/> : <p>No patch changes.</p> : <p>Saved diff unavailable for comparison.</p>}</>
+            {comparisonFiles ? comparisonFiles.length ? <DiffView worktree={runPlace} key={`${compare.id}:${id}`} files={comparisonFiles} layout={layout} attribution="unknown" evidenceUrl={evidenceUrl}/> : <p>No patch changes.</p> : <p>Saved diff unavailable for comparison.</p>}</>
             : typeof artifact.diff !== 'string' ? <p className="chip chip-inferred">Saved diff unavailable. Content may not have been retained.</p>
-              : files.length ? <DiffView key={id} files={selectedFile ? files.filter(file => file.path === selectedFile) : files} layout={layout} attribution={attribution} evidenceUrl={evidenceUrl} selection={activeSelection} selectedFile={selectedFile} onSelectLine={selectLine} fileHref={fileHref}/>
+              : files.length ? <DiffView worktree={runPlace} key={id} files={selectedFile ? files.filter(file => file.path === selectedFile) : files} layout={layout} attribution={attribution} evidenceUrl={evidenceUrl} selection={activeSelection} selectedFile={selectedFile} onSelectLine={selectLine} fileHref={fileHref}/>
                 : <p>No file changes in this version.</p>}
           {selectedFile && !compare && <button className="btn btn-ghost btn-sm" onClick={() => setSelectedFile('')}>Show all files</button>}
         </section>
@@ -183,7 +183,7 @@ function AgentChangesPage({ client, target = store, project, artifactId }: Chang
                 {readText(request.reviewer_run_id) && <AppLink className="btn btn-link" to={`/c/${encodeURIComponent(readText(state.projection.runs?.find(run => run.id === request.reviewer_run_id)?.conversation_id))}`}>Reviewer conversation</AppLink>}
                 {stale && <div className="stale-comparison"><p>{staleApprovalText(original, changed)}</p>
                   <div className="stale-hashes"><code>Approved: {readText(row.patch_hash).slice(0, 8)}</code><code>Changed: {readText(changed?.patch_hash).slice(0, 8) || 'Unavailable'}</code></div>
-                  {typeof original?.diff === 'string' && typeof changed?.diff === 'string' ? <DiffView files={comparePatches(original.diff, changed.diff)} layout="split" attribution="unknown" evidenceUrl={evidenceUrl}/>
+                  {typeof original?.diff === 'string' && typeof changed?.diff === 'string' ? <DiffView worktree={runPlace} files={comparePatches(original.diff, changed.diff)} layout="split" attribution="unknown" evidenceUrl={evidenceUrl}/>
                     : <p>Saved diff unavailable for stale comparison.</p>}</div>}
                 {['approved', 'stale'].includes(readText(row.state)) && <button className="btn btn-secondary btn-sm" disabled={!enabled} onClick={() => void command('review.revoke', { approvalId: row.id })}>Revoke</button>}
               </article>;

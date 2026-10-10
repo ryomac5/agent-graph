@@ -167,3 +167,21 @@ it('joins real ledger identities and resolves run-only streaming when membership
   } });
   expect(target.getSnapshot().deltas).toEqual({});
 });
+it('publishes terminal notifications, releases subscribers, and ends terminals on disconnect without replaying input', async () => {
+  vi.useFakeTimers();
+  const { client, sockets } = fixture();
+  const listener = vi.fn(); const unsubscribe = client.subscribeTerminal(listener);
+  const opening = client.command('terminal.open', { projectId: 'p', cols: 80, rows: 24 }, 'open-terminal');
+  sockets[0].receive({ type: 'ack', cmd_id: 'open-terminal', ok: true, result: { terminalId: 'terminal', cwd: '/repo', shell: '/bin/sh' } });
+  await opening;
+  const output = { type: 'terminal', event: 'output', terminalId: 'terminal', data: 'hello' };
+  sockets[0].receive(output); expect(listener).toHaveBeenLastCalledWith(output);
+  sockets[0].receive({ type: 'terminal', event: 'output', terminalId: 'terminal', data: 42 }); expect(listener).toHaveBeenCalledTimes(1);
+  const input = client.command('terminal.input', { terminalId: 'terminal', data: 'ls\r' }, 'terminal-input');
+  sockets[0].close();
+  expect(listener).toHaveBeenLastCalledWith({ type: 'terminal', event: 'exit', terminalId: 'terminal', exitCode: -1 });
+  expect(await input).toMatchObject({ ok: false });
+  await vi.advanceTimersByTimeAsync(500); sockets[1].open();
+  expect(sockets[1].sent.some(message => message.command === 'terminal.input')).toBe(false);
+  unsubscribe(); sockets[1].receive(output); expect(listener).toHaveBeenCalledTimes(2); client.stop();
+});

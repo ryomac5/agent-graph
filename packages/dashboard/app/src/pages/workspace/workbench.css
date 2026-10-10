@@ -1,0 +1,31 @@
+.workbench { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; outline: none; background: var(--bg-0); }
+.workbench-split { display: flex; flex: 1; height: 100%; min-width: 0; min-height: 0; }
+.workbench-split.vertical { flex-direction: column; }
+.split-child { display: flex; flex-basis: 0; min-width: 0; min-height: 0; overflow: hidden; }
+.workbench-divider { position: relative; flex: 0 0 1px; background: var(--line); cursor: col-resize; touch-action: none; }
+.workbench-divider::after { content: ''; position: absolute; inset: 0 -4px; z-index: 2; }
+.vertical > .workbench-divider { cursor: row-resize; }
+.vertical > .workbench-divider::after { inset: -4px 0; }
+.workbench-pane { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
+.workbench-tabs { display: flex; flex: none; height: var(--header); align-items: center; padding: 0 var(--space-2); gap: var(--space-1); border-bottom: var(--border); }
+.workbench-tablist { display: flex; flex: 1; min-width: 0; overflow-x: auto; }
+.workbench-tab { display: flex; align-items: center; flex: none; border-radius: var(--radius-1); }
+.workbench-tab:has([aria-selected='true']) { background: var(--bg-3); }
+.workbench-tab button[role='tab'] { font: var(--type-ui); color: var(--fg-2); padding: 0 var(--space-2); height: var(--control); max-width: 216px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workbench-tab button[aria-selected='true'] { color: var(--fg-1); }
+.workbench-tab:hover { background: var(--bg-2); }
+.workbench-add { position: relative; }
+.workbench-menu { position: absolute; right: 0; top: var(--control); z-index: 20; display: flex; flex-direction: column; background: var(--bg-0); border: var(--border); border-radius: var(--radius-2); box-shadow: var(--shadow); padding: var(--space-1); min-width: 160px; }
+.workbench-body { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.workbench-body[hidden] { display: none; }
+.workbench-body > .conversation-page { flex: 1; min-height: 0; }
+.code-tab, .terminal-tab { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
+.code-editor, .terminal-host { flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
+.code-editor .cm-editor { height: 100%; }
+.terminal-surface { height: 100%; padding: var(--space-2); }
+.editor-notice { flex: none; margin: 0; padding: var(--space-2); font: var(--type-meta); color: var(--fg-2); background: var(--bg-1); border-bottom: var(--border); }
+.editor-conflict { padding: var(--space-2); background: var(--bg-1); max-height: 50%; overflow: auto; }
+.editor-comparison { display: flex; gap: var(--space-2); }
+.editor-comparison section { width: 50%; min-width: 0; }
+.editor-comparison h3 { font: var(--type-ui); }
+.editor-comparison pre { font: var(--type-mono); overflow: auto; }

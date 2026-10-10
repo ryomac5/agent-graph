@@ -1,7 +1,8 @@
+import { readRemoteMetadata } from '../remote/observation.ts';
 import { readdirSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { createNativeId, projectEntities } from "../../../core/src/ledger/index.ts";
-import type { Fact, Ledger } from "../../../core/src/ledger/index.ts";
+import type { Fact, FactInput, Ledger } from "../../../core/src/ledger/index.ts";
 import { observeClaudeFile } from "../observe/claude/index.ts";
 import { observeClaudeContext } from "../observe/claude/context.ts";
 import type { LocationResolver } from "../observe/location.ts";
@@ -62,13 +63,21 @@ export function observeClaudeHistories(ledger: Ledger, directory: string, facts:
     const fileLedger: Ledger = { ...ledger,
       readSince: (seq, limit) => history.filter((fact) => fact.seq > seq).slice(0, limit),
       append(input) {
-        const result = ledger.append(input);
+        let decorated: FactInput = input;
+        if (remote) {
+          const location = { repository_id: remote.projectId, cwd: remote.cwd, connection_id: remote.connectionId };
+          if (input.kind === 'conversation.created') decorated = { ...input, payload: { ...input.payload, ...location } };
+          else if (input.kind === 'conversation.updated' || input.kind === 'conversation.corrected') decorated = { ...input, payload: { ...input.payload, ...location } };
+        }
+        const result = ledger.append(decorated);
         if (result.status === "appended" && (input.kind.startsWith("conversation.") || input.kind.startsWith("run.") || input.kind.startsWith("relation."))) {
-          history.push({ ...input, seq: result.seq, fact_id: result.fact_id } as Fact);
+          history.push({ ...decorated, seq: result.seq, fact_id: result.fact_id } as Fact);
         }
         return result;
       },
     };
+    const remote = readRemoteMetadata(file);
+    const readLocation = remote ? () => ({ cwd: remote!.cwd, repository_id: remote!.projectId }) : locate;
     let result;
     const start = saved?.get(resolve(file)) ?? cursors.get(resolve(file));
     try {
@@ -76,7 +85,7 @@ export function observeClaudeHistories(ledger: Ledger, directory: string, facts:
         const observation = observeClaudeFile(fileLedger, file, { cursor: start });
         // 発言の取り込みで読んだ行から、場所とターンの根拠を同じ取引で足す。
         const context = observeClaudeContext(fileLedger, file, { lines: observation.lines,
-          fromStart: !start || observation.reset || start.offset === 0, ...(locate ? { locate } : {}) });
+          fromStart: !start || observation.reset || start.offset === 0, ...(readLocation ? { locate: readLocation } : {}) });
         return { ...observation, conflicts: [...observation.conflicts, ...context.conflicts] };
       });
     }

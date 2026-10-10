@@ -1,3 +1,5 @@
+import { SessionCreate } from './components/SessionCreate.tsx';
+import { SshSettings } from './components/SshSettings.tsx';
 import { ResizeDivider } from './components/ResizeDivider.tsx';
 import { SIDEBAR_WIDTH_KEY, SIDEBAR_COLLAPSED_KEY, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_INITIAL_WIDTH, SIDEBAR_COMPACT_WIDTH, SIDEBAR_RESTORE_WIDTH, clampSidebar, useStoredToggle } from './lib/layout.ts';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -106,6 +108,7 @@ export function App({ target = store, client = unavailableClient, searchClient =
     }
   }, [location.pathname, location.search, location.hash, auxiliaryPage]);
   const { bindings, setBindings } = useKeySettings(client);
+  const [creatingSession, setCreatingSession] = useState<string>();
   const [projectMenu, setProjectMenu] = useState<string>();
   const [overlay, setOverlay] = useState<'commands' | 'help' | 'interrupt' | 'create'>();
   const [stopButton, setStopButton] = useState<HTMLButtonElement>();
@@ -176,7 +179,7 @@ export function App({ target = store, client = unavailableClient, searchClient =
   const handleKey = useMemo(() => createKeyHandler(Object.fromEntries(Object.entries(bindings).filter(([action]) => !['splitHorizontal', 'splitVertical', 'openFile', 'saveFile', 'togglePanel'].includes(action))), action => executeRef.current(action)), [bindings, location.pathname, overlay]);
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
-      if (overlay || (event.key === 'Escape' && event.target instanceof HTMLElement && event.target.matches('.explorer-filter input'))) return;
+      if (overlay || creatingSession || (event.key === 'Escape' && event.target instanceof HTMLElement && event.target.matches('.explorer-filter input'))) return;
       if (auxiliaryPage && event.key === 'Escape' && !isTextInput(event.target)) { event.preventDefault(); event.stopPropagation(); goBack(); return; }
       contextFocus.current = event.target instanceof HTMLElement ? event.target : null;
       if (handleKey(event)) { event.preventDefault(); event.stopPropagation(); }
@@ -184,7 +187,7 @@ export function App({ target = store, client = unavailableClient, searchClient =
     }
     document.addEventListener('keydown', onKey, true);
     return () => document.removeEventListener('keydown', onKey, true);
-  }, [handleKey, overlay, auxiliaryPage, returnUrl, project]);
+  }, [handleKey, overlay, creatingSession, auxiliaryPage, returnUrl, project]);
   const commands: Command[] = [
     ...(['home', 'workspace', 'inbox', 'tree', 'changes', 'help', 'interrupt', 'toggleSidebar'] as const).map(id => ({ id, name: keyLabel(id, language), run: () => executeKey(id), disabled: ['workspace', 'tree', 'changes'].includes(id) && !project })),
     { id: 'search', name: language === 'ja' ? '会話を検索' : 'Search conversations', run: () => navigate('/search') },
@@ -222,8 +225,8 @@ export function App({ target = store, client = unavailableClient, searchClient =
             <NavLink to={`/p/${encodeURIComponent(row.id)}`} title={row.full}><Icon name="folder" size={16}/><span className="truncate">{row.name}</span></NavLink>
             {runningCount > 0 && <span className="numeric project-running" aria-label={language === 'ja' ? '実行中のセッション' : 'Running sessions'}>{runningCount}</span>}
             <button className="icon-button project-create" aria-label={t('newTask') + ': ' + row.name} aria-expanded={projectMenu === row.id} onClick={() => setProjectMenu(projectMenu === row.id ? undefined : row.id)}><Icon name="plus" size={14}/></button></div>
-          {projectMenu === row.id && <div className="project-create-menu" role="menu">{['session', 'task'].map(kind => <button className="btn btn-ghost" role="menuitem" key={kind} onClick={() => { navigate(`/p/${encodeURIComponent(row.id)}?${kind === 'session' ? `session=${crypto.randomUUID()}` : 'create=1'}`); setProjectMenu(undefined); setMobileView('conversation'); }}>{kind === 'session' ? language === 'ja' ? '新しいセッション' : 'New session' : language === 'ja' ? '新規タスク' : 'New task'}</button>)}</div>}
-          {open && <section className="sidebar-roots" aria-label={language === 'ja' ? row.name + ' のセッション' : row.name + ' sessions'}><RootList grouped state={state} roots={items} selected={selectedRoot?.id} language={language} onSelect={root => { const next = new URLSearchParams(search); next.set('root', root.id); next.delete('child'); next.delete('path'); next.delete('create'); next.delete('session'); navigate(`/p/${encodeURIComponent(row.id)}?${next}`); setMobileView('conversation'); }}/></section>}
+          {projectMenu === row.id && <div className="project-create-menu" role="menu">{['session', 'task'].map(kind => <button className="btn btn-ghost" role="menuitem" key={kind} onClick={() => { if (kind === 'session') setCreatingSession(row.id); else navigate(`/p/${encodeURIComponent(row.id)}?create=1`); setProjectMenu(undefined); setMobileView('conversation'); }}>{kind === 'session' ? language === 'ja' ? '新しいセッション' : 'New session' : language === 'ja' ? '新規タスク' : 'New task'}</button>)}</div>}
+          {open && <section className="sidebar-roots" aria-label={language === 'ja' ? row.name + ' のセッション' : row.name + ' sessions'}><RootList grouped state={state} roots={items} selected={selectedRoot?.id} language={language} onSelect={root => { const next = new URLSearchParams(search); next.set('root', root.id); next.delete('child'); next.delete('path'); next.delete('create'); next.delete('session'); next.delete('conversation'); navigate(`/p/${encodeURIComponent(row.id)}?${next}`); setMobileView('conversation'); }}/></section>}
         </div>;
       })}</nav>
     </div><NavLink className="settings-link" to="/settings"><Icon name="settings" size={16}/>{t('settings')}</NavLink></div><ResizeDivider className="sidebar-resize" label={language === 'ja' ? 'サイドバーの幅' : 'Sidebar width'} orientation="vertical" value={sidebarWidth} min={SIDEBAR_MIN_WIDTH} max={SIDEBAR_MAX_WIDTH} step={20}
@@ -242,9 +245,10 @@ export function App({ target = store, client = unavailableClient, searchClient =
       <Route path="/settings" element={<div className="page settings-page"><header className="page-header">{backAction}<h1>{t('settings')}</h1></header><div className="settings-card">
         <label><span><strong>{t('theme')}</strong><small>{t('themeHint')}</small></span><select aria-label={t('theme')} value={theme} onChange={event => setTheme(event.target.value as Theme)}>{(['system', 'light', 'dark'] as const).map(value => <option key={value} value={value}>{t(value)}</option>)}</select></label>
         <label><span><strong>{t('language')}</strong><small>{t('languageHint')}</small></span><select aria-label={t('language')} value={language} onChange={event => setLanguage(event.target.value as Language)}><option value="en" lang="en">{t('english')}</option><option value="ja" lang="ja">{t('japanese')}</option></select></label>
-      </div><KeyboardSettings language={language} bindings={bindings} client={client} onSave={setBindings}/></div>}/>
+      </div><SshSettings client={client} projects={getRegisteredProjects(state)} language={language}/><KeyboardSettings language={language} bindings={bindings} client={client} onSave={setBindings}/></div>}/>
       <Route path="*" element={<EmptyView title="notFound" t={t}/>}/>
     </Routes>{commandError && <p role="alert" className="banner banner-danger">{commandError}</p>}</main></div>
+    {creatingSession && <SessionCreate client={client} projects={getRegisteredProjects(state)} initialProject={creatingSession} language={language} onClose={() => setCreatingSession(undefined)} onCreated={(project, conversation) => { setCreatingSession(undefined); navigate(`/p/${encodeURIComponent(project)}?conversation=${encodeURIComponent(conversation)}`); setMobileView('conversation'); }}/>}
     {overlay === 'commands' && <CommandPalette language={language} commands={commands} onClose={() => setOverlay(undefined)}/>}
     {overlay === 'help' && <CommandDialog language={language} title={language === 'ja' ? 'キー操作' : 'Shortcuts'} onClose={() => setOverlay(undefined)}><dl>{Object.entries(bindings).map(([key, value]) => <div key={key}><dt>{keyLabel(key as KeyAction, language)}</dt><dd><kbd>{value}</kbd></dd></div>)}</dl></CommandDialog>}
     {overlay === 'interrupt' && <CommandDialog language={language} title={language === 'ja' ? '実行を中断しますか' : 'Interrupt run?'} onClose={() => setOverlay(undefined)}><p>{language === 'ja' ? '現在の実行を中断しますか' : 'Interrupt the current run?'}</p><button className="btn btn-primary" onClick={() => { if (stopButton?.isConnected && !stopButton.disabled) stopButton.click(); setOverlay(undefined); }}>{language === 'ja' ? '中断' : 'Confirm interrupt'}</button><button className="btn btn-secondary" onClick={() => setOverlay(undefined)}>{language === 'ja' ? 'キャンセル' : 'Cancel'}</button></CommandDialog>}

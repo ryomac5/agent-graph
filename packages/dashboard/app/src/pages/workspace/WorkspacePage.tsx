@@ -61,7 +61,7 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
   const childId = requestedChild && !selected?.conversation_ids.includes(requestedChild) ? selectedNode?.conversationId : undefined;
   // 系列は最後に動いた会話を末尾に並べ、その会話を開く。
   const series = useMemo(() => selected ? orderSeries(state, selected.conversation_ids) : [], [selected, state.projection.conversations, state.projection.runs]);
-  const conversationId = childId ?? suppliedConversation ?? series.at(-1);
+  const conversationId = search.get('conversation') ?? childId ?? suppliedConversation ?? series.at(-1);
   // 子の会話は、頼んだ内容を名前として出す。
   const childNode = selectedNode;
   const childTitle = childNode ? tree.edges.find(edge => edge.target === childNode.id)?.title || undefined : undefined;
@@ -75,7 +75,7 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
         <div className="column-scroll"><RootList roots={roots} selected={selected?.id} language={language} onSelect={root => {
           const next = new URLSearchParams(search); next.set('root', root.id); next.delete('path'); next.delete('child'); next.delete('session'); setSearch(next);
         }}/></div></section>}
-      {(conversationId || newSession) ? <Workbench key={`${project}:${workspaceSession}`} project={project} session={workspaceSession} conversationId={conversationId ?? ''} newSession={newSession} client={client} language={language} bindings={bindings} registerOpenFile={openFile}
+      {(conversationId || newSession) ? <Workbench key={`${project}:${workspaceSession}`} project={project} session={workspaceSession} conversationId={conversationId ?? ''} openConversationId={search.get('conversation') ?? undefined} newSession={newSession} client={client} language={language} bindings={bindings} registerOpenFile={openFile}
         renderConversation={(tabConversation, onConversation) => <>
           {tabConversation === conversationId && childNode?.delegation?.state === 'failed' && <div className="request-detail-actions"><strong>{childTitle || childNode.label}</strong><button className="btn btn-secondary btn-sm" disabled={state.connection !== 'connected'} onClick={() => void retry(childNode)}>{t.retry}</button></div>}
           {retryError && <p role="alert" className="status-line danger">{retryError}</p>}

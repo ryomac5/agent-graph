@@ -139,8 +139,8 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
           return;
         }
         if ((TERMINAL_COMMANDS as readonly string[]).includes(message.command)) {
-          const hosted = message.command.startsWith('session.') || message.command === 'terminal.attach' || sessionHosts.hasTerminal(message.payload?.terminalId);
-          const retained = ['session.launch', 'session.send', 'session.interrupt'].includes(message.command);
+          const hosted = ['ssh.read', 'ssh.write', 'ssh.test', 'worktree.create', 'git.branches'].includes(message.command) || message.command.startsWith('session.') || message.command === 'terminal.attach' || sessionHosts.hasTerminal(message.payload?.terminalId);
+          const retained = ['session.launch', 'session.send', 'session.interrupt', 'worktree.create', 'ssh.write'].includes(message.command);
           let result = retained ? sessionCommands.get(message.cmd_id) : undefined;
           if (!result) {
             result = hosted ? sessionHosts.handle(message.command, message.payload, notify) : terminals.handle(message.command, message.payload);

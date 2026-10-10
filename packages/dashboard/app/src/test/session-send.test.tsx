@@ -96,37 +96,36 @@ it('replaces optimistic input with the recorded message without duplicating it',
   expect(screen.getAllByText('Recorded input')).toHaveLength(1);
 });
 
-it.each(['claude', 'codex'])('starts a %s session from the project menu and uses send for its next message', async provider => {
+it.each(['claude', 'codex'])('creates a %s session from the project menu, opens its tab and sends through the terminal', async provider => {
   const f = fixture();
+  const conversationId = JSON.stringify([provider, '12345678-1234-1234-1234-123456789abc']);
   let launched = false;
   f.command.mockImplementation(async (name: string) => {
     if (name === 'list_models') return ack([{ model: 'model-a', displayName: 'Model A' }]);
+    if (name === 'ssh.read') return ack({ connections: [] });
+    if (name === 'git.branches') return ack({ branches: ['main', 'origin/main'] });
     if (name === 'session.launch') { launched = true; return ack({ terminalId: 'terminal', pid: 123 }); }
-    if (name === 'session.hosts') return ack({ hosts: launched ? [{ terminalId: 'terminal', conversationId: 'started' }] : [] });
-    return name === 'start' ? ack({ conversationId: 'started', runId: 'started-run' }) : ack([]);
+    if (name === 'session.hosts') return ack({ hosts: launched ? [{ terminalId: 'terminal', conversationId, provider, projectId: 'p', cwd: '/repo' }] : [] });
+    return ack();
   });
   render(<MemoryRouter initialEntries={['/p/p']}><App target={f.target} client={f.client}/></MemoryRouter>);
   fireEvent.click(screen.getByRole('button', { name: 'New task: Project' }));
-  expect(screen.getAllByRole('menuitem').map(item => item.textContent)).toEqual(['New session', 'New task']);
   fireEvent.click(screen.getByRole('menuitem', { name: 'New session' }));
-  const tabs = screen.getAllByRole('tab');
-  expect(tabs.filter(tab => tab.getAttribute('aria-selected') === 'true')[0].textContent).toBe('New session');
-  const providerSelect = screen.getByRole('combobox', { name: 'Provider' });
-  expect(providerSelect).toHaveProperty('value', 'claude');
-  fireEvent.change(providerSelect, { target: { value: provider } });
-  await screen.findByRole('option', { name: 'Model A' });
-  const input = screen.getByRole('textbox', { name: 'Message' });
-  fireEvent.change(input, { target: { value: 'First message' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-  await vi.waitFor(() => expect(f.command).toHaveBeenCalledWith(provider === 'claude' ? 'session.launch' : 'start', provider === 'claude' ? { projectId: 'p', provider: 'claude', model: 'model-a' } : { provider, cwd: '/repo', model: { model: 'model-a' }, input: { text: 'First message' } }));
+  expect(screen.getByRole('dialog', { name: 'Create session' })).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: provider === 'claude' ? 'Claude' : 'Codex' }));
+  fireEvent.click(screen.getByRole('button', { name: /^Create / }));
+  await vi.waitFor(() => expect(f.command).toHaveBeenCalledWith('session.launch', { projectId: 'p', provider, target: { kind: 'local' } }));
   await vi.waitFor(() => {
     const saved = restoreWorkspace(localStorage.getItem(workspaceKey('p', 'root')), 'c')!;
     expect(listPanes(saved)[0].tabs).toHaveLength(2);
-    expect(listPanes(saved)[0].tabs.at(-1)).toMatchObject({ kind: 'conversation', conversationId: 'started' });
+    expect(listPanes(saved)[0].tabs.at(-1)).toMatchObject({ kind: 'conversation', conversationId });
+    expect(listPanes(saved)[0].active).toBe(listPanes(saved)[0].tabs.at(-1)!.id);
   });
-  fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Second message' } });
+  await screen.findByRole('option', { name: 'Model A' });
+  fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'First message' } });
   fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-  await vi.waitFor(() => expect(f.command).toHaveBeenCalledWith(provider === 'claude' ? 'session.send' : 'send', provider === 'claude' ? { conversationId: 'started', text: 'Second message' } : { runId: 'started-run', input: { text: 'Second message' } }));
+  await vi.waitFor(() => expect(f.command).toHaveBeenCalledWith('session.send', { conversationId, text: 'First message' }));
+  expect(f.command.mock.calls.filter(([name]) => name === 'session.launch')).toHaveLength(1);
 });
 
 it('renames tabs, cancels with Escape, restores names and order, and clears custom names', () => {

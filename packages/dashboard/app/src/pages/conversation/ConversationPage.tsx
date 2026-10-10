@@ -60,12 +60,12 @@ const TICK_MS = 1000;
 const STICK_TO_BOTTOM_PX = 120;
 const HOST_POLL_MS = 5000;
 const HOST_START_TIMEOUT_MS = 30000;
-interface SessionHost { conversationId: string; terminalId: string }
+interface SessionHost { conversationId: string; terminalId: string; provider?: string; cwd?: string; disconnected?: boolean; projectId?: string; target?: { kind: string; id?: string } }
 function readHosts(result: unknown): SessionHost[] {
   const rows = readObject(result).hosts;
   return (Array.isArray(rows) ? rows : []).flatMap(row => {
     const value = readObject(row);
-    return typeof value.conversationId === 'string' && typeof value.terminalId === 'string' ? [{ conversationId: value.conversationId, terminalId: value.terminalId }] : [];
+    return typeof value.conversationId === 'string' && typeof value.terminalId === 'string' ? [{ conversationId: value.conversationId, terminalId: value.terminalId, provider: readText(value.provider), cwd: readText(value.cwd), disconnected: value.disconnected === true, projectId: readText(value.projectId), target: value.target as SessionHost["target"] }] : [];
   });
 }
 
@@ -164,10 +164,12 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const [continued, setContinued] = useState(false);
   const [sentMessages, setSentMessages] = useState<{ id: string; conversationId: string; text: string; known: Set<unknown> }[]>([]);
   const starting = Boolean(newSession && !conversationId);
+  const nativeProvider = /^\["(claude|codex)",/.exec(conversationId)?.[1];
+  const creatingHost = hosts.find(host => host.conversationId === conversationId);
   const projectedConversation = (state.projection.conversations ?? []).find(row => row.id === conversationId);
-  const conversation = receipt && receiptConversationId === conversationId
+  const conversation: Row | undefined = receipt && receiptConversationId === conversationId
     ? { ...projectedConversation, id: conversationId, provider: receipt.provider, origin: 'managed' }
-    : projectedConversation ?? (hostedConversation?.id === conversationId ? hostedConversation : undefined) ?? (starting ? { id: '', provider: sessionProvider, origin: 'observed' } : undefined);
+    : projectedConversation ?? (hostedConversation?.id === conversationId ? hostedConversation : undefined) ?? (creatingHost ? { id: conversationId, provider: creatingHost.provider || nativeProvider || 'claude', origin: 'observed', project: creatingHost.projectId, cwd: creatingHost.cwd || newSession?.cwd } : undefined) ?? (starting ? { id: '', provider: sessionProvider, origin: 'observed' } : undefined);
   const runs = (state.projection.runs ?? []).filter(row => row.conversation_id === conversationId);
   const projectedRun = [...runs].sort((a, b) => Number(b.generation) - Number(a.generation))[0];
   const run: Row | undefined = receipt && receiptConversationId === conversationId && projectedRun?.id !== receiptRunId
@@ -200,7 +202,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const [engaged, setEngaged] = useState(false);
   const [handoffBlocked, setHandoffBlocked] = useState(false);
   const external = conversation?.origin !== 'managed';
-  const terminalConversation = external && provider === 'claude';
+  const terminalConversation = external && (provider === 'claude' || Boolean(creatingHost));
   const host = hosts.find(host => host.conversationId === conversationId) ?? (pendingHost?.conversationId === conversationId ? pendingHost : undefined);
   const stopped = ['ended', 'failed', 'idle'].includes(readText(run?.state)) && isStoppedEvidence(run?.last_evidence);
   const active = ACTIVE_STATES.includes(readText(run?.state));
@@ -211,7 +213,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const canSend = writable && !codexActive;
   const supported = SUPPORTED_FORMATS.includes(readText(conversation?.history_format));
   // 未対応の形式でも押せるようにし、押したときに理由を出す。
-  const canLaunch = connected && !pending && (terminalConversation ? Boolean(host || cwd.trim()) : Boolean(model && cwd.trim()));
+  const canLaunch = connected && !pending && !host?.disconnected && (terminalConversation ? Boolean(host || cwd.trim()) : Boolean(model && cwd.trim()));
   const rawStatus = seriesState ?? readText(run?.state);
   const status = executionStates.find(value => value === rawStatus) ?? 'unknown';
   const local = detail?.id === conversationId ? detail.projection : {};
@@ -264,7 +266,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     return next;
   }
   useEffect(() => {
-    if (!terminalConversation || !connected) return;
+    if ((!nativeProvider && provider !== 'claude') || !['connected', 'runner_unavailable'].includes(state.connection)) return;
     let disposed = false;
     const poll = async () => {
       try {
@@ -279,7 +281,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     setHosts([]); void poll();
     const timer = setInterval(() => { void poll(); }, HOST_POLL_MS);
     return () => { disposed = true; clearInterval(timer); };
-  }, [client, terminalConversation, connected, conversationId]);
+  }, [client, nativeProvider, provider, conversationId, state.connection]);
   // 画面に出す発言は新しい窓だけだが、変えたファイルは読み込みで残した古い発言も含めて数える。
   const editRows = [...new Map([...(local.edit_messages ?? []), ...messageEntries.map(entry => entry.row)].map(row => [readText(row.id), row])).values()];
   const changedFiles = collectConversationChanges(editRows, {
@@ -415,12 +417,12 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
           let resume: string | undefined;
           if (!starting) {
             const native = JSON.parse(conversationId);
-            if (!Array.isArray(native) || native[0] !== 'claude' || typeof native[1] !== 'string') throw new Error('Invalid Claude conversation');
+            if (!Array.isArray(native) || !['claude', 'codex'].includes(native[0]) || typeof native[1] !== 'string') throw new Error('Invalid Claude conversation');
             resume = native[1];
           }
           let terminalId = existingPending?.terminalId;
           if (!terminalId) {
-            const ack = await client.command('session.launch', { projectId, provider: 'claude', ...(resume ? { resume } : {}), ...(model ? { model } : {}) });
+            const ack = await client.command('session.launch', { projectId, provider: provider || 'claude', ...(resume ? { resume } : {}), ...(model ? { model } : {}) });
             if (!ack.ok) throw new Error(ack.error ?? t('failed'));
             terminalId = readText(readObject(ack.result).terminalId);
             setPendingHost({ conversationId, terminalId });
@@ -582,6 +584,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     </div></div>
     {/* 外の会話には、runner が応答できる続きを用意する。 */}
     <footer className="composer" onFocusCapture={() => setEngaged(true)} onPointerDownCapture={() => setEngaged(true)}>
+      {(host?.disconnected || run?.reason === 'disconnected') && <p role="status" className="status-line">{language === 'ja' ? '接続が切れました' : 'Connection lost'}</p>}
       {terminalConversation && !starting && !host && !stopped && <p className="status-line">{language === 'ja' ? 'この会話は別の場所で動いています。ここで送ると、別の続きになります。' : 'This conversation is running elsewhere. Sending here will start a separate continuation.'}</p>}
       {(error || pending || continued || modelsError && engaged || handoffBlocked) && <div className="composer-status">
         {error && <p role="alert" className="status-line danger" title={error}><Icon name="alert" size={14}/>{error}</p>}

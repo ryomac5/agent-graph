@@ -18,9 +18,9 @@ function CodeLabel({ document, name, language }: { document: CodeDocument; name:
   const state = useSyncExternalStore(document.subscribe, document.getSnapshot);
   return <>{name}{state.dirty && <span aria-label={language === 'ja' ? '未保存' : 'Unsaved'}> ●</span>}{state.external && <span aria-label={language === 'ja' ? '外で変更' : 'Changed on disk'}> !</span>}</>;
 }
-export function Workbench({ project, session, conversationId, client, language, bindings = DEFAULT_KEYS, renderConversation, registerOpenFile, newSession }: {
+export function Workbench({ project, session, conversationId, client, language, bindings = DEFAULT_KEYS, renderConversation, registerOpenFile, newSession, openConversationId }: {
   project: string; session: string; conversationId: string; client: ConversationClient; language: Language; bindings?: KeyBindings;
-  newSession?: string; renderConversation: (conversationId: string, onConversation: (id: string) => void) => ReactNode; registerOpenFile?: RefObject<(path: string, worktree?: string) => void>;
+  openConversationId?: string; newSession?: string; renderConversation: (conversationId: string, onConversation: (id: string) => void) => ReactNode; registerOpenFile?: RefObject<(path: string, worktree?: string) => void>;
 }) {
   const key = workspaceKey(project, session);
   const [tree, setTree] = useState<PaneTree | null>(() => {
@@ -52,6 +52,18 @@ export function Workbench({ project, session, conversationId, client, language, 
       return current ? updatePane(current, paneId, pane => ({ ...pane, tabs: [...pane.tabs, tab], active: tab.id })) : { kind: 'pane', id: paneId, tabs: [tab], active: tab.id };
     });
   }, [newSession]);
+  useEffect(() => {
+    if (!openConversationId) return;
+    setTree(current => {
+      if (!current) return createWorkspace(openConversationId);
+      const existing = listPanes(current).flatMap(pane => pane.tabs.map(tab => ({ pane, tab }))).find(({ tab }) => tab.kind === 'conversation' && tab.conversationId === openConversationId);
+      if (existing) { setFocused(existing.pane.id); return updatePane(current, existing.pane.id, pane => ({ ...pane, active: existing.tab.id })); }
+      const pane = listPanes(current).find(pane => pane.id === focused) ?? listPanes(current)[0];
+      const tab: WorkspaceTab = { kind: 'conversation', id: id(), conversationId: openConversationId };
+      setFocused(pane.id);
+      return updatePane(current, pane.id, pane => ({ ...pane, tabs: [...pane.tabs, tab], active: tab.id }));
+    });
+  }, [openConversationId]);
   function label(tab: WorkspaceTab) { return tab.name || (tab.kind === 'code' ? tab.path.split('/').at(-1)! : tab.kind === 'terminal' ? ja ? 'ターミナル' : 'Terminal' : tab.conversationId ? ja ? '会話' : 'Conversation' : ja ? '新しいセッション' : 'New session'); }
   function beginRename(pane: string, tab: WorkspaceTab) { setRenaming({ pane, tab: tab.id, value: label(tab) }); setTabMenu(undefined); }
   function finishRename() {

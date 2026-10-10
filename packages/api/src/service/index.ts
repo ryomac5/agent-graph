@@ -1,3 +1,5 @@
+import { readRemoteMetadata, observeRemoteStatus } from '../remote/observation.ts';
+import { cacheRoot } from '../remote/index.ts';
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -244,9 +246,11 @@ export function openObservationService(options: ObservationOptions = {}) {
   const kit = createKitObserver(scanLedger, checkpoints, refreshSnapshot);
   const claudeSessionsDirectory = join(env.CLAUDE_CONFIG_DIR ?? join(home, ".claude"), "sessions");
   const sessionQuery = createSessionQuery(scanLedger, projectionDb, !options.readerOnly);
-  const observeClaudeSessions = createClaudeSessionObserver(scanLedger, claudeSessionsDirectory, sessionQuery);
+  let remoteConversations = new Set<string>();
+  const localQuery = { ...sessionQuery, read: (provider: 'claude' | 'codex') => sessionQuery.read(provider).filter(run => !remoteConversations.has(run.conversation_id)) };
+  const observeClaudeSessions = createClaudeSessionObserver(scanLedger, claudeSessionsDirectory, localQuery);
   const observeCodexSessions = createCodexSessionObserver(scanLedger, env.CODEX_HOME ?? join(home, ".codex"),
-    options.codexProcessReader, sessionQuery);
+    options.codexProcessReader, localQuery);
   let rollout: ReturnType<typeof createIncrementalRolloutReader> | undefined;
   function hasChanged(path: string): boolean {
     let stat;
@@ -304,9 +308,11 @@ export function openObservationService(options: ObservationOptions = {}) {
         decorate = codex.decorate;
         const start = Number(readLastSeq.get()!.seq ?? 0);
         const claudeProjects = join(env.CLAUDE_CONFIG_DIR ?? join(home, ".claude"), "projects");
-        const claudePaths = list(claudeProjects, (name) => name.endsWith(".jsonl")).filter((path) => hasChanged(path) || needsClaudeContext(path));
+        const remoteProjects = join(cacheRoot(env, home), "remote");
+        const remoteFiles = list(remoteProjects, name => name.endsWith(".jsonl"));
+        const claudePaths = [...list(remoteProjects, (name) => name.endsWith(".jsonl")).filter(path => !path.includes("/codex/")), ...list(claudeProjects, (name) => name.endsWith(".jsonl"))].filter((path) => hasChanged(path) || needsClaudeContext(path));
         const codexHome = env.CODEX_HOME ?? join(home, ".codex");
-        const codexFiles = [...codex.reader.list(join(codexHome, "sessions")), ...codex.reader.list(join(codexHome, "archived_sessions"))];
+        const codexFiles = [...list(remoteProjects, name => name.endsWith(".jsonl")).filter(path => path.includes("/codex/")), ...codex.reader.list(join(codexHome, "sessions")), ...codex.reader.list(join(codexHome, "archived_sessions"))];
         const codexPaths = new Set(codexFiles.filter(hasChanged));
         const codexLocations = codexFiles.filter((path) => codexPaths.has(path) || needsCodexLocation(path));
         let processed = 0;
@@ -335,7 +341,11 @@ export function openObservationService(options: ObservationOptions = {}) {
         } catch (error) { codex.discard(); throw error; }
         refreshSnapshot();
         if (codexLocations.length) {
-          const located = buffered.batch(() => observeCodexLocations(scanLedger, codexLocations, { facts: snapshot, locate }));
+          const localLocations = codexLocations.filter(path => !path.startsWith(remoteProjects + "/"));
+          const located = buffered.batch(() => [...observeCodexLocations(scanLedger, localLocations, { facts: snapshot, locate }), ...codexLocations.filter(path => path.startsWith(remoteProjects + "/")).flatMap(path => {
+            const remote = readRemoteMetadata(path);
+            return observeCodexLocations(scanLedger, [path], { facts: snapshot, locate: remote ? () => ({ cwd: remote.cwd, repository_id: remote.projectId }) : locate });
+          })]);
           if (located.some((result) => result.status === "conflict")) throw new Error("Conflicting Codex location");
           refreshSnapshot();
         }
@@ -344,6 +354,7 @@ export function openObservationService(options: ObservationOptions = {}) {
         refreshSnapshot();
         const aliases = kit.observe();
         refreshSnapshot();
+        remoteConversations = buffered.batch(() => observeRemoteStatus(scanLedger, remoteFiles, snapshot));
         if (existsSync(claudeSessionsDirectory)) buffered.batch(() => observeClaudeSessions());
         refreshSnapshot();
         buffered.batch(() => observeCodexSessions());

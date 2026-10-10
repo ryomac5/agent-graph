@@ -35,7 +35,7 @@ async function createFixture(t: TestContext) {
   return { directory, children, launches, messages, hosts, notify, handle, launch };
 }
 
-test('launch only accepts a Claude provider, UUID resume and a plain model name', async t => {
+test('launch accepts supported providers, UUID resume and a plain model name', async t => {
   const f = await createFixture(t);
   for (const resume of ['', '../session', '--danger', '1234', SESSION + '\n']) {
     await assert.rejects(f.handle('session.launch', { projectId: 'p', provider: 'claude', resume }), /Invalid session launch/);
@@ -43,7 +43,7 @@ test('launch only accepts a Claude provider, UUID resume and a plain model name'
   for (const model of ['', '-flag', 'opus;touch x', 'model name', 'model/other', 'opus\n']) {
     await assert.rejects(f.handle('session.launch', { projectId: 'p', provider: 'claude', model }), /Invalid session launch/);
   }
-  for (const extra of [{ provider: 'codex' }, { args: ['--help'] }, { command: 'sh' }, { cwd: '/elsewhere' }]) {
+  for (const extra of [{ provider: 'other' }, { args: ['--help'] }, { command: 'sh' }, { cwd: '/elsewhere' }]) {
     await assert.rejects(f.handle('session.launch', { projectId: 'p', provider: 'claude', ...extra }), /Invalid session launch/);
   }
   const saved = { AGENT_GRAPH_TEST_SECRET: process.env.AGENT_GRAPH_TEST_SECRET, CLAUDECODE: process.env.CLAUDECODE, CLAUDE_CODE_TEST: process.env.CLAUDE_CODE_TEST };

@@ -35,5 +35,16 @@ export interface ReviewCommand extends ScreenCommand {
   command: typeof REVIEW_COMMANDS[number];
 }
 
-export const TERMINAL_COMMANDS = ["terminal.open", "terminal.input", "terminal.resize", "terminal.close", "terminal.attach", "session.launch", "session.send", "session.interrupt", "session.hosts"] as const;
+export const TERMINAL_COMMANDS = ["terminal.open", "terminal.input", "terminal.resize", "terminal.close", "terminal.attach", "session.launch", "session.send", "session.interrupt", "session.hosts", "ssh.read", "ssh.write", "ssh.test", "worktree.create", "git.branches"] as const;
 export type { TerminalNotification } from "../terminal/index.ts";
+
+/**
+ * session.launch: {projectId, provider: "claude" | "codex", target?, worktree?, resume?, model?} → {terminalId, pid}。
+ * target: {kind: "local"} または {kind: "ssh", id}。worktree は worktree.create が返した場所。
+ * worktree.create: {projectId, target, base, name} → {path}。
+ * git.branches: {projectId, target} → {branches: string[]}。
+ * ssh.read: {} → {connections: SshConnection[]}。
+ * ssh.write: {connections: SshConnection[]} → {saved: true}。
+ * ssh.test: {destination} → {connected: boolean}。
+ */
+export type { ExecutionTarget, SshConnection } from "../remote/index.ts";

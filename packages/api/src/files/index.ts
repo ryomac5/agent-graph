@@ -1,7 +1,8 @@
 import { MAX_FILE_BYTES, createGitApi, locateRepository, validateGitRequest, type GitRequest } from './git.ts';
 import { execFile } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, open, realpath, stat, readFile } from "node:fs/promises";
+import { lstat, open, realpath, stat, readFile, rename, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, posix, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import type { DatabaseSync } from "node:sqlite";
@@ -22,6 +23,21 @@ export interface FileEntry {
   changed: boolean;
   previousPath?: string;
 }
+export interface FilesWriteRequest { projectId: string; worktree?: string; path: string; content: string; baseHash: string }
+export class FilesWriteError extends Error {
+  constructor(code: "conflict" | "not_editable" | "invalid_path") { super(code); }
+}
+
+async function resolveWritable(root: string, path: string): Promise<string> {
+  const target = await resolveInside(root, path);
+  let current = root;
+  for (const part of relative(root, resolve(root, path)).split(sep)) {
+    current = resolve(current, part);
+    if ((await lstat(current)).isSymbolicLink()) throw new FilesWriteError("invalid_path");
+  }
+  return target;
+}
+
 export interface FilesRequest { projectId: string; path?: string; worktree?: string }
 
 async function runGit(root: string, args: string[]): Promise<string> {
@@ -175,7 +191,9 @@ export function createFilesApi(db: DatabaseSync, readRules: () => RedactionRules
     if (await realpath(dirname(backpointer)) !== selected) throw new Error('Worktree does not belong to project repository');
     return selected;
   }
-  return {
+  const writes = new Map<string, Promise<unknown>>();
+  const api = {
+    selectRoot,
     ...createGitApi(selectGitRoot, resolveInside, readRules, conversations),
     async worktrees(request: FilesRequest) {
       const root = await selectRoot(request);
@@ -220,7 +238,46 @@ export function createFilesApi(db: DatabaseSync, readRules: () => RedactionRules
       return { worktree: root, path, entries: safe.sort((a, b) =>
         Number(b.kind === "directory") - Number(a.kind === "directory") || a.name.localeCompare(b.name)) };
     },
-    async read(request: FilesRequest) {
+    async write(request: FilesWriteRequest) {
+      let root: string;
+      let path: string;
+      try { root = await selectRoot(request); path = normalizePath(request.path); }
+      catch { throw new FilesWriteError("invalid_path"); }
+      const key = resolve(root, path);
+      const pending = (writes.get(key) ?? Promise.resolve()).catch(() => {}).then(async () => {
+        let target: string;
+        let file: Awaited<ReturnType<typeof api.read>>;
+        try {
+          target = await resolveWritable(root, path);
+          file = await api.read({ ...request, path });
+        } catch { throw new FilesWriteError("invalid_path"); }
+        if (!file.editable || Buffer.byteLength(request.content) > MAX_FILE_BYTES
+          || request.content.includes("\0")) throw new FilesWriteError("not_editable");
+        if (file.hash !== request.baseHash) throw new FilesWriteError("conflict");
+        const mode = (await stat(target)).mode;
+        const temporary = resolve(dirname(target), ".agent-graph-" + randomUUID() + ".tmp");
+        const handle = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, mode);
+        try {
+          await handle.chmod(mode);
+          await handle.writeFile(request.content, "utf8");
+          await handle.sync();
+          try { await resolveWritable(root, path); }
+          catch { throw new FilesWriteError("invalid_path"); }
+          const current = await api.read({ ...request, path });
+          if (!current.editable) throw new FilesWriteError("not_editable");
+          if (current.hash !== request.baseHash) throw new FilesWriteError("conflict");
+          await rename(temporary, target);
+          return { worktree: root, path, hash: createHash("sha256").update(request.content).digest("hex") };
+        } finally {
+          await handle.close();
+          await unlink(temporary).catch(error => { if (error.code !== "ENOENT") throw error; });
+        }
+      });
+      writes.set(key, pending);
+      try { return await pending; }
+      finally { if (writes.get(key) === pending) writes.delete(key); }
+    },
+    async read(request: FilesRequest): Promise<{ worktree: string; path: string; size: number; hash: string; editable: boolean; state: "text" | "binary" | "too_large"; content?: string }> {
       const root = await selectRoot(request);
       const path = normalizePath(request.path ?? "");
       const target = await resolveInside(root, path);
@@ -233,35 +290,54 @@ export function createFilesApi(db: DatabaseSync, readRules: () => RedactionRules
         const current = await resolveInside(root, path);
         const currentInfo = await stat(current);
         if (current !== target || currentInfo.dev !== info.dev || currentInfo.ino !== info.ino) throw new Error("File changed while opening");
-        if (info.size > MAX_FILE_BYTES) return { worktree: root, path, size: info.size, state: "too_large" as const };
-        // 成長するファイルも上限を越えて読み込まない。
+        // 全体の hash を計算しつつ、表示上限を越える本文は保持しない。
+        const digest = createHash("sha256");
         const buffer = Buffer.alloc(MAX_FILE_BYTES + 1);
         let length = 0;
-        while (length < buffer.length) {
-          const { bytesRead } = await handle.read(buffer, length, buffer.length - length, null);
+        let retained = 0;
+        for (;;) {
+          const { bytesRead } = await handle.read(buffer, retained, buffer.length - retained, null);
           if (!bytesRead) break;
+          digest.update(buffer.subarray(retained, retained + bytesRead));
           length += bytesRead;
+          retained = length <= MAX_FILE_BYTES ? length : 0;
         }
-        if (length > MAX_FILE_BYTES) return { worktree: root, path, size: (await handle.stat()).size, state: "too_large" as const };
+        const hash = digest.digest("hex");
+        const result = { worktree: root, path, size: length, hash, editable: false };
+        if (length > MAX_FILE_BYTES) return { ...result, state: "too_large" as const };
         const bytes = buffer.subarray(0, length);
         if (bytes.includes(0) || bytes.some((byte) => byte < 32 && ![9, 10, 12, 13].includes(byte))) {
-          return { worktree: root, path, size: length, state: "binary" as const };
+          return { ...result, state: "binary" as const };
         }
         let text: string;
-        try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
-        catch { return { worktree: root, path, size: length, state: "binary" as const }; }
-        return { worktree: root, path, size: length, state: "text" as const, content: redact(text, readRules()).text };
+        try { text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes); }
+        catch { return { ...result, state: "binary" as const }; }
+        const content = redact(text, readRules()).text;
+        return { ...result, state: "text" as const, content, editable: content === text };
       } finally { await handle.close(); }
     },
   };
+  return api;
 }
 
 export async function handleFilesCommand(api: ReturnType<typeof createFilesApi>, command: string, payload: unknown) {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new Error("Invalid files request");
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    if (command === "files.write") throw new FilesWriteError("invalid_path");
+    throw new Error("Invalid files request");
+  }
   const request = payload as FilesRequest;
   if (typeof request.projectId !== "string" || !request.projectId
     || request.path !== undefined && typeof request.path !== "string"
-    || request.worktree !== undefined && typeof request.worktree !== "string") throw new Error("Invalid files request");
+    || request.worktree !== undefined && typeof request.worktree !== "string") {
+    if (command === "files.write") throw new FilesWriteError("invalid_path");
+    throw new Error("Invalid files request");
+  }
+  if (command === "files.write") {
+    const write = payload as FilesWriteRequest;
+    if (typeof write.path !== "string") throw new FilesWriteError("invalid_path");
+    if (typeof write.content !== "string" || typeof write.baseHash !== "string") throw new FilesWriteError("not_editable");
+    return api.write(write);
+  }
   validateGitRequest(request as GitRequest);
   if (command === "files.changes") return api.changes(request);
   if (command === "files.diff") return api.diff(request);

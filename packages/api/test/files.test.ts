@@ -13,6 +13,9 @@
  * worktrees: {worktree,worktrees:[{path,head?,branch?,detached}]}。
  * 読み取り要求は api が直接処理する。runner の稼働や台帳への追記は不要。
  */
+import { syncBuiltinESMExports } from "node:module";
+import { createHash } from "node:crypto";
+import fileSystem, { readFile, readdir, stat, realpath } from "node:fs/promises";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
@@ -166,7 +169,7 @@ test("limits content to 1 MiB, detects binary data, and redacts text through led
   const privateKey = "-----BEGIN PRIVATE KEY-----\nYWJjZGVmZ2hpamtsbW5vcA==\n-----END PRIVATE KEY-----";
   await write("secret.txt", `key: ${secret}\nPASSWORD=small-secret\n${privateKey}\ncustom-value`);
   assert.deepEqual(await api.read({ ...request, path: "large.txt" }), {
-    worktree: (await api.list(request)).worktree, path: "large.txt", size: MAX_FILE_BYTES + 1, state: "too_large",
+    worktree: (await api.list(request)).worktree, path: "large.txt", size: MAX_FILE_BYTES + 1, state: "too_large", hash: createHash("sha256").update("x".repeat(MAX_FILE_BYTES + 1)).digest("hex"), editable: false,
   });
   assert.equal((await api.read({ ...request, path: "boundary.txt" })).content?.length, MAX_FILE_BYTES);
   for (const path of ["binary.dat", "invalid-utf8.dat"]) {
@@ -221,7 +224,7 @@ test("uses current project projection and validates the command payload", async 
   assert.deepEqual(await handleFilesCommand(api, "files.read", { ...request, path: "file.txt" }),
     await api.read({ ...request, path: "file.txt" }));
   assert.deepEqual(await handleFilesCommand(api, "files.worktrees", request), await api.worktrees(request));
-  await assert.rejects(handleFilesCommand(api, "files.write", request), /Unknown files command/);
+  await assert.rejects(handleFilesCommand(api, "files.write", request), /invalid_path/);
   for (const payload of [null, [], {}, { projectId: 1 }, { ...request, path: 1 }, { ...request, worktree: false }]) {
     await assert.rejects(handleFilesCommand(api, "files.list", payload));
   }
@@ -279,6 +282,12 @@ test("WebSocket acknowledges files commands and safe failures while runner is un
   assert.equal(failure.ok, false);
   assert.equal(failure.error, "Files request failed");
   assert.equal((await command("files.list", null)).ok, false);
+  assert.equal((await command("files.write", { ...request, path: "file.txt", content: "changed", baseHash: read.result.hash })).error, "not_editable");
+  assert.equal((await command("files.write", { ...request, path: "../outside", content: "changed", baseHash: "wrong" })).error, "invalid_path");
+  await write("editable.txt", "before");
+  const editable = await command("files.read", { ...request, path: "editable.txt" });
+  assert.equal((await command("files.write", { ...request, path: "editable.txt", content: "after", baseHash: "wrong" })).error, "conflict");
+  assert.equal((await command("files.write", { ...request, path: "editable.txt", content: "after", baseHash: editable.result.hash })).ok, true);
   assert.equal(service.ledger.readSince(0, 100).length, 1);
 });
 
@@ -353,4 +362,78 @@ test('commit log preserves merge parents, branches, tags and record boundaries',
   assert.equal(commits[1].hash, '1111111');
   assert.deepEqual(commits[1].parents, []);
   assert.deepEqual(parseCommitLog(''), []);
+});
+
+
+test("writes atomically, preserves mode and detects stale and concurrent saves", async t => {
+  const { api, request, root, write } = await createFixture(t);
+  await write("file.txt", "before\r\n");
+  const initial = await api.read({ ...request, path: "file.txt" });
+  assert.equal(initial.editable, true);
+  assert.equal(initial.hash, createHash("sha256").update("before\r\n").digest("hex"));
+  const oldInfo = await stat(join(root, "file.txt"));
+  const saved = await handleFilesCommand(api, "files.write", { ...request, path: "file.txt", content: "after\n", baseHash: initial.hash });
+  assert.deepEqual(saved, { worktree: initial.worktree, path: "file.txt", hash: createHash("sha256").update("after\n").digest("hex") });
+  assert.equal(await readFile(join(root, "file.txt"), "utf8"), "after\n");
+  const newInfo = await stat(join(root, "file.txt"));
+  assert.notEqual(newInfo.ino, oldInfo.ino);
+  assert.equal(newInfo.mode, oldInfo.mode);
+  assert.deepEqual(await readdir(root), [".git", "file.txt"]);
+  await assert.rejects(api.write({ ...request, path: "file.txt", content: "stale", baseHash: initial.hash }), /^Error: conflict$/);
+  const current = await api.read({ ...request, path: "file.txt" });
+  const results = await Promise.allSettled(["first", "second"].map(content => api.write({ ...request, path: "file.txt", content, baseHash: current.hash })));
+  assert.equal(results.filter(result => result.status === "fulfilled").length, 1);
+  assert.equal(results.filter(result => result.status === "rejected" && result.reason.message === "conflict").length, 1);
+});
+
+test("rejects redacted, large, binary, ignored and symlink writes", async t => {
+  const { api, request, root, write, db } = await createFixture(t);
+  await write("secret.txt", "PASSWORD=secret-value\n");
+  await write("custom.txt", "custom-secret");
+  await write("large.txt", "x".repeat(MAX_FILE_BYTES + 1));
+  await write("binary.dat", Buffer.from([0, 1]));
+  await write("safe.txt", "safe");
+  await write(".gitignore", "ignored.txt\n");
+  await write("ignored.txt", "hidden");
+  await write("nested/file.txt", "nested");
+  await symlink(join(root, "safe.txt"), join(root, "link.txt"));
+  await symlink(join(root, "nested"), join(root, "linkdir"));
+  for (const path of ["secret.txt", "large.txt", "binary.dat"]) {
+    const file = await api.read({ ...request, path });
+    assert.equal(file.editable, false);
+    await assert.rejects(api.write({ ...request, path, content: "overwrite", baseHash: file.hash }), /^Error: not_editable$/);
+  }
+  const configured = createFilesApi(db, () => ({ patterns: ["custom-secret"] }));
+  const custom = await configured.read({ ...request, path: "custom.txt" });
+  await assert.rejects(configured.write({ ...request, path: "custom.txt", content: "overwrite", baseHash: custom.hash }), /not_editable/);
+  for (const path of ["../outside", "/tmp/outside", ".git/config", "ignored.txt", "link.txt", "linkdir/file.txt"]) {
+    await assert.rejects(api.write({ ...request, path, content: "overwrite", baseHash: "wrong" }), /^Error: invalid_path$/);
+  }
+  assert.equal(await readFile(join(root, "safe.txt"), "utf8"), "safe");
+});
+
+
+test("writes a sibling temporary file before rename and cleans it after rename failure", async t => {
+  const { api, request, root, write } = await createFixture(t);
+  await write("file.txt", "before");
+  const baseHash = (await api.read({ ...request, path: "file.txt" })).hash;
+  const target = join(await realpath(root), "file.txt");
+  const originalRename = fileSystem.rename;
+  let renames = 0;
+  const stub = t.mock.method(fileSystem, "rename", async (source: string, destination: string) => {
+    renames++;
+    assert.equal(destination, target);
+    assert.match(String(source), /\.agent-graph-.*\.tmp$/);
+    assert.equal(await readFile(source, "utf8"), "after");
+    assert.equal(await readFile(destination, "utf8"), "before");
+    if (renames === 1) throw new Error("Injected rename failure");
+    return originalRename(source, destination);
+  });
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(api.write({ ...request, path: "file.txt", content: "after", baseHash }), /Injected rename failure/);
+    assert.deepEqual(await readdir(root), [".git", "file.txt"]);
+    await api.write({ ...request, path: "file.txt", content: "after", baseHash });
+    assert.equal(renames, 2);
+  } finally { stub.mock.restore(); syncBuiltinESMExports(); }
 });

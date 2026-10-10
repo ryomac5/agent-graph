@@ -10,8 +10,9 @@ import { ProjectionFeed, type ProjectionPatch } from "../service/projection-feed
 import { RunnerClient, runnerSocketPath } from "../runner-client.ts";
 import { authorize, createToken, readRequestUrl } from "./security.ts";
 import { createSearchHandler } from "../search/index.ts";
-import { createFilesApi, handleFilesCommand } from "../files/index.ts";
-import { FILE_COMMANDS } from "./contract.ts";
+import { createFilesApi, handleFilesCommand, FilesWriteError } from "../files/index.ts";
+import { createTerminalSession } from "../terminal/index.ts";
+import { FILE_COMMANDS, TERMINAL_COMMANDS } from "./contract.ts";
 import type { RedactionRules } from "../../../core/src/ledger/redact.ts";
 import type { SettingsService } from "../settings/index.ts";
 
@@ -97,8 +98,9 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
     wss.handleUpgrade(request, socket, head, (client) => wss.emit("connection", client, request));
   });
   wss.on("connection", (socket) => {
+    const terminals = createTerminalSession(files.selectRoot, message => send(socket, message));
     socket.on("error", () => socket.terminate());
-    socket.on("close", () => clients.delete(socket));
+    socket.on("close", () => { terminals.close(); clients.delete(socket); });
     socket.on("message", (data, binary) => {
       if (binary) { socket.close(1003, "JSON required"); return; }
       let message;
@@ -129,13 +131,23 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
           void options.settings.handle(message).then(ack => send(socket, ack));
           return;
         }
+        if ((TERMINAL_COMMANDS as readonly string[]).includes(message.command)) {
+          void terminals.handle(message.command, message.payload).then(result => {
+            send(socket, { type: "ack", cmd_id: message.cmd_id, ok: true, result });
+          }, error => {
+            send(socket, { type: "ack", cmd_id: message.cmd_id, ok: false,
+              error: error instanceof Error && ["Terminal limit reached", "Unknown terminal", "Invalid terminal size"].includes(error.message)
+                ? error.message : "Terminal request failed" });
+          });
+          return;
+        }
         if ((FILE_COMMANDS as readonly string[]).includes(message.command)) {
           refresh();
           void handleFilesCommand(files, message.command, message.payload).then((result) => {
             send(socket, { type: "ack", cmd_id: message.cmd_id, ok: true, result });
-          }, () => {
+          }, (error) => {
             // Git の stderr やファイルの内容を失敗の応答へ複製しない。
-            send(socket, { type: "ack", cmd_id: message.cmd_id, ok: false, error: "Files request failed" });
+            send(socket, { type: "ack", cmd_id: message.cmd_id, ok: false, error: message.command === "files.write" ? (error instanceof FilesWriteError ? error.message : "not_editable") : "Files request failed" });
           });
           return;
         }

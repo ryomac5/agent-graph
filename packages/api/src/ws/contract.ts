@@ -15,8 +15,8 @@ export interface ScreenCommand {
   payload?: JsonValue;
 }
 export type ScreenInput = ScreenHello | ScreenCommand;
-export const FILE_COMMANDS = ["files.list", "files.read", "files.worktrees", "files.changes", "files.diff", "files.commits", "files.commit"] as const;
-export type { FilesRequest, FileEntry, GitMark } from "../files/index.ts";
+export const FILE_COMMANDS = ["files.write", "files.list", "files.read", "files.worktrees", "files.changes", "files.diff", "files.commits", "files.commit"] as const;
+export type { FilesRequest, FilesWriteRequest, FileEntry, GitMark } from "../files/index.ts";
 export type { ProjectionPatch, ProjectionRows } from "../service/projection-feed.ts";
 
 // 成果物 ID は操作の間も固定し、再送時には同じ cmd_id を保つ。
@@ -27,3 +27,6 @@ export const REVIEW_COMMANDS = [
 export interface ReviewCommand extends ScreenCommand {
   command: typeof REVIEW_COMMANDS[number];
 }
+
+export const TERMINAL_COMMANDS = ["terminal.open", "terminal.input", "terminal.resize", "terminal.close"] as const;
+export type { TerminalNotification } from "../terminal/index.ts";

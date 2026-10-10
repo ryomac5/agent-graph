@@ -1,3 +1,4 @@
+import { SessionName } from '../../components/SessionName.tsx';
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { OpenWorkspaceConversation, OpenWorkspaceTerminal } from '../../lib/workspace-context.ts';
 import { useAutosizeTextarea } from './useAutosizeTextarea.ts';
@@ -499,6 +500,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const worktree = worktreeLabel(run);
   const shownModel = appliedModel?.model || currentModel;
   const shownEffort = appliedModel?.effort || currentEffort;
+  const nameRoot = root?.conversation_ids.includes(conversationId) ? root : undefined;
   const title = displayName || conversationName(state, conversationId) || t('conversation');
   // 記録のモデル名「claude-opus-5-5」は、一覧の「Opus 5.5」と同じものとして選ぶ。内部名をそのまま出さない。
   const matchModel = (value: string) => models.find(item => item.model === value)?.model
@@ -523,7 +525,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
         event.preventDefault(); setDetailsOpen(true);
       }}>
         {breadcrumb && <div className="conv-breadcrumb">{breadcrumb}</div>}
-        <Heading className="conv-title truncate" title={title}>{title}</Heading>
+        <Heading className="conv-title truncate" aria-label={nameRoot?.name ?? title} title={nameRoot?.user_name ? nameRoot.auto_name : title}>{nameRoot ? <SessionName key={nameRoot.id} root={nameRoot} client={client} language={language}/> : title}</Heading>
         <StateBadge state={status} language={language} evidenceUrl="#conversation-details"
           evidence={evidenceLabel(evidence) || undefined}
           reason={readText(run?.cause ?? run?.reason) || undefined} elapsed={elapsed ? `${t(status.startsWith('waiting') ? 'waiting' : 'elapsed')} ${elapsed}` : undefined}/>

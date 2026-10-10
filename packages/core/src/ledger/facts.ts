@@ -36,6 +36,7 @@ export interface TaskPayload {
   state: string;
 }
 export interface ConversationPayload {
+  user_name?: string | null;
   provider: Provider;
   native_id: string;
   origin: "managed" | "observed";
@@ -197,6 +198,7 @@ export type FactPayloads = {
   "project.state_changed": Pick<ProjectPayload, "state">;
   "observation.unsupported": UnsupportedObservationPayload;
   "task.state_changed": Pick<TaskPayload, "state">;
+  "conversation.renamed": { user_name: string | null };
   "conversation.task_changed": { task_id: string | null };
   "relation.state_changed": Pick<RelationPayload, "active">;
   "run.state_changed": Pick<RunPayload, "state"> & Partial<RunPayload>;

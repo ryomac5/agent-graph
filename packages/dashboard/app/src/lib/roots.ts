@@ -10,6 +10,8 @@ export interface Root {
   conversation_ids: string[]; running_children: number; total_children: number;
   /** キットが付けた番号の名前。画面ではプロジェクト名と始めた日の名前で呼び、番号は補足に出す。 */
   kit_name?: string;
+  user_name?: string | null;
+  auto_name?: string;
 }
 interface ConversationTimes { first?: number; last?: string }
 function readConversationTimes(state: ScreenState): Map<string, ConversationTimes> {
@@ -92,10 +94,11 @@ export function selectRoots(state: ScreenState, project?: string): Root[] {
   return renameKitRoots(state, (state.projection.roots ?? []).filter(row => project === undefined || row.project === project
       || project === OTHER_PROJECT && rootProject(row as unknown as Root, registered) === OTHER_PROJECT)
     .filter(row => !((row.conversation_ids as string[] | undefined) ?? []).some(id => reviews.has(id)))
-    .map(row => { const root = { ...(row as unknown as Root) }; root.conversation_ids ??= []; root.name = rootName(state, root);
+    .map(row => { const root = { ...(row as unknown as Root) }; root.conversation_ids ??= []; root.name = root.auto_name ?? root.name; root.name = rootName(state, root);
       const spoken = root.conversation_ids.map(id => times.get(id)?.last).filter((value): value is string => Boolean(value));
       if (spoken.length) root.last_activity_ts = spoken.sort().at(-1)!;
       return root; }), times)
+    .map(root => ({ ...root, auto_name: root.name, name: root.user_name || root.name }))
     .toSorted((a, b) => Number(isRunning(b.state) || ['waiting_approval', 'waiting_input'].includes(b.state)) - Number(isRunning(a.state) || ['waiting_approval', 'waiting_input'].includes(a.state))
       || (b.last_activity_ts ?? '').localeCompare(a.last_activity_ts ?? '') || a.id.localeCompare(b.id));
 }

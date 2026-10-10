@@ -11,7 +11,7 @@ import type { Fact, JsonValue } from "./facts.ts";
 import { collectProjectionDependencies } from "./projections/dependencies.ts";
 import { initializeSearch, refreshSearch } from "./search.ts";
 
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 export const FACT_SCHEMA_VERSION = 1;
 export const FACTS_DDL = `CREATE TABLE facts (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -282,7 +282,10 @@ function migrateToVersion9(db: DatabaseSync): void {
     record?.run(row.kit_name, row.id);
   }
 }
-const MIGRATIONS = [migrateToVersion1, migrateToVersion2, migrateToVersion3, migrateToVersion4, migrateToVersion5, migrateToVersion6, migrateToVersion7, migrateToVersion8, migrateToVersion9] as const;
+function migrateToVersion10(db: DatabaseSync): void {
+  db.exec("ALTER TABLE conversations ADD COLUMN user_name TEXT");
+}
+const MIGRATIONS = [migrateToVersion1, migrateToVersion2, migrateToVersion3, migrateToVersion4, migrateToVersion5, migrateToVersion6, migrateToVersion7, migrateToVersion8, migrateToVersion9, migrateToVersion10] as const;
 
 export function initializeSchema(db: DatabaseSync): void {
   db.exec("BEGIN IMMEDIATE");

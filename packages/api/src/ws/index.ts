@@ -1,3 +1,4 @@
+import { renameSession } from './session-rename.ts';
 import { createServer } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import { WebSocket, WebSocketServer } from "ws";
@@ -136,6 +137,17 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
         for (const patch of patches) sendPatch(socket, patch);
       } else if (message.type === "cmd" && clients.has(socket) && typeof message.cmd_id === "string"
         && message.cmd_id.length > 0 && typeof message.command === "string" && message.command.length > 0) {
+        if (message.command === 'session.rename') {
+          try {
+            refresh();
+            const result = renameSession(service.ledger, feed.snapshot().projection.roots as unknown as import('../../../core/src/ledger/projections/roots.ts').RootProjection[], message);
+            refresh();
+            send(socket, { type: 'ack', cmd_id: message.cmd_id, ok: true, result });
+          } catch (error) {
+            send(socket, { type: 'ack', cmd_id: message.cmd_id, ok: false, error: error instanceof Error ? error.message : 'Rename failed' });
+          }
+          return;
+        }
         if (message.command === 'usage.read') {
           void usage.read(message.payload).then(result => send(socket, { type: 'ack', cmd_id: message.cmd_id, ok: true, result }),
             () => send(socket, { type: 'ack', cmd_id: message.cmd_id, ok: false, error: 'Invalid usage request' }));

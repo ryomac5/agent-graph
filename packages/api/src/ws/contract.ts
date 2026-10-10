@@ -54,3 +54,6 @@ export type { TerminalNotification } from "../terminal/index.ts";
 export type { ExecutionTarget, SshConnection } from "../remote/index.ts";
 
 /** attachment.put: {name, mime, dataBase64} → {attachmentId, path}。session.send: {conversationId, text, attachments?: string[]}。 */
+
+/** session.rename: {rootId, name}。名前は 80 文字まで。空欄で自動の名前に戻す。 */
+export interface SessionRenameRequest { rootId: string; name: string }

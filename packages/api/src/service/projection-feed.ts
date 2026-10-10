@@ -212,7 +212,7 @@ export class ProjectionFeed {
     const limit = ids ? "" : `LIMIT ${LIST_PAGE_SIZE}`;
     // 会話の名前と依頼の抜粋は core の投影の値をそのまま配る。画面は本文から名前を導かない。
     // プロジェクトは作業、会話の開始の場所、実行の場所の順に結ぶ。
-    if (table === "conversations") return this.prepare(`SELECT t.id, t.provider, t.origin, t.type, t.task_id, t.kit_name, t.created_ts, substr(t.name, 1, ${NAME_LENGTH}) AS name,
+    if (table === "conversations") return this.prepare(`SELECT t.id, t.provider, t.origin, t.type, t.task_id, t.kit_name, t.user_name, t.created_ts, substr(t.name, 1, ${NAME_LENGTH}) AS name,
       t.name_is_provisional, substr(t.first_request_excerpt, 1, ${NAME_LENGTH}) AS first_request_excerpt, t.cwd,
       r.project_id AS project, coalesce(r.state, 'unregistered') AS project_state,
       coalesce(s.message_count, 0) AS message_count, s.last_message_ts, coalesce(s.last_message_excerpt, '') AS last_message_excerpt
@@ -359,7 +359,7 @@ export class ProjectionFeed {
       const page = this.readList("conversations", undefined, after);
       // 根の投影に使わない一覧の列と抜粋を、全会話分の中間配列へ複製しない。
       for (const row of page) conversations.push({ id: String(row.id), type: row.type as string,
-        name: row.name as string | null, kit_name: row.kit_name as string | null, project: row.project as string | null,
+        user_name: row.user_name as string | null, name: row.name as string | null, kit_name: row.kit_name as string | null, project: row.project as string | null,
         created_ts: row.created_ts as string | null, last_activity_ts: row.last_message_ts as string | null, state: "unknown" });
       if (page.length < LIST_PAGE_SIZE) break;
       after = String(page.at(-1)!.id);

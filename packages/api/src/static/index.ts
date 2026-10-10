@@ -1,3 +1,4 @@
+import { createBrandSvgReader } from './brand-svg.ts';
 import { execFile } from 'node:child_process';
 import { homedir } from 'node:os';
 import { promisify } from 'node:util';
@@ -32,6 +33,7 @@ const BRAND_SOURCES = {
   antigravity: 'https://antigravity.google/favicon.ico',
 } as const;
 export interface BrandOptions {
+  fetchSvg?: (url: string) => Promise<string>;
   cacheHome?: string;
   sources?: Partial<Record<keyof typeof BRAND_SOURCES, string>>;
   convert?: (source: string, destination: string) => Promise<void>;
@@ -90,6 +92,7 @@ interface StaticOptions {
 export async function startStaticServer(options: StaticOptions) {
   const { upstream } = options;
   const readBrand = createBrandReader(options.brand);
+  const readSvg = createBrandSvgReader(options.brand);
   const root = resolve(options.dist ?? DEFAULT_DIST);
   let port = options.port ?? DEFAULT_DASHBOARD_PORT;
   const origin = () => `http://127.0.0.1:${port}`;
@@ -110,6 +113,14 @@ export async function startStaticServer(options: StaticOptions) {
     // URL の正規化で ../ が消える前に、プレビューの境界を判定する。
     const rawPath = request.url?.split('?')[0] ?? '';
     if (url.pathname === '/brand' || url.pathname.startsWith('/brand/')) {
+      const svgMatch = /^\/brand\/(claude|openai)\.svg$/.exec(rawPath);
+      if (svgMatch) {
+        response.setHeader('Content-Security-Policy', "default-src 'none'");
+        const content = await readSvg(svgMatch[1]);
+        if (!content) { response.writeHead(404).end(); return; }
+        response.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'public, max-age=86400' });
+        response.end(content); return;
+      }
       const match = /^\/brand\/(claude|chatgpt|antigravity)\.png$/.exec(rawPath);
       const content = match && await readBrand(match[1]);
       if (!content) { response.writeHead(404).end(); return; }

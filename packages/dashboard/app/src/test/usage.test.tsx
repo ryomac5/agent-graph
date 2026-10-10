@@ -18,7 +18,8 @@ it('shows the most constrained windows, official marks and boundary colors', asy
   expect(screen.getByText('31%')).toBeTruthy(); expect(screen.queryByText('3%')).toBeNull();
   expect(screen.getByText('80%').closest('.usage-summary-item')?.className).toContain('usage-warning');
   expect(screen.getByText('95%').closest('.usage-summary-item')?.className).toContain('usage-danger');
-  expect(document.querySelectorAll('.usage-bar img').length).toBe(3);
+  expect(document.querySelectorAll('.usage-bar .request-avatar').length).toBe(3);
+  expect(document.querySelector('.usage-bar .provider-codex img')).toBeNull();
   expect(screen.getByText('31%').closest('.usage-summary-item')?.getAttribute('title')).toBe('Claude: 31% 使用済み');
   expect(screen.queryByText(/使用済み/)).toBeNull();
   expect([79, 80, 94, 95].map(getUsageColor)).toEqual(['normal', 'warning', 'warning', 'danger']);

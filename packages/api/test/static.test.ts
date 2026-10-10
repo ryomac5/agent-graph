@@ -116,10 +116,12 @@ test('static handler serves real files and applies security without a socket', a
   syncBuiltinESMExports();
   t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); rmSync(directory, { recursive: true, force: true }); });
   let conversions = 0;
+  let svgAttempts = 0;
   const endpoint = await startStaticServer({ port: 0, dist: directory,
     brand: { cacheHome: directory, sources: { chatgpt: join(directory, 'app.css'), claude: join(directory, 'absent.icns') },
       convert: async (_source, destination) => { conversions++; writeFileSync(destination, 'brand-png'); },
-      fetchIcon: async () => { throw new Error('offline'); } },
+      fetchIcon: async () => { throw new Error('offline'); },
+      fetchSvg: async url => { if (url.includes('orca')) { svgAttempts++; if (svgAttempts === 1) return 'invalid'; throw new Error('offline'); } return '<svg viewBox="0 0 24 24" onload="bad()"><script>bad()</script><path d="M0 0Z" onclick="bad()" href="https://bad"/></svg>'; } },
     upstream: { url: 'http://127.0.0.1:1', wsUrl: 'ws://127.0.0.1:1/ws', token: 'injected-token', runner: { available: false } } });
   t.after(() => endpoint.close());
   async function get(url: string, headers: Record<string, string> = {}, remoteAddress = '127.0.0.1') {
@@ -134,6 +136,14 @@ test('static handler serves real files and applies security without a socket', a
       socket: { remoteAddress } } as http.IncomingMessage, response as unknown as http.ServerResponse);
     return { status, body, headers: responseHeaders };
   }
+  const logo = await get('/brand/claude.svg');
+  assert.equal(logo.status, 200);
+  assert.equal(logo.headers['Content-Type'], 'image/svg+xml');
+  assert.equal(logo.headers['Content-Security-Policy'], "default-src 'none'");
+  assert.match(logo.body, /#D97757/); assert.doesNotMatch(logo.body, /script|onload|onclick|https:\/\/bad/);
+  assert.equal((await get('/brand/openai.svg')).status, 404);
+  assert.equal((await get('/brand/openai.svg')).status, 404);
+  assert.equal(svgAttempts, 2);
   const brand = await get('/brand/chatgpt.png');
   assert.equal(brand.status, 200); assert.equal(brand.body, 'brand-png');
   assert.equal(brand.headers['Content-Type'], 'image/png'); assert.equal(brand.headers['Cache-Control'], 'public, max-age=86400');

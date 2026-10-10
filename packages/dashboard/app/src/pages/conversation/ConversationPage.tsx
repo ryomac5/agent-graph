@@ -118,7 +118,8 @@ function ApprovalCard({ entry, t, disabled, answered, onAnswer, screen }: {
 
 /** 送った発言と記録の発言が同じかを見る。画像を付けると、記録の本文は画像のパスと空白のあとに送った本文が続く。 */
 export function sameSent(recorded: string, sent: string): boolean {
-  const a = recorded.trim(); const b = sent.trim();
+  // Claude Code は貼った画像を「[Image #1]」の印に置き換えて記録するので、その印も外して比べる。
+  const a = recorded.trim().replace(/^(?:\[Image #\d+\]\s*)+/, ''); const b = sent.trim();
   return a === b || Boolean(b) && a.endsWith(b) && /^(?:\S+\.(?:png|jpe?g|gif|webp)\s+)+$/i.test(a.slice(0, a.length - b.length));
 }
 export function ConversationPage({ client, conversationId: explicitId, target = store, language = 'en', embedded = false, seriesIds, seriesState, displayName, breadcrumb, onConversation, newSession }: ConversationPageProps) {

@@ -57,10 +57,15 @@ export function Message({ row, sender, showName = true, language = 'en', streami
     </details>;
   }
   const blocks = (Array.isArray(row.body) ? row.body : []).map(readObject);
-  const text = visibleText(Array.isArray(row.body) ? blocks.filter(block => !['tool_use', 'tool_result', 'thinking'].includes(readText(block.type))).map(readBody).filter(Boolean).join('\n') : readBody(row.body));
+  const rawText = visibleText(Array.isArray(row.body) ? blocks.filter(block => !['tool_use', 'tool_result', 'thinking'].includes(readText(block.type))).map(readBody).filter(Boolean).join('\n') : readBody(row.body));
+  const text = blocks.some(block => block.type === 'image') ? rawText.replace(/\[Image #\d+\]\s*/g, '').trim() : rawText;
   const lines = text.split('\n');
   const long = lines.length > PREVIEW_LINES;
   const tools = blocks.filter(block => block.type === 'tool_use');
+  // 添付の画像は、記録の base64 から縮小で描く。本文の「[Image #1]」の印は、画像を描くので消す。
+  const images = blocks.filter(block => block.type === 'image').map(block => readObject(block.source))
+    .filter(source => source.type === 'base64' && /^image\/(png|jpeg|gif|webp)$/.test(readText(source.media_type)) && typeof source.data === 'string')
+    .map(source => `data:${readText(source.media_type)};base64,${readText(source.data)}`);
   const hasDelegations = tools.some(isDelegationTool);
   const flow: { text?: string; tool?: Row }[] = [];
   if (hasDelegations) for (const block of blocks) {
@@ -82,7 +87,7 @@ export function Message({ row, sender, showName = true, language = 'en', streami
   const unavailable = row.body_state === 'unavailable' || row.body_state === 'omitted';
   if (!unavailable && !text && !tools.length && blocks.length > 0 && blocks.every(paired)) return null;
   // 本文のない利用者の行は、hook が差し込んだ行か道具の結果だけの行である。吹き出しを出さない。
-  if (!unavailable && !streaming && !text && !tools.length && end && row.tool_output == null) return null;
+  if (!unavailable && !streaming && !text && !tools.length && !images.length && end && row.tool_output == null) return null;
   const toolOutput = row.tool_output !== undefined && row.tool_output !== null;
   const hasTools = (!hasDelegations && tools.length > 0) || orphanResults.length > 0 || toolOutput;
   const renderTool = (tool: Row, index: number) => isDelegationTool(tool)
@@ -98,6 +103,7 @@ export function Message({ row, sender, showName = true, language = 'en', streami
     </header>
     {parentRequest && <span className="message-request-label">{language === 'ja' ? '根からの依頼' : 'Request from root'}</span>}
     <div className="message-main">
+      {images.length > 0 && <div className="message-images">{images.map((src, index) => <img key={index} src={src} alt={`${t('image')} ${index + 1}`} loading="lazy"/>)}</div>}
       {unavailable ? <p className="message-gap">{t(row.body_state === 'omitted' ? 'omitted' : 'unavailable')}</p>
         : hasDelegations ? flow.map((part, index) => {
           if (part.tool) return renderTool(part.tool, index);

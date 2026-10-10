@@ -99,3 +99,17 @@ it('画像のパスの付いた記録の発言を、送った本文と同じ発�
   expect(sameSent('別の発言 この画像の色は', 'この画像の色は')).toBe(false);
   expect(sameSent('この画像の色は', 'この画像の色は')).toBe(true);
 });
+
+it('記録の画像を縮小で描き、[Image #1] の印と画像の元の行を出さない', async () => {
+  const { sameSent } = await import('../pages/conversation/ConversationPage.tsx');
+  const { harnessKind } = await import('../lib/message-body.ts');
+  expect(sameSent('[Image #1] もう一度、色を答えて', 'もう一度、色を答えて')).toBe(true);
+  expect(harnessKind('[Image: source: /Users/r/.cache/agent-graph/attachments/2026-10-10/a.png]')).toBe('notification');
+  const { Message } = await import('../components/conversation/Message.tsx');
+  const { render: draw } = await import('@testing-library/react');
+  const view = draw(<Message row={{ id: 'm', role: 'user', body: [{ type: 'text', text: '[Image #1] 色は' }, { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } }] }}
+    sender={{ key: 'user', name: 'User', side: 'end' }} language="ja"/>);
+  expect(view.container.querySelector('.message-images img')?.getAttribute('src')).toBe('data:image/png;base64,iVBORw0KGgo=');
+  expect(view.container.textContent).not.toContain('[Image #1]');
+  expect(view.container.textContent).toContain('色は');
+});

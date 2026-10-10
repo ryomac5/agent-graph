@@ -10,7 +10,8 @@ export function visibleText(text: string): string {
  */
 export type HarnessKind = 'agent_report' | 'notification' | 'user';
 const AGENT_REPORT = /^(?:Another Claude session sent a message|<agent-message\b|\[Subagent hand-back\])/;
-const NOTIFICATION = /^(?:\[SYSTEM NOTIFICATION|<task-notification>)/;
+// Claude Code は画像を貼ると、元のパスを「[Image: source: パス]」の行として別に記録する。画像は発言の中に描くので、この行は出さない。
+const NOTIFICATION = /^(?:\[SYSTEM NOTIFICATION|<task-notification>|\[Image: source: [^\]\n]+\]\s*$)/;
 export function harnessKind(text: string): HarnessKind {
   const head = text.trimStart();
   return AGENT_REPORT.test(head) ? 'agent_report' : NOTIFICATION.test(head) ? 'notification' : 'user';

@@ -198,3 +198,7 @@
 .composer-attachment { position: relative; }
 .composer-attachment img { display: block; width: 64px; height: 64px; object-fit: cover; border: var(--border); border-radius: var(--radius-1); }
 .composer-attachment button { position: absolute; top: 0; right: 0; width: 28px; height: 28px; background: var(--bg-0); }
+/* 添付の画像は、本文の上に縮小で並べる。押すと元の大きさで開く代わりに、最大の大きさだけを決める。 */
+.message-images { display: flex; flex-wrap: wrap; gap: var(--space-2); justify-content: flex-end; margin-bottom: var(--space-2); }
+.message-agent .message-images { justify-content: flex-start; }
+.message-images img { max-width: 240px; max-height: 180px; border-radius: 6px; border: 1px solid var(--line); object-fit: contain; background: var(--bg-2); }

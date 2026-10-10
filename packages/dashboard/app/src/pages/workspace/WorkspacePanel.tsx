@@ -40,6 +40,10 @@ export function WorkspacePanel({ project, target, client, language, rootId, bind
   }, [bindings]);
   const explorer = useFileExplorer({ client, target, project, enabled: tab === 'files' && !collapsed, embedded: true });
   const ja = language === 'ja';
+  // 木を畳むボタンは行を足さず、木が出ている間は作業ツリーの行に、畳んだ間はファイルの見出しに置く。
+  const treeToggle = <button className="icon-button" aria-expanded={!treeCollapsed} aria-label={treeCollapsed ? ja ? 'ファイルの木を開く' : 'Expand file tree' : ja ? 'ファイルの木を畳む' : 'Collapse file tree'}
+    title={treeCollapsed ? ja ? 'ファイルの木を開く' : 'Expand file tree' : ja ? 'ファイルの木を畳む' : 'Collapse file tree'} onClick={() => setTreeCollapsed(value => !value)}>
+    <Icon name={treeCollapsed ? 'chevronDown' : 'chevronRight'} size={14}/></button>;
   useEffect(() => { localStorage.setItem(PANEL_WIDTH_KEY, String(width)); }, [width]);
   useEffect(() => { localStorage.setItem(PANEL_COLLAPSED_KEY, collapsed ? '1' : '0'); }, [collapsed]);
   useEffect(() => {
@@ -63,7 +67,7 @@ export function WorkspacePanel({ project, target, client, language, rootId, bind
 
       {tab === 'graph' ? <GraphPage project={project} target={target} client={client} language={language} rootId={rootId} embedded/>
         : tab === 'changes' ? <ChangesPage project={project} target={target} client={client} language={language} embedded/>
-          : <div className="panel-files"><FileNotices explorer={explorer}/><button className="btn btn-ghost tree-toggle" aria-expanded={!treeCollapsed} onClick={() => setTreeCollapsed(value => !value)}>{treeCollapsed ? ja ? 'ファイルの木を開く' : 'Expand file tree' : ja ? 'ファイルの木を畳む' : 'Collapse file tree'}</button><ResizableStack storageKey={FILES_SPLIT_KEY} defaults={[0.45, 0.55]} labels={[ja ? 'ファイルの木の高さ' : 'File tree height']} collapsedFirst={treeCollapsed} children={[<FileTreePanel key="tree" explorer={explorer} language={language}/>, <FileViewerPanel explorer={explorer} language={language} actions={explorer.selectedPath && <button className="btn btn-ghost btn-xs" onClick={() => { const next = new URLSearchParams(search); next.delete('path'); setSearch(next); }}>{ja ? 'ファイルを閉じる' : 'Close file'}</button>}/>]}/></div>}
+          : <div className="panel-files"><FileNotices explorer={explorer}/><ResizableStack storageKey={FILES_SPLIT_KEY} defaults={[0.45, 0.55]} labels={[ja ? 'ファイルの木の高さ' : 'File tree height']} collapsedFirst={treeCollapsed} children={[<FileTreePanel key="tree" compact explorer={explorer} language={language} actions={treeToggle}/>, <FileViewerPanel explorer={explorer} language={language} actions={<>{treeCollapsed && treeToggle}{explorer.selectedPath && <button className="btn btn-ghost btn-xs" onClick={() => { const next = new URLSearchParams(search); next.delete('path'); setSearch(next); }}>{ja ? 'ファイルを閉じる' : 'Close file'}</button>}</>}/>]}/></div>}
     </div>}
   </aside>;
 }

@@ -61,7 +61,7 @@ it('syncs preview edits with source, the right panel, split panes and files.writ
   act(() => findEditor(body).commands.insertContentAt(1, 'Edited '));
   const viewer = screen.getByRole('region', { name: 'File viewer' });
   await vi.waitFor(() => expect(within(viewer).getByRole('heading', { name: 'Edited Original' })).toBeTruthy());
-  expect(within(viewer).getByText('Showing unsaved edits')).toBeTruthy();
+  expect(within(viewer).getByText('Unsaved').closest('.viewer-mode')).toBeTruthy();
   fireEvent.click(within(viewer).getByRole('button', { name: 'Raw' }));
   expect(viewer.textContent).toContain('# Edited Original');
   const work = document.querySelector('.workbench')!;
@@ -79,7 +79,7 @@ it('syncs preview edits with source, the right panel, split panes and files.writ
   expect(within(viewer).getByRole('heading', { name: 'From source' })).toBeTruthy();
   await act(async () => { fireEvent.keyDown(codes[1], { key: 's', metaKey: true }); });
   expect(f.client.command).toHaveBeenCalledWith('files.write', expect.objectContaining({ content: '# From source\n' }));
-  expect(within(viewer).queryByText('Showing unsaved edits')).toBeNull();
+  expect(within(viewer).queryByText('Unsaved')).toBeNull();
 });
 it('keeps drafts across workspaces and isolates project, worktree and path', async () => {
   const f = fixture(); await f.document.refresh(); f.document.edit('draft');
@@ -98,6 +98,17 @@ it('handles all requested Markdown blocks and marks, including official task lis
   expect(editor.getMarkdown()).toContain('- [x] Done');
   editor.destroy();
 });
+it('未保存の印を出しても、切り替えの行の下の中身の位置が変わらない', async () => {
+  const f = fixture('note.md', '# Disk'); await f.document.refresh();
+  render(<MemoryRouter initialEntries={['/p/p?path=note.md']}><f.Viewer/></MemoryRouter>);
+  const mode = await screen.findByRole('group', { name: 'Markdown view' });
+  const before = mode.nextElementSibling;
+  act(() => f.document.edit('# Draft'));
+  // 印は切り替えの行の中に入り、行の後ろの要素の並びは変わらない。
+  expect(within(mode).getByText('Unsaved')).toBeTruthy();
+  expect(mode.previousElementSibling?.classList.contains('document-draft') ?? false).toBe(false);
+  expect(mode.nextElementSibling?.className).toBe(before?.className);
+});
 it('protects unsupported content while permitting source edits', async () => {
   const content = 'Paragraph\n\n![image](image.png)';
   const change = vi.fn();
@@ -113,7 +124,7 @@ it.each(['page.html', 'page.htm'])('defaults %s to a sandboxed browser view and 
   for (const iframe of document.querySelectorAll('iframe')) expect(iframe.getAttribute('sandbox')).toBe('allow-scripts allow-popups allow-forms');
   act(() => f.document.edit('<h1>Draft</h1>'));
   await vi.waitFor(() => expect(f.client.command).toHaveBeenCalledWith('files.preview', { projectId: 'p', path, content: '<h1>Draft</h1>' }));
-  expect(screen.getByText('Showing unsaved edits')).toBeTruthy();
+  expect(screen.getByText('Unsaved').closest('.viewer-mode')).toBeTruthy();
 });
 it('debounces HTML edits for 500ms, reloads, opens a new tab and ignores stale responses', async () => {
   vi.useFakeTimers();

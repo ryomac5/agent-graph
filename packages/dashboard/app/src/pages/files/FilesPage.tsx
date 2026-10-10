@@ -66,11 +66,12 @@ function FileContent({ path, document, displayLanguage = 'en' }: { path: string;
   const content = state.content;
   const [raw, setRaw] = useState(false);
   const isHtml = /\.html?$/i.test(path);
-  const draft = state.dirty && <p className="document-draft" role="status">{displayLanguage === 'ja' ? '未保存の編集を表示中' : 'Showing unsaved edits'}</p>;
-  if (detectLanguage(path) !== 'md' && !isHtml) return <>{draft}<CodeView path={path} content={content} displayLanguage={displayLanguage}/></>;
+  // 未保存の印は、表示の切り替えの行の中に置く。行を足すと、編集のたびに中身が 1 段ずれるからである。
+  const draft = state.dirty && <span className="document-draft" role="status" title={displayLanguage === 'ja' ? '未保存の編集を表示中' : 'Showing unsaved edits'}>{displayLanguage === 'ja' ? '未保存' : 'Unsaved'}</span>;
+  if (detectLanguage(path) !== 'md' && !isHtml) return <CodeView path={path} content={content} displayLanguage={displayLanguage}/>;
   return <>
-    {draft}
     <div className="viewer-mode" role="group" aria-label={displayLanguage === 'ja' ? 'Markdown の表示' : 'Markdown view'}>
+      {draft}
       <button type="button" className="viewer-mode-option" aria-pressed={!raw} onClick={() => setRaw(false)}>{isHtml ? displayLanguage === 'ja' ? '表示' : 'Display' : displayLanguage === 'ja' ? 'プレビュー' : 'Preview'}</button>
       <button type="button" className="viewer-mode-option" aria-pressed={raw} onClick={() => setRaw(true)}>{displayLanguage === 'ja' ? '原文' : 'Raw'}</button>
     </div>
@@ -330,7 +331,9 @@ function TreeLevel({ explorer, path }: { explorer: FileExplorer; path: string })
 }
 
 /** 作業ツリーの選択と、名前の絞り込みと、ファイルの木。サイドバーのプロジェクトの下に置く。 */
-export function FileTreePanel({ explorer, actions, language = 'en' }: { explorer: FileExplorer; actions?: ReactNode; language?: DisplayLanguage }) {
+export function FileTreePanel({ explorer, actions, language = 'en', compact = false }: { explorer: FileExplorer; actions?: ReactNode; language?: DisplayLanguage;
+  /** 右のパネルの中では見出しの行を出さず、更新と操作を作業ツリーの行に寄せて上に詰める。 */
+  compact?: boolean }) {
   const [showOthers, setShowOthers] = useState(false);
   const text = (en: string, ja: string) => language === 'ja' ? ja : en;
   const trees = explorer.worktrees.status === 'loaded' ? explorer.worktrees.result.worktrees : [];
@@ -347,15 +350,16 @@ export function FileTreePanel({ explorer, actions, language = 'en' }: { explorer
   }, []);
   const { worktrees, worktreeValue, root, rows, needle, query, setQuery, current, move, onKeyDown } = explorer;
   return <section className="explorer-tree" aria-label={text('Explorer', 'ファイル')}>
-    <header className="column-header explorer-header"><h2>{text('Files', 'ファイル')}</h2><span className="spacer"/>
+    {!compact && <header className="column-header explorer-header"><h2>{text('Files', 'ファイル')}</h2><span className="spacer"/>
       <button className="icon-button" aria-label={text('Refresh', '更新')} title={text('Refresh', '更新')} onClick={explorer.refresh}><Icon name="clock" size={14}/></button>
-      {actions}</header>
+      {actions}</header>}
     <div className="explorer-worktree-row"><Icon name="branch" size={14}/>
       <select className="select-sm explorer-worktree" aria-label={text('Worktree', '作業ツリー')} value={worktreeValue} disabled={worktrees.status !== 'loaded'}
         onChange={event => explorer.selectWorktree(event.target.value)}>
         {worktrees.status === 'loaded' ? [...primary, ...others.filter(tree => showOthers || tree.path === worktreeValue)].map(tree => <option key={tree.path} value={tree.path} title={tree.path}>{worktreeName(tree)}</option>)
           : <option value={worktreeValue}>{worktrees.status === 'loading' ? text('Loading worktrees…', '作業ツリーを読み込み中') : text('Project root', 'プロジェクトの場所')}</option>}
-      </select></div>
+      </select>
+      {compact && <><button className="icon-button" aria-label={text('Refresh', '更新')} title={text('Refresh', '更新')} onClick={explorer.refresh}><Icon name="clock" size={14}/></button>{actions}</>}</div>
     {others.length > 0 && <button className="btn btn-ghost btn-xs" aria-expanded={showOthers} onClick={() => setShowOthers(value => !value)}>{language === 'ja' ? 'ほかの作業ツリー ' + others.length + ' 件' : 'Other worktrees · ' + others.length}</button>}
     <div className="explorer-filter"><Icon name="filter" size={14}/>
       <input className="input-sm" type="search" placeholder={text('Filter by name', '名前で絞り込む')} aria-label={text('Filter files by name', 'ファイル名で絞り込む')} value={query}
@@ -404,7 +408,7 @@ export function FileViewerPanel({ explorer, actions, language: displayLanguage =
   const language: Language | undefined = detectLanguage(selectedPath);
   const lineCount = shown?.status === 'loaded' && shown.result.state === 'text' ? highlightLineCount(shown.result.content) : undefined;
   return <section className="explorer-viewer" aria-label={text('File viewer', 'ファイルの表示')}>
-    {!selectedPath ? <div className="empty-state"><Icon name="file" size={22}/><h2>{text('No file selected', 'ファイルが選ばれていません')}</h2><p>{text('Choose a file in the tree to view its contents.', '木からファイルを選ぶと中身を表示します。')}</p></div> : <>
+    {!selectedPath ? <div className="empty-state"><Icon name="file" size={22}/><h2>{text('No file selected', 'ファイルが選ばれていません')}</h2><p>{text('Choose a file in the tree to view its contents.', '木からファイルを選ぶと中身を表示します。')}</p>{actions}</div> : <>
       <header className="viewer-header">
         <nav className="viewer-path" aria-label={text('File path', 'ファイルの場所')}>{selectedPath.split('/').map((part, index, parts) => <span key={index} className={index === parts.length - 1 ? 'viewer-path-current' : undefined}>{part}</span>)}</nav>
         <div className="viewer-meta">

@@ -17,4 +17,4 @@
 .document-toolbar { display: flex; flex-wrap: wrap; gap: var(--space-1); padding: var(--space-2); border-bottom: var(--border); color: var(--fg-2); font: var(--type-ui); }
 .html-surface { display: flex; flex: 1; min-height: 0; flex-direction: column; }
 .html-surface iframe { width: 100%; flex: 1; min-height: 320px; border: 0; background: var(--bg-0); }
-.document-draft { font: var(--type-meta); color: var(--fg-3); margin: var(--space-2) var(--space-3); }
+.document-draft { font: var(--type-meta); color: var(--fg-3); margin-right: auto; align-self: center; }

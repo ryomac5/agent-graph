@@ -27,6 +27,13 @@ export function parseCommitLog(output: string) {
   }
   return commits;
 }
+export function parseCommitStats(output: string) {
+  return output.split(/\0AGCOMMIT\0(?=[a-f\d]{40,64}\0[a-f\d ]*\0[^\0]*\0[^\0]*\0\d{4}-\d{2}-\d{2}T)/).slice(1).map(record => {
+    const values = record.split('\0');
+    const commit = parseCommitLog(values.slice(0, 6).join('\0') + '\0')[0];
+    return { ...commit, files: parseStats(values.slice(6).join('\0').replace(/^\0?\n/, '')) };
+  });
+}
 async function runGit(root: string, args: string[], maxBuffer = MAX_OUTPUT_BYTES) {
   const { stdout } = await execute('git', ['--literal-pathspecs', '-C', root, ...args], {
     encoding: 'utf8', maxBuffer, timeout: 30_000, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
@@ -65,7 +72,8 @@ export async function locateRepository(root: string): Promise<{ root: string; me
   }
 }
 export function createGitApi(selectRoot: (request: FilesRequest) => Promise<string>, resolveInside: (root: string, path: string, allowMissing?: boolean) => Promise<string>, readRules: () => RedactionRules,
-  readConversations: (commits: ReturnType<typeof parseCommitLog>) => Map<string, string[]> = () => new Map()) {
+  readConversations: ((commits: ReturnType<typeof parseCommitLog>) => Map<string, string[]>) & { pending?: () => boolean } = () => new Map()) {
+  const histories = new Map<string, { refs: string; history: ReturnType<typeof parseCommitStats> }>();
   async function check(root: string, request: FilesRequest) {
     await resolveInside(root, request.path ?? '', true);
   }
@@ -180,19 +188,37 @@ export function createGitApi(selectRoot: (request: FilesRequest) => Promise<stri
     },
     async commits(request: GitRequest) {
       const root = await selectRoot(request); await check(root, request);
-      let output: string;
-      try { output = await runGit(root, ['log', '--all', '--date-order', `-${request.limit ?? DEFAULT_COMMITS}`, '--decorate=short', '--format=%H%x00%P%x00%D%x00%an%x00%aI%x00%s%x00']); }
-      catch (error) { if (error instanceof Error && 'stderr' in error && /does not have any commits yet|unknown revision.*HEAD/.test(String(error.stderr))) return { worktree: root, commits: [] }; throw error; }
-      const commits = [];
-      const history = parseCommitLog(output);
-      const conversations = readConversations(history);
-      for (const commit of history) {
-        const files = await readCommitFiles(root, commit.hash);
-        commits.push({ ...commit, conversation_ids: conversations.get(commit.hash) ?? [], branches: commit.branches.map(name => redact(name, readRules()).text), tags: commit.tags.map(name => redact(name, readRules()).text),
-          subject: redact(commit.subject, readRules()).text, author: redact(commit.author, readRules()).text,
-          fileCount: files.length, additions: files.reduce((sum, file) => sum + file.additions, 0), deletions: files.reduce((sum, file) => sum + file.deletions, 0) });
+      const refs = await runGit(root, ['rev-parse', '--verify', 'HEAD']).catch(error => {
+        if (error instanceof Error && 'stderr' in error && /Needed a single revision|unknown revision|does not have any commits/.test(String(error.stderr))) return '';
+        throw error;
+      });
+      // 名前と参照値の両方を含め、同じコミットへの枝やタグの追加も検知する。
+      const names = await runGit(root, ['for-each-ref', '--format=%(refname) %(objectname)']);
+      const head = await runGit(root, ['symbolic-ref', '-q', 'HEAD']).catch(error => {
+        if (error instanceof Error && 'code' in error && error.code === 1) return ''; throw error;
+      });
+      const key = JSON.stringify([root, request.limit ?? DEFAULT_COMMITS]);
+      const revision = names + refs + head;
+      let history = histories.get(key)?.refs === revision ? histories.get(key)!.history : undefined;
+      if (!history) {
+        try { history = parseCommitStats(await runGit(root, ['log', '--all', 'HEAD', '--date-order', `-${request.limit ?? DEFAULT_COMMITS}`, '--decorate=short', '--numstat', '-z', '--relative', '--root', '--diff-merges=first-parent', '--no-ext-diff', '--no-textconv', '--format=%x00AGCOMMIT%x00%H%x00%P%x00%D%x00%an%x00%aI%x00%s%x00'])); }
+        catch (error) { if (error instanceof Error && 'stderr' in error && /does not have any commits yet|unknown revision.*HEAD|bad revision.*HEAD/.test(String(error.stderr))) return { worktree: root, commits: [] }; throw error; }
+        if (histories.size >= 32) histories.delete(histories.keys().next().value!);
+        histories.set(key, { refs: revision, history });
       }
-      return { worktree: root, commits };
+      const conversations = readConversations(history);
+      // 安全性はキャッシュせず、要求ごとに同じパスの確認だけをまとめる。
+      const visible = new Map<string, boolean>();
+      for (const commit of history) for (const file of commit.files) for (const path of [file.path, file.previousPath]) {
+        if (path !== undefined && !visible.has(path)) visible.set(path, await safe(root, path));
+      }
+      const commits = history.map(({ files: entries, ...commit }) => {
+        const files = entries.filter(file => visible.get(file.path) && (file.previousPath === undefined || visible.get(file.previousPath)));
+        return { ...commit, conversation_ids: conversations.get(commit.hash) ?? [], branches: commit.branches.map(name => redact(name, readRules()).text), tags: commit.tags.map(name => redact(name, readRules()).text),
+          subject: redact(commit.subject, readRules()).text, author: redact(commit.author, readRules()).text,
+          fileCount: files.length, additions: files.reduce((sum, file) => sum + file.additions, 0), deletions: files.reduce((sum, file) => sum + file.deletions, 0) };
+      });
+      return { worktree: root, commits, conversationsPending: readConversations.pending?.() ?? false };
     },
     async commit(request: GitRequest) {
       const root = await selectRoot(request); await check(root, request);

@@ -1,3 +1,4 @@
+import { Worker } from 'node:worker_threads';
 import type { DatabaseSync } from 'node:sqlite';
 
 interface Message { body: unknown; source_ts: string; conversation_id: string }
@@ -68,35 +69,132 @@ export function matchCommitConversations(commits: readonly Commit[], evidence: r
   return new Map([...matches].map(([hash, ids]) => [hash, [...ids].sort()]));
 }
 
-export function createCommitConversationIndex(db: DatabaseSync) {
-  let revision = '';
+const INDEX_BATCH_SIZE = 250;
+const INDEX_POLL_MS = 500;
+
+export function createLocalCommitConversationIndex(db: DatabaseSync, publish: (evidence: CommitEvidence[], state: { generation: number; sequence: number; ready: boolean }) => void = () => {}, keepAlive = false) {
+  let generation = -1;
+  let sequence = 0;
+  let cursor = 0;
+  let scanning = true;
+  let closed = false;
   let evidence: CommitEvidence[] = [];
-  return (commits: readonly Commit[]) => {
-    const state = db.prepare('SELECT generation, last_seq FROM projection_state WHERE id = 1').get()!;
-    // 再構築と追記の両方で更新し、変化のない投影の本文は読み直さない。
-    const next = `${state.generation}:${state.last_seq}`;
-    if (next !== revision) {
-      const calls = db.prepare(`SELECT m.body, m.source_ts, mm.conversation_id FROM messages m
-        JOIN message_memberships mm ON mm.message_id = m.id AND mm.active = 1
-        WHERE m.provider = 'claude' AND m.role = 'assistant'
-          AND (instr(m.body, 'git commit') > 0 OR instr(m.body, 'git -C ') > 0 OR instr(m.body, 'git merge') > 0)`).all() as unknown as Message[];
-      const results = db.prepare(`WITH tools AS MATERIALIZED (
-        SELECT cm.conversation_id, json_extract(b.value, '$.id') AS tool_id FROM messages c
-        JOIN message_memberships cm ON cm.message_id = c.id AND cm.active = 1
-        JOIN json_each(CASE WHEN json_type(c.body) = 'array' THEN c.body ELSE '[]' END) b ON b.type = 'object'
-        WHERE c.provider = 'claude' AND c.role = 'assistant'
-          AND (instr(c.body, 'git commit') > 0 OR instr(c.body, 'git -C ') > 0 OR instr(c.body, 'git merge') > 0)
-          AND json_extract(b.value, '$.type') = 'tool_use' AND json_extract(b.value, '$.name') = 'Bash')
-        SELECT DISTINCT m.id, m.body, m.source_ts, mm.conversation_id FROM tools t
-        JOIN message_memberships mm ON mm.conversation_id = t.conversation_id AND mm.active = 1
-        JOIN messages m ON m.id = mm.message_id
-        WHERE m.provider = 'claude' AND m.role = 'user' AND instr(m.body, t.tool_id) > 0
-          AND EXISTS (SELECT 1 FROM json_each(CASE WHEN json_type(m.body) = 'array' THEN m.body ELSE '[]' END) b WHERE b.type = 'object' AND json_extract(b.value, '$.type') = 'tool_result'
-            AND json_extract(b.value, '$.tool_use_id') = t.tool_id)`).all() as unknown as Message[];
-      const decode = (message: Message): Message => ({ ...message, body: JSON.parse(String(message.body)) });
-      evidence = extractCommitEvidence(calls.map(decode), results.map(decode));
-      revision = next;
+  const messages = new Map<string, Message[]>();
+  let pending: ReturnType<typeof setTimeout> | ReturnType<typeof setImmediate>;
+  const readState = db.prepare('SELECT generation, last_seq FROM projection_state WHERE id = 1');
+  const readMessages = db.prepare(`SELECT m.id, m.body, m.source_ts, mm.conversation_id FROM messages m
+    JOIN message_memberships mm ON mm.message_id = m.id AND mm.active = 1
+    WHERE m.id = ? AND m.provider = 'claude' AND m.role IN ('assistant', 'user')`);
+  function updateMessage(id: string) {
+    messages.delete(id);
+    const rows = readMessages.all(id);
+    const retained: Message[] = [];
+    for (const row of rows) {
+      const body = readBlocks(JSON.parse(String(row.body))).filter(block =>
+        block.type === 'tool_result' || block.type === 'tool_use' && block.name === 'Bash'
+          && /git(?: -C \S+)? (?:commit|merge)\b/.test(String((block.input as { command?: unknown })?.command ?? '')));
+      for (const block of body) if (block.type === 'tool_result') {
+        const text = readText(block.content);
+        block.content = [...text.matchAll(/^\[[^\]\n]+? (?:\(root-commit\) )?([a-f\d]{7,64})\]|^([a-f\d]{7,64})\s+\S/gim)].map(match => match[0]).join('\n');
+      }
+      if (body.length) retained.push({ body, source_ts: String(row.source_ts), conversation_id: String(row.conversation_id) });
     }
-    return matchCommitConversations(commits, evidence);
-  };
+    if (retained.length) messages.set(id, retained);
+  }
+  function refreshEvidence() {
+    const calls: Message[] = [];
+    const results: Message[] = [];
+    for (const rows of messages.values()) for (const message of rows) {
+      if (readBlocks(message.body).some(block => block.type === 'tool_use')) calls.push(message);
+      if (readBlocks(message.body).some(block => block.type === 'tool_result')) results.push(message);
+    }
+    evidence = extractCommitEvidence(calls, results);
+    publish(evidence, { generation, sequence, ready: !scanning });
+  }
+  function schedule(immediate: boolean) {
+    pending = immediate ? setImmediate(advance) : setTimeout(advance, INDEX_POLL_MS);
+    if (!keepAlive) pending.unref();
+  }
+  function advance() {
+    if (closed) return;
+    try {
+      const state = readState.get()!;
+      if (generation !== Number(state.generation) || sequence > Number(state.last_seq)) {
+        generation = Number(state.generation); sequence = Number(state.last_seq); cursor = 0; scanning = true;
+        messages.clear(); evidence = []; publish(evidence, { generation, sequence, ready: false });
+      }
+      if (scanning) {
+        const rows = db.prepare('SELECT rowid AS position, id FROM messages WHERE rowid > ? ORDER BY rowid LIMIT ?').all(cursor, INDEX_BATCH_SIZE);
+        for (const row of rows) { updateMessage(String(row.id)); cursor = Number(row.position); }
+        scanning = rows.length === INDEX_BATCH_SIZE;
+        if (!scanning) refreshEvidence();
+        schedule(scanning); return;
+      }
+      const rows = db.prepare('SELECT seq, kind, subject FROM facts WHERE seq > ? AND seq <= ? ORDER BY seq LIMIT ?').all(sequence, Number(state.last_seq), INDEX_BATCH_SIZE);
+      let changed = false;
+      for (const row of rows) {
+        const kind = String(row.kind).split('.')[0];
+        if (kind === 'conversation') {
+          const id = String(row.subject).slice('conversation:'.length);
+          const record = db.prepare("SELECT data FROM entity_records WHERE entity = 'conversation' AND id = ?").get(id);
+          const data = record ? JSON.parse(String(record.data)) : {};
+          const ids = [id, data.provider && data.native_id ? JSON.stringify([data.provider, data.native_id]) : id];
+          const affected = new Set(db.prepare('SELECT message_id FROM message_memberships WHERE conversation_id IN (?, ?)').all(...ids).map(row => String(row.message_id)));
+          for (const [messageId, rows] of messages) if (rows.some(message => ids.includes(message.conversation_id))) affected.add(messageId);
+          for (const messageId of affected) updateMessage(messageId);
+          changed ||= affected.size > 0;
+        }
+        if (kind === 'message' || kind === 'message_membership') {
+          const record = db.prepare('SELECT data FROM entity_records WHERE entity = ? AND id = ?').get(kind, String(row.subject).slice(kind.length + 1));
+          if (record) {
+            const data = JSON.parse(String(record.data));
+            const id = kind === 'message' ? data.provider && data.native_id ? JSON.stringify([data.provider, data.native_id]) : data.id : data.message_id;
+            if (id) {
+              const message = db.prepare("SELECT data FROM entity_records WHERE entity = 'message' AND id = ?").get(id);
+              const value = message ? JSON.parse(String(message.data)) : {};
+              const canonical = value.provider && value.native_id ? JSON.stringify([value.provider, value.native_id]) : id;
+              updateMessage(canonical); changed = true;
+            }
+          }
+        }
+        sequence = Number(row.seq);
+      }
+      if (changed) refreshEvidence();
+      else if (rows.length) publish(evidence, { generation, sequence, ready: true });
+      schedule(rows.length === INDEX_BATCH_SIZE);
+    } catch (error) {
+      // 接続が閉じられたら常駐の読み取りも終える。
+      if (error instanceof Error && /database is not open|database has been closed/i.test(error.message)) { closed = true; return; }
+      throw error;
+    }
+  }
+  schedule(false);
+  const read = (commits: readonly Commit[]) => matchCommitConversations(commits, evidence);
+  return Object.assign(read, {
+    refresh: advance,
+    pending: () => scanning,
+    close() { closed = true; clearTimeout(pending as ReturnType<typeof setTimeout>); clearImmediate(pending as ReturnType<typeof setImmediate>); },
+  });
+}
+
+export function createCommitConversationIndex(db: DatabaseSync) {
+  const path = String(db.prepare('PRAGMA database_list').get()?.file ?? '');
+  if (!path) return createLocalCommitConversationIndex(db);
+  let evidence: CommitEvidence[] = [];
+  let indexed = { generation: -1, sequence: -1, ready: false };
+  let worker: Worker | undefined;
+  function start() {
+    if (worker) return;
+    worker = new Worker(new URL('./conversation-worker.ts', import.meta.url), { workerData: path });
+    worker.on('message', (next: { evidence: CommitEvidence[]; state: typeof indexed }) => { evidence = next.evidence; indexed = next.state; });
+    worker.on('error', () => { evidence = []; });
+    worker.unref();
+  }
+  return Object.assign((commits: readonly Commit[]) => { start(); return matchCommitConversations(commits, evidence); }, {
+    pending() {
+      const state = db.prepare('SELECT generation, last_seq FROM projection_state WHERE id = 1').get()!;
+      return !indexed.ready || indexed.generation !== Number(state.generation) || indexed.sequence < Number(state.last_seq);
+    },
+    close() { void worker?.terminate(); },
+  });
 }

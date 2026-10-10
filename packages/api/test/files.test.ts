@@ -29,7 +29,7 @@ import { WebSocket } from "ws";
 import { createFilesApi, handleFilesCommand, MAX_FILE_BYTES } from "../src/files/index.ts";
 import { openObservationService } from "../src/service/index.ts";
 import { startWebSocketServer } from "../src/ws/index.ts";
-import { parseCommitLog } from '../src/files/git.ts';
+import { parseCommitLog, parseCommitStats } from '../src/files/git.ts';
 
 const execute = promisify(execFile);
 async function runGit(root: string, ...args: string[]): Promise<string> {
@@ -56,6 +56,7 @@ async function createFixture(t: TestContext) {
   const db = new DatabaseSync(dbPath, { readOnly: true });
   t.after(() => db.close());
   const api = createFilesApi(db);
+  t.after(() => api.close());
   const request = { projectId };
   async function write(path: string, body: string | Uint8Array = path) {
     await mkdir(join(root, path, ".."), { recursive: true });
@@ -445,4 +446,44 @@ test("writes a sibling temporary file before rename and cleans it after rename f
     await api.write({ ...request, path: "file.txt", content: "after", baseHash });
     assert.equal(renames, 2);
   } finally { stub.mock.restore(); syncBuiltinESMExports(); }
+});
+
+test('one history log matches per-commit stats for roots, renames, binary files and merges', async t => {
+  const { api, root, request, write, commit } = await createFixture(t);
+  await write('before\tname.txt', 'one\ntwo\n'); await write('binary', new Uint8Array([0, 1])); await commit();
+  await runGit(root, 'mv', 'before\tname.txt', 'after\nname.txt'); await commit();
+  const branch = (await runGit(root, 'branch', '--show-current')).trim();
+  await runGit(root, 'checkout', '-b', 'side'); await write('side.txt', 'side\n'); await commit();
+  await runGit(root, 'checkout', branch); await write('main.txt', 'main\n'); await commit();
+  await runGit(root, 'merge', '--no-ff', 'side', '-m', 'merge');
+  const history = await api.commits(request);
+  const output = await runGit(root, 'log', '--all', 'HEAD', '--date-order', '-200', '--numstat', '-z', '--root', '--diff-merges=first-parent', '--format=%x00AGCOMMIT%x00%H%x00%P%x00%D%x00%an%x00%aI%x00%s%x00');
+  const parsed = parseCommitStats(output);
+  assert.equal(parsed.length, history.commits.length);
+  for (const entry of history.commits) {
+    const detail = await api.commit({ ...request, hash: entry.hash });
+    assert.equal(entry.fileCount, detail.files.length);
+    assert.equal(entry.additions, detail.files.reduce((sum, file) => sum + file.additions, 0));
+    assert.equal(entry.deletions, detail.files.reduce((sum, file) => sum + file.deletions, 0));
+  }
+  assert.ok(parsed.some(commit => commit.files.some(file => file.binary)));
+  assert.ok(parsed.some(commit => commit.files.some(file => file.previousPath === 'before\tname.txt')));
+  assert.ok(parsed.some(commit => commit.parents.length === 2));
+});
+
+test('invalidates history on branch, tag and detached HEAD changes and rechecks symlink safety', async t => {
+  const { api, root, directory, request, write, commit } = await createFixture(t);
+  await write('safe.txt', 'safe\n'); await commit();
+  const initial = await api.commits(request);
+  assert.deepEqual(await api.commits(request), initial);
+  await runGit(root, 'tag', 'v1');
+  assert.deepEqual((await api.commits(request)).commits[0].tags, ['v1']);
+  await runGit(root, 'branch', 'extra');
+  assert.ok((await api.commits(request)).commits[0].branches.includes('extra'));
+  await write('new.txt', 'new\n'); await commit();
+  assert.equal((await api.commits(request)).commits.length, 2);
+  await runGit(root, 'checkout', '--detach', initial.commits[0].hash);
+  assert.ok((await api.commits(request)).commits.find(commit => commit.hash === initial.commits[0].hash)?.branches.includes('HEAD'));
+  await rm(join(root, 'safe.txt')); await symlink(join(directory, 'outside'), join(root, 'safe.txt'));
+  assert.equal((await api.commits(request)).commits.find(commit => commit.hash === initial.commits[0].hash)?.fileCount, 0);
 });

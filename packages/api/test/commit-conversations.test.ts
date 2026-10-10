@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import { initializeSchema } from '../../core/src/ledger/schema.ts';
-import { createCommitConversationIndex, extractCommitEvidence, matchCommitConversations } from '../src/files/conversations.ts';
+import { createLocalCommitConversationIndex, extractCommitEvidence, matchCommitConversations } from '../src/files/conversations.ts';
 const TIME = '2026-10-08T00:00:00Z';
 function makePair(command: string, content: unknown, id = 'agent', isError = false) {
   return {
@@ -65,13 +65,53 @@ test('caches projection evidence until its revision changes and respects active 
     // 本文が文字列の発言は、道具の呼び出しにはならない。
     db.prepare("INSERT INTO messages (id, provider, role, body) VALUES ('text', 'claude', 'assistant', ?)").run(JSON.stringify('git commit'));
     db.exec("INSERT INTO message_memberships VALUES ('text', 'text', 'agent', 1)");
-    const read = createCommitConversationIndex(db);
+    const read = createLocalCommitConversationIndex(db);
+    read.refresh();
     assert.deepEqual(read([makeCommit()]).get('abc123456789'), ['agent']);
     db.exec('UPDATE message_memberships SET active = 0');
     assert.deepEqual(read([makeCommit()]).get('abc123456789'), ['agent']);
-    db.exec('UPDATE projection_state SET last_seq = 1');
+    db.exec('UPDATE projection_state SET generation = 2');
+    read.refresh();
     assert.deepEqual(read([makeCommit()]).get('abc123456789'), []);
-    db.exec('UPDATE message_memberships SET active = 1; UPDATE projection_state SET generation = 1');
+    db.exec('UPDATE message_memberships SET active = 1; UPDATE projection_state SET generation = 3');
+    read.refresh();
     assert.deepEqual(read([makeCommit()]).get('abc123456789'), ['agent']);
+    read.close();
   } finally { db.close(); }
+});
+
+test('adds only changed messages, pairs results arriving later and applies membership corrections', () => {
+  const db = new DatabaseSync(':memory:');
+  initializeSchema(db);
+  const read = createLocalCommitConversationIndex(db);
+  try {
+    read.refresh();
+    const { call, result } = makePair('git commit -m Fix', '[main abc1234] Fix');
+    let seq = 0;
+    function addMessage(id: string, role: string, message: typeof call | typeof result) {
+      db.prepare('INSERT INTO messages (id, provider, role, body, source_ts) VALUES (?, ?, ?, ?, ?)').run(id, 'claude', role, JSON.stringify(message.body), TIME);
+      db.prepare('INSERT INTO message_memberships VALUES (?, ?, ?, 1)').run(id, id, 'agent');
+      db.prepare('INSERT INTO entity_records (entity, id, data, last_seq) VALUES (?, ?, ?, ?)').run('message', id, JSON.stringify({ id }), ++seq);
+      db.prepare(`INSERT INTO facts (fact_id,source,source_event_id,source_ts,observed_ts,kind,subject,confidence,payload_hash,schema_version) VALUES (?, 'ui', ?, ?, ?, 'message.created', ?, 'confirmed', 'test', 1)`).run(id, id, TIME, TIME, 'message:' + id);
+      db.prepare('UPDATE projection_state SET last_seq = ?').run(seq);
+    }
+    addMessage('call', 'assistant', call);
+    assert.deepEqual(read([makeCommit()]).get('abc123456789'), []);
+    read.refresh();
+    assert.deepEqual(read([makeCommit()]).get('abc123456789'), []);
+    addMessage('result', 'user', result);
+    read.refresh();
+    assert.deepEqual(read([makeCommit()]).get('abc123456789'), ['agent']);
+    // 既存の本文を読み直した場合だけ失敗する値で、差分だけの処理を確かめる。
+    db.exec("UPDATE messages SET body = 'invalid JSON' WHERE id = 'call'");
+    addMessage('unrelated', 'user', { ...result, body: [] });
+    read.refresh();
+    assert.deepEqual(read([makeCommit()]).get('abc123456789'), ['agent']);
+    db.exec("UPDATE message_memberships SET active = 0 WHERE message_id = 'result'");
+    db.prepare('INSERT INTO entity_records (entity,id,data,last_seq) VALUES (?, ?, ?, ?)').run('message_membership', 'result-membership', JSON.stringify({message_id:'result'}), ++seq);
+    db.prepare(`INSERT INTO facts (fact_id,source,source_event_id,source_ts,observed_ts,kind,subject,confidence,payload_hash,schema_version) VALUES ('membership', 'ui', 'membership', ?, ?, 'message_membership.updated', 'message_membership:result-membership', 'confirmed', 'test', 1)`).run(TIME, TIME);
+    db.prepare('UPDATE projection_state SET last_seq = ?').run(seq);
+    read.refresh();
+    assert.deepEqual(read([makeCommit()]).get('abc123456789'), []);
+  } finally { read.close(); db.close(); }
 });

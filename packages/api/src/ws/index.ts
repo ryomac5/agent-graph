@@ -12,6 +12,7 @@ import { authorize, createToken, readRequestUrl } from "./security.ts";
 import { createSearchHandler } from "../search/index.ts";
 import { createFilesApi, handleFilesCommand, FilesWriteError, FilesPreviewError } from "../files/index.ts";
 import { createTerminalSession } from "../terminal/index.ts";
+import { createSessionHosts, type HostOptions } from "../terminal/hosts.ts";
 import { FILE_COMMANDS, TERMINAL_COMMANDS } from "./contract.ts";
 import type { RedactionRules } from "../../../core/src/ledger/redact.ts";
 import type { SettingsService } from "../settings/index.ts";
@@ -20,12 +21,14 @@ export const DEFAULT_WS_PORT = 7421;
 const MAX_OPEN_CONVERSATIONS = 10;
 const MAX_FRAME_BYTES = 1024 * 1024;
 const MAX_BUFFERED_BYTES = 4 * MAX_FRAME_BYTES;
+const MAX_SESSION_COMMANDS = 256;
 export interface WebSocketOptions {
   port?: number;
   runnerPath?: string;
   patchRetention?: number;
   readRedactionRules?: () => RedactionRules;
   settings?: SettingsService;
+  sessionHosts?: HostOptions;
 }
 
 export async function startWebSocketServer(service: ReturnType<typeof openObservationService>, options: WebSocketOptions = {}) {
@@ -68,6 +71,9 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
   const searchOptions = { port, token };
   const search = createSearchHandler(searchDb, searchOptions);
   const files = createFilesApi(searchDb, options.readRedactionRules);
+  const sessionHosts = createSessionHosts(files.selectRoot, options.sessionHosts);
+  const sessionCommands = new Map<string, Promise<unknown>>();
+  const completedSessionCommands: string[] = [];
   const server = createServer((request, response) => {
     response.setHeader("Cache-Control", "no-store");
     if (!authorize(request, port, token)) { response.writeHead(403).end(); return; }
@@ -98,9 +104,10 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
     wss.handleUpgrade(request, socket, head, (client) => wss.emit("connection", client, request));
   });
   wss.on("connection", (socket) => {
-    const terminals = createTerminalSession(files.selectRoot, message => send(socket, message));
+    const notify = (message: import('../terminal/index.ts').TerminalNotification) => send(socket, message);
+    const terminals = createTerminalSession(files.selectRoot, notify);
     socket.on("error", () => socket.terminate());
-    socket.on("close", () => { terminals.close(); clients.delete(socket); });
+    socket.on("close", () => { terminals.close(); sessionHosts.detach(notify); clients.delete(socket); });
     socket.on("message", (data, binary) => {
       if (binary) { socket.close(1003, "JSON required"); return; }
       let message;
@@ -132,11 +139,25 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
           return;
         }
         if ((TERMINAL_COMMANDS as readonly string[]).includes(message.command)) {
-          void terminals.handle(message.command, message.payload).then(result => {
+          const hosted = message.command.startsWith('session.') || message.command === 'terminal.attach' || sessionHosts.hasTerminal(message.payload?.terminalId);
+          const retained = ['session.launch', 'session.send', 'session.interrupt'].includes(message.command);
+          let result = retained ? sessionCommands.get(message.cmd_id) : undefined;
+          if (!result) {
+            result = hosted ? sessionHosts.handle(message.command, message.payload, notify) : terminals.handle(message.command, message.payload);
+            if (retained) {
+              sessionCommands.set(message.cmd_id, result);
+              const finish = () => {
+                completedSessionCommands.push(message.cmd_id);
+                if (completedSessionCommands.length > MAX_SESSION_COMMANDS) sessionCommands.delete(completedSessionCommands.shift()!);
+              };
+              void result.then(finish, finish);
+            }
+          }
+          void result.then(result => {
             send(socket, { type: "ack", cmd_id: message.cmd_id, ok: true, result });
           }, error => {
             send(socket, { type: "ack", cmd_id: message.cmd_id, ok: false,
-              error: error instanceof Error && ["Terminal limit reached", "Unknown terminal", "Invalid terminal size"].includes(error.message)
+              error: error instanceof Error && ["Terminal limit reached", "Unknown terminal", "Invalid terminal size", "Invalid session launch", "Session already hosted", "no_host"].includes(error.message)
                 ? error.message : "Terminal request failed" });
           });
           return;
@@ -166,7 +187,7 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
       server.listen(port, "127.0.0.1", () => { server.off("error", reject); resolve(); });
     });
     feed = new ProjectionFeed(service.dbPath, service.catchUp, options.patchRetention);
-  } catch (error) { runner.close(); feed?.close(); searchDb.close(); wss.close(); server.close(); throw error; }
+  } catch (error) { sessionHosts.close(); runner.close(); feed?.close(); searchDb.close(); wss.close(); server.close(); throw error; }
   port = (server.address() as { port: number }).port;
   searchOptions.port = port;
   const timer = setInterval(() => pollObservation(refresh), PROJECTION_POLL_MS);
@@ -178,6 +199,7 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
     },
     close: async () => {
       clearInterval(timer);
+      sessionHosts.close();
       files.clearPreviews();
       runner.close();
       for (const socket of wss.clients) socket.terminate();

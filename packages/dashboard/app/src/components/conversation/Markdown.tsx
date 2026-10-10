@@ -45,6 +45,23 @@ function textOf(node: HastNode | undefined): string {
   return node.type === 'text' ? node.value ?? '' : (node.children ?? []).map(textOf).join('');
 }
 
+function rehypeTaskRows() {
+  function visit(node: HastNode) {
+    if (node.tagName === 'li' && (node.properties?.className as string[] | undefined)?.includes('task-list-item')) {
+      const children = node.children ?? [];
+      const paragraph = children.find(child => child.tagName === 'p' && child.children?.some(item => item.tagName === 'input'));
+      const container = paragraph?.children ?? children;
+      const box = container.find(child => child.tagName === 'input');
+      if (box) {
+        container.splice(container.indexOf(box), 1);
+        node.children = [box, { type: 'element', tagName: 'div', properties: { className: ['md-task-content'] }, children }];
+      }
+    }
+    for (const child of node.children ?? []) visit(child);
+  }
+  return (tree: HastNode) => visit(tree);
+}
+
 type CopyState = 'idle' | 'copied' | 'failed';
 const COPY_LABELS: Record<CopyState, string> = { idle: 'Copy', copied: 'Copied', failed: 'Copy failed' };
 const COPY_RESET_MS = 1600;
@@ -108,7 +125,7 @@ const COMPONENTS: Components = {
   table({ node: _node, ...props }) { return <div className="md-table-wrap"><table {...props}/></div>; },
   input({ node: _node, ...props }) { return <input {...props} readOnly className="md-task-box"/>; },
 };
-const PLUGINS = { document: [remarkGfm], conversation: [remarkGfm, remarkSoftBreaks], rehype: [rehypeSanitize] };
+const PLUGINS = { document: [remarkGfm], conversation: [remarkGfm, remarkSoftBreaks], rehype: [rehypeSanitize, rehypeTaskRows] };
 
 /**
  * Markdown を GFM で解釈し、rehype-sanitize の既定の方針で HTML を落としてから描く。

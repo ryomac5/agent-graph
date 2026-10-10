@@ -23,7 +23,7 @@ function prepareSpawnHelper(): void {
   if (!(mode & 0o100)) chmodSync(helper, mode | 0o100);
 }
 
-function spawnTerminal(...args: Parameters<typeof spawn>): IPty {
+export function spawnTerminal(...args: Parameters<typeof spawn>): IPty {
   prepareSpawnHelper();
   return spawn(...args);
 }

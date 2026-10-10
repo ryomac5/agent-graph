@@ -4,7 +4,7 @@ import { type CodeDocument } from '../../lib/code-document.ts';
 import { getFileDocument } from '../../lib/file-documents.ts';
 import { DEFAULT_KEYS, createKeyHandler, type KeyBindings } from '../../lib/keys.ts';
 import { closeTab, createWorkspace, listPanes, moveTab, resizeSplit, restoreWorkspace, splitPane, updatePane, workspaceKey, type PaneTree, type WorkspaceTab } from '../../lib/panes.ts';
-import { OpenWorkspaceFile } from '../../lib/workspace-context.ts';
+import { OpenWorkspaceFile, OpenWorkspaceTerminal } from '../../lib/workspace-context.ts';
 import type { Language } from '../../lib/i18n.ts';
 import type { ConversationClient } from '../conversation/ConversationPage.tsx';
 import { CodeTab } from './CodeTab.tsx';
@@ -68,7 +68,7 @@ export function Workbench({ project, session, conversationId, client, language, 
     return documents.current.get(key)!;
   }
   function getTerminal(tab: Extract<WorkspaceTab, { kind: 'terminal' }>) {
-    if (!terminals.current.has(tab.id)) terminals.current.set(tab.id, createTerminalSession(client, project, tab.worktree));
+    if (!terminals.current.has(tab.id)) terminals.current.set(tab.id, createTerminalSession(client, project, tab.worktree, tab.terminalId));
     return terminals.current.get(tab.id)!;
   }
   useEffect(() => { localStorage.setItem(key, JSON.stringify(tree)); }, [key, tree]);
@@ -95,6 +95,15 @@ export function Workbench({ project, session, conversationId, client, language, 
   function addTab(kind: 'conversation' | 'terminal', paneId: string) {
     const tab: WorkspaceTab = kind === 'conversation' ? { kind, id: id(), conversationId } : { kind, id: id(), ...(activeTab && 'worktree' in activeTab && activeTab.worktree ? { worktree: activeTab.worktree } : {}) };
     setTree(tree => tree ? updatePane(tree, paneId, pane => ({ ...pane, tabs: [...pane.tabs, tab], active: tab.id })) : { kind: 'pane', id: paneId, tabs: [tab], active: tab.id }); setFocused(paneId); setMenu(undefined);
+  }
+  function openTerminal(terminalId: string, sourcePane: string) {
+    const existing = panes.flatMap(pane => pane.tabs.map(tab => ({ pane, tab }))).find(({ tab }) => tab.kind === 'terminal' && tab.terminalId === terminalId);
+    if (existing) { setFocused(existing.pane.id); setTree(tree => tree && updatePane(tree, existing.pane.id, pane => ({ ...pane, active: existing.tab.id }))); return; }
+    const tab: WorkspaceTab = { kind: 'terminal', id: id(), terminalId };
+    const neighbor = panes.find(pane => pane.id !== sourcePane);
+    const paneId = neighbor?.id ?? id();
+    setTree(tree => tree && (neighbor ? updatePane(tree, paneId, pane => ({ ...pane, tabs: [...pane.tabs, tab], active: tab.id })) : splitPane(tree, sourcePane, 'horizontal', tab, paneId, id())));
+    setFocused(paneId);
   }
   function split(direction: 'horizontal' | 'vertical') {
     if (!focusedPane || !activeTab) return;
@@ -138,7 +147,7 @@ export function Workbench({ project, session, conversationId, client, language, 
         {tabMenu?.pane === node.id && <div className="workbench-menu" role="menu"><button className="btn btn-ghost" role="menuitem" onClick={() => beginRename(node.id, tabMenu.tab)}>{ja ? '名前を変える' : 'Rename'}</button><button className="btn btn-ghost" role="menuitem" onClick={() => setTabMenu(undefined)}>{ja ? '閉じる' : 'Close'}</button></div>}
       </header>
       {node.tabs.map(tab => <div key={tab.id} role="tabpanel" id={`workspace-body-${tab.id}`} aria-labelledby={`workspace-tab-${tab.id}`} hidden={tab.id !== node.active} className="workbench-body">
-        {tab.kind === 'conversation' ? renderConversation(tab.conversationId, conversationId => replaceConversation(node.id, tab.id, conversationId)) : tab.kind === 'code' ? <CodeTab path={tab.path} document={getDocument(tab)} language={language}/> : <TerminalTab key={`${tab.id}:${restart}`} session={getTerminal(tab)} language={language} reopen={() => { terminals.current.get(tab.id)?.dispose(); terminals.current.delete(tab.id); setRestart(value => value + 1); }}/>}</div>)}
+        {tab.kind === 'conversation' ? <OpenWorkspaceTerminal.Provider value={terminalId => openTerminal(terminalId, node.id)}>{renderConversation(tab.conversationId, conversationId => replaceConversation(node.id, tab.id, conversationId))}</OpenWorkspaceTerminal.Provider> : tab.kind === 'code' ? <CodeTab path={tab.path} document={getDocument(tab)} language={language}/> : <TerminalTab key={`${tab.id}:${restart}`} session={getTerminal(tab)} language={language} reopen={() => { terminals.current.get(tab.id)?.dispose(); terminals.current.delete(tab.id); setRestart(value => value + 1); }}/>}</div>)}
     </section>;
   }
   return <OpenWorkspaceFile.Provider value={openFile}><div className="workbench workspace-conversation" tabIndex={-1} ref={root} aria-label={ja ? '作業場' : 'Workbench'} onKeyDownCapture={event => { if (handler(event.nativeEvent)) { event.preventDefault(); event.stopPropagation(); } }}>

@@ -13,7 +13,10 @@
 .markdown-body .contains-task-list .contains-task-list { padding-left: var(--space-6); }
 .markdown-body .task-list-item > ul:not(.contains-task-list) { padding-left: var(--space-8); }
 .markdown-body .task-list-item > ol:not(.contains-task-list) { padding-left: var(--space-8); }
-.markdown-body .task-list-item { display: block; }
+.markdown-body .task-list-item { display: grid; grid-template-columns: 16px minmax(0, 1fr); column-gap: var(--space-2); align-items: start; }
+.markdown-body .md-task-content { min-width: 0; overflow-wrap: anywhere; }
+.markdown-body .md-task-content > p:first-child { margin-top: 0; }
+.markdown-body .task-list-item > .md-task-box { margin: 3px 0 0; }
 .markdown-body .md-task-box { appearance: none; display: inline-grid; place-content: center; width: 16px; height: 16px; margin: 0 var(--space-2) 0 0; vertical-align: -3px; border: var(--border); border-radius: var(--radius-1); background: transparent; cursor: default; }
 .markdown-body .md-task-box:disabled { opacity: 1; }
 .markdown-body .md-task-box:checked { background: var(--accent); border-color: var(--accent); }

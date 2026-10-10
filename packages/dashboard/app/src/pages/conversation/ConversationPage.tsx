@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { OpenWorkspaceTerminal } from '../../lib/workspace-context.ts';
 import { useAutosizeTextarea } from './useAutosizeTextarea.ts';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import { getRegisteredProjects, OTHER_PROJECT } from '../../lib/projects.ts';
@@ -32,7 +33,7 @@ import { resolveDelegationNode } from '../../components/conversation/DelegationC
 import { selectRoots, useRootIndex } from '../../lib/roots.ts';
 import './conversation.css';
 
-export type ConversationClient = Pick<ReturnType<typeof createClient>, 'command'> & Partial<Pick<ReturnType<typeof createClient>, 'watchConversation' | 'fetchConversation' | 'subscribeTerminal'>>;
+export type ConversationClient = Pick<ReturnType<typeof createClient>, 'command'> & Partial<Pick<ReturnType<typeof createClient>, 'watchConversation' | 'fetchConversation' | 'subscribeTerminal' | 'subscribeConnected'>>;
 interface Model { model: string; displayName: string; effort?: string }
 export interface ConversationPageProps {
   client: ConversationClient;
@@ -46,7 +47,7 @@ export interface ConversationPageProps {
   displayName?: string;
   breadcrumb?: React.ReactNode;
   onConversation?: (conversationId: string) => void;
-  newSession?: { cwd: string };
+  newSession?: { cwd: string; projectId?: string };
 }
 const CODEX_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
 function isStoppedEvidence(value: unknown): boolean {
@@ -57,6 +58,16 @@ function isStoppedEvidence(value: unknown): boolean {
 const SUPPORTED_FORMATS = ['jsonl', 'legacy', 'paginated'];
 const TICK_MS = 1000;
 const STICK_TO_BOTTOM_PX = 120;
+const HOST_POLL_MS = 5000;
+const HOST_START_TIMEOUT_MS = 30000;
+interface SessionHost { conversationId: string; terminalId: string }
+function readHosts(result: unknown): SessionHost[] {
+  const rows = readObject(result).hosts;
+  return (Array.isArray(rows) ? rows : []).flatMap(row => {
+    const value = readObject(row);
+    return typeof value.conversationId === 'string' && typeof value.terminalId === 'string' ? [{ conversationId: value.conversationId, terminalId: value.terminalId }] : [];
+  });
+}
 
 function nameOf(state: ScreenState, id: unknown): string {
   const value = readText(id);
@@ -141,6 +152,10 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   detailRef.current = detail;
   const t = (key: ConversationText) => translate(language, key);
   const [sessionProvider, setSessionProvider] = useState('claude');
+  const openTerminal = useContext(OpenWorkspaceTerminal);
+  const [hosts, setHosts] = useState<SessionHost[]>([]);
+  const [pendingHost, setPendingHost] = useState<SessionHost>();
+  const [hostedConversation, setHostedConversation] = useState<Row>();
   const [receipt, setReceipt] = useState<{ conversationId: string; runId: string; provider: string; cwd: string; model: string; effort: string }>();
   const receiptConversationId = receipt ? resolveConversation(receipt.conversationId) : undefined;
   const receiptRunId = receipt ? state.identities?.runs[receipt.runId] ?? receipt.runId : undefined;
@@ -150,7 +165,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const projectedConversation = (state.projection.conversations ?? []).find(row => row.id === conversationId);
   const conversation = receipt && receiptConversationId === conversationId
     ? { ...projectedConversation, id: conversationId, provider: receipt.provider, origin: 'managed' }
-    : projectedConversation ?? (starting ? { id: '', provider: sessionProvider, origin: 'observed' } : undefined);
+    : projectedConversation ?? (hostedConversation?.id === conversationId ? hostedConversation : undefined) ?? (starting ? { id: '', provider: sessionProvider, origin: 'observed' } : undefined);
   const runs = (state.projection.runs ?? []).filter(row => row.conversation_id === conversationId);
   const projectedRun = [...runs].sort((a, b) => Number(b.generation) - Number(a.generation))[0];
   const run: Row | undefined = receipt && receiptConversationId === conversationId && projectedRun?.id !== receiptRunId
@@ -183,15 +198,18 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const [engaged, setEngaged] = useState(false);
   const [handoffBlocked, setHandoffBlocked] = useState(false);
   const external = conversation?.origin !== 'managed';
+  const terminalConversation = external && provider === 'claude';
+  const host = hosts.find(host => host.conversationId === conversationId) ?? (pendingHost?.conversationId === conversationId ? pendingHost : undefined);
+  const stopped = ['ended', 'failed', 'idle'].includes(readText(run?.state)) && isStoppedEvidence(run?.last_evidence);
   const active = ACTIVE_STATES.includes(readText(run?.state));
   const codexActive = provider === 'codex' && active && !external;
-  const connected = state.connection === 'connected';
+  const connected = state.connection === 'connected' || terminalConversation && state.connection === 'runner_unavailable';
   const open = Boolean(run && [...ACTIVE_STATES, 'idle'].includes(readText(run.state)));
   const writable = !external && open && connected && !pending;
   const canSend = writable && !codexActive;
   const supported = SUPPORTED_FORMATS.includes(readText(conversation?.history_format));
   // 未対応の形式でも押せるようにし、押したときに理由を出す。
-  const canLaunch = connected && !pending && Boolean(model && cwd.trim());
+  const canLaunch = connected && !pending && (terminalConversation ? Boolean(host || cwd.trim()) : Boolean(model && cwd.trim()));
   const rawStatus = seriesState ?? readText(run?.state);
   const status = executionStates.find(value => value === rawStatus) ?? 'unknown';
   const local = detail?.id === conversationId ? detail.projection : {};
@@ -232,8 +250,34 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     });
   }, [conversationId, state.seq, detail]);
   const task = state.projection.tasks?.find(row => row.id === conversation?.task_id);
-  const projectId = resolveProjectId(state, readText(conversation?.project ?? task?.project));
+  const projectId = resolveProjectId(state, readText(conversation?.project ?? task?.project ?? newSession?.projectId)
+    || readText(state.projection.projects?.find(row => row.root_path === cwd.trim())?.id));
   const project = state.projection.projects?.find(row => row.id === projectId);
+  async function refreshHosts(): Promise<SessionHost[]> {
+    const ack = await client.command('session.hosts', {});
+    if (!ack.ok) throw new Error(ack.error ?? t('failed'));
+    const next = readHosts(ack.result);
+    setHosts(next);
+    setPendingHost(previous => next.some(host => host.terminalId === previous?.terminalId) ? undefined : previous);
+    return next;
+  }
+  useEffect(() => {
+    if (!terminalConversation || !connected) return;
+    let disposed = false;
+    const poll = async () => {
+      try {
+        const ack = await client.command('session.hosts', {});
+        if (!disposed && ack.ok) {
+          const next = readHosts(ack.result);
+          setHosts(next);
+          setPendingHost(previous => next.some(host => host.terminalId === previous?.terminalId) ? undefined : previous);
+        }
+      } catch { /* 接続の復帰後に一覧を取り直す。 */ }
+    };
+    setHosts([]); void poll();
+    const timer = setInterval(() => { void poll(); }, HOST_POLL_MS);
+    return () => { disposed = true; clearInterval(timer); };
+  }, [client, terminalConversation, connected, conversationId]);
   // 画面に出す発言は新しい窓だけだが、変えたファイルは読み込みで残した古い発言も含めて数える。
   const editRows = [...new Map([...(local.edit_messages ?? []), ...messageEntries.map(entry => entry.row)].map(row => [readText(row.id), row])).values()];
   const changedFiles = collectConversationChanges(editRows, {
@@ -353,11 +397,60 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   }
   async function send() {
     if (!(external ? canLaunch : canSend) || !input.trim()) return;
-    if (external && !starting && !supported) { setHandoffBlocked(true); return; }
+    if (external && !terminalConversation && !starting && !supported) { setHandoffBlocked(true); return; }
     const sent = input;
     const messageId = crypto.randomUUID();
     following.current = true;
     setSentMessages(previous => [...previous, { id: messageId, conversationId, text: sent, known: new Set(messageEntries.map(entry => entry.row.id)) }]);
+    if (terminalConversation) {
+      const sourceConversation = conversationId;
+      setPending(true); setError('');
+      let destination = conversationId;
+      try {
+        const current = await refreshHosts();
+        const existingPending = pendingHost?.conversationId === destination ? pendingHost : undefined;
+        if (!current.some(host => host.conversationId === destination) && (starting || !existingPending)) {
+          let resume: string | undefined;
+          if (!starting) {
+            const native = JSON.parse(conversationId);
+            if (!Array.isArray(native) || native[0] !== 'claude' || typeof native[1] !== 'string') throw new Error('Invalid Claude conversation');
+            resume = native[1];
+          }
+          let terminalId = existingPending?.terminalId;
+          if (!terminalId) {
+            const ack = await client.command('session.launch', { projectId, provider: 'claude', ...(resume ? { resume } : {}), ...(model ? { model } : {}) });
+            if (!ack.ok) throw new Error(ack.error ?? t('failed'));
+            terminalId = readText(readObject(ack.result).terminalId);
+            setPendingHost({ conversationId, terminalId });
+          }
+          const deadline = Date.now() + HOST_START_TIMEOUT_MS;
+          let next = await refreshHosts();
+          if (starting) {
+            while (!next.some(host => host.terminalId === terminalId)) {
+              if (!isVisible(sourceConversation)) return;
+              if (Date.now() >= deadline) throw new Error(language === 'ja' ? '会話の開始を確認できません。' : 'Unable to confirm the session start.');
+              await new Promise(resolve => setTimeout(resolve, 250));
+              next = await refreshHosts();
+            }
+            destination = next.find(host => host.terminalId === terminalId)!.conversationId;
+          }
+        }
+        const ack = await client.command('session.send', { conversationId: destination, text: sent });
+        if (!ack.ok) throw new Error(ack.error ?? t('failed'));
+        if (!isVisible(sourceConversation)) return;
+        setInput(value => value === sent ? '' : value);
+        setSentMessages(previous => previous.map(message => message.id === messageId ? { ...message, conversationId: destination } : message));
+        if (starting) {
+          setHostedConversation({ id: destination, provider: 'claude', origin: 'observed', project: projectId, cwd: cwd.trim() });
+          if (onConversation) onConversation(destination); else navigate(`/c/${encodeURIComponent(destination)}`);
+        }
+      } catch (reason) {
+        if (reason instanceof Error && reason.message === 'no_host') setPendingHost(undefined);
+        if (isVisible(sourceConversation)) setError(reason instanceof Error ? reason.message : String(reason));
+        setSentMessages(previous => previous.filter(message => message.id !== messageId));
+      } finally { if (isVisible(sourceConversation)) setPending(false); }
+      return;
+    }
     const launchPayload = { cwd: cwd.trim(), model: { model, ...(effort ? { effort } : {}) }, input: { text: sent } };
     const stopped = ['ended', 'failed', 'idle'].includes(readText(run?.state))
       && isStoppedEvidence(run?.last_evidence);
@@ -426,6 +519,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
         {provider && <span className="conv-agent truncate" title={[providerName(provider), shownModel].filter(Boolean).join(' · ')}>{agentName(provider, shownModel)}</span>}
         <span className="spacer"/>
         <div className="conv-header-actions">
+        {terminalConversation && <button type="button" className="btn btn-ghost btn-sm" disabled={!host || !openTerminal || !connected} onClick={() => host && openTerminal?.(host.terminalId)}>{language === 'ja' ? 'ターミナル' : 'Terminal'}</button>}
         <button type="button" className="btn btn-ghost btn-sm conv-more" aria-label={language === 'ja' ? '会話のメニュー' : 'Conversation menu'} aria-expanded={menuOpen} aria-controls="conversation-actions" onClick={() => setMenuOpen(value => !value)}>…</button>
         <div id="conversation-actions" className={`conv-action-menu${menuOpen ? ' open' : ''}`} onKeyDown={event => { if (event.key === 'Escape') { setMenuOpen(false); (event.currentTarget.previousElementSibling as HTMLElement | null)?.focus(); } }}>
         <button type="button" className="btn btn-ghost btn-sm conv-details-toggle" aria-expanded={detailsOpen} aria-controls="conversation-details"
@@ -486,6 +580,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     </div></div>
     {/* 外の会話には、runner が応答できる続きを用意する。 */}
     <footer className="composer" onFocusCapture={() => setEngaged(true)} onPointerDownCapture={() => setEngaged(true)}>
+      {terminalConversation && !starting && !host && !stopped && <p className="status-line">{language === 'ja' ? 'この会話は別の場所で動いています。ここで送ると、別の続きになります。' : 'This conversation is running elsewhere. Sending here will start a separate continuation.'}</p>}
       {(error || pending || continued || modelsError && engaged || handoffBlocked) && <div className="composer-status">
         {error && <p role="alert" className="status-line danger" title={error}><Icon name="alert" size={14}/>{error}</p>}
         {pending && <p role="status" className="status-line">{t('pending')}</p>}
@@ -518,7 +613,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
             {!savedCwd && <input className="input-sm" aria-label={t('cwd')} placeholder={t('cwd')} value={cwd} disabled={pending} onChange={event => setCwd(event.target.value)}/>}
           </div>
           <div className="composer-actions">
-            {active && <button className="btn btn-secondary btn-sm" disabled={!writable} onClick={() => void execute('interrupt', { runId: run!.id })}><Icon name="stop" size={13}/>{t('interrupt')}</button>}
+            {(active || terminalConversation && host) && <button className="btn btn-secondary btn-sm" disabled={terminalConversation ? !host || pending || !connected : !writable} onClick={() => void execute(terminalConversation ? 'session.interrupt' : 'interrupt', terminalConversation ? { conversationId } : { runId: run!.id })}><Icon name="stop" size={13}/>{t('interrupt')}</button>}
             <button className="btn btn-primary btn-sm" title={t('shortcut')} disabled={!(external ? canLaunch : canSend) || !input.trim()} onClick={() => void send()}><Icon name="send" size={14}/>{t('send')}</button>
           </div>
         </div>

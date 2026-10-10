@@ -5,11 +5,12 @@ import type { ConversationClient } from '../conversation/ConversationPage.tsx';
 import type { Language } from '../../lib/i18n.ts';
 import type { TerminalNotice } from '../../lib/client.ts';
 import '@xterm/xterm/css/xterm.css';
-export function createTerminalSession(client: ConversationClient, projectId: string, worktree?: string) {
+export function createTerminalSession(client: ConversationClient, projectId: string, worktree?: string, attachedId?: string) {
   let terminal: Terminal | undefined, fit: FitAddon | undefined, element: HTMLDivElement | undefined;
   let terminalId: string | undefined, disposed = false, ended = false;
   let error = '';
   let unsubscribe: (() => void) | undefined;
+  let disconnectConnected: (() => void) | undefined;
   let early: TerminalNotice[] = [];
   const listeners = new Set<() => void>();
   function notify() { for (const listener of listeners) listener(); }
@@ -46,16 +47,29 @@ export function createTerminalSession(client: ConversationClient, projectId: str
       terminal.onData(data => { if (terminalId && !ended) void command('terminal.input', { terminalId, data }); });
       if (!client.subscribeTerminal) { error = 'Terminal service unavailable'; ended = true; notify(); return; }
       unsubscribe = client.subscribeTerminal(receive);
-      void command('terminal.open', { projectId, ...(worktree ? { worktree } : {}), cols: terminal.cols, rows: terminal.rows }).then(ack => {
+      if (attachedId) disconnectConnected = client.subscribeConnected?.(() => {
+        if (disposed || !terminalId || ended) return;
+        terminalId = undefined; early = [];
+        void command('terminal.attach', { terminalId: attachedId }).then(ack => {
+          if (disposed) return;
+          if (!ack) { ended = true; notify(); return; }
+          terminalId = attachedId;
+          error = ''; terminal?.reset();
+          terminal?.write((ack.result as { scrollback: string }).scrollback);
+          for (const notice of early) receive(notice); early = []; resize(); notify();
+        });
+      });
+      void command(attachedId ? 'terminal.attach' : 'terminal.open', attachedId ? { terminalId: attachedId } : { projectId, ...(worktree ? { worktree } : {}), cols: terminal.cols, rows: terminal.rows }).then(ack => {
         if (!ack) { ended = true; notify(); return; }
         terminalId = (ack.result as { terminalId: string }).terminalId;
-        if (disposed) { void command('terminal.close', { terminalId }); return; }
+        if (disposed) { if (!attachedId) void command('terminal.close', { terminalId }); return; }
+        if (attachedId) terminal?.write((ack.result as { scrollback: string }).scrollback);
         for (const notice of early) receive(notice); early = []; resize();
       });
     }, resize, theme,
     getState: () => ({ ended, error }),
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
-    dispose() { disposed = true; unsubscribe?.(); terminal?.dispose(); element?.remove(); if (terminalId && !ended) void command('terminal.close', { terminalId }); },
+    dispose() { disposed = true; unsubscribe?.(); disconnectConnected?.(); terminal?.dispose(); element?.remove(); if (terminalId && !ended && !attachedId) void command('terminal.close', { terminalId }); },
   };
 }
 export type TerminalSession = ReturnType<typeof createTerminalSession>;

@@ -20,7 +20,7 @@ function fixture(origin = 'managed', state = 'idle', evidence?: unknown) {
   target.setSnapshot({ seq: 1, generation: 0, projection: {
     projects: [{ id: 'p', display_name: 'Project', root_path: '/repo', state: 'registered' }],
     roots: [{ id: 'root', name: 'Session', project: 'p', state, conversation_ids: ['c'] }],
-    conversations: [{ id: 'c', provider: 'claude', project: 'p', origin, history_format: 'jsonl' }],
+    conversations: [{ id: 'c', provider: origin === 'observed' ? 'codex' : 'claude', project: 'p', origin, history_format: 'jsonl' }],
     runs: [{ id: 'r', conversation_id: 'c', generation: 1, state, last_evidence: evidence, launch: { cwd: '/repo', model: { model: 'model-a' } } }],
     messages: [{ id: 'old', role: 'assistant', body: 'Earlier response' }],
     message_memberships: [{ id: 'old-link', message_id: 'old', conversation_id: 'c', active: 1 }],
@@ -98,8 +98,13 @@ it('replaces optimistic input with the recorded message without duplicating it',
 
 it.each(['claude', 'codex'])('starts a %s session from the project menu and uses send for its next message', async provider => {
   const f = fixture();
-  f.command.mockImplementation(async (name: string) => name === 'list_models' ? ack([{ model: 'model-a', displayName: 'Model A' }])
-    : name === 'start' ? ack({ conversationId: 'started', runId: 'started-run' }) : ack([]));
+  let launched = false;
+  f.command.mockImplementation(async (name: string) => {
+    if (name === 'list_models') return ack([{ model: 'model-a', displayName: 'Model A' }]);
+    if (name === 'session.launch') { launched = true; return ack({ terminalId: 'terminal', pid: 123 }); }
+    if (name === 'session.hosts') return ack({ hosts: launched ? [{ terminalId: 'terminal', conversationId: 'started' }] : [] });
+    return name === 'start' ? ack({ conversationId: 'started', runId: 'started-run' }) : ack([]);
+  });
   render(<MemoryRouter initialEntries={['/p/p']}><App target={f.target} client={f.client}/></MemoryRouter>);
   fireEvent.click(screen.getByRole('button', { name: 'New task: Project' }));
   expect(screen.getAllByRole('menuitem').map(item => item.textContent)).toEqual(['New session', 'New task']);
@@ -113,7 +118,7 @@ it.each(['claude', 'codex'])('starts a %s session from the project menu and uses
   const input = screen.getByRole('textbox', { name: 'Message' });
   fireEvent.change(input, { target: { value: 'First message' } });
   fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-  await vi.waitFor(() => expect(f.command).toHaveBeenCalledWith('start', { provider, cwd: '/repo', model: { model: 'model-a' }, input: { text: 'First message' } }));
+  await vi.waitFor(() => expect(f.command).toHaveBeenCalledWith(provider === 'claude' ? 'session.launch' : 'start', provider === 'claude' ? { projectId: 'p', provider: 'claude', model: 'model-a' } : { provider, cwd: '/repo', model: { model: 'model-a' }, input: { text: 'First message' } }));
   await vi.waitFor(() => {
     const saved = restoreWorkspace(localStorage.getItem(workspaceKey('p', 'root')), 'c')!;
     expect(listPanes(saved)[0].tabs).toHaveLength(2);
@@ -121,7 +126,7 @@ it.each(['claude', 'codex'])('starts a %s session from the project menu and uses
   });
   fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Second message' } });
   fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-  await vi.waitFor(() => expect(f.command).toHaveBeenCalledWith('send', { runId: 'started-run', input: { text: 'Second message' } }));
+  await vi.waitFor(() => expect(f.command).toHaveBeenCalledWith(provider === 'claude' ? 'session.send' : 'send', provider === 'claude' ? { conversationId: 'started', text: 'Second message' } : { runId: 'started-run', input: { text: 'Second message' } }));
 });
 
 it('renames tabs, cancels with Escape, restores names and order, and clears custom names', () => {
@@ -152,6 +157,7 @@ it('opens exactly one empty tab for a project without sessions and keeps it when
   f.command.mockImplementation(async (name: string) => name === 'list_models' ? ack([{ model: 'model-a', displayName: 'Model A' }]) : name === 'start' ? ack({ conversationId: 'started', runId: 'started-run' }) : ack([]));
   render(<MemoryRouter initialEntries={['/p/p?session=draft']}><App target={f.target} client={f.client}/></MemoryRouter>);
   expect(document.querySelectorAll('.workbench [role=tab]')).toHaveLength(1);
+  fireEvent.change(screen.getByRole('combobox', { name: 'Provider' }), { target: { value: 'codex' } });
   await screen.findByRole('option', { name: 'Model A' });
   fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Begin' } });
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Send' })); });
@@ -168,7 +174,7 @@ it('opens exactly one empty tab for a project without sessions and keeps it when
 
 it('keeps the first input and shows the reason when starting fails', async () => {
   const f = fixture();
-  f.command.mockImplementation(async (name: string) => name === 'list_models' ? ack([{ model: 'model-a', displayName: 'Model A' }]) : name === 'start' ? { type: 'ack', cmd_id: 'cmd', ok: false, error: 'Host unavailable' } : ack([]));
+  f.command.mockImplementation(async (name: string) => name === 'list_models' ? ack([{ model: 'model-a', displayName: 'Model A' }]) : name === 'session.launch' ? { type: 'ack', cmd_id: 'cmd', ok: false, error: 'Host unavailable' } : ack([]));
   render(<MemoryRouter initialEntries={['/p/p?session=draft']}><App target={f.target} client={f.client}/></MemoryRouter>);
   await screen.findByRole('option', { name: 'Model A' });
   fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'First input' } });

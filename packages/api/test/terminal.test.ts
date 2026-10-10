@@ -213,3 +213,69 @@ test('disconnect during root selection prevents spawning a terminal', async () =
   release('/project');
   await assert.rejects(pending, /connection closed/);
 });
+
+test('hosted sessions survive WebSocket disconnect, replay commands once and attach on a new connection', async t => {
+  const { directory, service } = await createFixture(t);
+  const sessionId = '12345678-1234-1234-1234-123456789abc';
+  const conversationId = JSON.stringify(['claude', sessionId]);
+  let starts = 0;
+  const writes: string[] = [];
+  let output = (_data: string) => {};
+  let exit = (_event: { exitCode: number }) => {};
+  let killed = false;
+  await writeFile(join(directory, '98765.json'), JSON.stringify({ pid: 98765, sessionId }));
+  const { spawn } = await import('node-pty');
+  const openTerminal: typeof spawn = () => {
+    starts++;
+    return { pid: 98765, write: (data: string) => writes.push(data), resize() {},
+      kill() { killed = true; exit({ exitCode: 0 }); },
+      onData(callback: typeof output) { output = callback; return { dispose() {} }; },
+      onExit(callback: typeof exit) { exit = callback; return { dispose() {} }; },
+    } as unknown as ReturnType<typeof spawn>;
+  };
+  let api: Awaited<ReturnType<typeof startWebSocketServer>>;
+  try { api = await startWebSocketServer(service, { port: 0, runnerPath: join(directory, 'missing.sock'), sessionHosts: {
+    openTerminal, sessionsDirectory: directory, listProcesses: async () => [],
+  } }); }
+  catch (error) { if (skipSandbox(t, error)) return; throw error; }
+  t.after(() => api.close());
+  const snapshot = api.feed.snapshot();
+  let sequence = 0;
+  async function connect() {
+    const socket = new WebSocket(`${api.wsUrl}?token=${api.token}`, { origin: api.url });
+    t.after(() => socket.terminate());
+    const frames: any[] = [];
+    socket.on('message', data => frames.push(JSON.parse(data.toString())));
+    await once(socket, 'open');
+    socket.send(JSON.stringify({ type: 'hello', seq: snapshot.seq, generation: snapshot.generation }));
+    async function command(command: string, payload: unknown, cmd_id = `hosted-${++sequence}`) {
+      const before = frames.length;
+      socket.send(JSON.stringify({ type: 'cmd', cmd_id, command, payload }));
+      await waitUntil(() => frames.slice(before).some(frame => frame.type === 'ack' && frame.cmd_id === cmd_id));
+      return frames.slice(before).find(frame => frame.type === 'ack' && frame.cmd_id === cmd_id);
+    }
+    return { socket, frames, command };
+  }
+  const first = await connect();
+  const payload = { projectId: 'terminal-project', provider: 'claude', resume: sessionId };
+  const launched = await first.command('session.launch', payload, 'same-launch');
+  assert.equal(launched.ok, true);
+  await first.command('session.hosts', {});
+  await first.command('session.send', { conversationId, text: 'one message' }, 'same-send');
+  output('before disconnect');
+  first.socket.close(); await once(first.socket, 'close');
+  assert.equal(killed, false);
+  output(' while disconnected');
+  const next = await connect();
+  assert.deepEqual(await next.command('session.launch', payload, 'same-launch'), launched);
+  assert.equal(starts, 1);
+  await next.command('session.send', { conversationId, text: 'one message' }, 'same-send');
+  assert.deepEqual(writes, ['\x15', '\x1b[200~one message\x1b[201~', '\r']);
+  const attached = await next.command('terminal.attach', { terminalId: launched.result.terminalId });
+  assert.equal(attached.result.scrollback, 'before disconnect while disconnected');
+  output(' live');
+  await waitUntil(() => next.frames.some(frame => frame.event === 'output' && frame.data === ' live'));
+  exit({ exitCode: 0 });
+  await waitUntil(() => next.frames.some(frame => frame.event === 'exit'));
+  assert.deepEqual((await next.command('session.hosts', {})).result, { hosts: [] });
+});

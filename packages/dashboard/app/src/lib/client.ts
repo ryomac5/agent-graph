@@ -34,6 +34,7 @@ export function createClient(options: ClientOptions) {
     return response.json() as Promise<Snapshot>;
   });
   const terminalListeners = new Set<(notice: TerminalNotice) => void>();
+  const connectedListeners = new Set<() => void>();
   const terminalIds = new Set<string>();
   const opened = new Map<string, number>();
   const pending = new Map<string, { message: Command; resolve: (ack: Ack) => void; reject: (error: Error) => void; promise: Promise<Ack> }>();
@@ -54,6 +55,7 @@ export function createClient(options: ClientOptions) {
   function hello() {
     subscribe();
     for (const item of pending.values()) send(item.message);
+    for (const listener of connectedListeners) listener();
   }
   async function resync() {
     if (syncing) return;
@@ -144,6 +146,7 @@ export function createClient(options: ClientOptions) {
     };
   }
   return {
+    subscribeConnected(listener: () => void) { connectedListeners.add(listener); return () => { connectedListeners.delete(listener); }; },
     subscribeTerminal(listener: (notice: TerminalNotice) => void) { terminalListeners.add(listener); return () => { terminalListeners.delete(listener); }; },
     start() { if (stopped) { stopped = false; target.setConnection('connecting'); connect(); } },
     stop() {

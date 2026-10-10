@@ -1,4 +1,4 @@
-export type WorkspaceTab = { name?: string } & ({ id: string; kind: 'conversation'; conversationId: string } | { id: string; kind: 'code'; path: string; worktree?: string } | { id: string; kind: 'terminal'; worktree?: string });
+export type WorkspaceTab = { name?: string } & ({ id: string; kind: 'conversation'; conversationId: string } | { id: string; kind: 'code'; path: string; worktree?: string } | { id: string; kind: 'terminal'; worktree?: string; terminalId?: string });
 export type Pane = { kind: 'pane'; id: string; tabs: WorkspaceTab[]; active: string };
 export type PaneTree = Pane | { kind: 'split'; id: string; direction: 'horizontal' | 'vertical'; ratio: number; first: PaneTree; second: PaneTree };
 export const MIN_RATIO = 0.1;
@@ -54,6 +54,7 @@ export function restoreWorkspace(value: string | null, conversationId: string): 
       if (!validId(tab.id) || tab.name !== undefined && typeof tab.name !== 'string') return false;
       if (tab.kind === 'conversation') return typeof tab.conversationId === 'string';
       if (tab.worktree !== undefined && typeof tab.worktree !== 'string') return false;
+      if (tab.terminalId !== undefined && typeof tab.terminalId !== 'string') return false;
       return tab.kind === 'code' ? typeof tab.path === 'string' : tab.kind === 'terminal';
     }
     function valid(value: unknown, depth = 0): boolean {

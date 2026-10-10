@@ -35,5 +35,5 @@ export interface ReviewCommand extends ScreenCommand {
   command: typeof REVIEW_COMMANDS[number];
 }
 
-export const TERMINAL_COMMANDS = ["terminal.open", "terminal.input", "terminal.resize", "terminal.close"] as const;
+export const TERMINAL_COMMANDS = ["terminal.open", "terminal.input", "terminal.resize", "terminal.close", "terminal.attach", "session.launch", "session.send", "session.interrupt", "session.hosts"] as const;
 export type { TerminalNotification } from "../terminal/index.ts";

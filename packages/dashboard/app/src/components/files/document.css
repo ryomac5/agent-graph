@@ -12,7 +12,9 @@
 .document-prose th { background: var(--bg-1); font-weight: 600; }
 .document-prose .selectedCell { background: var(--bg-3); }
 .document-prose ul[data-type='taskList'] { list-style: none; padding-left: 0; }
-.document-prose li[data-type='taskItem'] { display: flex; gap: var(--space-2); align-items: baseline; }
+.document-prose li[data-type='taskItem'] { display: flex; gap: var(--space-2); align-items: flex-start; }
+.document-prose li[data-type='taskItem'] > label { flex: 0 0 auto; margin-top: 3px; }
+.document-prose li[data-type='taskItem'] > div > p:first-child { margin-top: 0; }
 .document-prose li[data-type='taskItem'] > div { flex: 1; min-width: 0; }
 .document-toolbar { display: flex; flex-wrap: nowrap; align-items: center; overflow-x: auto; flex-shrink: 0; gap: var(--space-1); padding: var(--space-2); border-bottom: var(--border); color: var(--fg-2); font: var(--type-ui); }
 .html-surface { display: flex; flex: 1; min-height: 0; flex-direction: column; }

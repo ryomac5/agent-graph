@@ -353,12 +353,12 @@ details[open] > summary .caret { transform: rotate(90deg); }
 .panel-files .explorer-tree { flex: none; height: 300px; border-bottom: var(--border); }
 .panel-files .explorer-viewer { flex: 1; min-height: 240px; }
 .mobile-tabs { display: none; }
-.sidebar-actions { display: flex; align-items: center; gap: 0; }
+.sidebar-actions { display: flex; align-items: center; gap: 0; flex: none; }
 .sidebar-actions > .btn { padding-inline: 0; gap: var(--space-1); }
 .sidebar-actions .notification-panel.popover { position: fixed; top: 48px; left: 8px; right: auto; }
 .sidebar { display: flex; flex-direction: column; min-width: 0; overflow: hidden; border-right: var(--border); padding: 0 var(--space-2) var(--space-2); gap: 0; background: var(--bg-1); }
 .sidebar-brand-row { margin-bottom: var(--space-2); flex: none; align-items: center; display: flex; height: var(--header); margin: 0 calc(-1 * var(--space-2)); padding: 0 var(--space-2); gap: var(--space-1); border-bottom: var(--border); }
-.sidebar-brand-row .brand { padding-inline: var(--space-1); margin-bottom: 0; min-width: 0; flex: 1; height: var(--header); font: var(--type-title); gap: var(--space-2); }
+.sidebar-brand-row .brand { padding-inline: var(--space-1); margin-bottom: 0; min-width: 0; flex: 1; height: var(--header); font: var(--type-title); gap: var(--space-2); white-space: nowrap; }
 .sidebar > .nav-group { flex-shrink: 0; display: flex; flex-direction: column; gap: 0; padding-top: var(--space-2); }
 .sidebar > .nav-group > a { gap: var(--space-1); flex: none; justify-content: flex-start; height: var(--row); padding: 0 var(--space-2); font: var(--type-ui); }
 .workspace-panel { min-height: 0; flex: none; flex-direction: column; display: flex; position: relative; background: var(--bg-0); border-left: var(--border); }
@@ -470,7 +470,6 @@ textarea::placeholder { color: var(--fg-4); }
 .sidebar-project-row > button { flex: none; width: var(--control); }
 .sidebar-project-row > .project-create { visibility: hidden; width: var(--control); padding: 0; }
 .sidebar-project-row .icon { color: var(--fg-3); }
-.sidebar-actions kbd { padding-inline: var(--space-1); font: var(--type-meta); padding: 0 var(--space-1); }
 .brand-mark { display: grid; place-items: center; width: 20px; height: 20px; background: transparent; color: var(--fg-2); border-radius: var(--radius-1); box-shadow: none; }
 .page { width: 100%; margin: 0 auto; max-width: 1120px; padding: var(--space-12) var(--space-8); }
 .page-header { margin-bottom: var(--space-6); padding-bottom: var(--space-4); align-items: center; display: flex; justify-content: space-between; gap: var(--space-4); flex-wrap: wrap; border-bottom: var(--border); min-height: var(--header); }

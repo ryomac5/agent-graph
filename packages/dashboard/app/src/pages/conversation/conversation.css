@@ -146,10 +146,16 @@
 .delegation-title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .message-report[open] .message-bubble { padding: var(--space-3) 0; }
 .composer-box:focus-within { border-color: var(--accent); box-shadow: none; }
-.composer-box textarea { background: transparent; border-radius: var(--radius-1); width: 100%; display: block; font: var(--type-body); padding: var(--space-3); min-height: 48px; max-height: 200px; outline: none; border: 0; resize: vertical; }
+/* 本文8行（22px × 8）と上下の内側（12px × 2）で200pxを上限にする。 */
+.composer-box textarea { background: transparent; border-radius: var(--radius-1); width: 100%; display: block; font: var(--type-body); padding: var(--space-3); min-height: 48px; max-height: 200px; outline: none; border: 0; resize: none; overflow-y: auto; }
 .composer-box textarea:focus { outline: none; box-shadow: none; }
 .composer-toolbar { gap: var(--space-2); justify-content: space-between; align-items: center; flex-wrap: wrap; display: flex; min-height: 40px; padding: var(--space-1) var(--space-2); }
-.composer-controls select { max-width: 180px; height: var(--control); border: 0; background: transparent; font: var(--type-ui); }
+.composer-select { position: relative; display: inline-flex; min-width: 0; max-width: 180px; }
+.composer-select > .icon { position: absolute; right: var(--space-2); top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--fg-2); }
+.composer-select:has(select:disabled) > .icon { color: var(--fg-4); }
+.composer-controls select { width: 100%; max-width: 180px; height: var(--control); border: 0; border-radius: var(--radius-1); background: transparent; color: var(--fg-2); font: var(--type-ui); appearance: none; padding: 0 var(--space-8) 0 var(--space-3); }
+.composer-controls select:hover:not(:disabled) { background: var(--bg-2); color: var(--fg-1); }
+.composer-controls select:disabled { opacity: 1; color: var(--fg-4); }
 .pulse { background: currentColor; border-radius: 50%; height: 6px; width: 6px; animation: none; }
 .working-line .pulse { color: var(--state-running); animation: session-pulse 1600ms var(--ease) infinite; }
 .conv-changed-file { overflow: hidden; margin-bottom: var(--space-2); border: 0; border-radius: 0; }

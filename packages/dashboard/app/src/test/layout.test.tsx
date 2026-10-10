@@ -221,6 +221,22 @@ it('4: moves commands and notifications into the brand row and removes the top b
   expect(screen.getByRole('dialog')).toBeTruthy();
 });
 
+it.each(['en', 'ja'])('keeps the brand on one line and moves the command shortcut into the icon title in %s', language => {
+  mount('/p/p?root=active', language);
+  const row = document.querySelector('.sidebar-brand-row') as HTMLElement;
+  const button = within(row).getByRole('button', { name: language === 'ja' ? 'コマンドと検索' : 'Search and commands' });
+  expect(button.textContent).toBe('');
+  expect(button.querySelector('kbd')).toBeNull();
+  expect(button.querySelector('svg')?.getAttribute('width')).toBe('16');
+  expect(button.className).toBe('icon-button');
+  expect(button.title).toContain('Cmd+K');
+  const css = readFileSync('app/src/styles.css', 'utf8');
+  expect(css.match(/\.sidebar-brand-row \.brand \{([^}]+)\}/)?.[1]).toContain('white-space: nowrap');
+  expect(css.match(/\.sidebar-actions \{([^}]+)\}/)?.[1]).toContain('flex: none');
+  fireEvent.click(button);
+  expect(screen.getByRole('dialog')).toBeTruthy();
+});
+
 it('5: opens the compact conversation menu and centers three equal mobile tabs', () => {
   vi.stubGlobal('innerWidth', 390);
   mount();

@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useAutosizeTextarea } from './useAutosizeTextarea.ts';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import { getRegisteredProjects, OTHER_PROJECT } from '../../lib/projects.ts';
 import { compareMessages, loadConversationWindow, MESSAGE_PAGE_SIZE } from '../../lib/projection-client.ts';
@@ -141,6 +142,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const [effort, setEffort] = useState('');
   const [cwd, setCwd] = useState('');
   const [input, setInput] = useState('');
+  const inputRef = useAutosizeTextarea(input);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
   const [confirmation, setConfirmation] = useState<{ cwd: string; model: { model: string; effort?: string }; input: { text: string }; conversationId: string }>();
@@ -448,23 +450,23 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
           <button className="btn btn-ghost btn-sm" disabled={pending} onClick={() => setConfirmation(undefined)}>{t('cancel')}</button></div>
       </section>}
       <div className="composer-box" title={[provider === 'codex' ? t(hint) : '', engaged && (!model || !cwd.trim()) ? t('launchReady') : ''].filter(Boolean).join(' ')}>
-        <textarea aria-label={t('input')} rows={2} placeholder={t('placeholder')} value={input}
+        <textarea ref={inputRef} aria-label={t('input')} rows={1} placeholder={t('placeholder')} value={input}
           disabled={pending || !connected || !external && !canSend} onChange={event => setInput(event.target.value)} onKeyDown={event => {
             if (event.key === 'Enter' && event.metaKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (external) { if (input.trim()) void launchConversation('adopt'); } else void send(); }
           }}/>
         <div className="composer-toolbar">
           <div className="composer-controls">
             {!codexActive && <>
-              <select className="select-sm" aria-label={t('model')} title={t('model')} disabled={!connected || pending || confirmation !== undefined} value={selectedModel} onChange={event => {
+              <span className="composer-select"><select className="select-sm" aria-label={t('model')} title={t('model')} disabled={!connected || pending || confirmation !== undefined} value={selectedModel} onChange={event => {
                 setModel(event.target.value);
                 if (provider === 'codex') setEffort(models.find(item => item.model === event.target.value)?.effort ?? '');
               }}><option value="">{models.length ? t('chooseModel') : t('noModels')}</option>
                 {model && !models.some(item => item.model === selectedModel) && <option value={model} disabled>{modelName(model) || model}</option>}
-                {models.map(item => <option key={item.model} value={item.model}>{language === 'ja' && item.displayName === 'Default (recommended)' ? t('defaultModel') : item.displayName}</option>)}</select>
-              <select className="select-sm" aria-label={t('effort')} title={provider === 'codex' ? t('effort') : t('claudeEffort')} value={effort}
+                {models.map(item => <option key={item.model} value={item.model}>{language === 'ja' && item.displayName === 'Default (recommended)' ? t('defaultModel') : item.displayName}</option>)}</select><Icon name="chevronDown" size={16}/></span>
+              <span className="composer-select"><select className="select-sm" aria-label={t('effort')} title={provider === 'codex' ? t('effort') : t('claudeEffort')} value={effort}
                 disabled={!connected || pending || provider !== 'codex' || confirmation !== undefined} onChange={event => setEffort(event.target.value)}>
                 <option value="">{t('defaultEffort')}</option>{[...new Set([...CODEX_EFFORTS, ...(effort ? [effort] : [])])].map(value => <option key={value} value={value}>{effortLabel(value, language)}</option>)}
-              </select>
+              </select><Icon name="chevronDown" size={16}/></span>
               {!external && <button className="btn btn-ghost btn-sm" aria-label={t('apply')} title={t('apply')} disabled={!writable || !models.some(item => item.model === selectedModel) || !dirty}
                 onClick={() => void applyModel()}>{t('applyShort')}</button>}
             </>}

@@ -49,6 +49,27 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
+it.each(['en', 'ja'] as const)('fills the embedded graph width minus each indent and omits the root label in %s', language => {
+  const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ width: 420, height: 640 } as DOMRect);
+  render(<MemoryRouter><GraphPage embedded project="repo" target={fixture()} client={{ command: vi.fn() }} language={language}/></MemoryRouter>);
+  const root = document.querySelector('.graph-root') as HTMLElement;
+  const child = document.querySelector('[data-node-id="child"]') as HTMLElement;
+  expect(root.style.width).toBe('calc(100% - 0px)');
+  expect(child.style.marginLeft).toBe('16px');
+  expect(child.style.width).toBe('calc(100% - 16px)');
+  expect(root.querySelector('.graph-card-model')?.textContent).toContain('Claude Opus');
+  expect(within(root.querySelector('.graph-card-meta') as HTMLElement).queryByText(language === 'ja' ? '根' : 'Root')).toBeNull();
+  rect.mockReturnValue({ width: 720, height: 640 } as DOMRect);
+  fireEvent(window, new Event('resize'));
+  expect(document.querySelector('.graph-canvas')?.getAttribute('data-direction')).toBe('vertical');
+  expect(child.style.width).toBe('calc(100% - 16px)');
+});
+
+it('preserves the full-screen graph card width', () => {
+  renderGraph();
+  expect((document.querySelector('.graph-root') as HTMLElement).style.width).toBe('260px');
+});
+
 it('lays out layers from left to right, orders running then approval then newest, and has no overlaps', () => {
   const input = tree([node('root', 'running', ['done', 'approval', 'active', 'new']), node('done', 'ended', [], '2026-10-08T10:00:00Z'), node('new', 'ended'), node('approval', 'waiting_approval'), node('active', 'running', ['grandchild']), node('grandchild')]);
   const layout = calculateLayout(input, 1000);

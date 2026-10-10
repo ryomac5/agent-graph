@@ -62,6 +62,50 @@ it('translates effort labels without changing option values and translates the d
   expect(toolsLabel(1, 'en')).toBe('1 tool');
 });
 
+it('styles model and effort selectors as ghost controls with matching noninteractive chevrons', async () => {
+  render(<MemoryRouter><ConversationPage conversationId="c" target={setup()} client={client} language="ja"/></MemoryRouter>);
+  await screen.findByRole('option', { name: '既定' });
+  for (const name of ['モデル', '思考の深さ']) {
+    const select = screen.getByRole('combobox', { name });
+    const wrapper = select.closest('.composer-select')!;
+    expect(wrapper.querySelector('svg')?.getAttribute('width')).toBe('16');
+    expect(wrapper.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
+  }
+  const css = readFileSync('app/src/pages/conversation/conversation.css', 'utf8');
+  const rule = css.match(/\.composer-controls select \{([^}]+)\}/)![1];
+  for (const declaration of ['appearance: none', 'height: var(--control)', 'border: 0', 'border-radius: var(--radius-1)', 'font: var(--type-ui)', 'color: var(--fg-2)', 'background: transparent']) expect(rule).toContain(declaration);
+  expect(css.match(/\.composer-select > \.icon \{([^}]+)\}/)![1]).toContain('pointer-events: none');
+});
+
+it('grows the composer for wrapped input, caps it at eight lines, and shrinks after clearing or resizing', async () => {
+  let contentHeight = 46;
+  vi.spyOn(HTMLTextAreaElement.prototype, 'scrollHeight', 'get').mockImplementation(() => contentHeight);
+  const computed = window.getComputedStyle;
+  vi.spyOn(window, 'getComputedStyle').mockImplementation((element, pseudo) => element instanceof HTMLTextAreaElement
+    ? { minHeight: '48px', maxHeight: '200px' } as CSSStyleDeclaration : computed(element, pseudo));
+  render(<MemoryRouter><ConversationPage conversationId="c" target={setup()} client={client}/></MemoryRouter>);
+  await screen.findByRole('option', { name: 'Default (recommended)' });
+  const input = document.querySelector('.composer-box textarea') as HTMLTextAreaElement;
+  expect(input.style.height).toBe('48px');
+  contentHeight = 112;
+  fireEvent.change(input, { target: { value: 'A long line that wraps without newline characters' } });
+  expect(input.style.height).toBe('112px');
+  contentHeight = 244;
+  fireEvent.change(input, { target: { value: Array(10).fill('line').join('\n') } });
+  expect(input.style.height).toBe(`${8 * 22 + 2 * 12}px`);
+  contentHeight = 90;
+  fireEvent(window, new Event('resize'));
+  expect(input.style.height).toBe('90px');
+  contentHeight = 46;
+  fireEvent.change(input, { target: { value: '' } });
+  expect(input.style.height).toBe('48px');
+  const css = readFileSync('app/src/pages/conversation/conversation.css', 'utf8');
+  const rule = css.match(/\.composer-box textarea \{([^}]+)\}/)![1];
+  expect(rule).toContain('resize: none');
+  expect(rule).toContain('max-height: 200px');
+  expect(rule).toContain('overflow-y: auto');
+});
+
 it('drops leading boundaries and merges boundaries across invisible messages while preserving compaction', () => {
   const grouped = groupToolRuns([entry('lead', 'boundary', { type: 'continued' }), entry('blank', 'message', { role: 'assistant', body: '' }),
     entry('lead2', 'boundary', { type: 'continued' }), entry('visible', 'message', { role: 'user', body: 'Hello' }),

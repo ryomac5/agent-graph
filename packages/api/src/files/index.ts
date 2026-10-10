@@ -10,6 +10,8 @@ import { projectProjects } from "../../../core/src/ledger/projections/projects.t
 import { redact, type RedactionRules } from "../../../core/src/ledger/redact.ts";
 import type { Fact } from "../../../core/src/ledger/facts.ts";
 import { createCommitConversationIndex } from './conversations.ts';
+import { createPreviewApi, FilesPreviewError, type FilesPreviewRequest } from './preview.ts';
+export { FilesPreviewError, type FilesPreviewRequest } from './preview.ts';
 
 export { MAX_FILE_BYTES } from './git.ts';
 const MAX_GIT_OUTPUT_BYTES = 64 * MAX_FILE_BYTES;
@@ -127,6 +129,25 @@ async function readVisiblePaths(root: string): Promise<Set<string>> {
   return new Set([...tracked.split("\0"), ...others.split("\0")].filter(Boolean));
 }
 
+async function readPreviewFile(root: string, path: string): Promise<Buffer> {
+  const target = await resolveWritable(root, path);
+  if (!(await readVisiblePaths(root)).has(path)) throw new Error('File is not visible in project');
+  const handle = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const info = await handle.stat();
+    if (!info.isFile()) throw new Error('Not a regular file');
+    async function verify(): Promise<void> {
+      const current = await resolveWritable(root, path);
+      const currentInfo = await stat(current);
+      if (current !== target || currentInfo.dev !== info.dev || currentInfo.ino !== info.ino) throw new Error('File changed while opening');
+    }
+    await verify();
+    const bytes = await handle.readFile();
+    await verify();
+    return bytes;
+  } finally { await handle.close(); }
+}
+
 async function readIndex(root: string) {
   const [paths, status, prefix] = await Promise.all([
     readVisiblePaths(root),
@@ -194,6 +215,7 @@ export function createFilesApi(db: DatabaseSync, readRules: () => RedactionRules
   const writes = new Map<string, Promise<unknown>>();
   const api = {
     selectRoot,
+    ...createPreviewApi(selectRoot, normalizePath, readPreviewFile),
     ...createGitApi(selectGitRoot, resolveInside, readRules, conversations),
     async worktrees(request: FilesRequest) {
       const root = await selectRoot(request);
@@ -322,6 +344,7 @@ export function createFilesApi(db: DatabaseSync, readRules: () => RedactionRules
 
 export async function handleFilesCommand(api: ReturnType<typeof createFilesApi>, command: string, payload: unknown) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    if (command === 'files.preview') throw new FilesPreviewError('invalid_path');
     if (command === "files.write") throw new FilesWriteError("invalid_path");
     throw new Error("Invalid files request");
   }
@@ -329,8 +352,15 @@ export async function handleFilesCommand(api: ReturnType<typeof createFilesApi>,
   if (typeof request.projectId !== "string" || !request.projectId
     || request.path !== undefined && typeof request.path !== "string"
     || request.worktree !== undefined && typeof request.worktree !== "string") {
+    if (command === 'files.preview') throw new FilesPreviewError('invalid_path');
     if (command === "files.write") throw new FilesWriteError("invalid_path");
     throw new Error("Invalid files request");
+  }
+  if (command === 'files.preview') {
+    const preview = payload as FilesPreviewRequest;
+    if (typeof preview.path !== 'string') throw new FilesPreviewError('invalid_path');
+    if (preview.content !== undefined && typeof preview.content !== 'string') throw new FilesPreviewError('not_previewable');
+    return api.preview(preview);
   }
   if (command === "files.write") {
     const write = payload as FilesWriteRequest;

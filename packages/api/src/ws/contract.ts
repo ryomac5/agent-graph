@@ -15,8 +15,15 @@ export interface ScreenCommand {
   payload?: JsonValue;
 }
 export type ScreenInput = ScreenHello | ScreenCommand;
-export const FILE_COMMANDS = ["files.write", "files.list", "files.read", "files.worktrees", "files.changes", "files.diff", "files.commits", "files.commit"] as const;
-export type { FilesRequest, FilesWriteRequest, FileEntry, GitMark } from "../files/index.ts";
+export const FILE_COMMANDS = ["files.preview", "files.write", "files.list", "files.read", "files.worktrees", "files.changes", "files.diff", "files.commits", "files.commit"] as const;
+export type { FilesRequest, FilesWriteRequest, FilesPreviewRequest, FileEntry, GitMark } from "../files/index.ts";
+/**
+ * files.preview: {projectId,worktree?,path,content?} → {url,expiresAt}。
+ * url は /preview/<ticket>/<各部分を URL 符号化した相対 path>、expiresAt は Unix ミリ秒。
+ * ticket は 10 分有効。content は入口の HTML だけを置き換える。
+ * 失敗の error は invalid_path / not_previewable。
+ * iframe は sandbox="allow-scripts allow-popups allow-forms" とし、allow-same-origin を付けない。
+ */
 export type { ProjectionPatch, ProjectionRows } from "../service/projection-feed.ts";
 
 // 成果物 ID は操作の間も固定し、再送時には同じ cmd_id を保つ。

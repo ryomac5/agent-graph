@@ -104,12 +104,17 @@ export class ProjectionFeed {
       FROM facts WHERE seq <= ? AND (kind LIKE 'conversation.%' OR kind = 'run.created') ${subset} ORDER BY subject, seq`)
       .iterate(...(sinceSeq === undefined ? [this.state.last_seq] : [this.state.last_seq, sinceSeq, this.state.last_seq]));
     const next: ScreenIdentities = { conversations: {}, runs: {} };
-    const facts: Fact[] = [];
+    const createdRuns: { conversation_id: string; generation: number; subject_id: string }[] = [];
     let batch: Record<string, unknown>[] = [];
     function flush(): void {
       const decoded = decodeFacts(batch);
       Object.assign(next.conversations, createScreenIdentities(decoded).conversations);
-      facts.push(...decoded.filter(fact => fact.kind === "run.created"));
+      for (const fact of decoded) {
+        if (fact.kind === "run.created" && fact.payload?.conversation_id && fact.payload.generation !== undefined) {
+          createdRuns.push({ conversation_id: fact.payload.conversation_id, generation: fact.payload.generation,
+            subject_id: fact.subject.slice(4) });
+        }
+      }
       batch = [];
     }
     // 同じ subject の訂正はまとめ、会話全体の中間オブジェクトを保持しない。
@@ -128,11 +133,7 @@ export class ProjectionFeed {
     }
     const runs = this.prepare(`SELECT conversation_id, generation, subject_id FROM run_subjects
       WHERE conversation_id IN (SELECT value FROM json_each(?))`).all(JSON.stringify(Object.keys(next.conversations)));
-    for (const fact of facts) {
-      if (fact.kind === "run.created" && fact.payload?.conversation_id && fact.payload.generation !== undefined) {
-        runs.push({ conversation_id: fact.payload.conversation_id, generation: fact.payload.generation, subject_id: fact.subject.slice(4) });
-      }
-    }
+    for (const row of createdRuns) runs.push(row);
     for (const row of runs) {
       const id = String(row.conversation_id);
       const canonical = `${this.identities.conversations[id] ?? id}:${row.generation}`;
@@ -356,7 +357,10 @@ export class ProjectionFeed {
     let after = "";
     for (;;) {
       const page = this.readList("conversations", undefined, after);
-      conversations.push(...page.map(row => ({ ...row, last_activity_ts: row.last_message_ts } as unknown as RootConversation)));
+      // 根の投影に使わない一覧の列と抜粋を、全会話分の中間配列へ複製しない。
+      for (const row of page) conversations.push({ id: String(row.id), type: row.type as string,
+        name: row.name as string | null, kit_name: row.kit_name as string | null, project: row.project as string | null,
+        created_ts: row.created_ts as string | null, last_activity_ts: row.last_message_ts as string | null, state: "unknown" });
       if (page.length < LIST_PAGE_SIZE) break;
       after = String(page.at(-1)!.id);
     }

@@ -4,7 +4,7 @@ import { openObservationService, OBSERVATION_POLL_MS, type ObservationOptions } 
 import { pollObservation } from "./poll.ts";
 
 const port = parentPort!;
-const { observe, hook: enableHook = true, ...options } = workerData as ObservationOptions & { observe: boolean; hook?: boolean };
+const { observe, hook: enableHook = true, measureMemory, ...options } = workerData as ObservationOptions & { observe: boolean; hook?: boolean; measureMemory?: boolean };
 let progressTime = 0;
 const service = openObservationService({ ...options, writerOnly: true, onProgress(progress) {
   if (progress.processed === 0 || progress.processed === progress.total || performance.now() - progressTime >= 50) {
@@ -27,7 +27,7 @@ function ingest(): void {
   port.postMessage({ type: "started" });
   try {
     const report = pollObservation(() => service.ingestOnce());
-    port.postMessage({ type: "complete", report, seq: service.lastSeq() });
+    port.postMessage({ type: "complete", report, seq: service.lastSeq(), memory: measureMemory ? process.memoryUsage() : undefined });
     // 前の周期の投影も書き戻す。WAL の整理は通知の後に書き手だけが行う。
     if (report) pollObservation(() => service.checkpoint());
   } catch (error) {

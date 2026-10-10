@@ -767,6 +767,32 @@ test("準備台帳の再利用後も所属・訂正の依存と再送の結果�
   assert.deepEqual(actualDb.prepare(sql).all(), referenceDb.prepare(sql).all());
 });
 
+test("バッチの再接続と中断をまたいで準備中の追記と重複を読める", async t => {
+  const f = createFixture(t);
+  const { openBatchLedger } = await import("../src/service/batch-ledger.ts");
+  const buffered = openBatchLedger(f.dbPath);
+  t.after(() => buffered.ledger.close());
+  const first = { source: "ui", source_event_id: "first", kind: "task.created", subject: "task:first",
+    source_ts: TS, observed_ts: TS, confidence: "confirmed", payload: { name: "First", purpose: "", project: "fixture", state: "open" } } as const satisfies FactInput;
+  const second = { ...first, source_event_id: "second", subject: "task:second", payload: { ...first.payload, name: "Second" } } as const satisfies FactInput;
+  buffered.batch(() => {
+    buffered.ledger.append(first);
+    assert.deepEqual(buffered.ledger.readSince(0, 10).map(fact => fact.subject), [first.subject]);
+  });
+  assert.throws(() => buffered.batch(() => {
+    buffered.ledger.append(second);
+    assert.deepEqual(buffered.ledger.readSince(0, 10).map(fact => fact.subject), [first.subject, second.subject]);
+    throw new Error("Interrupted observation");
+  }), /Interrupted observation/);
+  const stored = buffered.ledger.readSince(0, 10);
+  buffered.batch(() => {
+    assert.equal(buffered.ledger.append(first).status, "duplicate");
+    assert.equal(buffered.ledger.append({ ...second, payload: { ...second.payload, name: "Changed" } }).status, "conflict");
+    assert.deepEqual(buffered.ledger.readSince(stored[0].seq, 1), [stored[1]]);
+  });
+  assert.deepEqual(buffered.ledger.readSince(0, 10), stored);
+});
+
 test("既存の Claude の子の親を補い、根の snapshot にキットの系列を載せる", (t) => {
   const f = createFixture(t);
   const root = join(f.home, "repository");

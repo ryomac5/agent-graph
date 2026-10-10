@@ -1,6 +1,7 @@
 import { useContext, useSyncExternalStore } from 'react';
 import { getFileDocument } from '../../lib/file-documents.ts';
 import { MarkdownDocument } from '../../components/files/MarkdownDocument.tsx';
+import { DocumentToolbar } from '../../components/files/DocumentToolbar.tsx';
 import { HtmlDocument } from '../../components/files/HtmlDocument.tsx';
 import type { CodeDocument } from '../../lib/code-document.ts';
 import { OpenWorkspaceFile } from '../../lib/workspace-context.ts';
@@ -66,17 +67,13 @@ function FileContent({ path, document, displayLanguage = 'en' }: { path: string;
   const content = state.content;
   const [raw, setRaw] = useState(false);
   const isHtml = /\.html?$/i.test(path);
-  // 未保存の印は、表示の切り替えの行の中に置く。行を足すと、編集のたびに中身が 1 段ずれるからである。
-  const draft = state.dirty && <span className="document-draft" role="status" title={displayLanguage === 'ja' ? '未保存の編集を表示中' : 'Showing unsaved edits'}>{displayLanguage === 'ja' ? '未保存' : 'Unsaved'}</span>;
   if (detectLanguage(path) !== 'md' && !isHtml) return <CodeView path={path} content={content} displayLanguage={displayLanguage}/>;
+  if (isHtml) return <HtmlDocument client={document.client} request={document.request} content={state.dirty ? content : undefined} language={displayLanguage}
+    rawContent={raw ? <CodeView path={path} content={content} displayLanguage={displayLanguage}/> : undefined}
+    renderToolbar={actions => <DocumentToolbar html raw={raw} onRaw={setRaw} dirty={state.dirty} language={displayLanguage} actions={actions}/>}/>;
   return <>
-    <div className="viewer-mode" role="group" aria-label={displayLanguage === 'ja' ? 'Markdown の表示' : 'Markdown view'}>
-      {draft}
-      <button type="button" className="viewer-mode-option" aria-pressed={!raw} onClick={() => setRaw(false)}>{isHtml ? displayLanguage === 'ja' ? '表示' : 'Display' : displayLanguage === 'ja' ? 'プレビュー' : 'Preview'}</button>
-      <button type="button" className="viewer-mode-option" aria-pressed={raw} onClick={() => setRaw(true)}>{displayLanguage === 'ja' ? '原文' : 'Raw'}</button>
-    </div>
+    <DocumentToolbar label={displayLanguage === 'ja' ? 'Markdown の表示' : 'Markdown view'} raw={raw} onRaw={setRaw} dirty={state.dirty} language={displayLanguage}/>
     {raw ? <CodeView path={path} content={content} displayLanguage={displayLanguage}/>
-      : isHtml ? <HtmlDocument client={document.client} request={document.request} content={state.dirty ? content : undefined} language={displayLanguage}/>
       : <div className="markdown-view" role="region" aria-label={displayLanguage === 'ja' ? `${path} の中身` : `Contents of ${path}`} tabIndex={0}>
         <MarkdownDocument content={content} language={displayLanguage}/></div>}
   </>;

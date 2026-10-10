@@ -46,8 +46,14 @@ export interface ConversationPageProps {
   displayName?: string;
   breadcrumb?: React.ReactNode;
   onConversation?: (conversationId: string) => void;
+  newSession?: { cwd: string };
 }
 const CODEX_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+function isStoppedEvidence(value: unknown): boolean {
+  const evidence = readObject(value);
+  return ['process_absent', 'host_exit', 'thread_closed', 'session_end', 'archived', 'user_correction', 'legacy_delegation'].includes(readText(evidence.kind))
+    || evidence.kind === 'process_check' && evidence.succeeded === true && evidence.matches === false;
+}
 const SUPPORTED_FORMATS = ['jsonl', 'legacy', 'paginated'];
 const TICK_MS = 1000;
 const STICK_TO_BOTTOM_PX = 120;
@@ -97,14 +103,21 @@ function ApprovalCard({ entry, t, disabled, answered, onAnswer, screen }: {
   </article>;
 }
 
-export function ConversationPage({ client, conversationId: explicitId, target = store, language = 'en', embedded = false, seriesIds, seriesState, displayName, breadcrumb, onConversation }: ConversationPageProps) {
+export function ConversationPage({ client, conversationId: explicitId, target = store, language = 'en', embedded = false, seriesIds, seriesState, displayName, breadcrumb, onConversation, newSession }: ConversationPageProps) {
   const params = useParams();
-  const conversationId = explicitId ?? params.conversation ?? '';
+  const state = useScreenStore(target);
+  const requestedId = explicitId ?? params.conversation ?? '';
+  const resolveConversation = (id: string) => state.identities?.conversations[id] ?? id;
+  const conversationId = resolveConversation(requestedId);
   const visibleConversation = useRef(conversationId);
   visibleConversation.current = conversationId;
+  function isVisible(id: string) {
+    const identities = target.getSnapshot().identities;
+    return (identities?.conversations[visibleConversation.current] ?? visibleConversation.current) === (identities?.conversations[id] ?? id);
+  }
+  useEffect(() => { if (requestedId !== conversationId) onConversation?.(conversationId); }, [requestedId, conversationId]);
   const timeline = useRef<HTMLDivElement>(null);
   const following = useRef(true);
-  const state = useScreenStore(target);
   const location = useLocation();
   const navigate = useNavigate();
   const [search, setSearch] = useSearchParams();
@@ -127,15 +140,30 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const detailRef = useRef(detail);
   detailRef.current = detail;
   const t = (key: ConversationText) => translate(language, key);
-  const conversation = (state.projection.conversations ?? []).find(row => row.id === conversationId);
+  const [sessionProvider, setSessionProvider] = useState('claude');
+  const [receipt, setReceipt] = useState<{ conversationId: string; runId: string; provider: string; cwd: string; model: string; effort: string }>();
+  const receiptConversationId = receipt ? resolveConversation(receipt.conversationId) : undefined;
+  const receiptRunId = receipt ? state.identities?.runs[receipt.runId] ?? receipt.runId : undefined;
+  const [continued, setContinued] = useState(false);
+  const [sentMessages, setSentMessages] = useState<{ id: string; conversationId: string; text: string; known: Set<unknown> }[]>([]);
+  const starting = Boolean(newSession && !conversationId);
+  const projectedConversation = (state.projection.conversations ?? []).find(row => row.id === conversationId);
+  const conversation = receipt && receiptConversationId === conversationId
+    ? { ...projectedConversation, id: conversationId, provider: receipt.provider, origin: 'managed' }
+    : projectedConversation ?? (starting ? { id: '', provider: sessionProvider, origin: 'observed' } : undefined);
   const runs = (state.projection.runs ?? []).filter(row => row.conversation_id === conversationId);
-  const run = [...runs].sort((a, b) => Number(b.generation) - Number(a.generation))[0];
+  const projectedRun = [...runs].sort((a, b) => Number(b.generation) - Number(a.generation))[0];
+  const run: Row | undefined = receipt && receiptConversationId === conversationId && projectedRun?.id !== receiptRunId
+    ? { id: receiptRunId, conversation_id: conversationId, state: 'idle', launch: { cwd: receipt.cwd, model: { model: receipt.model, effort: receipt.effort } } } : projectedRun;
+  useEffect(() => {
+    if (receipt && projectedRun?.id === receiptRunId && projectedConversation?.origin === 'managed') setReceipt(undefined);
+  }, [receipt, receiptRunId, projectedRun?.id, projectedConversation?.origin]);
   const provider = readText(conversation?.provider);
   const launch = readObject(run?.launch);
   const saved = readModel(run);
   const currentModel = saved.model || readText(run?.model);
   const currentEffort = saved.effort || readText(run?.effort);
-  const savedCwd = readText(launch.cwd ?? run?.cwd ?? run?.worktree_path);
+  const savedCwd = readText(launch.cwd ?? run?.cwd ?? run?.worktree_path ?? conversation?.cwd) || newSession?.cwd || readText(state.projection.projects?.find(row => row.id === conversation?.project)?.root_path);
   const [models, setModels] = useState<Model[]>([]);
   const [modelsError, setModelsError] = useState('');
   const [model, setModel] = useState('');
@@ -145,8 +173,6 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const inputRef = useAutosizeTextarea(input);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
-  const [confirmation, setConfirmation] = useState<{ cwd: string; model: { model: string; effort?: string }; input: { text: string }; conversationId: string }>();
-  const [nextConversation, setNextConversation] = useState('');
   const [answered, setAnswered] = useState<Set<unknown>>(new Set());
   const [appliedModel, setAppliedModel] = useState<{ model: string; effort: string }>();
   const [now, setNow] = useState(Date.now());
@@ -171,7 +197,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const local = detail?.id === conversationId ? detail.projection : {};
   const combine = (table: string) => [...new Map([...(local[table] ?? []), ...(state.projection[table] ?? [])].map(row => [readText(row.id), row])).values()];
   const historyState = { ...state, projection: { ...state.projection, messages: combine('messages'), message_memberships: combine('message_memberships') } };
-  const historyIds = seriesIds?.length ? seriesIds : [conversationId];
+  const historyIds = seriesIds?.length ? seriesIds.map(resolveConversation) : [conversationId];
   const seriesKey = historyIds.join('|');
   const seenMessages = new Set<string>();
   // 系列の発言は会話をまたいで時刻順に並べる。最新の発言が末尾に来る。会話が替わる所に区切りを 1 つ置く。
@@ -193,6 +219,18 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     return first ? [entry] : [{ kind: 'boundary', key: 'series:' + id, time: entry.time, row: { type: 'continued', series: true } } satisfies TimelineEntry, entry];
   });
   const messageEntries = allEntries.filter(entry => entry.kind === 'message');
+  useEffect(() => {
+    const reconciled = new Set<unknown>();
+    setSentMessages(previous => {
+      const remaining = previous.filter(message => {
+        if (resolveConversation(message.conversationId) !== conversationId) return true;
+        const match = messageEntries.find(entry => !message.known.has(entry.row.id) && !reconciled.has(entry.row.id) && entry.row.role === 'user' && readBody(entry.row.body) === message.text);
+        if (match) reconciled.add(match.row.id);
+        return !match;
+      });
+      return remaining.length === previous.length ? previous : remaining;
+    });
+  }, [conversationId, state.seq, detail]);
   const task = state.projection.tasks?.find(row => row.id === conversation?.task_id);
   const projectId = resolveProjectId(state, readText(conversation?.project ?? task?.project));
   const project = state.projection.projects?.find(row => row.id === projectId);
@@ -224,7 +262,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
         const part = await loadConversationWindow(id, controller.signal,
           older ? previous?.projection.messages?.filter(row => previous.projection.message_memberships?.some(link => link.message_id === row.id && link.conversation_id === id)).toSorted(compareMessages)[0] : undefined,
           older ? undefined : anchorId, client.fetchConversation ? path => client.fetchConversation!(path, controller.signal) : undefined);
-        if (controller.signal.aborted || visibleConversation.current !== conversationId) return;
+        if (controller.signal.aborted || !isVisible(conversationId)) return;
         if (pages.length && part.generation !== pages[0].generation) throw new Error('Conversation changed. Please retry.');
         pages.push(part);
         const page = { generation: pages[0].generation, hasOlder: pages.some(page => page.hasOlder) || pages.length < order.length, projection: {} as Record<string, Row[]> };
@@ -242,8 +280,8 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   }
   useEffect(() => {
     setDetail(undefined); setMessageLimit(MESSAGE_PAGE_SIZE); following.current = !anchorId;
-    const releases = historyIds.map(id => client.watchConversation?.(id));
-    void loadHistory();
+    const releases = historyIds.filter(Boolean).map(id => client.watchConversation?.(id));
+    if (conversationId) void loadHistory();
     return () => { historyController.current?.abort(); for (const release of releases) release?.(); };
   }, [conversationId, seriesKey, state.generation, client, anchorId, historyRevision]);
   useEffect(() => {
@@ -259,7 +297,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     setModel(currentModel); setEffort(currentEffort); setCwd(savedCwd);
   }, [conversationId, currentModel, currentEffort, savedCwd]);
   useEffect(() => {
-    setInput(''); setError(''); setConfirmation(undefined); setNextConversation('');
+    setInput(''); setError('');
     setPending(false); setAnswered(new Set()); setAppliedModel(undefined);
     setDetailsOpen(false); setFilesOpen(false); setEngaged(false); setHandoffBlocked(false);
   }, [conversationId]);
@@ -272,7 +310,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   useLayoutEffect(() => {
     const element = timeline.current;
     if (element && following.current) element.scrollTop = element.scrollHeight;
-  }, [entries.length, streamLength, conversationId]);
+  }, [entries.length, streamLength, conversationId, sentMessages.length]);
   useEffect(() => {
     const element = timeline.current;
     if (!element || !inner.current || typeof ResizeObserver === 'undefined') return;
@@ -291,10 +329,12 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     void client.command('list_models', { provider }).then(ack => {
       if (disposed) return;
       if (!ack.ok) { setModelsError(ack.error ?? t('failed')); return; }
-      setModels((Array.isArray(ack.result) ? ack.result : []).flatMap(item => {
+      const available = (Array.isArray(ack.result) ? ack.result : []).flatMap(item => {
         const value = readObject(item);
         return typeof value.model === 'string' ? [{ model: value.model, displayName: readText(value.displayName) || value.model, effort: readText(value.effort) || undefined }] : [];
-      }));
+      });
+      setModels(available);
+      if (!currentModel) setModel(value => value || available[0]?.model || '');
     }).catch(reason => { if (!disposed) setModelsError(String(reason)); });
     return () => { disposed = true; };
   }, [client, provider, connected, language, conversationId]);
@@ -305,37 +345,45 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     setPending(true); setError('');
     try {
       const ack = await client.command(command, payload);
-      if (visibleConversation.current !== sourceConversation) return;
+      if (!isVisible(sourceConversation)) return;
       if (!ack.ok) { setError(ack.error ?? t('failed')); return; }
       return ack;
-    } catch (reason) { if (visibleConversation.current === sourceConversation) setError(reason instanceof Error ? reason.message : String(reason)); }
-    finally { if (visibleConversation.current === sourceConversation) setPending(false); }
+    } catch (reason) { if (isVisible(sourceConversation)) setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { if (isVisible(sourceConversation)) setPending(false); }
   }
   async function send() {
-    if (!canSend || !input.trim()) return;
+    if (!(external ? canLaunch : canSend) || !input.trim()) return;
+    if (external && !starting && !supported) { setHandoffBlocked(true); return; }
     const sent = input;
+    const messageId = crypto.randomUUID();
     following.current = true;
-    if (await execute('send', { runId: run!.id, input: { text: sent } })) setInput(value => value === sent ? '' : value);
-  }
-  function follow(ack: Ack) {
-    const id = readText(readObject(ack.result).conversationId);
-    if (id && id !== conversationId) { setNextConversation(id); onConversation?.(id); }
+    setSentMessages(previous => [...previous, { id: messageId, conversationId, text: sent, known: new Set(messageEntries.map(entry => entry.row.id)) }]);
+    const launchPayload = { cwd: cwd.trim(), model: { model, ...(effort ? { effort } : {}) }, input: { text: sent } };
+    const stopped = ['ended', 'failed', 'idle'].includes(readText(run?.state))
+      && isStoppedEvidence(run?.last_evidence);
+    const command = starting ? 'start' : external ? stopped ? 'adopt' : 'fork' : 'send';
+    const payload = starting ? { provider, ...launchPayload } : external
+      ? { conversationId, ...launchPayload, ...(stopped ? { confirmStopped: true } : {}) }
+      : { runId: run!.id, input: { text: sent } };
+    const ack = await execute(command, payload);
+    if (!ack) { setSentMessages(previous => previous.filter(message => message.id !== messageId)); return; }
+    setInput(value => value === sent ? '' : value);
+    if (external) {
+      const result = readObject(ack.result);
+      const id = readText(result.conversationId);
+      const runId = readText(result.runId);
+      if (!id || !runId) { setError(language === 'ja' ? '送信結果を確認できません。' : 'Unable to confirm the session.'); setInput(sent); setSentMessages(previous => previous.filter(message => message.id !== messageId)); return; }
+      setReceipt({ conversationId: id, runId, provider, cwd: cwd.trim(), model, effort });
+      setSentMessages(previous => previous.map(message => message.id === messageId ? { ...message, conversationId: id } : message));
+      setContinued(command === 'fork');
+      if (id !== conversationId) { if (onConversation) onConversation(id); else navigate(`/c/${encodeURIComponent(id)}`); }
+    }
   }
   async function applyModel() {
     if (await execute('set_model', { runId: run!.id, model: { model, ...(effort ? { effort } : {}) } })) setAppliedModel({ model, effort });
   }
   async function answer(approvalId: unknown, decision: string) {
     if (await execute('answer', { approvalId, decision })) setAnswered(previous => new Set([...previous, approvalId]));
-  }
-  async function launchConversation(command: 'fork' | 'adopt', confirmStopped?: boolean) {
-    if (!canLaunch) return;
-    if (!supported) { setHandoffBlocked(true); return; }
-    const payload = confirmStopped === undefined ? { conversationId, cwd: cwd.trim(), model: { model, ...(effort ? { effort } : {}) }, input: { text: input } }
-      : { ...confirmation!, confirmStopped };
-    const ack = await execute(command, payload);
-    if (!ack) return;
-    if (readObject(ack.result).confirmation_required === true) setConfirmation(payload);
-    else { setConfirmation(undefined); follow(ack); }
   }
 
   if (!conversation) return <section className={`conversation-page missing${embedded ? ' embedded' : ''}`}><div className="empty-state">
@@ -429,56 +477,49 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
           {!entry.row.series && entry.time && <TimeStamp value={entry.time} fallback="" language={language}/>}
         </div>;
       })}
+      {sentMessages.filter(message => resolveConversation(message.conversationId) === conversationId).map(message => <Message key={message.id} language={language} sender={senderOf({ role: 'user' }, participants)} row={{ id: message.id, role: 'user', body: message.text, body_state: 'stored' }}/>) }
       {deltas.map(([key, delta]) => <Message key={key} language={language} streaming sender={agentSender} showName={nameShown(agentSender)}
         row={{ id: delta.messageId ?? key, role: 'assistant', body: delta.text, body_state: 'stored' } satisfies Row}/>)}
       {rawStatus === 'running' && Number.isFinite(turnStarted) && <p className="working-line" role="status">
         <span className="pulse" aria-hidden="true"/>{language === 'ja' ? '作業中' : 'Working'}… {formatSeconds(Math.max(0, Math.floor((now - turnStarted) / 1000)))}
         {lastTool && <span className="working-tool"> · {lastTool}</span>}</p>}
     </div></div>
-    {/* 端末で動いている会話も、同じ入力欄から返信する。送ると、この画面がその会話を引き継いで続ける。 */}
+    {/* 外の会話には、runner が応答できる続きを用意する。 */}
     <footer className="composer" onFocusCapture={() => setEngaged(true)} onPointerDownCapture={() => setEngaged(true)}>
-      {(error || pending || nextConversation || modelsError && engaged || handoffBlocked) && <div className="composer-status">
-        {error && <p role="alert" className="status-line danger"><Icon name="alert" size={14}/>{error}</p>}
+      {(error || pending || continued || modelsError && engaged || handoffBlocked) && <div className="composer-status">
+        {error && <p role="alert" className="status-line danger" title={error}><Icon name="alert" size={14}/>{error}</p>}
         {pending && <p role="status" className="status-line">{t('pending')}</p>}
         {modelsError && engaged && <p role="alert" className="status-line danger">{modelsError}</p>}
         {handoffBlocked && <p role="alert" className="banner banner-warning"><Icon name="alert" size={14}/>{t('unsupported')}</p>}
-        {nextConversation && <AppLink className="status-line" to={`/c/${encodeURIComponent(nextConversation)}`}>{conversationName(state, nextConversation) ? `${t('conversation')}: ${conversationName(state, nextConversation)}` : 'Open conversation'}</AppLink>}
+        {continued && <button className="btn btn-ghost status-line" onClick={() => setContinued(false)}>{language === 'ja' ? 'ブラウザで続きを始めました。元の会話はそのまま残ります。' : 'Continued in the browser. The original conversation remains available.'}</button>}
       </div>}
-      {confirmation && <section role="dialog" aria-modal="false" aria-label={t('stopped')} className="confirm-panel"><h3>{t('stopped')}</h3>
-        <div className="button-row"><button className="btn btn-primary btn-sm" disabled={pending} onClick={() => void launchConversation('adopt', true)}>{t('confirm')}</button>
-          <button className="btn btn-secondary btn-sm" disabled={pending} onClick={() => void launchConversation('adopt', false)}>{t('branchInstead')}</button>
-          <button className="btn btn-ghost btn-sm" disabled={pending} onClick={() => setConfirmation(undefined)}>{t('cancel')}</button></div>
-      </section>}
       <div className="composer-box" title={[provider === 'codex' ? t(hint) : '', engaged && (!model || !cwd.trim()) ? t('launchReady') : ''].filter(Boolean).join(' ')}>
         <textarea ref={inputRef} aria-label={t('input')} rows={1} placeholder={t('placeholder')} value={input}
           disabled={pending || !connected || !external && !canSend} onChange={event => setInput(event.target.value)} onKeyDown={event => {
-            if (event.key === 'Enter' && event.metaKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (external) { if (input.trim()) void launchConversation('adopt'); } else void send(); }
+            if (event.key === 'Enter' && event.metaKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); }
           }}/>
         <div className="composer-toolbar">
           <div className="composer-controls">
+            {starting && <select className="select-sm" aria-label={language === 'ja' ? '提供元' : 'Provider'} value={sessionProvider} disabled={pending} onChange={event => { setSessionProvider(event.target.value); setModel(''); setEffort(''); }}><option value="claude">Claude</option><option value="codex">Codex</option></select>}
             {!codexActive && <>
-              <span className="composer-select"><select className="select-sm" aria-label={t('model')} title={t('model')} disabled={!connected || pending || confirmation !== undefined} value={selectedModel} onChange={event => {
+              <span className="composer-select"><select className="select-sm" aria-label={t('model')} title={t('model')} disabled={!connected || pending} value={selectedModel} onChange={event => {
                 setModel(event.target.value);
                 if (provider === 'codex') setEffort(models.find(item => item.model === event.target.value)?.effort ?? '');
               }}><option value="">{models.length ? t('chooseModel') : t('noModels')}</option>
                 {model && !models.some(item => item.model === selectedModel) && <option value={model} disabled>{modelName(model) || model}</option>}
                 {models.map(item => <option key={item.model} value={item.model}>{language === 'ja' && item.displayName === 'Default (recommended)' ? t('defaultModel') : item.displayName}</option>)}</select><Icon name="chevronDown" size={16}/></span>
               <span className="composer-select"><select className="select-sm" aria-label={t('effort')} title={provider === 'codex' ? t('effort') : t('claudeEffort')} value={effort}
-                disabled={!connected || pending || provider !== 'codex' || confirmation !== undefined} onChange={event => setEffort(event.target.value)}>
+                disabled={!connected || pending || provider !== 'codex'} onChange={event => setEffort(event.target.value)}>
                 <option value="">{t('defaultEffort')}</option>{[...new Set([...CODEX_EFFORTS, ...(effort ? [effort] : [])])].map(value => <option key={value} value={value}>{effortLabel(value, language)}</option>)}
               </select><Icon name="chevronDown" size={16}/></span>
               {!external && <button className="btn btn-ghost btn-sm" aria-label={t('apply')} title={t('apply')} disabled={!writable || !models.some(item => item.model === selectedModel) || !dirty}
                 onClick={() => void applyModel()}>{t('applyShort')}</button>}
             </>}
-            {!savedCwd && <input className="input-sm" aria-label={t('cwd')} placeholder={t('cwd')} value={cwd} disabled={pending || confirmation !== undefined} onChange={event => setCwd(event.target.value)}/>}
+            {!savedCwd && <input className="input-sm" aria-label={t('cwd')} placeholder={t('cwd')} value={cwd} disabled={pending} onChange={event => setCwd(event.target.value)}/>}
           </div>
           <div className="composer-actions">
-            {!external && <button className="btn btn-ghost btn-sm" aria-label={t('fork')} title={canLaunch ? t('fork') : t('launchReady')} disabled={!canLaunch} onClick={() => void launchConversation('fork')}>
-              <Icon name="fork" size={14}/>{t('branchShort')}</button>}
             {active && <button className="btn btn-secondary btn-sm" disabled={!writable} onClick={() => void execute('interrupt', { runId: run!.id })}><Icon name="stop" size={13}/>{t('interrupt')}</button>}
-            {external ? <button className="btn btn-primary btn-sm" title={canLaunch ? t('shortcut') : t('launchReady')} disabled={!canLaunch || !input.trim() || confirmation !== undefined} onClick={() => void launchConversation('adopt')}>
-              <Icon name="send" size={14}/>{t('send')}</button>
-              : <button className="btn btn-primary btn-sm" title={t('shortcut')} disabled={!canSend || !input.trim()} onClick={() => void send()}><Icon name="send" size={14}/>{t('send')}</button>}
+            <button className="btn btn-primary btn-sm" title={t('shortcut')} disabled={!(external ? canLaunch : canSend) || !input.trim()} onClick={() => void send()}><Icon name="send" size={14}/>{t('send')}</button>
           </div>
         </div>
       </div>

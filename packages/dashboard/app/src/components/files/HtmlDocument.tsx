@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { FilesClient, FilesRequest } from '../../pages/files/model.ts';
 import type { Language } from '../../lib/i18n.ts';
 import './document.css';
 export const PREVIEW_DEBOUNCE_MS = 500;
-export function HtmlDocument({ client, request, content, language = 'en' }: { client: FilesClient; request: FilesRequest; content?: string; language?: Language }) {
+export function HtmlDocument({ client, request, content, language = 'en', renderToolbar, rawContent }: { client: FilesClient; request: FilesRequest; content?: string; language?: Language; renderToolbar?: (actions: ReactNode) => ReactNode; rawContent?: ReactNode }) {
   const [preview, setPreview] = useState<{ url: string; expiresAt: number | string }>();
   const [error, setError] = useState('');
   const [revision, setRevision] = useState(0);
@@ -27,10 +27,11 @@ export function HtmlDocument({ client, request, content, language = 'en' }: { cl
     }, content === undefined ? 0 : PREVIEW_DEBOUNCE_MS);
     return () => { cancelled = true; clearTimeout(timer); };
   }, [client, projectId, worktree, path, content, revision, key]);
-  return <div className="html-surface"><div className="document-toolbar">
+  const actions = <>
     <button className="btn btn-ghost" onClick={() => setRevision(value => value + 1)}>{ja ? '再読み込み' : 'Reload'}</button>
     {preview && <a className="btn btn-ghost" href={preview.url} target="_blank" rel="noopener noreferrer">{ja ? '新しいタブで開く' : 'Open in new tab'}</a>}
-  </div>{loading && <p role="status">{ja ? '読み込み中' : 'Loading…'}</p>}{error && <p role="alert">{ja ? '表示できません' : 'Unable to display preview'}: {error}</p>}
+  </>;
+  return <div className="html-surface">{renderToolbar ? renderToolbar(actions) : <div className="document-toolbar">{actions}</div>}{rawContent ?? <>{loading && <p role="status">{ja ? '読み込み中' : 'Loading…'}</p>}{error && <p role="alert">{ja ? '表示できません' : 'Unable to display preview'}: {error}</p>}
     {preview && <iframe title={ja ? 'HTML の表示' : 'HTML preview'} src={preview.url} sandbox="allow-scripts allow-popups allow-forms"/>}
-  </div>;
+  </>}</div>;
 }

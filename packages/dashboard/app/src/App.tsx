@@ -106,6 +106,7 @@ export function App({ target = store, client = unavailableClient, searchClient =
     }
   }, [location.pathname, location.search, location.hash, auxiliaryPage]);
   const { bindings, setBindings } = useKeySettings(client);
+  const [projectMenu, setProjectMenu] = useState<string>();
   const [overlay, setOverlay] = useState<'commands' | 'help' | 'interrupt' | 'create'>();
   const [stopButton, setStopButton] = useState<HTMLButtonElement>();
   const [commandError, setCommandError] = useState('');
@@ -220,8 +221,9 @@ export function App({ target = store, client = unavailableClient, searchClient =
           <div className="sidebar-project-row"><button className="icon-button" aria-label={language === 'ja' ? row.name + ' のセッション' : 'Toggle sessions for ' + row.name} aria-expanded={open} onClick={() => setCollapsedProjects(value => ({ ...value, [row.id]: open }))}><Icon name={open ? 'chevronDown' : 'chevronRight'} size={16}/></button>
             <NavLink to={`/p/${encodeURIComponent(row.id)}`} title={row.full}><Icon name="folder" size={16}/><span className="truncate">{row.name}</span></NavLink>
             {runningCount > 0 && <span className="numeric project-running" aria-label={language === 'ja' ? '実行中のセッション' : 'Running sessions'}>{runningCount}</span>}
-            <button className="icon-button project-create" aria-label={t('newTask') + ': ' + row.name} onClick={() => { navigate(`/p/${encodeURIComponent(row.id)}?create=1`); setMobileView('conversation'); }}><Icon name="plus" size={14}/></button></div>
-          {open && <section className="sidebar-roots" aria-label={language === 'ja' ? row.name + ' のセッション' : row.name + ' sessions'}><RootList grouped state={state} roots={items} selected={selectedRoot?.id} language={language} onSelect={root => { const next = new URLSearchParams(search); next.set('root', root.id); next.delete('child'); next.delete('path'); next.delete('create'); navigate(`/p/${encodeURIComponent(row.id)}?${next}`); setMobileView('conversation'); }}/></section>}
+            <button className="icon-button project-create" aria-label={t('newTask') + ': ' + row.name} aria-expanded={projectMenu === row.id} onClick={() => setProjectMenu(projectMenu === row.id ? undefined : row.id)}><Icon name="plus" size={14}/></button></div>
+          {projectMenu === row.id && <div className="project-create-menu" role="menu">{['session', 'task'].map(kind => <button className="btn btn-ghost" role="menuitem" key={kind} onClick={() => { navigate(`/p/${encodeURIComponent(row.id)}?${kind === 'session' ? `session=${crypto.randomUUID()}` : 'create=1'}`); setProjectMenu(undefined); setMobileView('conversation'); }}>{kind === 'session' ? language === 'ja' ? '新しいセッション' : 'New session' : language === 'ja' ? '新規タスク' : 'New task'}</button>)}</div>}
+          {open && <section className="sidebar-roots" aria-label={language === 'ja' ? row.name + ' のセッション' : row.name + ' sessions'}><RootList grouped state={state} roots={items} selected={selectedRoot?.id} language={language} onSelect={root => { const next = new URLSearchParams(search); next.set('root', root.id); next.delete('child'); next.delete('path'); next.delete('create'); next.delete('session'); navigate(`/p/${encodeURIComponent(row.id)}?${next}`); setMobileView('conversation'); }}/></section>}
         </div>;
       })}</nav>
     </div><NavLink className="settings-link" to="/settings"><Icon name="settings" size={16}/>{t('settings')}</NavLink></div><ResizeDivider className="sidebar-resize" label={language === 'ja' ? 'サイドバーの幅' : 'Sidebar width'} orientation="vertical" value={sidebarWidth} min={SIDEBAR_MIN_WIDTH} max={SIDEBAR_MAX_WIDTH} step={20}

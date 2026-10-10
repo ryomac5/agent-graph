@@ -148,37 +148,17 @@ it('sends only on Cmd+Enter, preserves newlines on Enter and rejects composing i
   await waitFor(() => expect((input as HTMLTextAreaElement).value).toBe(''));
 });
 
-it('branches with an explicit model, cwd and input', async () => {
-  const { command } = setup();
+it('uses one send button and immediately continues an external conversation without a dialog', async () => {
+  const command = vi.fn(async (name: string): Promise<Ack> => ({ type: 'ack', cmd_id: 'cmd', ok: true,
+    result: name === 'list_models' ? [{ model: 'model-a', displayName: 'Model A' }, { model: 'model-b', displayName: 'Model B' }] : { conversationId: 'continued', runId: 'new-run' } }));
+  setup({ origin: 'observed', status: 'running', client: { command } });
   await waitModels();
-  fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Try another approach' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Branch conversation' }));
-  await waitFor(() => expect(command).toHaveBeenCalledWith('fork', { conversationId: 'c', cwd: '/workspace/demo',
-    model: { model: 'model-a', effort: 'medium' }, input: { text: 'Try another approach' } }));
-});
-
-it.each([true, false])('replies to an external conversation by taking it over and confirms terminal stopped=%s only when requested', async confirmStopped => {
-  const command = vi.fn(async (name: string, payload?: unknown): Promise<Ack> => ({ type: 'ack', cmd_id: 'cmd', ok: true,
-    result: name === 'list_models' ? [{ model: 'model-a', displayName: 'Model A' }, { model: 'model-b', displayName: 'Model B' }]
-      : name === 'adopt' && !Object.hasOwn(payload as object, 'confirmStopped') ? { confirmation_required: true, fallback: 'fork' }
-      : { conversationId: 'adopted', operation: confirmStopped ? 'resume' : 'fork' } }));
-  setup({ origin: 'observed', status: 'unknown', client: { command } });
-  await waitModels();
-  // 端末の会話も、同じ入力欄に書いて送れる。空のうちは送れない。
-  expect(screen.queryByText('Read-only')).toBeNull();
-  const input = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;
-  expect(input.readOnly).toBe(false);
-  expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
-  expect(screen.queryByRole('button', { name: 'Interrupt' })).toBeNull();
-  expect(screen.queryByRole('button', { name: 'Apply model and effort' })).toBeNull();
-  fireEvent.change(input, { target: { value: 'Continue please' } });
+  fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Continue please' } });
   fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-  expect(command.mock.calls.some(call => call[0] === 'send')).toBe(false);
-  const dialog = await screen.findByRole('dialog', { name: 'Have you stopped the external terminal?' });
-  fireEvent.click(within(dialog).getByRole('button', { name: confirmStopped ? 'Yes, resume here' : 'No, continue in a branch' }));
-  await waitFor(() => expect(command).toHaveBeenCalledWith('adopt', { conversationId: 'c', cwd: '/workspace/demo',
-    model: { model: 'model-a', effort: 'medium' }, input: { text: 'Continue please' }, confirmStopped }));
-  expect((await screen.findByRole('link', { name: 'Open conversation' })).getAttribute('href')).toBe('/c/adopted');
+  await waitFor(() => expect(command).toHaveBeenCalledWith('fork', { conversationId: 'c', cwd: '/workspace/demo',
+    model: { model: 'model-a', effort: 'medium' }, input: { text: 'Continue please' } }));
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Branch conversation' })).toBeNull();
 });
 
 it('shows unknown reason, last evidence, timestamp and a dashed state with evidence access', async () => {
@@ -223,13 +203,13 @@ it('blocks handoff for unsupported formats only when asked and marks absent mess
   } });
   await waitModels();
   // 読むだけのときは黄色の帯を出さない。形式は Details で分かる。
-  expect(screen.queryByText('This conversation cannot be taken over.')).toBeNull();
+  expect(screen.queryByText('Unable to continue from this conversation history.')).toBeNull();
   expect(screen.getByText('Older history is unavailable')).toBeTruthy();
   expect(screen.getByRole('separator').getAttribute('title')).toContain('missing');
   expect(screen.queryByRole('article', { name: 'Codex message' })).toBeNull();
   fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Hello' } });
   fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-  expect((await screen.findByRole('alert')).textContent).toBe('This conversation cannot be taken over.');
+  expect((await screen.findByRole('alert')).textContent).toBe('Unable to continue from this conversation history.');
   expect(command.mock.calls.some(call => call[0] === 'adopt')).toBe(false);
 });
 
@@ -252,12 +232,12 @@ it('decodes SQLite JSON columns from real snapshot rows for tool content and app
 
 it('takes over an external conversation without a confirmation dialog when runner has stop evidence', async () => {
   const command = vi.fn(async (name: string): Promise<Ack> => ({ type: 'ack', cmd_id: 'cmd', ok: true,
-    result: name === 'list_models' ? [{ model: 'model-b', displayName: 'Model B' }] : { conversationId: 'c', operation: 'resume' } }));
-  setup({ origin: 'observed', status: 'ended', client: { command } });
+    result: name === 'list_models' ? [{ model: 'model-b', displayName: 'Model B' }] : { conversationId: 'c', runId: 'new-run', operation: 'resume' } }));
+  setup({ origin: 'observed', status: 'ended', client: { command }, projection: { runs: [{ id: 'r', conversation_id: 'c', generation: 1, state: 'ended', last_evidence: { kind: 'process_absent' }, launch: { cwd: '/workspace/demo', model: { model: 'model-a', effort: 'medium' } } }] } });
   await waitModels();
   fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Next step' } });
   fireEvent.keyDown(screen.getByRole('textbox', { name: 'Message' }), { key: 'Enter', metaKey: true });
-  await waitFor(() => expect(command).toHaveBeenCalledWith('adopt', { conversationId: 'c', cwd: '/workspace/demo', model: { model: 'model-a', effort: 'medium' }, input: { text: 'Next step' } }));
+  await waitFor(() => expect(command).toHaveBeenCalledWith('adopt', { conversationId: 'c', cwd: '/workspace/demo', model: { model: 'model-a', effort: 'medium' }, input: { text: 'Next step' }, confirmStopped: true }));
   expect(screen.queryByRole('dialog')).toBeNull();
 });
 
@@ -387,7 +367,7 @@ it('keeps the header to the name, state, provider with model and elapsed time, a
     expect(within(row).getByRole('link', { name: 'Running · Details' }).textContent).toContain('Elapsed 1m 5s');
     expect(within(row).getByText('Codex model-a')).toBeTruthy();
     for (const noise of ['Effort', 'Worktree', 'Observation', 'Read-only', 'Unsupported', 'Handoff']) expect(header.textContent).not.toContain(noise);
-    expect(screen.queryByText('This conversation cannot be taken over.')).toBeNull();
+    expect(screen.queryByText('Unable to continue from this conversation history.')).toBeNull();
     const toggle = within(row).getByRole('button', { name: 'Details' });
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     fireEvent.click(toggle);

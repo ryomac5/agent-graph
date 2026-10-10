@@ -160,7 +160,7 @@ input[type='checkbox'] { width: 15px; height: 15px; margin: 0; accent-color: var
 .projects { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .projects > .eyebrow { flex: none; }
 .project-list { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; }
-.sidebar-project { flex: none; min-height: 0; }
+.sidebar-project { position: relative; flex: none; min-height: 0; }
 .sidebar-project.expanded { flex: 1 0 180px; display: flex; flex-direction: column; }
 .sidebar-files { flex: 1; min-height: 0; display: flex; flex-direction: column; margin-left: var(--space-3); }
 .sidebar-files .explorer-tree { flex: 1; border-right: 0; }
@@ -531,3 +531,5 @@ textarea::placeholder { color: var(--fg-4); }
   .app-shell { grid-template-columns: minmax(0, 1fr) !important; }
   .sidebar-resize, .panel-resize { display: none; }
 }
+
+.project-create-menu { position: absolute; right: var(--space-2); z-index: 10; display: flex; flex-direction: column; background: var(--bg-0); border: var(--border); border-radius: var(--radius-2); padding: var(--space-1); box-shadow: var(--shadow); }

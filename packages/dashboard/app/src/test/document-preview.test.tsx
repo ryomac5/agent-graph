@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
@@ -124,7 +125,14 @@ it.each(['page.html', 'page.htm'])('defaults %s to a sandboxed browser view and 
   for (const iframe of document.querySelectorAll('iframe')) expect(iframe.getAttribute('sandbox')).toBe('allow-scripts allow-popups allow-forms');
   act(() => f.document.edit('<h1>Draft</h1>'));
   await vi.waitFor(() => expect(f.client.command).toHaveBeenCalledWith('files.preview', { projectId: 'p', path, content: '<h1>Draft</h1>' }));
-  expect(screen.getByText('Unsaved').closest('.viewer-mode')).toBeTruthy();
+  for (const mark of screen.getAllByText('Unsaved')) expect(mark.closest('.viewer-mode')).toBeTruthy();
+  const rows = document.querySelectorAll('.document-toolbar');
+  expect(rows).toHaveLength(2);
+  for (const row of rows) {
+    expect([...row.querySelectorAll('button, a')].map(control => control.textContent)).toEqual(['Display', 'Raw', 'Reload', 'Open in new tab']);
+    expect(row.querySelector('.document-toolbar-actions')?.textContent).toBe('ReloadOpen in new tab');
+    expect(row.querySelector('.document-draft')?.textContent).toBe('Unsaved');
+  }
 });
 it('debounces HTML edits for 500ms, reloads, opens a new tab and ignores stale responses', async () => {
   vi.useFakeTimers();
@@ -151,4 +159,11 @@ it('shows localized HTML failures and never embeds an unexpected URL', async () 
   render(<HtmlDocument client={client} request={{ projectId: 'p', path: 'page.html' }} language="ja"/>);
   expect((await screen.findByRole('alert')).textContent).toContain('表示できません');
   expect(document.querySelector('iframe')).toBeNull();
+});
+
+it('keeps the shared HTML and Markdown toolbar on one row with actions on the right', () => {
+  const css = readFileSync('app/src/components/files/document.css', 'utf8');
+  expect(css.match(/\.document-toolbar \{([^}]+)\}/)![1]).toContain('flex-wrap: nowrap');
+  expect(css.match(/\.document-toolbar-actions \{([^}]+)\}/)![1]).toContain('margin-left: auto');
+  expect(css.match(/\.viewer-mode\.document-toolbar \{([^}]+)\}/)![1]).toContain('justify-content: flex-start');
 });

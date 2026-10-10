@@ -191,3 +191,5 @@
 }
 
 .message-request-label { font: var(--type-meta); color: var(--fg-3); }
+
+.composer-status .status-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }

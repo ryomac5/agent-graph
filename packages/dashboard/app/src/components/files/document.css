@@ -14,7 +14,12 @@
 .document-prose ul[data-type='taskList'] { list-style: none; padding-left: 0; }
 .document-prose li[data-type='taskItem'] { display: flex; gap: var(--space-2); align-items: baseline; }
 .document-prose li[data-type='taskItem'] > div { flex: 1; min-width: 0; }
-.document-toolbar { display: flex; flex-wrap: wrap; gap: var(--space-1); padding: var(--space-2); border-bottom: var(--border); color: var(--fg-2); font: var(--type-ui); }
+.document-toolbar { display: flex; flex-wrap: nowrap; align-items: center; overflow-x: auto; flex-shrink: 0; gap: var(--space-1); padding: var(--space-2); border-bottom: var(--border); color: var(--fg-2); font: var(--type-ui); }
 .html-surface { display: flex; flex: 1; min-height: 0; flex-direction: column; }
 .html-surface iframe { width: 100%; flex: 1; min-height: 320px; border: 0; background: var(--bg-0); }
-.document-draft { font: var(--type-meta); color: var(--fg-3); margin-right: auto; align-self: center; }
+.document-draft { font: var(--type-meta); color: var(--fg-3); white-space: nowrap; align-self: center; }
+
+.document-toolbar-actions { display: flex; align-items: center; gap: var(--space-1); margin-left: auto; white-space: nowrap; }
+.document-toolbar .viewer-mode-option { flex-shrink: 0; }
+
+.viewer-mode.document-toolbar { justify-content: flex-start; padding: var(--space-2); gap: var(--space-1); }

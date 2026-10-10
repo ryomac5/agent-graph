@@ -76,6 +76,7 @@ it('2: keeps only the conversation header in the middle and starts tasks from th
   expect(within(middle).getByRole('heading', { name: 'Session active' })).toBeTruthy();
   expect(within(middle).getByRole('button', { name: 'Details' })).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'New task: Project' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'New task' }));
   expect(screen.getByRole('form', { name: 'New task' })).toBeTruthy();
   expect(screen.getByTestId('route').textContent).toBe('/p/p?create=1');
 });

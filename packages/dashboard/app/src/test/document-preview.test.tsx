@@ -98,8 +98,8 @@ it('handles all requested Markdown blocks and marks, including official task lis
   expect(editor.getMarkdown()).toContain('- [x] Done');
   editor.destroy();
 });
-it('protects unsupported content and substantial formatting changes while permitting source edits', async () => {
-  const content = Array.from({ length: 30 }, (_, i) => `* item ${i}`).join('\n');
+it('protects unsupported content while permitting source edits', async () => {
+  const content = 'Paragraph\n\n![image](image.png)';
   const change = vi.fn();
   render(<MarkdownDocument content={content} editable onChange={change} language="ja"/>);
   expect(await screen.findByText('このファイルはプレビューで書くと書式が変わるため、原文で編集してください')).toBeTruthy();

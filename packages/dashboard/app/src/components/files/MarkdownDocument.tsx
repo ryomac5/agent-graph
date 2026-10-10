@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { EditorContent, useEditor } from '@tiptap/react';
 import type { Language } from '../../lib/i18n.ts';
-import { createMarkdownExtensions, shouldReadMarkdownOnly } from '../../lib/markdown-editor.ts';
+import { createMarkdownExtensions } from '../../lib/markdown-editor.ts';
+import { MarkdownBlocks } from '../../lib/markdown-blocks.ts';
 import { Markdown } from '../conversation/Markdown.tsx';
 import './document.css';
 
@@ -10,6 +11,7 @@ export function MarkdownDocument({ content, editable = false, onChange, language
 }) {
   const ja = language === 'ja';
   const applied = useRef(content);
+  const blocks = useRef<MarkdownBlocks | null>(null);
   const change = useRef(onChange); change.current = onChange;
   const [protectedFormat, setProtectedFormat] = useState(false);
   const editor = useEditor({
@@ -17,7 +19,7 @@ export function MarkdownDocument({ content, editable = false, onChange, language
     editorProps: { attributes: { class: 'document-prose', role: editable ? 'textbox' : 'document', 'aria-label': ja ? 'Markdown の本文' : 'Markdown document', 'aria-multiline': 'true' } },
     onUpdate: ({ editor, transaction }) => {
       if (!transaction.docChanged || !editor.isEditable) return;
-      const markdown = editor.getMarkdown();
+      const markdown = blocks.current!.write(transaction);
       applied.current = markdown;
       change.current?.(markdown);
     },
@@ -27,8 +29,10 @@ export function MarkdownDocument({ content, editable = false, onChange, language
     if (applied.current !== content) {
       editor.commands.setContent(content, { contentType: 'markdown', emitUpdate: false });
       applied.current = content;
+      blocks.current = new MarkdownBlocks(content, editor);
     }
-    const protectedFormat = shouldReadMarkdownOnly(content, editor.getMarkdown());
+    if (!blocks.current) blocks.current = new MarkdownBlocks(content, editor);
+    const protectedFormat = blocks.current.readOnly;
     setProtectedFormat(protectedFormat);
     editor.setEditable(editable && !protectedFormat);
     editor.view.dom.setAttribute('role', editable ? 'textbox' : 'document');

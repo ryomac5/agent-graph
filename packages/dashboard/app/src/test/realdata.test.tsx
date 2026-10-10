@@ -93,13 +93,13 @@ it('fetches conversation bodies, shows loading and displays the newest two hundr
   });
   vi.stubGlobal('fetch', fetcher);
   render(<MemoryRouter><ConversationPage conversationId="c" target={target} client={client}/></MemoryRouter>);
-  expect(screen.getByText('Loading messages…')).toBeTruthy();
+  expect(screen.getByRole('status', { name: 'Loading messages…' })).toBeTruthy();
   await screen.findByText('Message 449');
   expect(fetcher.mock.calls[0][0].pathname).toBe('/conversation');
   expect(fetcher.mock.calls[0][0].searchParams.get('id')).toBe('c');
   expect(screen.queryByText('Message 249')).toBeNull();
   expect(screen.getAllByRole('article', { name: 'User message' })).toHaveLength(200);
-  fireEvent.click(screen.getByRole('button', { name: 'Load older' }));
+  fireEvent.scroll(document.querySelector('.conv-timeline')!, { target: { scrollTop: 0 } });
   await screen.findByText('Message 50');
   expect(screen.getAllByRole('article', { name: 'User message' })).toHaveLength(400);
 });

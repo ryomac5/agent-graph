@@ -14,7 +14,7 @@
 .meta-item { display: inline-flex; align-items: center; gap: var(--space-1); min-width: 0; }
 .meta-item .icon { color: var(--fg-3); }
 .branch-name { padding: 0 var(--space-1); border-radius: var(--radius-1); background: transparent; color: var(--fg-3); font: var(--type-meta); white-space: nowrap; }
-.conv-timeline { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.conv-timeline { position: relative; overflow-anchor: none; flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .timeline-empty { display: flex; align-items: center; justify-content: center; gap: var(--space-2); padding: var(--space-12) 0; color: var(--fg-3); }
 .conv-timeline-inner > .message-first:first-child { margin-top: 0; }
 .message-user { align-items: flex-end; }
@@ -94,7 +94,7 @@
 .btn.conv-more { display: none; }
 .conv-header { flex: none; height: auto; min-height: var(--header); padding: 0 var(--space-6); gap: 0; display: flex; flex-direction: column; justify-content: center; border-bottom: var(--border); background: var(--bg-0); }
 .embedded .conv-header { padding: 0 var(--space-6); }
-.conv-details { overflow: auto; max-height: 280px; margin: 0 calc(-1 * var(--space-6)); padding: var(--space-3) var(--space-6); background: var(--bg-1); border: 0; border-radius: 0; }
+.conv-details { overflow: auto; max-height: 280px; margin: 0; padding: var(--space-3) var(--space-6); background: var(--bg-1); border: 0; border-radius: 0; }
 .conv-breadcrumb { display: flex; align-items: center; gap: var(--space-2); min-width: 0; flex: 0 1 auto; color: var(--fg-3); font: var(--type-ui); }
 .conv-breadcrumb .root-back { height: var(--control); border: 0; padding: 0; min-width: 0; max-width: 160px; color: var(--fg-3); }
 .conv-timeline-inner { display: flex; flex-direction: column; gap: var(--space-2); width: 100%; max-width: 768px; padding: var(--space-6); margin: 0 auto; }
@@ -202,3 +202,8 @@
 .message-images { display: flex; flex-wrap: wrap; gap: var(--space-2); justify-content: flex-end; margin-bottom: var(--space-2); }
 .message-agent .message-images { justify-content: flex-start; }
 .message-images img { max-width: 240px; max-height: 180px; border-radius: 6px; border: 1px solid var(--line); object-fit: contain; background: var(--bg-2); }
+
+.conv-icon-action { width: var(--control); height: var(--control); padding: 0; }
+.conv-files-action { width: auto; gap: var(--space-1); padding: 0 var(--space-1); }
+.conv-file-count { font: var(--type-meta); color: var(--fg-3); }
+.history-loading { position: absolute; top: 0; left: 0; right: 0; height: 1px; background: var(--fg-3); }

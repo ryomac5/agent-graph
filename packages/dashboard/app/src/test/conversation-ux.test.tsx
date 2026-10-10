@@ -165,7 +165,8 @@ it('omits the back row in roots and places Codex hints in the composer title wit
   expect(document.querySelector('.root-back-placeholder')).toBeNull();
   expect(document.querySelector('.composer-hint')).toBeNull();
   expect(document.querySelector('.composer-box')!.getAttribute('title')).toContain('次の返答');
-  expect(document.querySelector('.conv-title')!.nextElementSibling!.classList.contains('state-badge')).toBe(true);
+  expect(screen.getByRole('tab', { name: 'Root' }).querySelector('.status-idle')).toBeTruthy();
+  expect(document.querySelector('.workbench-body .conv-header')).toBeNull();
   const css = readFileSync(resolve(process.cwd(), 'app/src/pages/conversation/conversation.css'), 'utf8');
   expect(css).toMatch(/\.conversation-page \.conv-title-row \.conv-title \{ flex: 0 1 auto;/);
   expect(css).not.toContain('.root-back-placeholder');
@@ -183,7 +184,7 @@ it('matches planner attempts to the current conversation and state rather than a
   expect(card.querySelector('[title="Codex"]')).toBeTruthy();
   fireEvent.click(card);
   expect(screen.getByTestId('url').textContent).toContain('child=child');
-  expect(screen.getByRole('heading', { name: 'Planner task' })).toBeTruthy();
+  expect(screen.getByRole('tab', { name: 'Planner task' })).toBeTruthy();
   await act(async () => {});
 });
 
@@ -210,7 +211,10 @@ it.each(['ja', 'en'] as const)('renders translated tool counts, history loading,
     approvals: [{ id: 'approval', conversation_id: 'c', state: 'pending', request: { command: 'pwd' } }],
   });
   render(<MemoryRouter><ConversationPage conversationId="c" target={target} client={client} language={language}/></MemoryRouter>);
-  expect(screen.getByRole('button', { name: language === 'ja' ? '古い発言を読み込む' : 'Load older' })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: language === 'ja' ? '古い発言を読み込む' : 'Load older' })).toBeNull();
+  await act(async () => {});
+  fireEvent.scroll(document.querySelector('.conv-timeline')!, { target: { scrollTop: 0 } });
+  expect(screen.getByText('Older 0')).toBeTruthy();
   expect(screen.getByText(language === 'ja' ? 'ツール 1 件' : '1 tool').closest('details')!.open).toBe(false);
   expect(screen.getByLabelText(language === 'ja' ? 'エージェントの報告' : 'Agent report').tagName).toBe('DETAILS');
   expect(screen.getByText(language === 'ja' ? 'コマンド' : 'Command', { selector: '.tool-name' })).toBeTruthy();
@@ -257,7 +261,7 @@ it('opens a conversation card in the focused empty pane and keeps the original c
   fireEvent.click(currentCard);
   expect(panes[1].dataset.focused).toBe('true');
   expect(within(panes[0]).getByRole('button', { name: /Build parser/ })).toBeTruthy();
-  expect(within(panes[1]).getByRole('tab', { name: '会話' })).toBeTruthy();
+  expect(within(panes[1]).getByRole('tab', { name: 'Claude' })).toBeTruthy();
   expect(screen.getByTestId('url').textContent).toBe('?root=root');
   const saved = JSON.parse(localStorage.getItem('agent-graph-workspace:["p","root"]')!);
   expect(saved.first.tabs[0].conversationId).toBe('c');

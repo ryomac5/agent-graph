@@ -5,8 +5,8 @@ import { translate } from '../../components/conversation/text.ts';
 import { Icon } from '../../components/Icon.tsx';
 import '../../components/diff/diff.css';
 
-export function ChangedFiles({ files, language }: { files: FileChange[]; language: Language }) {
-  return <section id="conversation-changed-files" className="conv-changed-files" aria-label={translate(language, 'filesChanged')}>
+export function ChangedFiles({ files, language, id = 'conversation-changed-files' }: { files: FileChange[]; language: Language; id?: string }) {
+  return <section id={id} className="conv-changed-files" aria-label={translate(language, 'filesChanged')}>
     {files.map(file => <details key={file.path} className="conv-changed-file">
       <summary><Icon name="chevronRight" size={14} className="caret"/><span className="truncate mono" title={file.path}>{file.path}</span>
         <span className="spacer"/>{file.additions > 0 && <span className="diff-add-count">+{file.additions}</span>}{file.deletions > 0 && <span className="diff-remove-count">−{file.deletions}</span>}</summary>

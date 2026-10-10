@@ -1,6 +1,7 @@
+import { createPortal } from 'react-dom';
 import { SessionName } from '../../components/SessionName.tsx';
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { OpenWorkspaceConversation, OpenWorkspaceTerminal } from '../../lib/workspace-context.ts';
+import { OpenWorkspaceConversation, OpenWorkspaceTerminal, WorkspaceConversationHeader, type ConversationTabMetadata } from '../../lib/workspace-context.ts';
 import { useAutosizeTextarea } from './useAutosizeTextarea.ts';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import { getRegisteredProjects, OTHER_PROJECT } from '../../lib/projects.ts';
@@ -60,6 +61,7 @@ function isStoppedEvidence(value: unknown): boolean {
 const SUPPORTED_FORMATS = ['jsonl', 'legacy', 'paginated'];
 const TICK_MS = 1000;
 const STICK_TO_BOTTOM_PX = 120;
+const LOAD_OLDER_THRESHOLD_PX = 80;
 const HOST_POLL_MS = 5000;
 const HOST_START_TIMEOUT_MS = 30000;
 interface SessionHost { conversationId: string; terminalId: string; provider?: string; cwd?: string; disconnected?: boolean; projectId?: string; target?: { kind: string; id?: string } }
@@ -122,6 +124,18 @@ export function sameSent(recorded: string, sent: string): boolean {
   const a = recorded.trim().replace(/^(?:\[Image #\d+\]\s*)+/, ''); const b = sent.trim();
   return a === b || Boolean(b) && a.endsWith(b) && /^(?:\S+\.(?:png|jpe?g|gif|webp)\s+)+$/i.test(a.slice(0, a.length - b.length));
 }
+function ConversationTabHeader({ metadata, breadcrumb, actions }: { metadata: ConversationTabMetadata; breadcrumb?: React.ReactNode; actions: React.ReactNode }) {
+  const header = useContext(WorkspaceConversationHeader);
+  const [slots, setSlots] = useState<{ back: HTMLElement; actions: HTMLElement }>();
+  useLayoutEffect(() => {
+    if (!header) return;
+    const back = document.getElementById(`workspace-back-${header.tabId}`);
+    const actions = document.getElementById(`workspace-actions-${header.tabId}`);
+    if (back && actions) setSlots({ back, actions });
+  }, [header?.tabId]);
+  useLayoutEffect(() => { if (header) header.report(header.tabId, metadata); }, [header?.tabId, header?.report, metadata.name, metadata.state, metadata.title]);
+  return slots ? <>{breadcrumb && createPortal(<div className="conv-breadcrumb">{breadcrumb}</div>, slots.back)}{createPortal(actions, slots.actions)}</> : null;
+}
 export function ConversationPage({ client, conversationId: explicitId, target = store, language = 'en', embedded = false, seriesIds, seriesState, displayName, breadcrumb, onConversation, newSession }: ConversationPageProps) {
   const params = useParams();
   const state = useScreenStore(target);
@@ -135,6 +149,9 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     return (identities?.conversations[visibleConversation.current] ?? visibleConversation.current) === (identities?.conversations[id] ?? id);
   }
   useEffect(() => { if (requestedId !== conversationId) onConversation?.(conversationId); }, [requestedId, conversationId]);
+  const workspaceHeader = useContext(WorkspaceConversationHeader);
+  const olderPending = useRef(false);
+  const scrollAnchor = useRef<{ height: number; top: number } | undefined>(undefined);
   const timeline = useRef<HTMLDivElement>(null);
   const following = useRef(true);
   const location = useLocation();
@@ -289,7 +306,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
         }
       } catch { /* 接続の復帰後に一覧を取り直す。 */ }
     };
-    setHosts([]); void poll();
+    void poll();
     const timer = setInterval(() => { void poll(); }, HOST_POLL_MS);
     return () => { disposed = true; clearInterval(timer); };
   }, [client, nativeProvider, provider, conversationId, state.connection]);
@@ -338,6 +355,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     finally { if (!controller.signal.aborted) setHistoryLoading(false); }
   }
   useEffect(() => {
+    olderPending.current = false; scrollAnchor.current = undefined;
     setDetail(undefined); setMessageLimit(MESSAGE_PAGE_SIZE); following.current = !anchorId;
     const releases = historyIds.filter(Boolean).map(id => client.watchConversation?.(id));
     if (conversationId) void loadHistory();
@@ -368,8 +386,13 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const inner = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const element = timeline.current;
-    if (element && following.current) element.scrollTop = element.scrollHeight;
-  }, [entries.length, streamLength, conversationId, sentMessages.length]);
+    if (element && scrollAnchor.current) {
+      const anchor = scrollAnchor.current;
+      element.scrollTop = anchor.top + element.scrollHeight - anchor.height;
+      scrollAnchor.current = { height: element.scrollHeight, top: element.scrollTop };
+      if (!historyLoading) { scrollAnchor.current = undefined; olderPending.current = false; }
+    } else if (element && following.current) element.scrollTop = element.scrollHeight;
+  }, [entries.length, streamLength, conversationId, sentMessages.length, historyLoading, messageLimit, detail]);
   useEffect(() => {
     const element = timeline.current;
     if (!element || !inner.current || typeof ResizeObserver === 'undefined') return;
@@ -377,9 +400,17 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     observer.observe(inner.current); observer.observe(element);
     return () => observer.disconnect();
   }, [conversation !== undefined]);
+  function loadOlderNearTop(element: HTMLDivElement) {
+    if (element.scrollTop > LOAD_OLDER_THRESHOLD_PX || historyLoading || historyError || olderPending.current || !(detail?.hasOlder || messageEntries.length > shownMessages.size)) return;
+    following.current = false;
+    olderPending.current = true;
+    scrollAnchor.current = { height: element.scrollHeight, top: element.scrollTop };
+    if (messageEntries.length > shownMessages.size) setMessageLimit(value => value + MESSAGE_PAGE_SIZE);
+    else void loadHistory(true);
+  }
   function nearBottom(element: HTMLElement) { return element.scrollHeight - element.scrollTop - element.clientHeight < STICK_TO_BOTTOM_PX; }
   function userScrolled() {
-    requestAnimationFrame(() => { if (timeline.current) following.current = nearBottom(timeline.current); });
+    requestAnimationFrame(() => { if (timeline.current && !scrollAnchor.current) following.current = nearBottom(timeline.current); });
   }
   useEffect(() => {
     let disposed = false;
@@ -524,8 +555,20 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     previous = sender?.key;
     return shown;
   }
+  const detailsId = workspaceHeader ? `conversation-details-${workspaceHeader.tabId}` : 'conversation-details';
+  const filesId = workspaceHeader ? `conversation-changed-files-${workspaceHeader.tabId}` : 'conversation-changed-files';
+  const actionsId = workspaceHeader ? `conversation-actions-${workspaceHeader.tabId}` : 'conversation-actions';
+  const back = breadcrumb ?? (root && !root.conversation_ids.includes(conversationId) && <button className="btn btn-ghost btn-sm root-back" aria-label={`${language === 'ja' ? '戻る:' : 'Back to'} ${root.name}`} title={root.name} onClick={() => onConversation?.(root.conversation_ids.at(-1)!)}><Icon name="chevronLeft"/><span className="truncate">{root.name}</span></button>);
+  const headerActions = <div className="conv-header-actions">
+      <button type="button" className="btn btn-ghost conv-more" aria-label={language === 'ja' ? '会話のメニュー' : 'Conversation menu'} title={language === 'ja' ? '会話のメニュー' : 'Conversation menu'} aria-expanded={menuOpen} aria-controls={actionsId} onClick={() => setMenuOpen(value => !value)}>…</button>
+      <div id={actionsId} className={`conv-action-menu${menuOpen ? ' open' : ''}`} onKeyDown={event => { if (event.key === 'Escape') { setMenuOpen(false); (event.currentTarget.previousElementSibling as HTMLElement | null)?.focus(); } }}>
+        <button type="button" className="btn btn-ghost conv-icon-action" aria-label={language === 'ja' ? 'ターミナル' : 'Terminal'} title={language === 'ja' ? 'ターミナル' : 'Terminal'} disabled={!host || !openTerminal || !connected} onClick={() => { if (host) openTerminal?.(host.terminalId); setMenuOpen(false); }}><Icon name="terminal"/></button>
+        {(workspaceHeader || changedFiles.length > 0) && <button type="button" disabled={changedFiles.length === 0} className="btn btn-ghost conv-icon-action conv-files-action" aria-label={`${t('filesChanged')} ${changedFiles.length}`} title={`${t('filesChanged')} ${changedFiles.length}`} aria-expanded={filesOpen} aria-controls={filesId} onClick={() => { setFilesOpen(value => !value); setMenuOpen(false); }}><Icon name="diff"/><span className="conv-file-count">{changedFiles.length}</span></button>}
+        <button type="button" className="btn btn-ghost conv-icon-action" aria-label={t('details')} title={t('details')} aria-expanded={detailsOpen} aria-controls={detailsId} onClick={() => { setDetailsOpen(value => !value); setMenuOpen(false); }}><Icon name="info"/></button>
+      </div>
+    </div>;
   return <section className={`conversation-page${embedded ? ' embedded' : ''}`} aria-label={t('conversation')}>
-    <header className="conv-header">
+    {workspaceHeader ? <ConversationTabHeader metadata={{ name: nameRoot?.user_name || nameRoot?.name || title, state: status, title: [nameRoot?.name || title, dictionaries[language][status], elapsed ? `${t(status.startsWith('waiting') ? 'waiting' : 'elapsed')} ${elapsed}` : '', shownModel].filter(Boolean).join(' · ') }} breadcrumb={back} actions={headerActions}/> : <header className="conv-header">
       <div className="conv-title-row" onClick={event => {
         if (!(event.target instanceof Element) || !event.target.closest('.state-badge')) return;
         event.preventDefault(); setDetailsOpen(true);
@@ -537,17 +580,10 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
           reason={readText(run?.cause ?? run?.reason) || undefined} elapsed={elapsed ? `${t(status.startsWith('waiting') ? 'waiting' : 'elapsed')} ${elapsed}` : undefined}/>
         {provider && <span className="conv-agent truncate" title={[providerName(provider), shownModel].filter(Boolean).join(' · ')}>{agentName(provider, shownModel)}</span>}
         <span className="spacer"/>
-        <div className="conv-header-actions">
-        {terminalConversation && <button type="button" className="btn btn-ghost btn-sm" disabled={!host || !openTerminal || !connected} onClick={() => host && openTerminal?.(host.terminalId)}>{language === 'ja' ? 'ターミナル' : 'Terminal'}</button>}
-        <button type="button" className="btn btn-ghost btn-sm conv-more" aria-label={language === 'ja' ? '会話のメニュー' : 'Conversation menu'} aria-expanded={menuOpen} aria-controls="conversation-actions" onClick={() => setMenuOpen(value => !value)}>…</button>
-        <div id="conversation-actions" className={`conv-action-menu${menuOpen ? ' open' : ''}`} onKeyDown={event => { if (event.key === 'Escape') { setMenuOpen(false); (event.currentTarget.previousElementSibling as HTMLElement | null)?.focus(); } }}>
-        <button type="button" className="btn btn-ghost btn-sm conv-details-toggle" aria-expanded={detailsOpen} aria-controls="conversation-details"
-          onClick={() => { setDetailsOpen(value => !value); setMenuOpen(false); }}>{t('details')}<Icon name="chevronDown" size={14} className="caret"/></button>
-        {changedFiles.length > 0 && <button type="button" className="btn btn-ghost btn-sm conv-details-toggle" aria-expanded={filesOpen} aria-controls="conversation-changed-files"
-          onClick={() => { setFilesOpen(value => !value); setMenuOpen(false); }}>{t('filesChanged')} {changedFiles.length}<Icon name="chevronDown" size={14} className="caret"/></button>}
-        </div></div>
+        {headerActions}
       </div>
-      {detailsOpen && <section id="conversation-details" className="conv-details" aria-label={t('details')}>
+    </header>}
+      {detailsOpen && <section id={detailsId} className="conv-details" aria-label={t('details')}>
         <dl className="conv-meta">
           <div><dt>{t('model')}</dt><dd>{shownModel ? modelName(shownModel) : <span className="muted-text">{t('noModel')}</span>}</dd></div>
           <div><dt>{t('effort')}</dt><dd>{effortLabel(shownEffort, language) || <span className="muted-text">{t('defaultEffort')}</span>}</dd></div>
@@ -558,15 +594,13 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
           {readText(run?.last_evidence_ts) && <div><dt>{t('lastEvidence')}</dt><dd><RelativeTime value={readText(run?.last_evidence_ts)} now={now} language={language}/></dd></div>}
         </dl>
       </section>}
-    </header>
-    {filesOpen && changedFiles.length > 0 && <ChangedFiles key={conversationId} files={changedFiles} language={language}/>}
+    {filesOpen && changedFiles.length > 0 && <ChangedFiles id={filesId} key={conversationId} files={changedFiles} language={language}/>}
     <div className="conv-timeline" ref={timeline} aria-label={t('conversation')} tabIndex={0}
-      onScroll={event => { if (nearBottom(event.currentTarget)) following.current = true; }}
+      onScroll={event => { if (!scrollAnchor.current) following.current = nearBottom(event.currentTarget); loadOlderNearTop(event.currentTarget); }}
       onWheel={userScrolled} onTouchMove={userScrolled} onKeyDown={userScrolled} onPointerUp={userScrolled}><div className="conv-timeline-inner" ref={inner}>
       {anchorId && <AppLink to={`/c/${encodeURIComponent(conversationId)}`}>Latest</AppLink>}
-      {historyLoading && <p role="status" className="status-line">Loading messages…</p>}
+      {historyLoading && <div role="status" aria-label={language === 'ja' ? '発言を読み込み中' : 'Loading messages…'} className="history-loading"/>}
       {historyError && <p role="alert" className="status-line danger">{historyError} <button className="btn btn-secondary btn-sm" onClick={() => setHistoryRevision(value => value + 1)}>Retry</button></p>}
-      {(detail?.hasOlder || messageEntries.length > shownMessages.size) && <button className="btn btn-secondary btn-sm" disabled={historyLoading} onClick={() => { following.current = false; if (detail?.hasOlder) void loadHistory(true); else setMessageLimit(value => value + MESSAGE_PAGE_SIZE); }}>{t('loadOlder')}</button>}
       {!historyLoading && !historyError && entries.length === 0 && deltas.length === 0 && <p className="timeline-empty"><Icon name="message" size={16}/>{t('empty')}</p>}
       {groupToolRuns(entries).map(entry => {
         if (entry.kind === 'tools') {

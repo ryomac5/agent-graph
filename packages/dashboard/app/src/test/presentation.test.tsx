@@ -113,12 +113,12 @@ it('shows the conversation header with model, effort, worktree place and branch,
   expect(within(header).getByText('Claude Sonnet')).toBeTruthy();
   expect(within(header).queryByText('high')).toBeNull();
   fireEvent.click(within(header).getByRole('button', { name: 'Details' }));
-  expect(within(header).getByText('high')).toBeTruthy();
-  expect(within(header).getByText('repo')).toBeTruthy();
-  expect(within(header).getByText('main')).toBeTruthy();
+  expect(within(screen.getByRole('region', { name: 'Details' })).getByText('high')).toBeTruthy();
+  expect(within(screen.getByRole('region', { name: 'Details' })).getByText('repo')).toBeTruthy();
+  expect(within(screen.getByRole('region', { name: 'Details' })).getByText('main')).toBeTruthy();
   expect(header.textContent).not.toMatch(/Unknown|\[|\{/);
   const page = document.querySelector('.conversation-page')!;
-  expect([...page.children].map(child => child.className.split(' ')[0])).toEqual(['conv-header', 'conv-timeline', 'composer']);
+  expect([...page.children].map(child => child.className.split(' ')[0])).toEqual(['conv-header', 'conv-details', 'conv-timeline', 'composer']);
 });
 
 it('folds tool calls with their paired output and places approvals inline at their requested time', () => {

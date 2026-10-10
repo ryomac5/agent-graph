@@ -50,8 +50,9 @@ it('orders a series by its last activity and shows the latest message last with 
   const texts = [...document.querySelectorAll('.conv-timeline article')].map(article => article.textContent ?? '');
   expect(texts.at(-1)).toContain('Latest answer');
   expect(texts[0]).toContain('September request');
-  const header = document.querySelector<HTMLElement>('.conv-header')!;
-  expect(within(header).getByRole('link', { name: 'Running · Details' })).toBeTruthy();
+  const tab = screen.getByRole('tab', { name: 'Repo-20260925' });
+  expect(tab.querySelector('.status-running')).toBeTruthy();
+  expect(tab.title).toContain('Running');
 });
 it('keeps reviewer conversations out of the root list', () => {
   expect(selectRoots(store().getSnapshot()).map(root => root.id)).toEqual(['old']);
@@ -105,7 +106,7 @@ it('puts running children first, then the newest, and folds older children past 
 });
 it('opens a child conversation from anywhere on its row, writes it to the URL and offers a way back', () => {
   render(<MemoryRouter><WorkspacePage project="repo" target={flowStore(2)} client={client}/><Location/></MemoryRouter>);
-  const header = () => document.querySelector<HTMLElement>('.conv-title-row')!;
+  const header = () => document.querySelector<HTMLElement>('.workbench-tabs')!;
   // 根の系列の見出しには経過の時間を出さない。
   expect(header().textContent).not.toMatch(/Elapsed/);
   const flow = screen.getByRole('complementary', { name: 'Panel' });
@@ -115,7 +116,8 @@ it('opens a child conversation from anywhere on its row, writes it to the URL an
   fireEvent.click(within(flow).getByText('Task 0'));
   expect(screen.getByTestId('location').textContent).toContain('child=child-0');
   // 子の会話は動いている間だけ経過を出す。
-  expect(header().textContent).toMatch(/Elapsed/);
+  expect(within(header()).getByRole('tab').title).toMatch(/Elapsed/);
+  expect(within(header()).getByRole('tab').querySelector('.status-running')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Back to Repo-20260925' }));
   expect(screen.getByTestId('location').textContent).not.toContain('child=');
 });

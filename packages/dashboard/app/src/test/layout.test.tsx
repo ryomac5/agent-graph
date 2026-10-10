@@ -73,7 +73,7 @@ it('2: keeps only the conversation header in the middle and starts tasks from th
   expect(document.querySelector('.workspace-header')).toBeNull();
   expect(document.querySelector('.workspace-requests')).toBeNull();
   const middle = document.querySelector('.workspace-conversation') as HTMLElement;
-  expect(within(middle).getByRole('heading', { name: 'Session active' })).toBeTruthy();
+  expect(within(middle).getByRole('tab', { name: 'Session active' })).toBeTruthy();
   expect(within(middle).getByRole('button', { name: 'Details' })).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'New task: Project' }));
   fireEvent.click(screen.getByRole('menuitem', { name: 'New task' }));

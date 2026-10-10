@@ -70,7 +70,7 @@ it('shares live activity, approval counts, commands and notices across all stage
   expect(screen.getByRole('tab', { name: 'Graph' })).toBeTruthy();
   expect(screen.getByRole('textbox', { name: 'Message' })).toBeTruthy();
   fireEvent.click(within(screen.getByRole('region', { name: 'demo sessions' })).getByRole('link', { name: /Console conversation/ }));
-  expect(screen.getByRole('heading', { name: 'Console conversation' })).toBeTruthy();
+  expect(screen.getByRole('tab', { name: 'Console conversation' })).toBeTruthy();
   fireEvent.click(within(screen.getByRole('navigation', { name: 'Workspace' })).getByRole('link', { name: 'Approvals' }));
   expect(screen.getByRole('heading', { name: 'Approvals' })).toBeTruthy();
   expect(screen.getByRole('heading', { name: 'Approval pending' })).toBeTruthy();

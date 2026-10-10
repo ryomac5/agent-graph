@@ -16,6 +16,7 @@ import { createSessionHosts, type HostOptions } from "../terminal/hosts.ts";
 import { FILE_COMMANDS, TERMINAL_COMMANDS } from "./contract.ts";
 import type { RedactionRules } from "../../../core/src/ledger/redact.ts";
 import type { SettingsService } from "../settings/index.ts";
+import { createUsageService, type UsageOptions } from "../usage/index.ts";
 
 export const DEFAULT_WS_PORT = 7421;
 const MAX_OPEN_CONVERSATIONS = 10;
@@ -23,6 +24,7 @@ const MAX_FRAME_BYTES = 1024 * 1024;
 const MAX_BUFFERED_BYTES = 4 * MAX_FRAME_BYTES;
 const MAX_SESSION_COMMANDS = 256;
 export interface WebSocketOptions {
+  usage?: UsageOptions;
   port?: number;
   runnerPath?: string;
   patchRetention?: number;
@@ -71,6 +73,7 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
   const searchOptions = { port, token };
   const search = createSearchHandler(searchDb, searchOptions);
   const files = createFilesApi(searchDb, options.readRedactionRules);
+  const usage = createUsageService(options.usage);
   const sessionHosts = createSessionHosts(files.selectRoot, options.sessionHosts);
   const sessionCommands = new Map<string, Promise<unknown>>();
   const completedSessionCommands: string[] = [];
@@ -134,6 +137,11 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
         for (const patch of patches) sendPatch(socket, patch);
       } else if (message.type === "cmd" && clients.has(socket) && typeof message.cmd_id === "string"
         && message.cmd_id.length > 0 && typeof message.command === "string" && message.command.length > 0) {
+        if (message.command === 'usage.read') {
+          void usage.read(message.payload).then(result => send(socket, { type: 'ack', cmd_id: message.cmd_id, ok: true, result }),
+            () => send(socket, { type: 'ack', cmd_id: message.cmd_id, ok: false, error: 'Invalid usage request' }));
+          return;
+        }
         if (message.command.startsWith("settings.") && options.settings) {
           void options.settings.handle(message).then(ack => send(socket, ack));
           return;

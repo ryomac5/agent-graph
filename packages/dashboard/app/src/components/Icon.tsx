@@ -2,6 +2,7 @@ import type { SVGProps } from 'react';
 
 // 線のアイコンの組。24 の格子に 1.75 の線で描き、色は文字の色に従う。
 const PATHS = {
+  refresh: <><path d="M20 7v5h-5"/><path d="M19 12a7 7 0 1 0-2 5M20 12l-3-5"/></>,
   overview: <><rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/></>,
   inbox: <><path d="M3.5 13.5h5l1.5 3h4l1.5-3h5"/><path d="M5.6 5.8 3.5 13.5v4a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2v-4l-2.1-7.7a2 2 0 0 0-1.9-1.3H7.5a2 2 0 0 0-1.9 1.3Z"/></>,
   search: <><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.4-4.4"/></>,

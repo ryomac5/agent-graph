@@ -304,15 +304,15 @@ it('toggles the sidebar with Cmd+B and its buttons, remembers collapse and keeps
   fireEvent.keyDown(document, { key: 'b', metaKey: true });
   expect(localStorage.getItem(SIDEBAR_COLLAPSED_KEY)).toBe('0');
 });
-it('toggles the right panel with Cmd+Alt+B independently and resets its width', () => {
+it('toggles the right panel with Cmd+J independently and resets its width', () => {
   mount();
   const edge = screen.getByRole('separator', { name: 'Panel width' });
   fireEvent.keyDown(edge, { key: 'ArrowLeft' }); fireEvent.doubleClick(edge);
   expect(edge.getAttribute('aria-valuenow')).toBe('420');
-  fireEvent.keyDown(document, { key: 'b', metaKey: true, altKey: true });
+  fireEvent.keyDown(document, { key: 'j', metaKey: true });
   expect(localStorage.getItem(PANEL_COLLAPSED_KEY)).toBe('1');
   expect(localStorage.getItem(SIDEBAR_COLLAPSED_KEY)).toBe('0');
-  fireEvent.keyDown(document, { key: 'b', metaKey: true, altKey: true });
+  fireEvent.keyDown(document, { key: 'j', metaKey: true });
   expect(screen.getByRole('separator', { name: 'Panel width' })).toBeTruthy();
 });
 it('drags, restores and resets the file tree height and remembers its collapse', () => {

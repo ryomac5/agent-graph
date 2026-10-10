@@ -226,7 +226,7 @@ it('applies configurable sidebar and panel shortcuts', async () => {
   await act(async () => {});
   press('b', document, { metaKey: true });
   expect(localStorage.getItem('agent-graph-sidebar-collapsed')).toBe('1');
-  press('b', document, { metaKey: true, altKey: true });
+  press('j', document, { metaKey: true });
   expect(localStorage.getItem('agent-graph-panel-collapsed')).toBe('1');
   setKeys({ ...DEFAULT_KEYS, toggleSidebar: 'Alt+L', togglePanel: 'Alt+R' });
   await act(async () => { vi.advanceTimersByTime(1500); });

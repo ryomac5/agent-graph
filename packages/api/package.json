@@ -9,6 +9,7 @@
     "agent-graph-api": "./src/cli.ts"
   },
   "dependencies": {
+    "node-pty": "^1.1.0",
     "ws": "8.22.0"
   },
   "devDependencies": {

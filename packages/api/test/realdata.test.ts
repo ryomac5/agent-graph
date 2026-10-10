@@ -28,7 +28,7 @@ const CPU_LIMIT_MICROSECONDS = 3_000_000;
 const TS = "2026-01-01T00:00:00.000Z";
 const LATER = "2026-01-02T00:00:00.000Z";
 
-async function runChild(mode: string, path: string): Promise<Record<string, number | boolean>> {
+async function runChild(mode: string, path: string): Promise<Record<string, unknown>> {
   const child = spawn(process.execPath, [new URL(import.meta.url).pathname], {
     env: { ...process.env, D1_REALDATA_MODE: mode, D1_REALDATA_PATH: path }, stdio: ["ignore", "pipe", "pipe"],
   });
@@ -78,8 +78,10 @@ function buildLargeLedger(path: string): void {
   } finally { service.close(); }
 }
 async function probeLargeLedger(path: string) {
+  const memory = { baseline: process.memoryUsage() } as Record<string, NodeJS.MemoryUsage>;
   const service = openObservationService({ dbPath: path, readerOnly: true });
-  const rssService = process.memoryUsage().rss;
+  memory.service = process.memoryUsage();
+  const rssService = memory.service.rss;
   let api: Awaited<ReturnType<typeof startWebSocketServer>> | undefined;
   let socketBlocked = false;
   try { api = await startWebSocketServer(service, { port: 0, runnerPath: join(path, "missing.sock") }); }
@@ -89,8 +91,9 @@ async function probeLargeLedger(path: string) {
   }
   const feed = api?.feed ?? new ProjectionFeed(path, service.catchUp);
   const timer = api ? undefined : setInterval(() => feed.refresh(), PROJECTION_POLL_MS);
-  const rssFeed = process.memoryUsage().rss;
-  const worker = await startObservationWorker(service, { hook: false, home: join(dirname(path), "empty-home"),
+  memory.feed = process.memoryUsage();
+  const rssFeed = memory.feed.rss;
+  const worker = await startObservationWorker(service, { hook: false, measureMemory: true, home: join(dirname(path), "empty-home"),
     env: { HOME: join(dirname(path), "empty-home"), CODEX_HOME: join(dirname(path), "empty-codex"), CLAUDE_CONFIG_DIR: join(dirname(path), "empty-claude") } });
   worker.start();
   try {
@@ -99,7 +102,9 @@ async function probeLargeLedger(path: string) {
       assert.ok(Date.now() < deadline, "Observation worker did not settle");
       await Promise.race([delay(20), worker.failure]);
     }
-    const rssWorker = process.memoryUsage().rss;
+    memory.worker = process.memoryUsage();
+    memory.workerThread = worker.memoryUsage()!;
+    const rssWorker = memory.worker.rss;
     const snapshot = api ? await (await fetch(`${api.url}/snapshot`, { headers: { "x-agent-graph-token": api.token } })).json() : feed.snapshot();
     const bytes = Buffer.byteLength(JSON.stringify(snapshot));
     assert.ok(bytes <= SNAPSHOT_LIMIT_BYTES, `snapshot: ${bytes}`);
@@ -122,17 +127,24 @@ async function probeLargeLedger(path: string) {
       after = String(page.next ?? "");
     } while (after);
     assert.equal(seen.size, CONVERSATION_COUNT);
-    const rssLoaded = process.memoryUsage().rss;
+    memory.loaded = process.memoryUsage();
+    const rssLoaded = memory.loaded.rss;
     let rss = Math.max(rssService, rssFeed, rssWorker, rssLoaded);
-    const sample = setInterval(() => { rss = Math.max(rss, process.memoryUsage().rss); }, PROJECTION_POLL_MS);
+    const sample = setInterval(() => {
+      const usage = process.memoryUsage();
+      if (usage.rss > rss) { rss = usage.rss; memory.idlePeak = usage; }
+      const workerUsage = worker.memoryUsage();
+      if (workerUsage && workerUsage.rss > (memory.workerThreadPeak?.rss ?? 0)) memory.workerThreadPeak = workerUsage;
+    }, PROJECTION_POLL_MS);
     const before = process.cpuUsage();
     try { await Promise.race([delay(IDLE_DURATION_MS), worker.failure]); }
     finally { clearInterval(sample); }
     const cpu = process.cpuUsage(before);
     const cpuTime = cpu.user + cpu.system;
-    assert.ok(rss <= RSS_LIMIT_BYTES, `RSS: ${rss}; ${JSON.stringify({ rssService, rssFeed, rssWorker, rssLoaded, heapMain: process.memoryUsage().heapUsed })}`);
+    memory.idleEnd = process.memoryUsage();
+    assert.ok(rss <= RSS_LIMIT_BYTES, `RSS: ${rss}; ${JSON.stringify({ rssService, rssFeed, rssWorker, rssLoaded, heapMain: process.memoryUsage().heapUsed, memory })}`);
     assert.ok(cpuTime <= CPU_LIMIT_MICROSECONDS, `idle CPU: ${cpuTime}`);
-    return { bytes, rss, cpuTime, socketBlocked };
+    return { bytes, rss, cpuTime, socketBlocked, memory };
   } finally { clearInterval(timer); await worker.close(); if (!api) feed.close(); await api?.close(); service.close(); }
 }
 

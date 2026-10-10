@@ -50,12 +50,14 @@ export function openBatchLedger(path: string) {
   let copyFact: ReturnType<DatabaseSync["prepare"]>;
   let copyDependency: ReturnType<DatabaseSync["prepare"]>;
   let readBatch: ReturnType<DatabaseSync["prepare"]>;
+  const attachStaging = db.prepare("ATTACH DATABASE ? AS staging");
+  const readSequence = db.prepare("SELECT seq FROM main.sqlite_sequence WHERE name = 'facts'");
 
   function begin(): void {
     // BEGIN IMMEDIATE が準備側もロックしないよう、開始後に共有メモリを接続する。
     db.exec("BEGIN IMMEDIATE");
-    db.prepare("ATTACH DATABASE ? AS staging").run(stagingPath);
-    nextSeq = Number(db.prepare("SELECT seq FROM main.sqlite_sequence WHERE name = 'facts'").get()?.seq ?? 0);
+    attachStaging.run(stagingPath);
+    nextSeq = Number(readSequence.get()?.seq ?? 0);
     // 空の台帳への初回投入だけ、二次索引を取引内でまとめて構築する。
     // 他の接続には、索引を戻した後の確定済みスキーマだけが見える。
     buildIndexes = nextSeq === 0;
@@ -67,12 +69,13 @@ export function openBatchLedger(path: string) {
       SELECT d.projection, d.subject, d.direction, d.key, p.seq
       FROM staging.fact_projection_dependencies d JOIN pending_facts p ON p.staging_seq = d.seq`;
     // 事実の対応先の seq は準備側と同じ順序。既存の主キー順で読む。
-    copyFacts = db.prepare(`${factSql} ORDER BY f.seq`);
-    copyDependencies = db.prepare(`${dependencySql} ORDER BY d.projection, d.subject, d.direction, d.key, d.seq`);
-    copyFact = db.prepare(`${factSql} WHERE p.seq = ?`);
-    copyDependency = db.prepare(`${dependencySql} WHERE p.seq = ?`);
+    // 同じ SQL を周期ごとに準備すると、GC まで SQLite のネイティブ領域が積み上がる。
+    copyFacts ??= db.prepare(`${factSql} ORDER BY f.seq`);
+    copyDependencies ??= db.prepare(`${dependencySql} ORDER BY d.projection, d.subject, d.direction, d.key, d.seq`);
+    copyFact ??= db.prepare(`${factSql} WHERE p.seq = ?`);
+    copyDependency ??= db.prepare(`${dependencySql} WHERE p.seq = ?`);
     // 準備中の事実も予約済みの seq で読み、読み取りのための保存を繰り返さない。
-    readBatch = db.prepare(`SELECT seq, ${quotedColumns.join(", ")} FROM main.facts WHERE seq > ?
+    readBatch ??= db.prepare(`SELECT seq, ${quotedColumns.join(", ")} FROM main.facts WHERE seq > ?
       UNION ALL SELECT p.seq, ${quotedColumns.map((name) => `f.${name}`).join(", ")}
       FROM staging.facts f JOIN pending_facts p ON p.staging_seq = f.seq WHERE p.seq > ?
       ORDER BY seq LIMIT ?`);
@@ -101,7 +104,7 @@ export function openBatchLedger(path: string) {
         }
       } finally {
         resetStaging();
-        nextSeq = Number(db.prepare("SELECT seq FROM main.sqlite_sequence WHERE name = 'facts'").get()?.seq ?? 0);
+        nextSeq = Number(readSequence.get()?.seq ?? 0);
       }
       return;
     }

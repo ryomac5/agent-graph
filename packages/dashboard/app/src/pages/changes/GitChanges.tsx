@@ -1,3 +1,5 @@
+import { useContext } from 'react';
+import { OpenWorkspaceFile } from '../../lib/workspace-context.ts';
 import { FileTreeRow } from '../../components/FileTreeRow.tsx';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useSearchParams } from 'react-router';
@@ -29,11 +31,11 @@ export async function callGit<T>(client: FilesClient, command: string, request: 
   if (!ack?.ok || !ack.result) throw new Error(ack?.error ?? 'Could not load Git changes');
   return ack.result as T;
 }
-export function GitPatch({ patch, layout }: { patch: Patch; layout: DiffLayout }) {
+export function GitPatch({ patch, layout, worktree }: { patch: Patch; layout: DiffLayout; worktree?: string }) {
   const files = parseDiff(patch.diff ?? '').map(file => ({ ...file, path: patch.path }));
   return patch.state === 'too_large' ? <p>Diff exceeds 1.0 MiB and cannot be displayed.</p>
     : patch.state === 'binary' ? <p>Binary content is not shown.</p>
-      : files.length ? <DiffView files={files} layout={layout} attribution="unknown" evidenceUrl="#git-changes"/>
+      : files.length ? <DiffView files={files} worktree={worktree} layout={layout} attribution="unknown" evidenceUrl="#git-changes"/>
         : <p>No changes in this diff.</p>;
 }
 export function FileGitDiff({ client, request, change, language = 'en', w = WORDS[language] }: { language?: 'en' | 'ja'; client: FilesClient; request: FilesRequest; change: Pick<GitChange, 'staged' | 'unstaged' | 'git'>; w?: Words }) {
@@ -52,7 +54,7 @@ export function FileGitDiff({ client, request, change, language = 'en', w = WORD
   return <div className="git-diff-panel"><div className="toolbar changes-toolbar">
     <div className="button-row" role="group" aria-label="Change source">{modes.map(value => <button key={value} className="btn btn-secondary btn-sm" aria-pressed={mode === value} onClick={() => setChosen(value)}>{value === 'staged' ? w.staged : value === 'unstaged' ? w.unstaged : w.untracked}</button>)}</div>
     <Layout value={layout} onChange={setLayout} w={w}/></div>
-    {error ? <p role="alert">{error}</p> : patch ? <GitPatch patch={patch} layout={layout}/> : <p>Loading diff…</p>}
+    {error ? <p role="alert">{error}</p> : patch ? <GitPatch patch={patch} layout={layout} worktree={request.worktree}/> : <p>Loading diff…</p>}
   </div>;
 }
 function Layout({ value, onChange, w = WORDS.en }: { value: DiffLayout; onChange: (value: DiffLayout) => void; w?: Words }) {
@@ -120,6 +122,7 @@ export function GitChanges({ client, projectId, worktree, enabled, language = 'e
     });
   }
 
+  const openFile = useContext(OpenWorkspaceFile);
   const [entries, setEntries] = useState<GitChange[]>([]);
   const [commits, setCommits] = useState<Commit[]>([]);
   const [hash, setHash] = useState('');
@@ -231,9 +234,9 @@ export function GitChanges({ client, projectId, worktree, enabled, language = 'e
       {commitError ? <p role="alert">{commitError}</p> : loading || commitLoading ? <p>{w.loadingFiles}</p> : treeEntries.length ? <ChangeTree entries={treeEntries} selected={selected} onSelect={setSelected}/> : <p className="muted-text">{hash ? w.noFiles : w.clean}</p>}
     </section>
     <section className="git-diff-pane" aria-label="Difference" ref={diffRef} tabIndex={-1}>
-      <header className="git-pane-header"><h2 title={selected}>{selected || w.difference}</h2></header>
+      <header className="git-pane-header"><h2 title={selected} onDoubleClick={() => selected && openFile?.(selected, worktree)}>{selected || w.difference}</h2></header>
       {change ? <FileGitDiff key={`${projectId}:${worktree}:${revision}:${selected}`} client={client} request={{ ...request, path: selected }} change={change} w={w}/>
-        : patch ? <><Layout value={layout} onChange={setLayout} w={w}/><GitPatch patch={patch} layout={layout}/></> : <p className="muted-text">{commitLoading ? w.loadingDiff : w.choose}</p>}
+        : patch ? <><Layout value={layout} onChange={setLayout} w={w}/><GitPatch patch={patch} layout={layout} worktree={worktree}/></> : <p className="muted-text">{commitLoading ? w.loadingDiff : w.choose}</p>}
     </section>
   </div>;
 }

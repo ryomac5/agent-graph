@@ -12,7 +12,7 @@ import { startStaticServer } from '../src/static/index.ts';
 async function fixture(t: TestContext) {
   const directory = mkdtempSync(join(tmpdir(), 'ag-static-'));
   const dist = join(directory, 'dist'); mkdirSync(dist);
-  writeFileSync(join(dist, 'index.html'), '<meta name="agent-graph-token" content="__AGENT_GRAPH_TOKEN__"><div id="root"></div>');
+  writeFileSync(join(dist, 'index.html'), '<html><head><meta name="agent-graph-token" content="__AGENT_GRAPH_TOKEN__"></head><body><div id="root"></div></body></html>');
   writeFileSync(join(dist, 'app.js'), 'console.log("app")');
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const service = openObservationService({ dbPath: join(directory, 'db.sqlite') });
@@ -105,7 +105,7 @@ test('static handler serves real files and applies security without a socket', a
   const { EventEmitter } = await import('node:events');
   const { syncBuiltinESMExports } = await import('node:module');
   const directory = mkdtempSync(join(tmpdir(), 'ag-static-handler-'));
-  writeFileSync(join(directory, 'index.html'), '<meta content="__AGENT_GRAPH_TOKEN__">');
+  writeFileSync(join(directory, 'index.html'), '<html><head><meta content="__AGENT_GRAPH_TOKEN__"></head><body></body></html>');
   writeFileSync(join(directory, 'app.css'), 'body{}');
   let handle!: (request: http.IncomingMessage, response: http.ServerResponse) => Promise<void>;
   const server = Object.assign(new EventEmitter(), {
@@ -134,6 +134,15 @@ test('static handler serves real files and applies security without a socket', a
   assert.equal(route.status, 200); assert.match(route.body, /injected-token/);
   assert.equal(route.headers['Cache-Control'], 'no-store');
   assert.match(route.headers['Content-Security-Policy'], /frame-ancestors/);
+  const nonces = new Set<string>();
+  for (const response of [route, await get('/'), await get('/index.html')]) {
+    const nonce = response.body.match(/<meta name="agent-graph-style-nonce" content="([^"]+)">/)?.[1];
+    assert.ok(nonce);
+    assert.equal(Buffer.from(nonce, 'base64').length, 32);
+    assert.equal(response.headers['Content-Security-Policy'], `default-src 'self'; script-src 'self'; style-src 'self' 'nonce-${nonce}'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`);
+    nonces.add(nonce);
+  }
+  assert.equal(nonces.size, 3);
   assert.equal((await get('/app.css')).headers['Content-Type'], 'text/css; charset=utf-8');
   assert.equal((await get('/missing.js')).status, 404);
   assert.equal((await get('/%2e%2e%2fsecret')).status, 403);

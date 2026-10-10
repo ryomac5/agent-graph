@@ -1,4 +1,5 @@
 import { createServer, request as requestHttp } from 'node:http';
+import { randomBytes } from 'node:crypto';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -58,8 +59,10 @@ export async function startStaticServer(options: StaticOptions) {
       if (!actual.startsWith(actualRoot + sep) || !(await stat(actual)).isFile()) { response.writeHead(403).end(); return; }
       let content: Buffer | string = await readFile(actual);
       if (extname(actual) === '.html') {
-        content = content.toString().replaceAll('__AGENT_GRAPH_TOKEN__', upstream.token);
-        response.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
+        const nonce = randomBytes(32).toString('base64');
+        content = content.toString().replaceAll('__AGENT_GRAPH_TOKEN__', upstream.token)
+          .replace('</head>', `<meta name="agent-graph-style-nonce" content="${nonce}"></head>`);
+        response.setHeader('Content-Security-Policy', `default-src 'self'; script-src 'self'; style-src 'self' 'nonce-${nonce}'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`);
       }
       response.writeHead(200, { 'Content-Type': MIME[extname(actual)] ?? 'application/octet-stream' });
       response.end(content);

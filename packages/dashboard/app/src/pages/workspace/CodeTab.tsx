@@ -12,6 +12,7 @@ import { python } from '@codemirror/lang-python';
 import { yaml } from '@codemirror/lang-yaml';
 import { FILE_POLL_MS, type CodeDocument } from '../../lib/code-document.ts';
 import type { Language } from '../../lib/i18n.ts';
+import { readStyleNonce } from '../../lib/style-nonce.ts';
 import '../files/highlight.css';
 export function codeLanguage(path: string) {
   const extension = path.split('.').at(-1)?.toLowerCase();
@@ -46,7 +47,9 @@ export function CodeTab({ document, path, language }: { document: CodeDocument; 
   }, [document]);
   useEffect(() => {
     if (state.loading || !host.current) return;
+    const nonce = readStyleNonce();
     const view = new EditorView({ parent: host.current, state: EditorState.create({ doc: document.getSnapshot().content, extensions: [basicSetup, codeLanguage(path), codeTheme, colors,
+      nonce ? EditorView.cspNonce.of(nonce) : [],
       EditorState.readOnly.of(!state.editable), EditorView.editable.of(state.editable), EditorView.contentAttributes.of({ 'aria-label': ja ? 'コード' : 'Code' }),
       EditorView.updateListener.of(update => { if (update.docChanged && update.state.doc.toString() !== document.getSnapshot().content) document.edit(update.state.doc.toString()); }),
     ] }) });

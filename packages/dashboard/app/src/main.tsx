@@ -2,6 +2,9 @@ import { createRoot } from 'react-dom/client';
 import { Dashboard } from './App.tsx';
 import { createSearchClient } from './pages/search/model.ts';
 import { createClient } from './lib/client.ts';
+import { installStyleNonce } from './lib/style-nonce.ts';
+
+installStyleNonce();
 
 const injectedToken = document.querySelector<HTMLMetaElement>('meta[name="agent-graph-token"]')?.content ?? '';
 let token = injectedToken === '__AGENT_GRAPH_TOKEN__' ? new URLSearchParams(location.search).get('token') ?? '' : injectedToken;

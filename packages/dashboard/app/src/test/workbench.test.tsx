@@ -79,6 +79,16 @@ it('only opens code on double click, selects existing files, and opens diff file
   expect(tabs()).toHaveLength(2); expect(tabs()[1].getAttribute('aria-selected')).toBe('true');
   expect(f.client.command).toHaveBeenCalledWith('files.read', expect.objectContaining({ path: 'file.ts', projectId: 'p' }));
 });
+it('passes the meta nonce to CodeMirror', async () => {
+  const meta = document.createElement('meta');
+  meta.name = 'agent-graph-style-nonce'; meta.content = 'editor-style-nonce';
+  document.head.append(meta);
+  try {
+    fixture(); await openCode();
+    const view = EditorView.findFromDOM(screen.getByRole('textbox', { name: 'Code' }))!;
+    expect(view.state.facet(EditorView.cspNonce)).toBe(meta.content);
+  } finally { meta.remove(); }
+});
 it('saves with Cmd+S, shows conflict choices, compares and discards changes', async () => {
   const f = fixture(); await openCode(); edit('mine');
   expect(tabs()[1].textContent).toContain('●');

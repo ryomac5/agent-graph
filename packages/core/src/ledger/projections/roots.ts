@@ -1,6 +1,8 @@
 export interface RootProjection {
   id: string;
   name: string;
+  auto_name?: string;
+  user_name?: string | null;
   project: string | null;
   state: string;
   last_activity_ts: string | null;
@@ -9,6 +11,7 @@ export interface RootProjection {
   total_children: number;
 }
 export interface RootConversation {
+  user_name?: string | null;
   id: string; type?: string; name?: string | null; kit_name?: string | null;
   project?: string | null; repository_id?: string | null; created_ts?: string | null;
   last_activity_ts?: string | null; state?: string;
@@ -74,7 +77,9 @@ export function projectRoots(conversations: readonly RootConversation[], relatio
     const descendants = [...reached].filter(id => !ids.has(id) && rows.has(id)).map(id => rows.get(id)!);
     const latest = [...group].sort((a, b) => (b.last_activity_ts ?? b.created_ts ?? '').localeCompare(a.last_activity_ts ?? a.created_ts ?? '') || b.id.localeCompare(a.id))[0];
     const activity = [...group, ...descendants].flatMap(row => row.last_activity_ts ? [row.last_activity_ts] : row.created_ts ? [row.created_ts] : []).sort().at(-1) ?? null;
-    roots.push({ id: first.id, name: group.find(row => row.kit_name)?.kit_name ?? first.name ?? first.id,
+    const automatic = group.find(row => row.kit_name)?.kit_name ?? first.name ?? first.id;
+    roots.push({ id: first.id, name: first.user_name || automatic,
+      ...(first.user_name ? { user_name: first.user_name, auto_name: automatic } : {}),
       project: first.project ?? first.repository_id ?? null, state: latest.state ?? 'unknown', last_activity_ts: activity,
       conversation_ids: group.map(row => row.id), running_children: descendants.filter(row => row.state === 'running').length,
       total_children: descendants.length });
@@ -85,7 +90,7 @@ export function projectRoots(conversations: readonly RootConversation[], relatio
 export function connectRootDelegations<T extends { root_id?: string | null; repository_id?: string; kit?: unknown }>(delegations: T[], roots: readonly RootProjection[]): (T & { root_id: string | null })[] {
   return delegations.map(row => {
     const kit = row.kit as { session?: unknown } | undefined;
-    const matches = typeof kit?.session === 'string' ? roots.filter(root => root.name === kit.session
+    const matches = typeof kit?.session === 'string' ? roots.filter(root => (root.auto_name ?? root.name) === kit.session
       && (!row.repository_id || root.project === null || root.project === row.repository_id)) : [];
     return { ...row, root_id: matches.length === 1 ? matches[0].id : null };
   });

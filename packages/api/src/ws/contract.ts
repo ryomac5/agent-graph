@@ -50,3 +50,6 @@ export type { TerminalNotification } from "../terminal/index.ts";
  * ssh.test: {destination} → {connected: boolean}。
  */
 export type { ExecutionTarget, SshConnection } from "../remote/index.ts";
+
+/** session.rename: {rootId, name}。名前は 80 文字まで。空欄で自動の名前に戻す。 */
+export interface SessionRenameRequest { rootId: string; name: string }

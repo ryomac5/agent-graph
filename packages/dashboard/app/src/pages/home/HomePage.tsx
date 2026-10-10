@@ -11,7 +11,7 @@ import { Icon } from '../../components/Icon.tsx';
 import '../../components/activity.css';
 
 const PROJECT_ROOT_LIMIT = 5;
-export function HomePage({ target = store, language = 'en', backAction }: { target?: ScreenStore; client?: ConversationClient; language?: Language; backAction?: ReactNode }) {
+export function HomePage({ target = store, language = 'en', backAction, client }: { target?: ScreenStore; client?: ConversationClient; language?: Language; backAction?: ReactNode }) {
   const t = dictionaries[language];
   const navigate = useNavigate();
   const state = useScreenStore(target);
@@ -31,7 +31,7 @@ export function HomePage({ target = store, language = 'en', backAction }: { targ
     .map(root => [root.id, buildRootTree(root, index)])), [groups, index]);
   const [otherOpen, setOtherOpen] = useState(false);
   const other = groups.get(OTHER_PROJECT) ?? [];
-  const renderRoot = (project: string, root: (typeof roots)[number]) => <div className="root-block" key={root.id}><RootList roots={[root]} language={language}/><RootTree tree={trees.get(root.id) ?? buildRootTree(root, index)} runningOnly language={language} onSelect={node => {
+  const renderRoot = (project: string, root: (typeof roots)[number]) => <div className="root-block" key={root.id}><RootList client={client} roots={[root]} language={language}/><RootTree tree={trees.get(root.id) ?? buildRootTree(root, index)} runningOnly language={language} onSelect={node => {
     if (node.conversationId) navigate(`/p/${encodeURIComponent(project)}?root=${encodeURIComponent(root.id)}&child=${encodeURIComponent(node.conversationId)}`);
   }}/></div>;
   return <div className="page home-page"><header className="page-header">{backAction}<h1>{t.overview}</h1></header>

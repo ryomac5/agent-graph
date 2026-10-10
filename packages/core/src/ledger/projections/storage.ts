@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 
-// 版を上げると、次の反映で全投影を台帳から作り直す。3 で会話と委譲のプロジェクトと状態の規則を変えた。
-export const RUNNER_PROJECTION_VERSION = 3;
+// 版を上げると、次の反映で全投影を台帳から作り直す。4 で利用者のセッション名を加えた。
+export const RUNNER_PROJECTION_VERSION = 4;
 export const RECORD_ENTITIES = ["run", "conversation", "delegation", "artifact", "approval", "finding", "relation", "message", "message_membership"] as const;
 
 const PROJECTION_VERSION_DDL = "CREATE TABLE IF NOT EXISTS runner_projection_version (id INTEGER PRIMARY KEY, version INTEGER NOT NULL)";

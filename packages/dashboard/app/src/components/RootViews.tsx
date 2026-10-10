@@ -1,3 +1,4 @@
+import { SessionName, type RenameClient } from './SessionName.tsx';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { rootHref, useTurnConversations } from '../lib/turns.ts';
@@ -9,13 +10,39 @@ import type { DelegationTree, TreeNode } from '../pages/tree/model.ts';
 import { StatusDot, stateLabel } from './StateBadge.tsx';
 import { Icon } from './Icon.tsx';
 
-/** 依頼先の印。頭文字は Claude と Codex で重なるので、色と形で分ける。 */
+interface LogoShape { viewBox: string; paths: string[]; evenodd: boolean }
+const openaiShapes = new Map<string, Promise<LogoShape>>();
+function loadOpenAIShape(): Promise<LogoShape> {
+  const url = '/brand/openai.svg';
+  if (!openaiShapes.has(url)) {
+    const request = fetch(url).then(async response => {
+      if (!response.ok) throw new Error('Logo unavailable');
+      const document = new DOMParser().parseFromString(await response.text(), 'image/svg+xml');
+      const svg = document.documentElement;
+      const viewBox = svg.getAttribute('viewBox') ?? '';
+      const paths = [...svg.querySelectorAll('path')].map(path => path.getAttribute('d') ?? '');
+      if (svg.localName !== 'svg' || document.querySelector('parsererror') || !/^[0-9+.,\s-]+$/.test(viewBox) || !paths.length
+        || paths.some(d => !/^[MmZzLlHhVvCcSsQqTtAaEe0-9+.,\s-]+$/.test(d))) throw new Error('Invalid logo');
+      return { viewBox, paths, evenodd: svg.getAttribute('fill-rule') === 'evenodd' };
+    }).catch(error => { openaiShapes.delete(url); throw error; });
+    openaiShapes.set(url, request);
+  }
+  return openaiShapes.get(url)!;
+}
 export function ProviderMark({ provider }: { provider?: string }) {
-  const brand = provider === 'claude' ? 'claude' : provider === 'codex' ? 'chatgpt' : ['antigravity', 'gemini'].includes(provider ?? '') ? 'antigravity' : undefined;
+  const brand = provider === 'claude' ? 'claude' : provider === 'codex' ? 'openai' : ['antigravity', 'gemini'].includes(provider ?? '') ? 'antigravity' : undefined;
   const [failed, setFailed] = useState<string>();
+  const [shape, setShape] = useState<LogoShape>();
+  useEffect(() => {
+    let disposed = false;
+    if (brand === 'openai') void loadOpenAIShape().then(value => { if (!disposed) { setShape(value); setFailed(undefined); } }, () => { if (!disposed) setFailed('openai'); });
+    return () => { disposed = true; };
+  }, [brand]);
   const name = provider === 'claude' ? 'Claude' : provider === 'codex' ? 'Codex' : brand === 'antigravity' ? 'Antigravity' : 'Agent';
+  const fallback = <Icon name={provider === 'codex' ? 'terminal' : provider === 'claude' ? 'sparkle' : 'bot'} size={13}/>;
   return <span className={`request-avatar provider-${provider || 'unknown'}`} title={name} aria-hidden="true">
-    {brand && failed !== brand ? <img src={`/brand/${brand}.png`} alt="" onError={() => setFailed(brand)}/> : <Icon name={provider === 'codex' ? 'terminal' : provider === 'claude' ? 'sparkle' : 'bot'} size={13}/>}</span>;
+    {brand === 'openai' ? shape && failed !== brand ? <svg viewBox={shape.viewBox} fill="currentColor" fillRule={shape.evenodd ? 'evenodd' : 'nonzero'}>{shape.paths.map((d, index) => <path key={index} d={d}/>)}</svg> : fallback
+      : brand && failed !== brand ? <img src={`/brand/${brand}.${brand === 'claude' ? 'svg' : 'png'}`} alt="" onError={() => setFailed(brand)}/> : fallback}</span>;
 }
 import './roots.css';
 
@@ -29,8 +56,10 @@ function runningText(count: number, language: Language): string {
 }
 
 /** 根の会話の 1 行。1 行目に名前、2 行目に状態と動いている子の数と時刻を出す。 */
-export function RootList({ roots, selected, onSelect, project, language = 'en', grouped = false, state }: { state?: ScreenState; grouped?: boolean; roots: Root[]; selected?: string; onSelect?: (root: Root) => void; project?: string; language?: Language }) {
+export function RootList({ roots, selected, onSelect, project, language = 'en', grouped = false, state, client }: { client?: RenameClient; state?: ScreenState; grouped?: boolean; roots: Root[]; selected?: string; onSelect?: (root: Root) => void; project?: string; language?: Language }) {
   const t = dictionaries[language];
+  const [editing, setEditing] = useState<string>();
+  const [menu, setMenu] = useState<string>();
   const [showEarlier, setShowEarlier] = useState(false);
   const turns = useTurnConversations();
   const [now, setNow] = useState(Date.now);
@@ -48,12 +77,15 @@ export function RootList({ roots, selected, onSelect, project, language = 'en', 
       <span className="root-row-meta">{yourTurn(root) || root.state === 'failed' ? <StatusDot state={shownState} language={language}/>
         : isRunning(root.state) ? <span className="root-elapsed numeric" aria-label={language === 'ja' ? '経過時間' : 'Elapsed time'}>{started === undefined ? '—' : formatSeconds(Math.max(0, Math.floor((now - started) / 1000)))}</span>
         : root.last_activity_ts && <time className="root-time" dateTime={root.last_activity_ts} title={formatWhen(root.last_activity_ts, language)}>{formatWhen(root.last_activity_ts, language)}</time>}</span></>;
-    return <Link key={root.id} className="root-row activity-name" title={[root.kit_name, stateLabel(root.state, language), runningText(root.running_children, language)].filter(Boolean).join(' · ')} aria-label={root.name} aria-current={selected === root.id ? 'page' : undefined}
+    if (editing === root.id && client) return <div key={root.id} className="root-row"><SessionName key={root.id} root={root} client={client} language={language} editing onFinish={() => setEditing(undefined)}/></div>;
+    return <div key={root.id} className="root-list-item" onKeyDown={event => { if (event.key === 'Escape') setMenu(undefined); }}><Link
+      onDoubleClick={client ? event => { event.preventDefault(); setEditing(root.id); setMenu(undefined); } : undefined}
+      onContextMenu={client ? event => { event.preventDefault(); setMenu(root.id); } : undefined} className="root-row activity-name" title={[root.user_name ? root.auto_name : root.kit_name, stateLabel(root.state, language), runningText(root.running_children, language)].filter(Boolean).join(' · ')} aria-label={root.name} aria-current={selected === root.id ? 'page' : undefined}
       to={rootHref({ ...root, project: project ?? root.project })} onClick={event => {
         if (onSelect && event.button === 0 && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
           event.preventDefault(); onSelect(root);
         }
-      }}>{content}</Link>;
+      }}>{content}</Link>{menu === root.id && client && <div role="menu"><button role="menuitem" onClick={() => { setMenu(undefined); setEditing(root.id); }}>{language === 'ja' ? '名前を変える' : 'Rename'}</button></div>}</div>;
   };
   if (!grouped) {
     const newest = Math.max(...roots.map(root => Date.parse(root.last_activity_ts ?? '')).filter(Number.isFinite));

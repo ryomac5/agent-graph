@@ -60,6 +60,10 @@ export function collectProjectionDependencies(fact: Fact): ProjectionDependency[
       // provider が部分訂正で省略されても、候補を取りこぼさない。
       if (typeof payload.native_id === "string") share(`${entity}-native:${payload.native_id}`);
     }
+    if (fact.kind === "conversation.renamed") {
+      const native = readNativeReference(id);
+      if (native !== undefined) share(`conversation-native:${native}`);
+    }
     if (entity === "conversation" && projection === "conversations") {
       need("task", payload.task_id);
       add("needs", `conversation-alias:${id}`);

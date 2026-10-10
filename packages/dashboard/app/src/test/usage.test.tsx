@@ -18,7 +18,8 @@ it('shows the most constrained windows, official marks and boundary colors', asy
   expect(screen.getByText('31% 使用済み')).toBeTruthy(); expect(screen.queryByText('3% 使用済み')).toBeNull();
   expect(screen.getByText('80% 使用済み').closest('.usage-summary-item')?.className).toContain('usage-warning');
   expect(screen.getByText('95% 使用済み').closest('.usage-summary-item')?.className).toContain('usage-danger');
-  expect(document.querySelectorAll('.usage-bar img').length).toBe(3);
+  expect(document.querySelectorAll('.usage-bar .request-avatar').length).toBe(3);
+  expect(document.querySelector('.usage-bar .provider-codex img')).toBeNull();
   expect([79, 80, 94, 95].map(getUsageColor)).toEqual(['normal', 'warning', 'warning', 'danger']);
 });
 it('opens details upwards with provider windows, reset times and Antigravity groups; Escape closes it', async () => {

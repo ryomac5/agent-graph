@@ -11,6 +11,8 @@ import type { spawn, IPty } from 'node-pty';
 import type { FilesRequest } from '../files/index.ts';
 import { MAX_TERMINALS, spawnTerminal, type TerminalNotification } from './index.ts';
 
+import { createAttachmentStore, escapeAttachmentPath, uploadRemoteAttachment, type AttachmentOptions } from './attachments.ts';
+
 export const MAX_SCROLLBACK_BYTES = 256 * 1024;
 const DISCOVERY_MS = 500;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -20,7 +22,7 @@ type Notify = (message: TerminalNotification) => void;
 interface Host {
   terminalId: string; terminal: IPty; startedAt: string; conversationId?: string; resumeId?: string;
   described?: boolean; provider?: 'claude' | 'codex'; projectId?: string; cwd?: string; target?: ExecutionTarget; connection?: SshConnection; remotePid?: number; discoveryBuffer?: string; disconnected?: boolean; mirror?: ReturnType<typeof startRemoteMirror>;
-  scrollback: Buffer; pending: string[]; listeners: Set<Notify>; sending?: Promise<void>;
+  scrollback: Buffer; pending: { text: string; paths: Promise<string[]> }[]; listeners: Set<Notify>; sending?: Promise<void>;
 }
 export interface HostOptions {
   targets?: TargetService;
@@ -30,6 +32,8 @@ export interface HostOptions {
   listProcesses?: () => Promise<{ pid: number; ppid: number }[]>;
   /** 貼り付けのあと Enter を送るまでの待ち。試験では 0 にする。 */
   submitDelayMs?: number;
+  attachments?: AttachmentOptions;
+  wait?: (ms: number) => Promise<void>;
 }
 async function listProcesses() {
   const { stdout } = await execute('ps', ['-axo', 'pid=,ppid=']);
@@ -40,6 +44,7 @@ async function listProcesses() {
 }
 export function createSessionHosts(selectRoot: (request: FilesRequest) => Promise<string>, options: HostOptions = {}) {
   const targets = options.targets ?? createTargetService(selectRoot, options.targetOptions);
+  const attachments = createAttachmentStore(options.attachments);
   const hosts = new Map<string, Host>();
   const directory = options.sessionsDirectory ?? join(homedir(), '.claude', 'sessions');
   let opening = 0, closed = false;
@@ -47,14 +52,21 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
   // Orca と同じく、入力中の行を消してから貼り付け、Enter は間を置いて別に書く。
   // 同じ書き込みに Enter を含めると、貼り付けの中身として扱われて送られないことがあるからである。
   // 送信は端末ごとに順に並べ、続けて送った発言が混ざらないようにする。
-  function writeMessage(host: Host, text: string): Promise<void> {
+  function writeMessage(host: Host, text: string, paths: Promise<string[]> = Promise.resolve([])): Promise<void> {
     const delay = options.submitDelayMs ?? 500;
-    host.sending = (host.sending ?? Promise.resolve()).then(async () => {
-      if (!hosts.has(host.terminalId) || host.disconnected) return;
+    const wait = options.wait ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
+    host.sending = (host.sending ?? Promise.resolve()).catch(() => {}).then(async () => {
+      if (!hosts.has(host.terminalId) || host.disconnected) throw new Error('no_host');
+      const localPaths = await paths;
+      const pasted = host.connection ? await Promise.all(localPaths.map(path => uploadRemoteAttachment(targets, host.connection!, path))) : localPaths;
       host.terminal.write('\x15');
-      host.terminal.write(`\x1b[200~${text}\x1b[201~`);
-      if (delay) await new Promise(resolve => setTimeout(resolve, delay));
-      if (hosts.has(host.terminalId)) host.terminal.write('\r');
+      for (const path of pasted) host.terminal.write(`\x1b[200~${escapeAttachmentPath(path)}\x1b[201~`);
+      if (pasted.length) await wait(300);
+      if (!hosts.has(host.terminalId) || host.disconnected) throw new Error('no_host');
+      host.terminal.write(`\x1b[200~${pasted.length ? ' ' : ''}${text}\x1b[201~`);
+      if (delay) await wait(delay);
+      if (!hosts.has(host.terminalId) || host.disconnected) throw new Error('no_host');
+      host.terminal.write('\r');
     });
     return host.sending;
   }
@@ -69,7 +81,7 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
       try { row = await discoverCodex(targets, pid, host.connection); } catch { continue; }
       if (!row || closed || !hosts.has(host.terminalId)) continue;
       host.conversationId = JSON.stringify(['codex', row.sessionId]);
-      for (const text of host.pending) void writeMessage(host, text);
+      for (const message of host.pending) void writeMessage(host, message.text, message.paths).catch(() => {});
       host.pending = [];
       if (host.connection && !host.mirror) host.mirror = startRemoteMirror(targets, host.connection, row.path, row.sessionId, host.projectId!, row.cwd, () => { host.disconnected = true; }, 'codex');
     }
@@ -78,7 +90,7 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
       try { row = await discoverRemoteSession(targets, host.connection!, host.cwd!, host.startedAt, host.remotePid, host.resumeId); } catch { continue; }
       if (!row || !hosts.has(host.terminalId) || host.disconnected || closed) continue;
       host.conversationId = JSON.stringify(['claude', row.sessionId]);
-      for (const text of host.pending) void writeMessage(host, text);
+      for (const message of host.pending) void writeMessage(host, message.text, message.paths).catch(() => {});
       host.pending = [];
       let remoteFile: string;
       try { remoteFile = (await targets.ssh(host.connection!, `find "$HOME"/.claude/projects -type f -name ${JSON.stringify(row.sessionId + '.jsonl')} -print`)).trim().split('\n')[0]; } catch { continue; }
@@ -101,7 +113,7 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
         if (row?.pid !== pid || typeof row.sessionId !== 'string' || !UUID.test(row.sessionId)
           || host.resumeId && row.sessionId !== host.resumeId || !hosts.has(host.terminalId)) continue;
         host.conversationId = JSON.stringify(['claude', row.sessionId]);
-        for (const text of host.pending) void writeMessage(host, text);
+        for (const message of host.pending) void writeMessage(host, message.text, message.paths).catch(() => {});
         host.pending = [];
         break;
       }
@@ -120,6 +132,7 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
       if (closed) throw new Error('Terminal service closed');
       if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('Invalid session request');
       const request = payload as Record<string, unknown>;
+      if (command === 'attachment.put') return attachments.put(payload);
       if (command === 'session.launch') {
         if (Object.keys(request).some(key => !['projectId', 'provider', 'resume', 'model', 'target', 'worktree'].includes(key))
           || !['claude', 'codex'].includes(String(request.provider)) || typeof request.projectId !== 'string' || !request.projectId
@@ -182,8 +195,17 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
           || host.resumeId && JSON.stringify([host.provider ?? 'claude', host.resumeId]) === request.conversationId);
         if (!host || host.disconnected) throw new Error('no_host');
         if (command === 'session.interrupt') host.terminal.write('\x1b');
-        else if (host.conversationId) await writeMessage(host, request.text as string);
-        else host.pending.push(request.text as string);
+        else {
+          const paths = attachments.resolve(request.attachments);
+          void paths.catch(() => {});
+          if (host.conversationId) await writeMessage(host, request.text as string, paths);
+          else {
+            const message = { text: request.text as string, paths };
+            host.pending.push(message);
+            try { await paths; }
+            catch (error) { host.pending = host.pending.filter(pending => pending !== message); throw error; }
+          }
+        }
         return {};
       }
       const host = hosts.get(String(request.terminalId));
@@ -206,6 +228,6 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
       } else throw new Error('Unknown terminal command');
       return {};
     },
-    close() { closed = true; clearInterval(timer); for (const host of hosts.values()) { host.mirror?.disconnect(); host.terminal.kill(); } hosts.clear(); },
+    close() { closed = true; clearInterval(timer); attachments.close(); for (const host of hosts.values()) { host.mirror?.disconnect(); host.terminal.kill(); } hosts.clear(); },
   };
 }

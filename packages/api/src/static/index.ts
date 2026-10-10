@@ -7,6 +7,7 @@ import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/
 import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocket, WebSocketServer } from 'ws';
+import { MAX_FRAME_BYTES } from '../ws/contract.ts';
 import { authorize, readRequestUrl } from '../ws/security.ts';
 import type { createPreviewApi } from '../files/preview.ts';
 
@@ -93,7 +94,7 @@ export async function startStaticServer(options: StaticOptions) {
   let port = options.port ?? DEFAULT_DASHBOARD_PORT;
   const origin = () => `http://127.0.0.1:${port}`;
   const sockets = new Set<WebSocket>();
-  const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
   const server = createServer(async (request, response) => {
     response.setHeader('Cache-Control', 'no-store');
     response.setHeader('X-Content-Type-Options', 'nosniff');
@@ -180,7 +181,7 @@ export async function startStaticServer(options: StaticOptions) {
         if (remote.readyState === WebSocket.OPEN) remote.send(buffer, { binary });
         else if (remote.readyState === WebSocket.CONNECTING) {
           queuedBytes += buffer.length;
-          if (queuedBytes > 1024 * 1024) { browser.close(1009); return; }
+          if (queuedBytes > MAX_FRAME_BYTES) { browser.close(1009); return; }
           queue.push({ data: buffer, binary });
         }
       });

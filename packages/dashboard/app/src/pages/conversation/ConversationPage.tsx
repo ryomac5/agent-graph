@@ -31,6 +31,7 @@ import { ChangedFiles } from './ChangedFiles.tsx';
 import { groupToolRuns, instructionKind } from '../../components/conversation/timeline.ts';
 import { resolveDelegationNode } from '../../components/conversation/DelegationCard.tsx';
 import { selectRoots, useRootIndex } from '../../lib/roots.ts';
+import { useAttachments, MAX_ATTACHMENTS } from './useAttachments.ts';
 import './conversation.css';
 
 export type ConversationClient = Pick<ReturnType<typeof createClient>, 'command'> & Partial<Pick<ReturnType<typeof createClient>, 'watchConversation' | 'fetchConversation' | 'subscribeTerminal' | 'subscribeConnected'>>;
@@ -189,6 +190,9 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const [effort, setEffort] = useState('');
   const [cwd, setCwd] = useState('');
   const [input, setInput] = useState('');
+  const attachments = useAttachments(conversationId, language, client);
+  const [dragging, setDragging] = useState(false);
+  const dragDepth = useRef(0);
   const inputRef = useAutosizeTextarea(input);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
@@ -345,7 +349,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     setModel(currentModel); setEffort(currentEffort); setCwd(savedCwd);
   }, [conversationId, currentModel, currentEffort, savedCwd]);
   useEffect(() => {
-    setInput(''); setError('');
+    setInput(''); setError(''); setDragging(false); dragDepth.current = 0;
     setPending(false); setAnswered(new Set()); setAppliedModel(undefined);
     setDetailsOpen(false); setFilesOpen(false); setEngaged(false); setHandoffBlocked(false);
   }, [conversationId]);
@@ -400,7 +404,8 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     finally { if (isVisible(sourceConversation)) setPending(false); }
   }
   async function send() {
-    if (!(external ? canLaunch : canSend) || !input.trim()) return;
+    if (!(external ? canLaunch : canSend) || (!input.trim() && !attachments.items.length)) return;
+    if (attachments.items.length && !terminalConversation) return;
     if (external && !terminalConversation && !starting && !supported) { setHandoffBlocked(true); return; }
     const sent = input;
     const messageId = crypto.randomUUID();
@@ -439,10 +444,12 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
             destination = next.find(host => host.terminalId === terminalId)!.conversationId;
           }
         }
-        const ack = await client.command('session.send', { conversationId: destination, text: sent });
-        if (!ack.ok) throw new Error(ack.error ?? t('failed'));
+        const ids = await attachments.upload();
         if (!isVisible(sourceConversation)) return;
-        setInput(value => value === sent ? '' : value);
+        const ack = await client.command('session.send', { conversationId: destination, text: sent, ...(ids.length ? { attachments: ids } : {}) });
+        if (!ack.ok) throw new Error(['Invalid attachment', 'Invalid attachments', 'Attachment too large', 'Attachment transfer failed'].includes(ack.error ?? '') ? attachments.text.failed : ack.error ?? t('failed'));
+        if (!isVisible(sourceConversation)) return;
+        setInput(value => value === sent ? '' : value); attachments.clear();
         setSentMessages(previous => previous.map(message => message.id === messageId ? { ...message, conversationId: destination } : message));
         if (starting) {
           setHostedConversation({ id: destination, provider: 'claude', origin: 'observed', project: projectId, cwd: cwd.trim() });
@@ -593,7 +600,35 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
         {handoffBlocked && <p role="alert" className="banner banner-warning"><Icon name="alert" size={14}/>{t('unsupported')}</p>}
         {continued && <button className="btn btn-ghost status-line" onClick={() => setContinued(false)}>{language === 'ja' ? 'ブラウザで続きを始めました。元の会話はそのまま残ります。' : 'Continued in the browser. The original conversation remains available.'}</button>}
       </div>}
-      <div className="composer-box" title={[provider === 'codex' ? t(hint) : '', engaged && (!model || !cwd.trim()) ? t('launchReady') : ''].filter(Boolean).join(' ')}>
+      {!external && <p className="status-line" role="status">{attachments.text.unsupported}</p>}
+      {attachments.error && <p className="status-line danger" role="alert">{attachments.error}</p>}
+      <div className={`composer-box${dragging ? ' composer-drop-active' : ''}`}
+        onDragEnter={event => {
+          if (!Array.from(event.dataTransfer.types).includes('Files')) return;
+          event.preventDefault(); dragDepth.current++;
+          if (terminalConversation && connected && !pending && attachments.items.length < MAX_ATTACHMENTS) setDragging(true);
+        }}
+        onDragOver={event => {
+          if (!Array.from(event.dataTransfer.types).includes('Files')) return;
+          event.preventDefault(); event.dataTransfer.dropEffect = terminalConversation && connected && !pending && attachments.items.length < MAX_ATTACHMENTS ? 'copy' : 'none';
+        }}
+        onDragLeave={event => { event.preventDefault(); dragDepth.current = Math.max(0, dragDepth.current - 1); if (!dragDepth.current) setDragging(false); }}
+        onDrop={event => {
+          event.preventDefault(); dragDepth.current = 0; setDragging(false);
+          if (!pending && connected) attachments.accept(Array.from(event.dataTransfer.files), terminalConversation);
+        }}
+        onPaste={event => {
+          const files = Array.from(event.clipboardData.items).filter(item => item.kind === 'file').map(item => item.getAsFile()).filter((file): file is File => file !== null);
+          if (!files.length) return;
+          event.preventDefault();
+          if (!pending && connected) attachments.accept(files, terminalConversation);
+        }} title={[provider === 'codex' ? t(hint) : '', engaged && (!model || !cwd.trim()) ? t('launchReady') : ''].filter(Boolean).join(' ')}>
+        {attachments.items.length > 0 && <div className="composer-attachments">
+          {attachments.items.map(item => <div className="composer-attachment" key={item.key}>
+            <img src={item.url} alt={item.file.name}/>
+            <button className="btn btn-ghost" aria-label={`${attachments.text.remove}: ${item.file.name}`} disabled={pending} onClick={() => attachments.remove(item.key)}>×</button>
+          </div>)}
+        </div>}
         <textarea ref={inputRef} aria-label={t('input')} rows={1} placeholder={t('placeholder')} value={input}
           disabled={pending || !connected || !external && !canSend} onChange={event => setInput(event.target.value)} onKeyDown={event => {
             if (event.key === 'Enter' && event.metaKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); }
@@ -619,7 +654,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
           </div>
           <div className="composer-actions">
             {(active || terminalConversation && host) && <button className="btn btn-secondary btn-sm" disabled={terminalConversation ? !host || pending || !connected : !writable} onClick={() => void execute(terminalConversation ? 'session.interrupt' : 'interrupt', terminalConversation ? { conversationId } : { runId: run!.id })}><Icon name="stop" size={13}/>{t('interrupt')}</button>}
-            <button className="btn btn-primary btn-sm" title={t('shortcut')} disabled={!(external ? canLaunch : canSend) || !input.trim()} onClick={() => void send()}><Icon name="send" size={14}/>{t('send')}</button>
+            <button className="btn btn-primary btn-sm" title={t('shortcut')} disabled={!(external ? canLaunch : canSend) || (!input.trim() && !attachments.items.length)} onClick={() => void send()}><Icon name="send" size={14}/>{t('send')}</button>
           </div>
         </div>
       </div>

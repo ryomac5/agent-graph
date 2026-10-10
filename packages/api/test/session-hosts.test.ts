@@ -5,12 +5,13 @@ import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
 import type { spawn } from 'node-pty';
 import { createSessionHosts, MAX_SCROLLBACK_BYTES } from '../src/terminal/hosts.ts';
+import { escapeAttachmentPath } from '../src/terminal/attachments.ts';
 import type { TerminalNotification } from '../src/terminal/index.ts';
 
 const SESSION = '12345678-1234-1234-1234-123456789abc';
 const conversationId = JSON.stringify(['claude', SESSION]);
-async function createFixture(t: TestContext) {
-  const directory = await mkdtemp(join(tmpdir(), 'ag-session-hosts-'));
+async function createFixture(t: TestContext, waits?: number[]) {
+  const directory = await mkdtemp(join(tmpdir(), 'ag session-hosts-'));
   const children: { pid: number; killed: boolean; writes: string[]; output: (data: string) => void; exit: (event: { exitCode: number }) => void }[] = [];
   const launches: { file: string; args: string[] | string; options: Parameters<typeof spawn>[2] }[] = [];
   const openTerminal: typeof spawn = (file, args, options) => {
@@ -25,14 +26,15 @@ async function createFixture(t: TestContext) {
       onExit(callback: typeof child.exit) { child.exit = callback; return { dispose() {} }; },
     } as unknown as ReturnType<typeof spawn>;
   };
+  const waitWrites: string[][] = [];
   const messages: TerminalNotification[] = [];
   const notify = (message: TerminalNotification) => messages.push(message);
-  const hosts = createSessionHosts(async () => '/repo', { openTerminal, sessionsDirectory: directory, submitDelayMs: 0,
+  const hosts = createSessionHosts(async () => '/repo', { openTerminal, sessionsDirectory: directory, attachments: { directory: join(directory, 'attachments') }, submitDelayMs: waits ? 500 : 0, wait: async ms => { waits?.push(ms); waitWrites.push([...children[0].writes]); },
     listProcesses: async () => [{ pid: 2000, ppid: 1000 }, { pid: 3000, ppid: 2000 }, { pid: 9999, ppid: 1 }] });
   t.after(async () => { hosts.close(); await rm(directory, { recursive: true, force: true }); });
   const handle = (command: string, payload: unknown = {}) => hosts.handle(command, payload, notify);
   const launch = (resume?: string) => handle('session.launch', { projectId: 'p', provider: 'claude', ...(resume ? { resume } : {}) }) as Promise<{ terminalId: string; pid: number }>;
-  return { directory, children, launches, messages, hosts, notify, handle, launch };
+  return { directory, children, launches, messages, hosts, notify, handle, launch, waitWrites };
 }
 
 test('launch accepts supported providers, UUID resume and a plain model name', async t => {
@@ -136,4 +138,24 @@ test('eight hosts including pending launches is the shared limit and exiting rel
   f.children[0].exit({ exitCode: 0 });
   await f.launch();
   assert.equal(f.launches.length, 9);
+});
+
+
+test('image sends paste each escaped path, wait 300ms, paste body, wait 500ms and submit in queue order', async t => {
+  const waits: number[] = [];
+  const f = await createFixture(t, waits);
+  await f.launch(SESSION);
+  await writeFile(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: SESSION }));
+  await f.handle('session.hosts');
+  const image = await f.handle('attachment.put', { name: 'test.png', mime: 'image/png', dataBase64: 'iVBORw0KGgo=' }) as { attachmentId: string; path: string };
+  const first = f.handle('session.send', { conversationId, text: 'body', attachments: [image.attachmentId, image.attachmentId] });
+  const second = f.handle('session.send', { conversationId, text: '' , attachments: [image.attachmentId] });
+  await Promise.all([first, second]);
+  assert.deepEqual(waits, [300, 500, 300, 500]);
+  const paste = '\x1b[200~' + escapeAttachmentPath(image.path) + '\x1b[201~';
+  assert.deepEqual(f.children[0].writes, ['\x15', paste, paste, '\x1b[200~ body\x1b[201~', '\r', '\x15', paste, '\x1b[200~ \x1b[201~', '\r']);
+  assert.deepEqual(f.waitWrites.map(writes => writes.at(-1)), [paste, '\x1b[200~ body\x1b[201~', paste, '\x1b[200~ \x1b[201~']);
+  await assert.rejects(f.handle('session.send', { conversationId, text: 'bad', attachments: ['../bad'] }), /Invalid attachments/);
+  await f.handle('session.send', { conversationId, text: 'recovery' });
+  assert.equal(f.children[0].writes.at(-1), '\r');
 });

@@ -461,3 +461,23 @@ test("同じ時刻の旧い rollout の発言は、行の位置を数として�
   assert.equal(row.name, "最初の依頼。");
   assert.equal(row.last_message_excerpt, "最後の応答");
 });
+
+testSocket('attachment.put accepts a large image through the dashboard proxy, replays IDs and blocks managed attachments', async t => {
+  const { directory, service, runnerPath } = createFixture(t);
+  const api = await startWebSocketServer(service, { port: 0, runnerPath, sessionHosts: { attachments: { directory: join(directory, 'attachments') } } });
+  t.after(() => api.close());
+  const { startStaticServer } = await import('../src/static/index.ts');
+  const proxy = await startStaticServer({ port: 0, upstream: api }); t.after(() => proxy.close());
+  const client = await connect({ ...api, url: proxy.url, wsUrl: proxy.url.replace('http:', 'ws:') + '/ws' });
+  t.after(() => client.socket.terminate());
+  const data = Buffer.alloc(2 * 1024 * 1024); Buffer.from([137,80,78,71,13,10,26,10]).copy(data);
+  const message = { type: 'cmd', cmd_id: 'upload-once', command: 'attachment.put', payload: { name: 'test.png', mime: 'image/png', dataBase64: data.toString('base64') } };
+  client.send(message);
+  const first = await client.next('ack'); assert.equal(first.ok, true);
+  assert.deepEqual(readFileSync(first.result.path), data);
+  client.send(message); assert.deepEqual(await client.next('ack'), first);
+  client.send({ type: 'cmd', cmd_id: 'bad-mime', command: 'attachment.put', payload: { ...message.payload, mime: 'image/jpeg' } });
+  assert.equal((await client.next('ack')).error, 'Invalid attachment');
+  client.send({ type: 'cmd', cmd_id: 'managed-image', command: 'send', payload: { runId: 'r', input: { text: '', attachments: [first.result.attachmentId] } } });
+  assert.equal((await client.next('ack')).error, 'managed_attachments_unsupported');
+});

@@ -13,15 +13,14 @@ import { createSearchHandler } from "../search/index.ts";
 import { createFilesApi, handleFilesCommand, FilesWriteError, FilesPreviewError } from "../files/index.ts";
 import { createTerminalSession } from "../terminal/index.ts";
 import { createSessionHosts, type HostOptions } from "../terminal/hosts.ts";
-import { FILE_COMMANDS, TERMINAL_COMMANDS } from "./contract.ts";
+import { FILE_COMMANDS, TERMINAL_COMMANDS, MAX_FRAME_BYTES } from "./contract.ts";
 import type { RedactionRules } from "../../../core/src/ledger/redact.ts";
 import type { SettingsService } from "../settings/index.ts";
 import { createUsageService, type UsageOptions } from "../usage/index.ts";
 
 export const DEFAULT_WS_PORT = 7421;
 const MAX_OPEN_CONVERSATIONS = 10;
-const MAX_FRAME_BYTES = 1024 * 1024;
-const MAX_BUFFERED_BYTES = 4 * MAX_FRAME_BYTES;
+const MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
 const MAX_SESSION_COMMANDS = 256;
 export interface WebSocketOptions {
   usage?: UsageOptions;
@@ -147,8 +146,8 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
           return;
         }
         if ((TERMINAL_COMMANDS as readonly string[]).includes(message.command)) {
-          const hosted = ['ssh.read', 'ssh.write', 'ssh.test', 'worktree.create', 'git.branches'].includes(message.command) || message.command.startsWith('session.') || message.command === 'terminal.attach' || sessionHosts.hasTerminal(message.payload?.terminalId);
-          const retained = ['session.launch', 'session.send', 'session.interrupt', 'worktree.create', 'ssh.write'].includes(message.command);
+          const hosted = message.command === 'attachment.put' || ['ssh.read', 'ssh.write', 'ssh.test', 'worktree.create', 'git.branches'].includes(message.command) || message.command.startsWith('session.') || message.command === 'terminal.attach' || sessionHosts.hasTerminal(message.payload?.terminalId);
+          const retained = ['attachment.put', 'session.launch', 'session.send', 'session.interrupt', 'worktree.create', 'ssh.write'].includes(message.command);
           let result = retained ? sessionCommands.get(message.cmd_id) : undefined;
           if (!result) {
             result = hosted ? sessionHosts.handle(message.command, message.payload, notify) : terminals.handle(message.command, message.payload);
@@ -165,7 +164,7 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
             send(socket, { type: "ack", cmd_id: message.cmd_id, ok: true, result });
           }, error => {
             send(socket, { type: "ack", cmd_id: message.cmd_id, ok: false,
-              error: error instanceof Error && ["Terminal limit reached", "Unknown terminal", "Invalid terminal size", "Invalid session launch", "Session already hosted", "no_host"].includes(error.message)
+              error: error instanceof Error && ["Terminal limit reached", "Unknown terminal", "Invalid terminal size", "Invalid session launch", "Session already hosted", "no_host", "Invalid attachment", "Invalid attachments", "Attachment too large", "Attachment transfer failed"].includes(error.message)
                 ? error.message : "Terminal request failed" });
           });
           return;
@@ -180,6 +179,11 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
               error: message.command === 'files.preview' ? (error instanceof FilesPreviewError ? error.message : 'not_previewable')
                 : message.command === "files.write" ? (error instanceof FilesWriteError ? error.message : "not_editable") : "Files request failed" });
           });
+          return;
+        }
+        const input = message.payload?.input;
+        if (['send', 'start', 'adopt', 'fork'].includes(message.command) && input?.attachments?.length) {
+          send(socket, { type: 'ack', cmd_id: message.cmd_id, ok: false, error: 'managed_attachments_unsupported' });
           return;
         }
         void runner.request(forwardScreenCommand(message)).then((result) => {

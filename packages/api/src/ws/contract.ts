@@ -37,7 +37,9 @@ export interface ReviewCommand extends ScreenCommand {
   command: typeof REVIEW_COMMANDS[number];
 }
 
-export const TERMINAL_COMMANDS = ["terminal.open", "terminal.input", "terminal.resize", "terminal.close", "terminal.attach", "session.launch", "session.send", "session.interrupt", "session.hosts", "ssh.read", "ssh.write", "ssh.test", "worktree.create", "git.branches"] as const;
+export const MAX_FRAME_BYTES = 14 * 1024 * 1024;
+
+export const TERMINAL_COMMANDS = ["attachment.put", "terminal.open", "terminal.input", "terminal.resize", "terminal.close", "terminal.attach", "session.launch", "session.send", "session.interrupt", "session.hosts", "ssh.read", "ssh.write", "ssh.test", "worktree.create", "git.branches"] as const;
 export type { TerminalNotification } from "../terminal/index.ts";
 
 /**
@@ -50,3 +52,5 @@ export type { TerminalNotification } from "../terminal/index.ts";
  * ssh.test: {destination} → {connected: boolean}。
  */
 export type { ExecutionTarget, SshConnection } from "../remote/index.ts";
+
+/** attachment.put: {name, mime, dataBase64} → {attachmentId, path}。session.send: {conversationId, text, attachments?: string[]}。 */

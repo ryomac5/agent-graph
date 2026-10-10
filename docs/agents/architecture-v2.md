@@ -289,7 +289,7 @@ api と MCP 中継と CLI が、同じソケットへ接続する。
 | `dashboard` | `codemirror` と `@codemirror/lang-*` | 真ん中の作業場でのコードの表示と編集。段 8 で足す |
 | `dashboard` | `@xterm/xterm`、`@xterm/addon-fit` | 真ん中の作業場のターミナルの描画。段 8 で足す |
 | `api` | `node-pty` | ターミナルの擬似端末。段 8 で足す |
-| `dashboard` | `@tiptap/react`、`@tiptap/starter-kit`、`@tiptap/markdown`、`@tiptap/pm` | 真ん中の作業場での Markdown のプレビューの中の編集。段 8 で足す |
+| `dashboard` | `@tiptap/react`、`@tiptap/starter-kit`、`@tiptap/markdown`、`@tiptap/pm`、`@tiptap/extension-table`、`@tiptap/extension-list` | 真ん中の作業場での Markdown のプレビューの中の編集。段 8 で足す |
 
 ライセンスが MIT 以外の依存を追加するときは、段の受け入れでライセンスを確認する。
 SDK の版は 0.3.291 を既定の起点とし、版を固定して `pnpm-lock.yaml` に含める。

@@ -5,6 +5,9 @@ import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocket, WebSocketServer } from 'ws';
 import { authorize, readRequestUrl } from '../ws/security.ts';
+import type { createPreviewApi } from '../files/preview.ts';
+
+export const PREVIEW_CSP = "sandbox allow-scripts allow-popups allow-forms; default-src * data: blob: 'unsafe-inline' 'unsafe-eval'";
 
 export const DEFAULT_DASHBOARD_PORT = 7422;
 const DEFAULT_DIST = fileURLToPath(new URL('../../../dashboard/dist/', import.meta.url));
@@ -12,9 +15,14 @@ const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json',
   '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2',
+  '.htm': 'text/html; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
+  '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp',
+  '.avif': 'image/avif', '.woff': 'font/woff', '.ttf': 'font/ttf', '.otf': 'font/otf',
+  '.wasm': 'application/wasm', '.mp4': 'video/mp4', '.webm': 'video/webm', '.mp3': 'audio/mpeg',
+  '.pdf': 'application/pdf', '.txt': 'text/plain; charset=utf-8',
 };
 interface StaticOptions {
-  port?: number; dist?: string; upstream: { url: string; wsUrl: string; token: string; runner: { available: boolean } };
+  port?: number; dist?: string; upstream: { url: string; wsUrl: string; token: string; runner: { available: boolean }; previews?: Pick<ReturnType<typeof createPreviewApi>, 'readPreview'> };
 }
 export async function startStaticServer(options: StaticOptions) {
   const { upstream } = options;
@@ -35,6 +43,20 @@ export async function startStaticServer(options: StaticOptions) {
     }
     const url = readRequestUrl(request);
     if (!url || request.method !== 'GET') { response.writeHead(404).end(); return; }
+    // URL の正規化で ../ が消える前に、プレビューの境界を判定する。
+    const rawPath = request.url?.split('?')[0] ?? '';
+    if (rawPath === '/preview' || rawPath.startsWith('/preview/') || url.pathname === '/preview' || url.pathname.startsWith('/preview/')) {
+      response.setHeader('Content-Security-Policy', PREVIEW_CSP);
+      try {
+        const match = /^\/preview\/([A-Za-z0-9_-]{43})\/(.+)$/.exec(rawPath);
+        const path = match && decodeURIComponent(match[2]);
+        const content = match && path && await upstream.previews?.readPreview(match[1], path);
+        if (!content) { response.writeHead(404).end(); return; }
+        response.writeHead(200, { 'Content-Type': MIME[extname(path).toLowerCase()] ?? 'application/octet-stream' });
+        response.end(content);
+      } catch { response.writeHead(404).end(); }
+      return;
+    }
     if (['/snapshot', '/conversation', '/projection', '/api/search'].includes(url.pathname)) {
       if (!authorize(request, port, upstream.token)) { response.writeHead(403).end(); return; }
       const proxy = requestHttp(new URL(url.pathname + url.search, upstream.url), {

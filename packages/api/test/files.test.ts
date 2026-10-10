@@ -288,6 +288,15 @@ test("WebSocket acknowledges files commands and safe failures while runner is un
   const editable = await command("files.read", { ...request, path: "editable.txt" });
   assert.equal((await command("files.write", { ...request, path: "editable.txt", content: "after", baseHash: "wrong" })).error, "conflict");
   assert.equal((await command("files.write", { ...request, path: "editable.txt", content: "after", baseHash: editable.result.hash })).ok, true);
+  await write('preview.html', '<p>preview</p>');
+  const preview = await command('files.preview', { ...request, path: 'preview.html', content: '<p>unsaved</p>' });
+  assert.equal(preview.ok, true);
+  assert.match(preview.result.url, /^\/preview\/[\w-]{43}\/preview.html$/);
+  assert.ok(preview.result.expiresAt > Date.now());
+  assert.equal((await server.previews.readPreview(preview.result.url.split('/')[2], 'preview.html'))!.toString(), '<p>unsaved</p>');
+  assert.equal((await command('files.preview', { ...request, path: '../outside.html' })).error, 'invalid_path');
+  assert.equal((await command('files.preview', { ...request, path: 'file.txt' })).error, 'not_previewable');
+  assert.equal((await command('files.preview', null)).error, 'invalid_path');
   assert.equal(service.ledger.readSince(0, 100).length, 1);
 });
 

@@ -10,7 +10,7 @@ import { ProjectionFeed, type ProjectionPatch } from "../service/projection-feed
 import { RunnerClient, runnerSocketPath } from "../runner-client.ts";
 import { authorize, createToken, readRequestUrl } from "./security.ts";
 import { createSearchHandler } from "../search/index.ts";
-import { createFilesApi, handleFilesCommand, FilesWriteError } from "../files/index.ts";
+import { createFilesApi, handleFilesCommand, FilesWriteError, FilesPreviewError } from "../files/index.ts";
 import { createTerminalSession } from "../terminal/index.ts";
 import { FILE_COMMANDS, TERMINAL_COMMANDS } from "./contract.ts";
 import type { RedactionRules } from "../../../core/src/ledger/redact.ts";
@@ -147,7 +147,9 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
             send(socket, { type: "ack", cmd_id: message.cmd_id, ok: true, result });
           }, (error) => {
             // Git の stderr やファイルの内容を失敗の応答へ複製しない。
-            send(socket, { type: "ack", cmd_id: message.cmd_id, ok: false, error: message.command === "files.write" ? (error instanceof FilesWriteError ? error.message : "not_editable") : "Files request failed" });
+            send(socket, { type: "ack", cmd_id: message.cmd_id, ok: false,
+              error: message.command === 'files.preview' ? (error instanceof FilesPreviewError ? error.message : 'not_previewable')
+                : message.command === "files.write" ? (error instanceof FilesWriteError ? error.message : "not_editable") : "Files request failed" });
           });
           return;
         }
@@ -169,13 +171,14 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
   searchOptions.port = port;
   const timer = setInterval(() => pollObservation(refresh), PROJECTION_POLL_MS);
   return {
-    url: `http://127.0.0.1:${port}`, wsUrl: `ws://127.0.0.1:${port}/ws`, token, runner, feed,
+    url: `http://127.0.0.1:${port}`, wsUrl: `ws://127.0.0.1:${port}/ws`, token, runner, feed, previews: files,
     resync() {
       for (const socket of clients.keys()) send(socket, { type: "resync", reason: "Projection rebuilt" });
       clients.clear();
     },
     close: async () => {
       clearInterval(timer);
+      files.clearPreviews();
       runner.close();
       for (const socket of wss.clients) socket.terminate();
       await new Promise<void>((resolve) => wss.close(() => resolve()));

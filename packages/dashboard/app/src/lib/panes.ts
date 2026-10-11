@@ -2,6 +2,17 @@ export type WorkspaceTab = { name?: string } & ({ id: string; kind: 'conversatio
 export type Pane = { kind: 'pane'; id: string; tabs: WorkspaceTab[]; active?: string };
 export type PaneTree = Pane | { kind: 'split'; id: string; direction: 'horizontal' | 'vertical'; ratio: number; first: PaneTree; second: PaneTree };
 export const MIN_RATIO = 0.1;
+export type PaneEdge = 'left' | 'right' | 'top' | 'bottom';
+export function splitAndMoveTab(tree: PaneTree, tabId: string, destination: string, edge: PaneEdge, paneId: string, splitId: string): PaneTree {
+  if (!listPanes(tree).some(pane => pane.id === destination) || !listPanes(tree).some(pane => pane.tabs.some(tab => tab.id === tabId))) return tree;
+  const split = splitPane(tree, destination, edge === 'left' || edge === 'right' ? 'horizontal' : 'vertical', paneId, splitId);
+  function orient(node: PaneTree): PaneTree {
+    if (node.kind === 'pane') return node;
+    if (node.id === splitId && (edge === 'left' || edge === 'top')) return { ...node, first: node.second, second: node.first };
+    return { ...node, first: orient(node.first), second: orient(node.second) };
+  }
+  return moveTab(orient(split), tabId, paneId);
+}
 export function listPanes(tree: PaneTree): Pane[] { return tree.kind === 'pane' ? [tree] : [...listPanes(tree.first), ...listPanes(tree.second)]; }
 export function updatePane(tree: PaneTree, id: string, update: (pane: Pane) => Pane): PaneTree {
   return tree.kind === 'pane' ? tree.id === id ? update(tree) : tree : { ...tree, first: updatePane(tree.first, id, update), second: updatePane(tree.second, id, update) };

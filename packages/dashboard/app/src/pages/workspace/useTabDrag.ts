@@ -56,19 +56,31 @@ export function useTabDrag(root: RefObject<HTMLDivElement | null>, drop: (tab: s
         if (event.type === 'pointerup' && target) apply.current(tab, target);
       }
     }
+    function cancel(event: KeyboardEvent) {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (moved) suppressClick.current = true;
+      cleanup();
+    }
     function cleanup() {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', finish);
       window.removeEventListener('pointercancel', finish);
+      window.removeEventListener('keydown', cancel);
       window.removeEventListener('blur', cleanup);
+      capture.removeEventListener('lostpointercapture', cleanup);
       if (capture.hasPointerCapture?.(pointerId)) capture.releasePointerCapture(pointerId);
       setPreview(undefined); setDragging(undefined);
     }
     stop.current = cleanup;
+    suppressClick.current = false;
     window.addEventListener('pointermove', move, { passive: false });
     window.addEventListener('pointerup', finish);
     window.addEventListener('pointercancel', finish);
+    window.addEventListener('keydown', cancel);
     window.addEventListener('blur', cleanup);
+    capture.addEventListener('lostpointercapture', cleanup);
   }
   return { preview, dragging, begin, suppressClick };
 }

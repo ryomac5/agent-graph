@@ -46,7 +46,7 @@ export function Workbench({ project, session, conversationId, client, language, 
   const root = useRef<HTMLDivElement>(null);
   const documents = useRef(new Map<string, CodeDocument>());
   const terminals = useRef(new Map<string, TerminalSession>());
-  const dragTab = useRef<string | undefined>(undefined);
+  const tabMenuRoot = useRef<HTMLDivElement>(null);
   const ja = language === 'ja';
   const text = dictionaries[language];
   const tabDrag = useTabDrag(root, (tab, target) => {
@@ -57,8 +57,9 @@ export function Workbench({ project, session, conversationId, client, language, 
   });
   useEffect(() => {
     if (!tabMenu) return;
+    tabMenuRoot.current?.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled)')?.focus();
     const dismiss = (event: PointerEvent) => { if (!(event.target as Element).closest('.workbench-menu')) setTabMenu(undefined); };
-    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') setTabMenu(undefined); };
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setTabMenu(undefined); document.getElementById(`workspace-tab-${tabMenu.tab.id}`)?.focus(); } };
     window.addEventListener('pointerdown', dismiss); window.addEventListener('keydown', escape);
     return () => { window.removeEventListener('pointerdown', dismiss); window.removeEventListener('keydown', escape); };
   }, [tabMenu]);
@@ -185,10 +186,9 @@ export function Workbench({ project, session, conversationId, client, language, 
         onDrag={(delta, bounds) => { const size = (node.direction === 'horizontal' ? bounds.width : bounds.height) - 6; if (size > 0) setTree(tree => tree && resizeSplit(tree, node.id, node.ratio + delta / size)); }}
         /><div className="split-child" style={{ flexGrow: 1 - node.ratio }}>{renderTree(node.second)}</div></div>;
     return <section className="workbench-pane" key={node.id} tabIndex={-1} data-pane-id={node.id} data-focused={focusedPane?.id === node.id} onFocusCapture={event => focusPane(node.id, event.target)} onPointerDownCapture={event => focusPane(node.id, event.target)}>
-      <header className="workbench-tabs" onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); const tabId = event.dataTransfer.getData('text/plain') || dragTab.current; if (tabId) { setTree(tree => tree && moveTab(tree, tabId, node.id)); setFocused(node.id); } dragTab.current = undefined; }}>
+      <header className="workbench-tabs">
         {node.tabs.filter(tab => tab.kind === 'conversation').map(tab => <div key={tab.id} id={`workspace-back-${tab.id}`} className="workbench-back" hidden={tab.id !== node.active}/>)}
-        <div className="workbench-tablist" role="tablist" aria-label={ja ? '作業場のタブ' : 'Workspace tabs'}>{node.tabs.map(tab => <div className="workbench-tab" key={tab.id} data-tab-id={tab.id} data-dragging={tabDrag.dragging === tab.id} data-drop-before={tabDrag.preview?.pane === node.id && tabDrag.preview?.tablist && tabDrag.preview.before === tab.id} onPointerDown={event => { setTabMenu(undefined); if (event.button === 1) event.preventDefault(); tabDrag.begin(event, tab.id); }} onClickCapture={event => { if (tabDrag.suppressClick.current) { event.preventDefault(); event.stopPropagation(); } }} onDragStart={event => { dragTab.current = tab.id; event.dataTransfer.setData('text/plain', tab.id); }} onDragEnd={() => { dragTab.current = undefined; }}
-          onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); event.stopPropagation(); const tabId = event.dataTransfer.getData('text/plain') || dragTab.current; if (tabId) { setTree(tree => tree && moveTab(tree, tabId, node.id, tab.id)); setFocused(node.id); } dragTab.current = undefined; }}
+        <div className="workbench-tablist" role="tablist" aria-label={ja ? '作業場のタブ' : 'Workspace tabs'}>{node.tabs.map(tab => <div className="workbench-tab" key={tab.id} data-tab-id={tab.id} data-dragging={tabDrag.dragging === tab.id} data-drop-before={tabDrag.preview?.pane === node.id && tabDrag.preview?.tablist && tabDrag.preview.before === tab.id} onPointerDown={event => { setTabMenu(undefined); if (event.button === 1) event.preventDefault(); tabDrag.begin(event, tab.id); }} onClickCapture={event => { if (tabDrag.suppressClick.current) { tabDrag.suppressClick.current = false; event.preventDefault(); event.stopPropagation(); } }}
           onContextMenu={event => { event.preventDefault(); setTabMenu({ pane: node.id, tab }); }}
           onAuxClick={event => { if (event.button === 1) { event.preventDefault(); close(tab); } }}>
           {renaming?.tab === tab.id ? <input className="input-sm" autoFocus aria-label={ja ? 'タブの名前' : 'Tab name'} value={renaming.value} onFocus={event => event.currentTarget.select()} onChange={event => setRenaming({ ...renaming, value: event.target.value })} onBlur={finishRename} onKeyDown={event => { event.stopPropagation(); if (event.key === 'Enter') { event.preventDefault(); finishRename(); } else if (event.key === 'Escape') { event.preventDefault(); setRenaming(undefined); } }}/>
@@ -200,7 +200,14 @@ export function Workbench({ project, session, conversationId, client, language, 
           {menu === node.id && <div className="workbench-menu" role="menu">{(['conversation', 'terminal', 'file'] as const).map(kind => <button className="btn btn-ghost" role="menuitem" key={kind} onClick={() => { if (kind === 'file') { setPicker({ pane: node.id, worktree: activeTab && 'worktree' in activeTab ? activeTab.worktree : undefined }); setMenu(undefined); } else addTab(kind, node.id); }}>{kind === 'conversation' ? ja ? '会話' : 'Conversation' : kind === 'terminal' ? ja ? 'ターミナル' : 'Terminal' : ja ? 'ファイルを開く' : 'Open file'}</button>)}</div>}</div>
         {node.tabs.filter(tab => tab.kind === 'conversation').map(tab => <div key={tab.id} id={`workspace-actions-${tab.id}`} className="workbench-actions" hidden={tab.id !== node.active}/>)}
         {!node.tabs.length && <button className="icon-button" aria-label={ja ? '区画を閉じる' : 'Close pane'} onClick={() => { setTree(tree => tree && closePane(tree, node.id)); requestAnimationFrame(() => root.current?.focus()); }}>×</button>}
-        {tabMenu?.pane === node.id && <div className="workbench-menu" role="menu">
+        {tabMenu?.pane === node.id && <div className="workbench-menu" role="menu" ref={tabMenuRoot} onKeyDown={event => {
+          if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+          event.preventDefault(); event.stopPropagation();
+          const items = [...event.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)')];
+          const index = items.indexOf(document.activeElement as HTMLElement);
+          const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length;
+          items[next]?.focus();
+        }}>
           <button className="btn btn-ghost" role="menuitem" onClick={() => splitTab(node.id, tabMenu.tab, 'right')}>{text.splitRight}</button>
           <button className="btn btn-ghost" role="menuitem" onClick={() => splitTab(node.id, tabMenu.tab, 'bottom')}>{text.splitDown}</button>
           <button className="btn btn-ghost" role="menuitem" disabled={panes.length < 2} onClick={() => { const next = panes[(panes.findIndex(pane => pane.id === node.id) + 1) % panes.length]; setTree(current => current && moveTab(current, tabMenu.tab.id, next.id)); setFocused(next.id); setTabMenu(undefined); }}>{text.moveToOtherPane}</button>

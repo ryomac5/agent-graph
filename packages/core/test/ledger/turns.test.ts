@@ -123,3 +123,20 @@ test("同じ実行の状態は、状態の規則の版がいちばん新しい�
     state(4, "turn:v3:x:a", "2026-10-04T15:35:53.437Z", "idle")] as unknown as Fact[];
   assert.equal(projectRuns(facts)[0].state, "idle");
 });
+
+test("ターンの開始を台帳から保持し、承認と道具で時計を戻さず次のターンで更新する", () => {
+  const event = (id: string, state: "running" | "idle" | "waiting_approval", kind: string, ts: string) => fact({
+    source: "host-codex", source_event_id: id, source_ts: ts, kind: "run.state_changed", subject: "run:clock",
+    confidence: "confirmed", payload: { conversation_id: "c", generation: 1, state, last_evidence: { kind }, last_evidence_ts: ts },
+  });
+  const start = event("start", "running", "turn_started", "2026-10-11T00:00:00Z");
+  const tool = event("tool", "running", "tool_call", "2026-10-11T00:10:42Z");
+  const approval = event("approval", "waiting_approval", "request_approval", "2026-10-11T00:11:00Z");
+  for (const facts of [[start, tool], [start, tool, approval], [approval, tool, start]]) {
+    assert.equal(projectRuns(facts)[0].turn_started_ts, start.source_ts);
+  }
+  const stop = event("stop", "idle", "turn_completed", "2026-10-11T00:12:00Z");
+  assert.equal(projectRuns([start, tool, stop])[0].turn_started_ts, undefined);
+  const next = event("next", "running", "turn_started", "2026-10-11T00:13:00Z");
+  assert.equal(projectRuns([next, stop, start, tool])[0].turn_started_ts, next.source_ts);
+});

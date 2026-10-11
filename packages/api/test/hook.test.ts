@@ -207,3 +207,29 @@ test("実 HTTP の受け口は 127.0.0.1 に限定する", async (t) => {
     authorization: `Bearer ${receiver.token}` }, body: JSON.stringify(EVENT) });
   assert.equal(response.status, 200);
 });
+
+test("根は子の終了を待つ間も hook のターンを保ち、Stop でだけ待機へ戻る", async (t) => {
+  const ledger = openLedger(":memory:");
+  t.after(() => ledger.close());
+  const receiver = createReceiver(ledger);
+  const post = (event: HookEvent) => receiver.post(receiver.url, { method: "POST", headers: {
+    "content-type": "application/json", authorization: `Bearer ${receiver.token}`,
+  }, body: JSON.stringify(event) });
+  await post(EVENT);
+  const start = "2026-01-01T00:01:00.000Z";
+  await post({ ...EVENT, event_id: "prompt", hook_event_name: "UserPromptSubmit", source_ts: start });
+  ledger.append({ source: "transcript-claude", source_event_id: "child-stop", source_ts: "2026-01-01T00:11:42.000Z",
+    kind: "run.state_changed", subject: "run:claude:session:1", confidence: "confirmed",
+    payload: { conversation_id: "claude:session", generation: 1, state: "idle", last_evidence: { kind: "turn_completed" } } });
+  await post({ ...EVENT, event_id: "tool", hook_event_name: "PostToolUse", source_ts: "2026-01-01T00:11:42.000Z" });
+  let runs = projectRuns(ledger.readSince(0, 100));
+  assert.equal(runs[0].state, "running");
+  assert.equal(runs[0].turn_started_ts, start);
+  assert.deepEqual(projectRuns(ledger.readSince(0, 100).reverse()), runs);
+  await post({ ...EVENT, event_id: "stop", hook_event_name: "Stop", source_ts: "2026-01-01T00:12:00.000Z" });
+  runs = projectRuns(ledger.readSince(0, 100));
+  assert.equal(runs[0].state, "idle");
+  assert.equal(runs[0].turn_started_ts, undefined);
+  await post({ ...EVENT, event_id: "next", hook_event_name: "UserPromptSubmit", source_ts: "2026-01-01T00:13:00.000Z" });
+  assert.equal(projectRuns(ledger.readSince(0, 100))[0].turn_started_ts, "2026-01-01T00:13:00.000Z");
+});

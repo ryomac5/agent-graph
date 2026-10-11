@@ -87,7 +87,7 @@ function flowStore(childCount: number) {
   for (let index = 0; index < childCount; index++) {
     const id = `child-${index}`;
     p.conversations!.push({ id, provider: 'claude', type: 'subagent', origin: 'observed' });
-    p.runs!.push({ id: `${id}:1`, conversation_id: id, generation: 1, state: index === 0 ? 'running' : 'ended', started_ts: day(index), last_evidence_ts: day(index) });
+    p.runs!.push({ id: `${id}:1`, conversation_id: id, generation: 1, state: index === 0 ? 'running' : 'ended', turn_started_ts: day(index), started_ts: day(index), last_evidence_ts: day(index) });
     p.relations!.push({ id: `rel-${id}`, type: 'delegated', active: 1, from_id: 'new', to_id: id, confidence: 'confirmed', evidence: { agentType: 'general-purpose', description: `Task ${index}` } });
   }
   target.setSnapshot({ ...target.getSnapshot() });

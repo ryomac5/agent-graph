@@ -12,7 +12,7 @@ import { isWorkingTurn, resolveWorkingTurn, workingElapsed } from '../lib/turns.
 const START = '2026-10-11T00:00:00Z';
 const NOW = Date.parse(START) + 192_000;
 const run = (state = 'running', extra: Row = {}): Row => ({ id: 'r', conversation_id: 'c', generation: 1, state,
-  started_ts: '2026-10-10T00:00:00Z', last_evidence_ts: START, last_evidence: { kind: 'turn_started' }, ...extra });
+  turn_started_ts: START, started_ts: '2026-10-10T00:00:00Z', last_evidence_ts: START, last_evidence: { kind: 'turn_started' }, ...extra });
 beforeEach(() => {
   vi.useFakeTimers(); vi.setSystemTime(NOW); localStorage.clear();
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
@@ -38,47 +38,23 @@ it('starts and clears work from the parent turn state, without an inactivity tim
   expect(workingElapsed(turn, NOW)).toBe('3m 12s');
   expect(workingElapsed(turn, Date.parse(START) - 1000)).toBe('0s');
   expect(workingElapsed(turn, NOW + 600_000)).toBe('13m 12s');
-  for (const state of ['idle', 'ended', 'failed', 'unknown']) expect(resolveWorkingTurn(run(state), START, turn)).toBeUndefined();
+  for (const state of ['idle', 'ended', 'failed', 'unknown']) expect(resolveWorkingTurn(run(state))).toBeUndefined();
   expect(isWorkingTurn(resolveWorkingTurn(run('starting')))).toBe(true);
 });
-it('keeps the clock through tool results and approval waits and resets on the next turn or generation', () => {
-  const first = resolveWorkingTurn(run());
+it('uses only the projected start through tools and approval waits, and resets with the next turn', () => {
   const tool = run('running', { last_evidence_ts: '2026-10-11T00:02:00Z', last_evidence: { kind: 'tool_result' } });
-  const next = resolveWorkingTurn(tool, '', first);
-  expect(workingElapsed(next, NOW)).toBe('3m 12s');
-  const approval = resolveWorkingTurn({ ...tool, state: 'waiting_approval' }, '', next);
+  expect(workingElapsed(resolveWorkingTurn(tool), NOW)).toBe('3m 12s');
+  const approval = resolveWorkingTurn({ ...tool, state: 'waiting_approval' });
   expect(isWorkingTurn(approval)).toBe(false);
-  expect(workingElapsed(resolveWorkingTurn(tool, '', approval), NOW)).toBe('3m 12s');
-  const newTurn = resolveWorkingTurn(run('running', { last_evidence_ts: '2026-10-11T00:03:00Z' }), '', next);
-  expect(workingElapsed(newTurn, NOW)).toBe('12s');
-  expect(workingElapsed(resolveWorkingTurn({ ...tool, id: 'new', generation: 2 }, '', next), NOW)).toBe('1m 12s');
+  expect(workingElapsed(approval, NOW)).toBe('3m 12s');
+  expect(workingElapsed(resolveWorkingTurn(tool), NOW)).toBe('3m 12s');
+  expect(workingElapsed(resolveWorkingTurn(run('running', { turn_started_ts: '2026-10-11T00:03:00Z' })), NOW)).toBe('12s');
+  expect(workingElapsed(resolveWorkingTurn({ ...tool, generation: 2, turn_started_ts: '2026-10-11T00:02:00Z' }), NOW)).toBe('1m 12s');
+  expect(workingElapsed(resolveWorkingTurn({ ...tool, turn_started_ts: undefined }), NOW)).toBe('');
 });
-it('uses the user message when the start evidence has been replaced, with a timestamp fallback for a limited history window', () => {
-  const tool = run('running', { last_evidence: { kind: 'tool_call' }, last_evidence_ts: '2026-10-11T00:02:00Z' });
-  expect(workingElapsed(resolveWorkingTurn(tool, START), NOW)).toBe('3m 12s');
-  expect(workingElapsed(resolveWorkingTurn(tool), NOW)).toBe('1m 12s');
-  expect(workingElapsed(resolveWorkingTurn(run('running', { started_ts: undefined, last_evidence_ts: undefined })), NOW)).toBe('');
-});
-it('updates an inferred start when a newer user message arrives after the initial render', () => {
-  const tool = run('running', { last_evidence: { kind: 'tool_call' }, last_evidence_ts: '2026-10-11T00:02:00Z' });
-  const first = resolveWorkingTurn(tool, START);
-  const next = resolveWorkingTurn(tool, '2026-10-11T00:01:00Z', first);
-  expect(next?.started).toBe(Date.parse('2026-10-11T00:01:00Z'));
-  expect(workingElapsed(next, NOW)).toBe('2m 12s');
-  const laterTool = { ...tool, last_evidence_ts: '2026-10-11T00:03:00Z' };
-  expect(resolveWorkingTurn(laterTool, '2026-10-11T00:01:00Z', next)?.started).toBe(next?.started);
-  const confirmed = resolveWorkingTurn(run());
-  expect(resolveWorkingTurn(tool, '2026-10-11T00:01:00Z', confirmed)?.started).toBe(confirmed?.started);
-});
-it('falls back to the latest evidence for a background turn with only an old user message', () => {
-  const background = run('running', { last_evidence: { kind: 'tool_result' }, last_evidence_ts: START });
-  const turn = resolveWorkingTurn(background, '2026-10-10T20:00:00Z');
-  expect(turn?.started).toBe(Date.parse(START));
-  expect(workingElapsed(turn, NOW)).toBe('3m 12s');
-  expect(resolveWorkingTurn(background, '2026-10-10T23:55:00Z')?.started).toBe(Date.parse('2026-10-10T23:55:00Z'));
-  expect(resolveWorkingTurn(background, '2026-10-10T23:54:59Z')?.started).toBe(Date.parse(START));
-  const later = { ...background, last_evidence_ts: '2026-10-11T00:03:00Z' };
-  expect(resolveWorkingTurn(later, '2026-10-10T20:00:00Z', turn)?.started).toBe(turn?.started);
+it('shows eleven minutes from the projected start even when the latest tool is eighteen seconds old', () => {
+  const now = Date.parse(START) + 660_000;
+  expect(workingElapsed(resolveWorkingTurn(run('running', { last_evidence_ts: new Date(now - 18_000).toISOString(), last_evidence: { kind: 'tool_call' } })), now)).toBe('11m 0s');
 });
 it('shows on turn start, ticks through waiting for a child and a background command, and disappears on parent completion', async () => {
   const target = setup();
@@ -115,7 +91,7 @@ it('shows on turn start, ticks through waiting for a child and a background comm
 });
 it.each(['en', 'ja'] as const)('shows working even without a timestamp in %s', async language => {
   const target = setup('running'); const snapshot = target.getSnapshot();
-  target.setSnapshot({ ...snapshot, projection: { ...snapshot.projection, runs: [run('running', { last_evidence_ts: undefined, started_ts: undefined })], messages: [], message_memberships: [] } });
+  target.setSnapshot({ ...snapshot, projection: { ...snapshot.projection, runs: [run('running', { turn_started_ts: undefined, last_evidence_ts: undefined, started_ts: undefined })], messages: [], message_memberships: [] } });
   render(<MemoryRouter><ConversationPage conversationId="c" target={target} client={client} language={language}/></MemoryRouter>);
   await act(async () => {});
   expect(screen.getByRole('status', { name: language === 'ja' ? '作業中' : 'Working' })).toBeTruthy();
@@ -130,8 +106,9 @@ it('omits tools from an earlier turn and recovers the clock when start evidence 
   render(<MemoryRouter><ConversationPage conversationId="c" target={target} client={client}/></MemoryRouter>);
   await act(async () => {});
   expect(screen.getByRole('status', { name: 'Working' }).querySelector('.working-tool')).toBeNull();
-  const unknownStart = resolveWorkingTurn(run('running', { started_ts: undefined, last_evidence_ts: undefined }));
-  expect(workingElapsed(resolveWorkingTurn(run(), '', unknownStart), NOW)).toBe('3m 12s');
+  const unknownStart = resolveWorkingTurn(run('running', { turn_started_ts: undefined, started_ts: undefined, last_evidence_ts: undefined }));
+  expect(workingElapsed(unknownStart, NOW)).toBe('');
+  expect(workingElapsed(resolveWorkingTurn(run()), NOW)).toBe('3m 12s');
 });
 it.each(['running', 'idle', 'waiting_approval', 'waiting_input'])('shows a named activity mark on the list and tab for %s', async state => {
   const target = setup(state);
@@ -144,39 +121,49 @@ it.each(['running', 'idle', 'waiting_approval', 'waiting_input'])('shows a named
   expect(document.querySelector('.root-row-meta .status-label')?.textContent).toBe(label);
   expect(document.querySelector('.root-row .activity-mark')?.getAttribute('data-state')).toBe(state);
 });
-it('reuses the list user timestamp on clock ticks and refreshes it when messages, memberships or conversation change', () => {
+it('uses the projected clock without reading message bodies on list ticks', () => {
   const snapshot = setup('running').getSnapshot();
-  const roots = selectRoots(snapshot);
   const readMessageBody = vi.fn(() => 'Build the feature');
-  let state: ScreenState = { ...snapshot, projection: { ...snapshot.projection,
+  const state: ScreenState = { ...snapshot, projection: { ...snapshot.projection,
     messages: [{ ...snapshot.projection.messages[0], get body() { return readMessageBody(); } }],
   } };
-  const view = (conversationIds = ['c']) => <MemoryRouter><RootList roots={roots.map(root => ({ ...root, conversation_ids: conversationIds }))} state={state}/></MemoryRouter>;
-  const { rerender } = render(view());
-  expect(readMessageBody).toHaveBeenCalled();
-  readMessageBody.mockClear();
+  render(<MemoryRouter><RootList roots={selectRoots(state)} state={state}/></MemoryRouter>);
+  expect(readMessageBody).not.toHaveBeenCalled();
   act(() => vi.advanceTimersByTime(1000));
   expect(screen.getByLabelText('Elapsed time').textContent).toBe('3m 13s');
   expect(readMessageBody).not.toHaveBeenCalled();
-  state = { ...state, projection: { ...state.projection, runs: [run('running', { last_evidence: { kind: 'tool_result' } })] } };
-  rerender(view());
-  expect(readMessageBody).not.toHaveBeenCalled();
-  state = { ...state, projection: { ...state.projection, messages: [...state.projection.messages] } };
-  rerender(view());
-  expect(readMessageBody).toHaveBeenCalled();
-  readMessageBody.mockClear();
-  state = { ...state, projection: { ...state.projection, message_memberships: [...state.projection.message_memberships,
-    { id: 'd', message_id: 'u', conversation_id: 'd', active: 1 }] } };
-  rerender(view());
-  expect(readMessageBody).toHaveBeenCalled();
-  readMessageBody.mockClear();
-  state = { ...state, projection: { ...state.projection, runs: [run('running', { conversation_id: 'd' })] } };
-  rerender(view(['c', 'd']));
-  expect(readMessageBody).toHaveBeenCalled();
 });
 it('disables all activity animation for reduced motion and uses distinct shapes for running and waiting', () => {
   const css = readFileSync('app/src/styles.css', 'utf8');
   expect(css).toMatch(/\.status\.activity-mark\.status-running \.status-dot \{[^}]*working-spin/);
   expect(css).toMatch(/\.status\.activity-mark\.status-input \.status-dot \{[^}]*border-radius: 2px/);
   expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*\* \{ animation: none !important;/);
+});
+
+it('uses the active root peer for the list, tab and composer even when the selected peer is unknown', async () => {
+  const target = setup('running');
+  const snapshot = target.getSnapshot();
+  target.setSnapshot({ ...snapshot, projection: { ...snapshot.projection,
+    roots: [{ ...snapshot.projection.roots[0], state: 'idle', conversation_ids: ['c', 'new'] }],
+    conversations: [...snapshot.projection.conversations, { id: 'new', name: 'New peer', origin: 'observed', provider: 'claude' }],
+    runs: [run('running', { last_evidence_ts: new Date(NOW - 18_000).toISOString() }),
+      { id: 'new-run', conversation_id: 'new', generation: 2, state: 'unknown' }],
+  } });
+  vi.setSystemTime(Date.parse(START) + 660_000);
+  render(<MemoryRouter><RootList roots={selectRoots(target.getSnapshot())} state={target.getSnapshot()}/>
+    <Workbench project="p" session="root" conversationId="new" client={client} language="en"
+      renderConversation={id => <ConversationPage conversationId={id} seriesState="idle" displayName="Main agent" target={target} client={client} embedded/>}/></MemoryRouter>);
+  await act(async () => {});
+  expect(screen.getByRole('status', { name: 'Working' }).textContent).toContain('11m 0s');
+  expect(screen.getByLabelText('Elapsed time').textContent).toBe('11m 0s');
+  expect(screen.getByRole('tab', { name: 'Main agent' }).querySelector('.activity-mark')?.getAttribute('data-state')).toBe('running');
+  expect(document.querySelector('.root-row .activity-mark')?.getAttribute('data-state')).toBe('running');
+});
+
+it('does not infer a clock from a tool timestamp when projected start evidence is missing', () => {
+  const tool = run('running', { turn_started_ts: undefined, last_evidence_ts: new Date(NOW - 18_000).toISOString(), last_evidence: { kind: 'tool_call' } });
+  const turn = resolveWorkingTurn(tool);
+  expect(isWorkingTurn(turn)).toBe(true);
+  expect(workingElapsed(turn, NOW)).toBe('');
+  expect(workingElapsed(resolveWorkingTurn({ ...tool, turn_started_ts: START }), NOW)).toBe('3m 12s');
 });

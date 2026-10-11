@@ -47,7 +47,7 @@ it('uses only registered display names in the sidebar for ten thousand conversat
 });
 it('shows at most five roots per project with running roots first', () => {
  const target = createLargeStore(); const snapshot = target.getSnapshot();
- target.setSnapshot({ ...snapshot, projection: { ...snapshot.projection, roots: snapshot.projection.roots.map((row, index) => ({ ...row, state: index === 9999 ? 'running' : index === 9998 ? 'waiting_input' : 'ended', last_activity_ts: index === 9998 ? NOW : OLD })) } });
+ target.setSnapshot({ ...snapshot, projection: { ...snapshot.projection, runs: snapshot.projection.runs.map((row, index) => ({ ...row, state: index === 9999 ? 'running' : index === 9998 ? 'waiting_input' : 'ended' })), roots: snapshot.projection.roots.map((row, index) => ({ ...row, state: index === 9999 ? 'running' : index === 9998 ? 'waiting_input' : 'ended', last_activity_ts: index === 9998 ? NOW : OLD })) } });
  render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
  // 登録外のプロジェクトの根は Other の 1 つの区画にまとめ、既定で畳んで件数だけを出す。
  const real = screen.getByRole('region', { name: 'Real project' }); const other = screen.getByRole('group', { name: 'Other' }) as HTMLDetailsElement;

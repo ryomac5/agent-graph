@@ -53,7 +53,7 @@ it('groups roots by project and leaves conversations that are not roots out', ()
  const target = createActivityStore(); render(<MemoryRouter><HomePage target={target}/></MemoryRouter>);
  const row = screen.getByRole('link', { name: /Investigate latency/ }); expect(row.querySelector('.root-state')?.getAttribute('data-state')).toBe('unknown');
  expect(row.querySelector('time')!.getAttribute('datetime')).toBe('2026-10-07T01:05:00Z');
- act(() => target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: { roots: { remove: [], upsert: [{ ...target.getSnapshot().projection.roots[0], state: 'failed' }] } } }));
+ act(() => target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: { runs: { remove: [], upsert: [{ ...target.getSnapshot().projection.runs[0], state: 'failed' }] }, roots: { remove: [], upsert: [{ ...target.getSnapshot().projection.roots[0], state: 'failed' }] } } }));
  expect(screen.getByRole('link', { name: /Implement API/ }).textContent).toContain('Failed');
 });it('uses the projected root name and leaves unrelated conversations out of the list', () => {
  const target = createActivityStore(); const snapshot = target.getSnapshot();

@@ -43,6 +43,7 @@ function confirmEnd(fact: Fact, run: RunProjection, evidence: { [key: string]: J
 export function projectRuns(facts: readonly Fact[]): RunProjection[] {
   const runs = new Map<string, RunProjection>();
   const currentGeneration = new Map<string, number>();
+  const hookStates = new Set<string>();
   const interruptedTurns = new Set<string>();
   const active = orderActiveFacts(facts);
   // 状態の規則の版が上がると、同じ記録の行を新しい版で読み直した事実が足される。実行ごとに最新の版の読み方だけを使う。
@@ -71,6 +72,11 @@ export function projectRuns(facts: readonly Fact[]): RunProjection[] {
       continue;
     }
     const previous = runs.get(key);
+    const turnEvidence = readObject(payload.last_evidence);
+    const hookTurn = fact.source === "hook" && (turnEvidence?.hook_event_name === "UserPromptSubmit" || turnEvidence?.hook_event_name === "Stop");
+    if (hookTurn && payload.state && fact.confidence === "confirmed") hookStates.add(key);
+    // 外の実行では hook のターン通知を履歴の補助的な終了で上書きしない。
+    const auxiliaryState = fact.source === "transcript-claude" && hookStates.has(key);
     const conversationId = payload.conversation_id ?? previous?.conversation_id;
     if (!conversationId) continue;
     const run: RunProjection = previous ? { ...previous } : {
@@ -87,10 +93,10 @@ export function projectRuns(facts: readonly Fact[]): RunProjection[] {
     const terminal = run.state === "ended" || run.state === "failed";
     // ターンの根拠のない live な状態は、状態の規則に従って不明にする。
     const unobserved = rejectUnobservedLiveState(fact);
-    if (payload.state && !terminal && unobserved) {
+    if (payload.state && !terminal && !auxiliaryState && unobserved) {
       run.state = "unknown";
       run.reason = unobserved;
-    } else if (payload.state && !terminal) {
+    } else if (payload.state && !terminal && !auxiliaryState) {
       if (payload.state === "ended" || payload.state === "failed") {
         if (evidence && confirmEnd(fact, run, evidence)) {
           const interrupted = fact.source === "host-claude" && evidence.kind === "host_exit"
@@ -104,6 +110,7 @@ export function projectRuns(facts: readonly Fact[]): RunProjection[] {
             run.reason = "missing_failure_cause";
           } else {
             run.end_evidence = interrupted ? { ...evidence, interrupted: true } : { ...evidence };
+            delete run.turn_started_ts;
             run.ended_ts = payload.ended_ts ?? fact.source_ts;
             if (run.state === "failed") run.cause = payload.cause;
             delete run.reason;
@@ -118,6 +125,13 @@ export function projectRuns(facts: readonly Fact[]): RunProjection[] {
         run.state = "unknown";
         run.reason = payload.reason ?? "unconfirmed_state_evidence";
       } else {
+        const startsTurn = turnEvidence?.kind === "turn_started" || turnEvidence?.hook_event_name === "UserPromptSubmit";
+        if (startsTurn) {
+          run.turn_started_ts = payload.last_evidence_ts ?? fact.source_ts;
+        } else if (payload.state === "running" && fact.source.startsWith("host-") && !["running", "waiting_approval", "waiting_input"].includes(run.state)) {
+          run.turn_started_ts ??= fact.source_ts;
+        }
+        if (["idle", "ended", "failed"].includes(payload.state)) delete run.turn_started_ts;
         run.state = payload.state;
         run.last_evidence = payload.last_evidence ?? { fact_id: fact.fact_id, kind: fact.kind };
         run.last_evidence_ts = payload.last_evidence_ts ?? fact.source_ts;

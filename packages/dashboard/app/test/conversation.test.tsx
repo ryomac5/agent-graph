@@ -14,7 +14,7 @@ function setup({ provider = 'codex', origin = 'managed', status = 'idle', projec
   const conversationId = origin === 'observed' ? JSON.stringify([provider, 'native-id']) : 'c';
   store.setSnapshot({ seq: 1, generation: 0, projection: {
     conversations: [{ id: conversationId, name: 'Build console', provider, origin, history_format: provider === 'codex' ? 'legacy' : 'jsonl' }],
-    runs: [{ id: 'r', conversation_id: conversationId, generation: 1, state: status, started_ts: '2026-10-07T00:00:00Z',
+    runs: [{ id: 'r', conversation_id: conversationId, generation: 1, state: status, turn_started_ts: '2026-10-07T00:00:00Z', started_ts: '2026-10-07T00:00:00Z',
       launch: { cwd: '/workspace/demo', model: { model: 'model-a', effort: 'medium' } } }],
     messages: [], message_memberships: [], ...Object.fromEntries(Object.entries(projection).map(([table, rows]) => [table, rows.map(row => ({ ...row, ...(table === 'conversations' && row.id === 'c' ? { id: conversationId } : {}), ...(row.conversation_id === 'c' ? { conversation_id: conversationId } : {}) }))])),
   } });

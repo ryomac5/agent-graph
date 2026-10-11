@@ -1,3 +1,4 @@
+import { resolveActivity } from './activity.ts';
 import { useMemo } from 'react';
 import type { Row, ScreenState } from './store.ts';
 import { readObject, readText } from '../components/conversation/model.ts';
@@ -94,7 +95,7 @@ export function selectRoots(state: ScreenState, project?: string): Root[] {
   return renameKitRoots(state, (state.projection.roots ?? []).filter(row => project === undefined || row.project === project
       || project === OTHER_PROJECT && rootProject(row as unknown as Root, registered) === OTHER_PROJECT)
     .filter(row => !((row.conversation_ids as string[] | undefined) ?? []).some(id => reviews.has(id)))
-    .map(row => { const root = { ...(row as unknown as Root) }; root.conversation_ids ??= []; root.name = root.auto_name ?? root.name; root.name = rootName(state, root);
+    .map(row => { const root = { ...(row as unknown as Root) }; root.conversation_ids ??= []; root.name = root.auto_name ?? root.name; root.name = rootName(state, root); root.state = resolveActivity(state, root.conversation_ids, root.state).state;
       const spoken = root.conversation_ids.map(id => times.get(id)?.last).filter((value): value is string => Boolean(value));
       if (spoken.length) root.last_activity_ts = spoken.sort().at(-1)!;
       return root; }), times)

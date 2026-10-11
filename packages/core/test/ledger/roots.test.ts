@@ -34,3 +34,17 @@ test("キットのあるプロジェクトでは、キットの名前のある�
   ], []);
   assert.deepEqual(roots.map(row => row.name).sort(), ["agent-graph-001", "solo"]);
 });
+
+test("系列の新しい待機中の会話や子の終了は、動いている根のターンを隠さない", () => {
+  const roots = projectRoots([
+    { id: 'parent', type: 'interactive', created_ts: '2026-10-11T00:00:00Z', last_activity_ts: '2026-10-11T00:01:00Z', state: 'running' },
+    { id: 'peer', type: 'interactive', created_ts: '2026-10-11T00:02:00Z', last_activity_ts: '2026-10-11T00:12:00Z', state: 'idle' },
+    { id: 'child', type: 'subagent', created_ts: '2026-10-11T00:03:00Z', last_activity_ts: '2026-10-11T00:13:00Z', state: 'ended' },
+  ], [
+    { type: 'continued', from_id: 'parent', to_id: 'peer', active: true },
+    { type: 'delegated', from_id: 'parent', to_id: 'child', active: true },
+  ]);
+  assert.equal(roots.length, 1);
+  assert.equal(roots[0].state, 'running');
+  assert.equal(roots[0].running_children, 0);
+});

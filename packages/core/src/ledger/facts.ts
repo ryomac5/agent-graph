@@ -61,6 +61,7 @@ export interface RunPayload {
   generation: number;
   state: RunState;
   started_ts?: string;
+  turn_started_ts?: string;
   ended_ts?: string;
   end_evidence?: JsonValue;
   cause?: string;

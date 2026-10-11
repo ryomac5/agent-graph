@@ -33,6 +33,7 @@ import { ChangedFiles } from './ChangedFiles.tsx';
 import { groupToolRuns, instructionKind } from '../../components/conversation/timeline.ts';
 import { isDelegationTool, resolveDelegationNode } from '../../components/conversation/DelegationCard.tsx';
 import { selectRoots, useRootIndex } from '../../lib/roots.ts';
+import { resolveActivity } from '../../lib/activity.ts';
 import { isWorkingTurn, useWorkingTurn, workingElapsed } from '../../lib/turns.ts';
 import { useAttachments, MAX_ATTACHMENTS } from './useAttachments.ts';
 import './conversation.css';
@@ -248,7 +249,9 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const supported = SUPPORTED_FORMATS.includes(readText(conversation?.history_format));
   // 未対応の形式でも押せるようにし、押したときに理由を出す。
   const canLaunch = connected && !pending && !host?.disconnected && (terminalConversation ? Boolean(host || cwd.trim()) : Boolean(model && cwd.trim()));
-  const rawStatus = seriesState ?? readText(run?.state);
+  const activityIds = seriesIds?.map(resolveConversation) ?? (root?.conversation_ids.includes(conversationId) ? root.conversation_ids : [conversationId]);
+  const activity = resolveActivity(state, activityIds, readText(run?.state) || seriesState);
+  const rawStatus = activity.state;
   const status = executionStates.find(value => value === rawStatus) ?? 'unknown';
   const local = detail?.id === conversationId ? detail.projection : {};
   const combine = (table: string) => [...new Map([...(local[table] ?? []), ...(state.projection[table] ?? [])].map(row => [readText(row.id), row])).values()];
@@ -322,12 +325,9 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     cwd: readText(conversation?.cwd) || savedCwd, projectRoot: readText(project?.root_path),
   });
   // 系列の古い会話が動いている場合も、その会話の時計と道具を使う。子の実行は親の終了を上書きしない。
-  const activityRun = seriesIds ? historyIds.map(id => rootIndex.runs.get(id)).filter((row): row is Row => Boolean(row))
-    .filter(row => ['starting', 'running'].includes(readText(row.state))).sort((a, b) => readText(b.last_evidence_ts).localeCompare(readText(a.last_evidence_ts)))[0] ?? run : run;
+  const activityRun = activity.run ?? run;
   const activityMessages = messageEntries.filter(entry => owner.get(entry.key) === activityRun?.conversation_id);
-  const lastHuman = [...activityMessages].reverse().find(entry => readText(entry.row.role) === 'user' && !isToolOnly(entry.row) && !isBlank(entry.row)
-    && harnessKind(readBody(entry.row.body)) === 'user');
-  const workingTurn = useWorkingTurn(activityRun, lastHuman?.time);
+  const workingTurn = useWorkingTurn(activityRun);
   const lastToolBlock = [...activityMessages].reverse().filter(entry => workingTurn && Date.parse(entry.time) >= workingTurn.started)
     .flatMap(entry => Array.isArray(entry.row.body) ? entry.row.body.map(readObject).filter(block => block.type === 'tool_use').reverse() : [])[0];
   const lastToolInput = readObject(lastToolBlock?.input);

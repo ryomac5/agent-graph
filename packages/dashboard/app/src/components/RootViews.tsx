@@ -1,12 +1,11 @@
 import { SessionName, type RenameClient } from './SessionName.tsx';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { rootHref, useTurnConversations, useWorkingTurn, workingElapsed } from '../lib/turns.ts';
 import { isRunning, shownRole, type Root } from '../lib/roots.ts';
 import { agentName, formatWhen, summarizeApproval } from '../lib/format.ts';
-import { readText, selectTimeline } from './conversation/model.ts';
-import { isBlank, isToolOnly } from './conversation/Message.tsx';
-import { harnessKind, readBody } from '../lib/message-body.ts';
+import { readText } from './conversation/model.ts';
+import { resolveActivity } from '../lib/activity.ts';
 import type { Row, ScreenState } from '../lib/store.ts';
 import { dictionaries, type Language } from '../lib/i18n.ts';
 import type { DelegationTree, TreeNode } from '../pages/tree/model.ts';
@@ -58,18 +57,7 @@ function runningText(count: number, language: Language): string {
   return language === 'ja' ? `${count} ${t.agentsRunning}` : `${count} ${count === 1 ? t.agentRunning : t.agentsRunning}`;
 }
 function RootElapsed({ state, root, now, language }: { state?: ScreenState; root: Root; now: number; language: Language }) {
-  const latest = new Map<string, Row>();
-  for (const run of state?.projection.runs ?? []) if (root.conversation_ids.includes(readText(run.conversation_id))) {
-    const id = readText(run.conversation_id);
-    if (Number(run.generation ?? 0) >= Number(latest.get(id)?.generation ?? 0)) latest.set(id, run);
-  }
-  const run = [...latest.values()].filter(row => ['starting', 'running'].includes(readText(row.state)))
-    .sort((a, b) => readText(b.last_evidence_ts).localeCompare(readText(a.last_evidence_ts)))[0];
-  const conversationId = readText(run?.conversation_id);
-  const humanTime = useMemo(() => state && conversationId ? selectTimeline(state, conversationId).reverse().find(entry => entry.kind === 'message'
-    && entry.row.role === 'user' && !isToolOnly(entry.row) && !isBlank(entry.row) && harnessKind(readBody(entry.row.body)) === 'user')?.time ?? '' : '',
-  [state?.projection.messages, state?.projection.message_memberships, conversationId]);
-  const turn = useWorkingTurn(run, humanTime);
+  const turn = useWorkingTurn(state ? resolveActivity(state, root.conversation_ids).run : undefined);
   return <span className="root-elapsed numeric" aria-label={language === 'ja' ? '経過時間' : 'Elapsed time'}>{workingElapsed(turn, now) || '—'}</span>;
 }
 
@@ -87,7 +75,7 @@ export function RootList({ roots, selected, onSelect, project, language = 'en', 
   const groups = [0, 1, 2, 3].map(value => roots.filter(root => group(root) === value).toSorted((a, b) => (b.last_activity_ts ?? '').localeCompare(a.last_activity_ts ?? '')));
   const labels = language === 'ja' ? ['あなたの番', '実行中', '最近', '以前'] : ['Your turn', 'Running', 'Recent', 'Earlier'];
   const row = (root: Root) => {
-    const shownState = yourTurn(root) && !WAITING.includes(root.state) ? 'waiting_input' : root.state;
+    const shownState = state ? resolveActivity(state, root.conversation_ids, root.state).state : root.state;
     const content = <><StatusDot className="root-state" dotOnly activity dotLabel={root.conversation_ids.some(id => turns.has(id)) ? language === 'ja' ? '自分の番' : 'Your turn' : stateLabel(shownState, language)} state={shownState} language={language}/>
       <span className="root-row-line"><span className="root-name">{root.name}</span></span>
       <span className="root-row-meta"><StatusDot state={shownState} language={language} activity/>

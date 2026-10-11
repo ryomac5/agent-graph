@@ -26,7 +26,7 @@ function fixture() {
   target.setSnapshot({ seq: 1, generation: 1, projection: {
     projects: [{ id: 'p', display_name: 'Project', root_path: '/repo', state: 'registered' }], roots,
     conversations: [...roots.map(root => ({ id: root.id, name: root.name, origin: 'managed', provider: 'codex' })), { id: 'child', provider: 'codex', origin: 'managed', type: 'subagent' }],
-    runs: [...roots.map(root => ({ id: `run-${root.id}`, conversation_id: root.id, state: root.state, generation: 1, started_ts: time(72), last_evidence_ts: new Date(NOW - 201000).toISOString() })), { id: 'child-run', conversation_id: 'child', state: 'waiting_approval', generation: 1 }],
+    runs: [...roots.map(root => ({ id: `run-${root.id}`, conversation_id: root.id, state: root.state, generation: 1, started_ts: time(72), turn_started_ts: new Date(NOW - 201000).toISOString(), last_evidence_ts: new Date(NOW - 201000).toISOString() })), { id: 'child-run', conversation_id: 'child', state: 'waiting_approval', generation: 1 }],
     relations: [{ id: 'edge', type: 'delegated', from_id: 'active', to_id: 'child', evidence: { description: 'Child work', agentType: 'implement' } }],
     approvals: [{ id: 'pending', conversation_id: 'child', run_id: 'child-run', state: 'pending', available_decisions: ['accept', 'decline'], request: { command: 'git status' } }],
     messages: [{ id: 'root-message', role: 'assistant', body: 'Root response' }, { id: 'child-message', role: 'assistant', body: 'Child response' }],

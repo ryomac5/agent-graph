@@ -23,14 +23,25 @@ it.each(['en', 'ja'] as const)('restores key storage and last-valid-value inform
   expect(screen.getByText(ja ? 'api の再起動で反映します。旧 daemon のポートは使えません。' : 'Applies after API restart. The legacy daemon port is not allowed.').className).toBe('settings-note');
   expect(screen.getByText(ja ? 'Keychain に保存して再表示せず、次の起動から反映します。' : 'Stored in Keychain without redisplay and applied on the next launch.')).toBeTruthy();
 });
-it('translates policy headings, nested names and add-constraint order in Japanese', async () => {
+it.each(['en', 'ja'] as const)('shows short policy labels and numbered constraints with full accessible names in %s', async language => {
   const f = createFixture();
-  render(<SettingsPage client={f.client} language="ja"/>);
-  await screen.findByRole('button', { name: '割り当てを保存' });
-  for (const heading of ['利用枠', '実績', '重み', '制約']) expect(screen.getByText(heading).tagName).toBe('LEGEND');
-  expect(screen.getByLabelText('利用枠 · 利用枠の使用を止める上限')).toBeTruthy();
-  expect(screen.getByLabelText('実績 · 重み · 受け入れ率の重み')).toBeTruthy();
-  expect(screen.getByRole('button', { name: '制約を追加' })).toBeTruthy();
+  const { container } = render(<SettingsPage client={f.client} language={language}/>);
+  const ja = language === 'ja';
+  await screen.findByRole('button', { name: ja ? '割り当てを保存' : 'Save policy' });
+  for (const heading of ja ? ['利用枠', '実績', '重み', '制約'] : ['quota', 'performance', 'weights', 'constraints']) expect(screen.getByText(heading, { selector: 'legend' }).tagName).toBe('LEGEND');
+  const hardLimit = screen.getByLabelText(ja ? '利用枠 · 利用枠の使用を止める上限' : 'quota · Quota hard limit (%)');
+  const acceptance = screen.getByLabelText(ja ? '実績 · 重み · 受け入れ率の重み' : 'performance · weights · Acceptance weight');
+  expect(hardLimit.closest('label')?.querySelector('strong')?.textContent).toBe(ja ? '使用を止める上限' : 'Hard limit (%)');
+  expect(acceptance.closest('label')?.querySelector('strong')?.textContent).toBe(ja ? '受け入れ率' : 'Acceptance rate');
+  expect(screen.getByRole('button', { name: ja ? '制約を追加' : 'Add constraints' })).toBeTruthy();
+  const rows = [...container.querySelectorAll('.settings-array-row')];
+  expect(rows).toHaveLength(f.value.policy.constraints.length);
+  expect(rows.length).toBeGreaterThan(0);
+  rows.forEach((row, index) => {
+    expect(row.querySelector('legend')?.textContent).toBe(String(index + 1));
+    const constraint = within(row as HTMLElement).getByLabelText(ja ? `制約 · ${index + 1} · 制約` : `constraints · ${index + 1} · Constraint`);
+    expect(constraint.closest('label')?.querySelector('strong')?.textContent).toBe(ja ? '制約' : 'Constraint');
+  });
 });
 function createFixture() {
   const value: SettingsSnapshot = { config: defaultConfig(), policy: defaultPolicy(), project: defaultProject(), errors: {}, apiKeyConfigured: false };

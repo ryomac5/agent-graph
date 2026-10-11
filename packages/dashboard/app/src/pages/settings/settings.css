@@ -1,35 +1,37 @@
 .settings-page { max-width: 1100px; }
 .settings-page .settings-section { max-width: none; margin: 0 0 var(--space-6); }
 .settings-section header { display: grid; gap: var(--space-2); margin-bottom: var(--space-3); }
-.settings-page .settings-card { max-width: none; overflow: visible; }
-.settings-page .settings-card > p { margin: var(--space-4) var(--space-6); }
-.settings-page .settings-card > .fields { margin: var(--space-4) var(--space-6); }
-.settings-page .settings-card > .button-row { margin: var(--space-4) var(--space-6); }
-.settings-models { margin: var(--space-4) var(--space-6); }
-.settings-page .settings-card > [role='region'] { margin: var(--space-4) var(--space-6); }
-.settings-page .settings-card > progress { margin: var(--space-4) var(--space-6); }
-.settings-page fieldset { border: 0; margin: 0; padding: var(--space-3) 0; min-width: 0; }
+.settings-page .settings-card { max-width: none; overflow: visible; padding-inline: var(--space-6); }
+.settings-page .settings-card > p { margin: var(--space-4) 0; }
+.settings-page .settings-card > .fields { margin: var(--space-4) 0; }
+.settings-page .settings-card > .button-row { margin: var(--space-4) 0; }
+.settings-models { margin: var(--space-4) 0; }
+.settings-page .settings-card > [role='region'] { margin: var(--space-4) 0; }
+.settings-page .settings-card > progress { margin: var(--space-4) 0; }
+.settings-page fieldset { border: 0; margin: var(--space-6) 0 0; padding: 0; min-width: 0; }
 .settings-page textarea { min-width: 200px; max-width: 50%; }
-.settings-array-row { margin: var(--space-3) 0; padding-left: var(--space-4); }
-.settings-array-row .button-row { padding: var(--space-2) var(--space-4); }
+.settings-page .settings-array-row { margin: var(--space-3) 0; }
+.settings-array-row .button-row { padding: var(--space-2) 0; }
 .settings-page table { width: 100%; border-collapse: collapse; text-align: left; }
 .settings-page td { padding: var(--space-2); border-bottom: var(--border); overflow-wrap: anywhere; }
 .settings-page th { padding: var(--space-2); border-bottom: var(--border); overflow-wrap: anywhere; }
+.settings-page :is(td, th):first-child { padding-left: 0; }
 .settings-page > .banner { margin-bottom: var(--space-3); }
 .settings-page > .button-row { margin-bottom: var(--space-6); }
-.settings-page .settings-card > .btn { margin: var(--space-3) var(--space-6); }
+.settings-page .settings-card > .btn { margin: var(--space-3) 0; }
 [data-density='compact'] .settings-page label { padding-top: var(--space-2); padding-bottom: var(--space-2); }
 @media (max-width: 760px) {
   .settings-page .settings-card label { flex-wrap: wrap; }
   .settings-page textarea { max-width: 100%; }
 }
-.settings-page legend { font-weight: 400; padding: 0; font: var(--type-meta); color: var(--fg-3); }
+.settings-page legend { padding: 0; margin-bottom: var(--space-2); font: var(--type-title); color: var(--fg-1); }
 .settings-section header h2 { font: var(--type-title); }
 .settings-card label > span { font: var(--type-body); }
 .settings-card { border: 0; border-radius: 0; box-shadow: none; }
-.settings-card label { min-height: 48px; padding: var(--space-3) 0; }
+.settings-page .settings-card label { min-height: 48px; padding: var(--space-3) 0; }
+.settings-card label strong { font-weight: 400; }
 .settings-card label:last-child { border-bottom: var(--border); }
-.model-assignments { margin: var(--space-4) var(--space-6); width: auto; max-width: 1100px; }
+.model-assignments { margin: var(--space-4) 0; width: auto; max-width: 1100px; }
 .model-assignments h3 { font: var(--type-title); margin: var(--space-4) 0; }
 .assignment-scroll { width: 100%; min-width: 0; }
 .assignment-table { table-layout: fixed; width: 100%; }
@@ -53,6 +55,7 @@
 .settings-page .assignment-popover label, .settings-page .assignment-criteria-editor label { display: grid; gap: var(--space-1); padding: 0; min-height: 0; border: 0; font: var(--type-meta); }
 .settings-page .assignment-popover input, .settings-page .assignment-popover select { width: 100%; min-width: 0; height: 32px; }
 .settings-page .assignment-note { font: var(--type-meta); color: var(--fg-3); }
+.assignment-preset .assignment-note { margin-block: var(--space-3); }
 .assignment-popover summary, .assignment-apply summary { cursor: pointer; font: var(--type-meta); color: var(--fg-3); }
 .assignment-apply { text-align: right; margin-top: var(--space-1); }
 .assignment-apply button { display: block; margin-left: auto; }
@@ -83,7 +86,8 @@
 .settings-note { display: block; color: var(--fg-3); font: var(--type-meta); }
 .settings-page .banner-warning { display: block; }
 .settings-page .banner-warning .settings-note { margin-top: var(--space-1); }
-.settings-page .assignment-model-options > li > .btn { display: grid; grid-template-columns: 16px minmax(0, 1fr); }
+.settings-page .assignment-model-options > li > .btn { display: grid; grid-template-columns: 16px minmax(0, 1fr); align-items: center; }
+.assignment-model-options button > .request-avatar { margin: 0; }
 .assignment-model-options button > small { grid-column: 2; margin-left: 0; }
 .settings-page .settings-card > .settings-note { margin: var(--space-1) 0 var(--space-3); }
 .assignment-actions { flex-wrap: wrap; }

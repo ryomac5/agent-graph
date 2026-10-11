@@ -30,6 +30,8 @@
 .graph-row.is-quiet .graph-row-title { color: var(--fg-2); }
 .graph-row-who, .graph-row-inferred, .graph-rounds, .graph-task-number, .graph-row-end, .graph-more { font: var(--type-meta); color: var(--fg-3); white-space: nowrap; }
 .graph-row-who { max-width: 40%; overflow: hidden; text-overflow: ellipsis; }
+.graph-role[data-role='main'] ~ .graph-row-who { flex: 0 6 auto; min-width: 0; max-width: 20%; }
+.graph-role[data-role='main'] ~ .graph-row-title { flex: 1 1 auto; }
 .graph-row-end { margin-left: auto; }
 .graph-row-end.state-waiting_approval, .graph-time-end.state-waiting_approval { color: var(--state-approval); }
 .graph-row-end.state-waiting_input, .graph-time-end.state-waiting_input { color: var(--state-reply); }

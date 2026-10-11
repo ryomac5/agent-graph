@@ -172,4 +172,7 @@ export function loadPolicy(options: { path?: string; env?: NodeJS.ProcessEnv; ho
   if (env.AGENT_GRAPH_POLICY_JSON) policy = mergePolicy(policy, JSON.parse(readFileSync(env.AGENT_GRAPH_POLICY_JSON, "utf8")));
   return policy;
 }
-export function policyVersion(policy: Policy): string { return `policy-${createHash("sha256").update(JSON.stringify(policy)).digest("hex").slice(0, 8)}`; }
+const ASSIGNMENT_RULE_VERSION = 2;
+export function policyVersion(policy: Policy): string {
+  return `policy-${createHash("sha256").update(JSON.stringify({ assignmentRuleVersion: ASSIGNMENT_RULE_VERSION, policy })).digest("hex").slice(0, 8)}`;
+}

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { assign, defaultPolicyTable } from "../src/assign/static.ts";
 import { decide } from "../src/assign/assign.ts";
-import { defaultPolicy, getCandidates } from "../src/assign/policy.ts";
+import { defaultPolicy, getCandidates, policyVersion } from "../src/assign/policy.ts";
 import type { DelegateRequest, Role } from "../src/delegate/types.ts";
 
 function createPolicy() {
@@ -71,6 +71,104 @@ test("実績不足は静的順位、十分ならスコア順", () => {
     ...input, performance: (role: Role, model: string) => ({ ...performance(role, model), samples: 20 }),
   });
   assert.equal(second.ok && second.assignment.model, "gpt-6.1-sol");
+});
+
+test("数万トークンでも重み 0.1 が順位を支配せず、各候補の項別点を残す", () => {
+  const policy = defaultPolicy();
+  const input = { policy, quota: () => undefined, performance: (_role: Role, model: string) => ({
+    samples: 20, acceptRate: model === "opus" ? 0.9 : 0.6, reviewApprove: model === "opus" ? 0.9 : 0.6,
+    avgRoundTrips: model === "opus" ? 2 : 1, avgTokens: model === "opus" ? 50_000 : 10_000,
+  }) };
+  const result = decide(request("implement"), input);
+  assert.ok(result.ok);
+  assert.equal(result.assignment.model, "opus");
+  assert.ok(result.assignment.reason.includes("stage 3 score opus: acceptRate=0.400000 reviewApprove=0.300000 roundTrips=0.000000 tokens=0.000000 total=0.700000"));
+  assert.ok(result.assignment.reason.includes("stage 3 score gpt-6-astra: acceptRate=0.000000 reviewApprove=0.000000 roundTrips=0.200000 tokens=0.100000 total=0.300000"));
+  policy.performance.weights = { acceptRate: 4, reviewApprove: 3, roundTrips: 2, tokens: 1 };
+  assert.deepEqual(decide(request("implement"), input), {
+    ...result, assignment: { ...result.assignment, policyVersion: policyVersion(policy) },
+  });
+});
+
+test("合格率の重みを上げると合格率の高い候補が上に来る", () => {
+  const policy = defaultPolicy();
+  policy.performance.weights = { acceptRate: 1, reviewApprove: 6, roundTrips: 2, tokens: 1 };
+  const input = { policy, quota: () => undefined, performance: (_role: Role, model: string) => ({
+    samples: 20, acceptRate: model === "opus" ? 0.9 : 0.6, reviewApprove: model === "opus" ? 0.6 : 0.9,
+    avgRoundTrips: 2, avgTokens: 30_000,
+  }) };
+  const before = decide(request("implement"), input);
+  assert.ok(before.ok);
+  assert.equal(before.assignment.model, "gpt-6-astra");
+  policy.performance.weights.acceptRate = 8;
+  const after = decide(request("implement"), input);
+  assert.ok(after.ok);
+  assert.equal(after.assignment.model, "opus");
+});
+
+test("候補間の中間値も正規化し、往復とトークンは少ないほど高得点にする", () => {
+  const policy = createPolicy();
+  const values = {
+    "gpt-6-astra": { acceptRate: 0.6, reviewApprove: 0.3, avgRoundTrips: 1, avgTokens: 10_000 },
+    "gpt-6.1-sol": { acceptRate: 0.8, reviewApprove: 0.6, avgRoundTrips: 2, avgTokens: 30_000 },
+    opus: { acceptRate: 1, reviewApprove: 0.9, avgRoundTrips: 3, avgTokens: 50_000 },
+  };
+  const result = decide(request("implement"), { policy, quota: () => undefined,
+    performance: (_role, model) => ({ samples: 20, ...values[model as keyof typeof values] }),
+  });
+  assert.ok(result.ok);
+  assert.equal(result.assignment.model, "opus");
+  assert.ok(result.assignment.reason.includes("stage 3 score gpt-6.1-sol: acceptRate=0.200000 reviewApprove=0.150000 roundTrips=0.100000 tokens=0.050000 total=0.500000"));
+});
+
+test("全候補が同じ値の項は 0 点となり、同点と単独候補は元の順を保つ", () => {
+  const policy = defaultPolicy();
+  const input = { policy, quota: () => undefined, performance: () => ({
+    samples: 20, acceptRate: 0.8, reviewApprove: 0.9, avgRoundTrips: 2, avgTokens: 30_000,
+  }) };
+  for (const role of ["implement", "research"] as const) {
+    const result = decide(request(role), input);
+    assert.ok(result.ok);
+    assert.equal(result.assignment.model, getCandidates(policy, role)[0].model);
+    const scores = result.assignment.reason.filter(reason => reason.startsWith("stage 3 score "));
+    assert.equal(scores.length, getCandidates(policy, role).length);
+    for (const score of scores) assert.match(score, /acceptRate=0\.000000 reviewApprove=0\.000000 roundTrips=0\.000000 tokens=0\.000000 total=0\.000000$/);
+  }
+});
+
+test("重みの合計が 0 なら実績にかかわらず利用枠適用後の順を保つ", () => {
+  const policy = defaultPolicy();
+  policy.performance.weights = { acceptRate: 0, reviewApprove: 0, roundTrips: 0, tokens: 0 };
+  for (const performance of [
+    () => undefined,
+    (_role: Role, model: string) => ({ samples: 20, acceptRate: model === "opus" ? 1 : 0,
+      reviewApprove: 0, avgRoundTrips: 1, avgTokens: model === "opus" ? 10_000 : 50_000 }),
+  ]) {
+    for (const deferred of [false, true]) {
+      const result = decide(request("implement"), { policy, performance,
+        quota: candidate => deferred && candidate.model === "gpt-6-astra" ? { percent: 70, source: "primary" } : undefined,
+      });
+      assert.ok(result.ok);
+      assert.equal(result.assignment.model, deferred ? "opus" : "gpt-6-astra");
+      assert.ok(result.assignment.reason.includes("stage 3 performance: static order (weight sum is zero)"));
+      const scores = result.assignment.reason.filter(reason => reason.startsWith("stage 3 score "));
+      assert.equal(scores.length, 2);
+      for (const score of scores) assert.match(score, /acceptRate=0\.000000 reviewApprove=0\.000000 roundTrips=0\.000000 tokens=0\.000000 total=0\.000000$/);
+    }
+  }
+});
+
+test("正規化後も soft 超の降格と hard 超の除外を実績より優先する", () => {
+  const policy = createPolicy();
+  const result = decide(request("implement"), { policy,
+    quota: candidate => candidate.model === "opus" ? undefined : { percent: candidate.model === "gpt-6-astra" ? 90 : 70, source: "primary" },
+    performance: (_role, model) => ({ samples: 20, acceptRate: model === "opus" ? 0 : 1,
+      reviewApprove: model === "opus" ? 0 : 1, avgRoundTrips: model === "opus" ? 3 : 1, avgTokens: model === "opus" ? 50_000 : 10_000 }),
+  });
+  assert.ok(result.ok);
+  assert.equal(result.assignment.model, "opus");
+  assert.equal(result.assignment.reason.filter(reason => reason.startsWith("stage 3 score ")).length, 2);
+  assert.ok(!result.assignment.reason.some(reason => reason.startsWith("stage 3 score gpt-6-astra:")));
 });
 
 test("policy 制約と依頼の minTier を適用する", () => {

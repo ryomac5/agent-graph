@@ -1,9 +1,21 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { getCandidates, loadPolicy, defaultPolicy, parsePolicyToml } from "../src/assign/policy.ts";
+import { getCandidates, loadPolicy, defaultPolicy, parsePolicyToml, policyVersion } from "../src/assign/policy.ts";
+
+test("policyVersion は設定と採点規則の第 2 版を識別する", () => {
+  const policy = defaultPolicy();
+  const previous = `policy-${createHash("sha256").update(JSON.stringify(policy)).digest("hex").slice(0, 8)}`;
+  const version = policyVersion(policy);
+  assert.match(version, /^policy-[0-9a-f]{8}$/);
+  assert.notEqual(version, previous);
+  assert.equal(policyVersion(structuredClone(policy)), version);
+  policy.performance.weights.acceptRate = 0.8;
+  assert.notEqual(policyVersion(policy), version);
+});
 
 test("TOML の数値と役割候補を読む", () => {
   const parsed = parsePolicyToml(`

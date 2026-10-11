@@ -14,6 +14,13 @@ export interface DecisionInput {
 }
 const TIER_RANK: Record<Tier, number> = { low: 0, mid: 1, high: 2 };
 
+function normalizeMetric(values: number[], lowerIsBetter: boolean): number[] {
+  const minimum = Math.min(...values);
+  const maximum = Math.max(...values);
+  if (minimum === maximum) return values.map(() => 0);
+  return values.map(value => (lowerIsBetter ? maximum - value : value - minimum) / (maximum - minimum));
+}
+
 export function decide(
   req: DelegateRequest, input: DecisionInput,
 ): { ok: true; assignment: Assignment } | { ok: false; reason: string[] } {
@@ -35,18 +42,32 @@ export function decide(
   }
   candidates = [...available, ...deferred];
   reason.push(`stage 2 quota: ${candidates.length} remain`);
+  const weights = policy.performance.weights;
+  const weightSum = weights.acceptRate + weights.reviewApprove + weights.roundTrips + weights.tokens;
   const metrics = candidates.map((candidate) => input.performance(req.role, candidate.model));
-  if (candidates.length && metrics.every((value) => value && value.samples >= policy.performance.minSamples)) {
-    const weights = policy.performance.weights;
-    const score = (index: number): number => {
-      const value = metrics[index]!;
-      return weights.acceptRate * value.acceptRate + weights.reviewApprove * value.reviewApprove -
-        weights.roundTrips * value.avgRoundTrips - weights.tokens * value.avgTokens;
-    };
+  if (weightSum === 0) {
+    for (const candidate of candidates) reason.push(`stage 3 score ${candidate.model}: acceptRate=0.000000 reviewApprove=0.000000 roundTrips=0.000000 tokens=0.000000 total=0.000000`);
+    reason.push("stage 3 performance: static order (weight sum is zero)");
+  } else if (candidates.length && metrics.every((value) => value && value.samples >= policy.performance.minSamples)) {
+    const acceptRate = normalizeMetric(metrics.map(value => value!.acceptRate), false);
+    const reviewApprove = normalizeMetric(metrics.map(value => value!.reviewApprove), false);
+    const roundTrips = normalizeMetric(metrics.map(value => value!.avgRoundTrips), true);
+    const tokens = normalizeMetric(metrics.map(value => value!.avgTokens), true);
+    const scores = candidates.map((candidate, index) => {
+      const terms = {
+        acceptRate: acceptRate[index] * (weights.acceptRate / weightSum),
+        reviewApprove: reviewApprove[index] * (weights.reviewApprove / weightSum),
+        roundTrips: roundTrips[index] * (weights.roundTrips / weightSum),
+        tokens: tokens[index] * (weights.tokens / weightSum),
+      };
+      const total = terms.acceptRate + terms.reviewApprove + terms.roundTrips + terms.tokens;
+      reason.push(`stage 3 score ${candidate.model}: ${Object.entries(terms).map(([key, value]) => `${key}=${value.toFixed(6)}`).join(" ")} total=${total.toFixed(6)}`);
+      return total;
+    });
     candidates = candidates.map((candidate, index) => ({ candidate, index }))
       .sort((a, b) => {
         const quotaOrder = Number(a.index >= available.length) - Number(b.index >= available.length);
-        return quotaOrder || score(b.index) - score(a.index) || a.index - b.index;
+        return quotaOrder || scores[b.index] - scores[a.index] || a.index - b.index;
       })
       .map(({ candidate }) => candidate);
     reason.push("stage 3 performance: weighted score order");

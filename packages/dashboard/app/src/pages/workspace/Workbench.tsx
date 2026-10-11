@@ -5,9 +5,10 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { type CodeDocument } from '../../lib/code-document.ts';
 import { getFileDocument } from '../../lib/file-documents.ts';
 import { DEFAULT_KEYS, createKeyHandler, type KeyBindings } from '../../lib/keys.ts';
-import { closePane, closeTab, createWorkspace, listPanes, moveTab, resizeSplit, restoreWorkspace, splitPane, updatePane, workspaceKey, type PaneTree, type WorkspaceTab } from '../../lib/panes.ts';
+import { closePane, closeTab, createWorkspace, listPanes, moveTab, resizeSplit, restoreWorkspace, splitAndMoveTab, splitPane, updatePane, workspaceKey, type PaneTree, type WorkspaceTab } from '../../lib/panes.ts';
 import { OpenWorkspaceConversation, OpenWorkspaceFile, OpenWorkspaceTerminal, WorkspaceConversationHeader, type ConversationTabMetadata } from '../../lib/workspace-context.ts';
-import type { Language } from '../../lib/i18n.ts';
+import { dictionaries, type Language } from '../../lib/i18n.ts';
+import { useTabDrag } from './useTabDrag.ts';
 import type { ConversationClient } from '../conversation/ConversationPage.tsx';
 import { CodeTab } from './CodeTab.tsx';
 import { TerminalTab, createTerminalSession, type TerminalSession } from './TerminalTab.tsx';
@@ -47,6 +48,20 @@ export function Workbench({ project, session, conversationId, client, language, 
   const terminals = useRef(new Map<string, TerminalSession>());
   const dragTab = useRef<string | undefined>(undefined);
   const ja = language === 'ja';
+  const text = dictionaries[language];
+  const tabDrag = useTabDrag(root, (tab, target) => {
+    const paneId = target.edge ? id() : target.pane;
+    const splitId = id();
+    setTree(current => current && (target.edge ? splitAndMoveTab(current, tab, target.pane, target.edge, paneId, splitId) : moveTab(current, tab, target.pane, target.before)));
+    setFocused(paneId);
+  });
+  useEffect(() => {
+    if (!tabMenu) return;
+    const dismiss = (event: PointerEvent) => { if (!(event.target as Element).closest('.workbench-menu')) setTabMenu(undefined); };
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') setTabMenu(undefined); };
+    window.addEventListener('pointerdown', dismiss); window.addEventListener('keydown', escape);
+    return () => { window.removeEventListener('pointerdown', dismiss); window.removeEventListener('keydown', escape); };
+  }, [tabMenu]);
   const panes = tree ? listPanes(tree) : [];
   const focusedPane = panes.find(pane => pane.id === focused) ?? panes[0];
   const activeTab = focusedPane?.tabs.find(tab => tab.id === focusedPane.active);
@@ -146,6 +161,11 @@ export function Workbench({ project, session, conversationId, client, language, 
     setTree(tree => tree && closeTab(tree, tab.id));
     requestAnimationFrame(() => root.current?.focus());
   }
+  function splitTab(pane: string, tab: WorkspaceTab, edge: 'right' | 'bottom') {
+    const paneId = id(), splitId = id();
+    setTree(current => current && splitAndMoveTab(current, tab.id, pane, edge, paneId, splitId));
+    setFocused(paneId); setTabMenu(undefined);
+  }
   function openConversation(conversationId: string): boolean {
     if (!focusedPane || focusedPane.tabs.length) return false;
     const tab: WorkspaceTab = { kind: 'conversation', id: id(), conversationId };
@@ -167,7 +187,7 @@ export function Workbench({ project, session, conversationId, client, language, 
     return <section className="workbench-pane" key={node.id} tabIndex={-1} data-pane-id={node.id} data-focused={focusedPane?.id === node.id} onFocusCapture={event => focusPane(node.id, event.target)} onPointerDownCapture={event => focusPane(node.id, event.target)}>
       <header className="workbench-tabs" onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); const tabId = event.dataTransfer.getData('text/plain') || dragTab.current; if (tabId) { setTree(tree => tree && moveTab(tree, tabId, node.id)); setFocused(node.id); } dragTab.current = undefined; }}>
         {node.tabs.filter(tab => tab.kind === 'conversation').map(tab => <div key={tab.id} id={`workspace-back-${tab.id}`} className="workbench-back" hidden={tab.id !== node.active}/>)}
-        <div className="workbench-tablist" role="tablist" aria-label={ja ? '作業場のタブ' : 'Workspace tabs'}>{node.tabs.map(tab => <div className="workbench-tab" key={tab.id} draggable onDragStart={event => { dragTab.current = tab.id; event.dataTransfer.setData('text/plain', tab.id); }} onDragEnd={() => { dragTab.current = undefined; }}
+        <div className="workbench-tablist" role="tablist" aria-label={ja ? '作業場のタブ' : 'Workspace tabs'}>{node.tabs.map(tab => <div className="workbench-tab" key={tab.id} data-tab-id={tab.id} data-dragging={tabDrag.dragging === tab.id} data-drop-before={tabDrag.preview?.pane === node.id && tabDrag.preview?.tablist && tabDrag.preview.before === tab.id} onPointerDown={event => { setTabMenu(undefined); if (event.button === 1) event.preventDefault(); tabDrag.begin(event, tab.id); }} onClickCapture={event => { if (tabDrag.suppressClick.current) { event.preventDefault(); event.stopPropagation(); } }} onDragStart={event => { dragTab.current = tab.id; event.dataTransfer.setData('text/plain', tab.id); }} onDragEnd={() => { dragTab.current = undefined; }}
           onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); event.stopPropagation(); const tabId = event.dataTransfer.getData('text/plain') || dragTab.current; if (tabId) { setTree(tree => tree && moveTab(tree, tabId, node.id, tab.id)); setFocused(node.id); } dragTab.current = undefined; }}
           onContextMenu={event => { event.preventDefault(); setTabMenu({ pane: node.id, tab }); }}
           onAuxClick={event => { if (event.button === 1) { event.preventDefault(); close(tab); } }}>
@@ -175,11 +195,19 @@ export function Workbench({ project, session, conversationId, client, language, 
           : <button onDoubleClick={() => beginRename(node.id, tab)} role="tab" id={`workspace-tab-${tab.id}`} aria-label={tab.kind === 'conversation' ? label(tab) : undefined} aria-controls={`workspace-body-${tab.id}`} aria-selected={tab.id === node.active} title={tab.kind === 'code' ? tab.path : conversationTabs[tab.id]?.title} onClick={() => { setFocused(node.id); setTree(tree => tree && updatePane(tree, node.id, pane => ({ ...pane, active: tab.id }))); }}>{tab.kind === 'conversation' && conversationTabs[tab.id] && <StatusDot state={conversationTabs[tab.id].state} language={language} dotOnly activity/>}<span className="truncate">{tab.kind === 'code' ? <CodeLabel document={getDocument(tab)} language={language} name={label(tab)}/> : label(tab)}</span></button>}
           <button className="icon-button" aria-label={`${ja ? '閉じる' : 'Close'} ${tab.kind === 'code' ? tab.path : tab.kind === 'terminal' ? ja ? 'ターミナル' : 'Terminal' : ja ? '会話' : 'Conversation'}`} onClick={() => close(tab)}>×</button>
         </div>)}</div>
+        {tabDrag.preview?.pane === node.id && tabDrag.preview.tablist && !tabDrag.preview.before && <span className="workbench-drop-end"/>}
         <div className="workbench-add"><button className="icon-button" aria-label={ja ? 'タブを開く' : 'Open tab'} aria-expanded={menu === node.id} onClick={() => setMenu(menu === node.id ? undefined : node.id)}>+</button>
           {menu === node.id && <div className="workbench-menu" role="menu">{(['conversation', 'terminal', 'file'] as const).map(kind => <button className="btn btn-ghost" role="menuitem" key={kind} onClick={() => { if (kind === 'file') { setPicker({ pane: node.id, worktree: activeTab && 'worktree' in activeTab ? activeTab.worktree : undefined }); setMenu(undefined); } else addTab(kind, node.id); }}>{kind === 'conversation' ? ja ? '会話' : 'Conversation' : kind === 'terminal' ? ja ? 'ターミナル' : 'Terminal' : ja ? 'ファイルを開く' : 'Open file'}</button>)}</div>}</div>
         {node.tabs.filter(tab => tab.kind === 'conversation').map(tab => <div key={tab.id} id={`workspace-actions-${tab.id}`} className="workbench-actions" hidden={tab.id !== node.active}/>)}
         {!node.tabs.length && <button className="icon-button" aria-label={ja ? '区画を閉じる' : 'Close pane'} onClick={() => { setTree(tree => tree && closePane(tree, node.id)); requestAnimationFrame(() => root.current?.focus()); }}>×</button>}
-        {tabMenu?.pane === node.id && <div className="workbench-menu" role="menu"><button className="btn btn-ghost" role="menuitem" onClick={() => beginRename(node.id, tabMenu.tab)}>{ja ? '名前を変える' : 'Rename'}</button><button className="btn btn-ghost" role="menuitem" onClick={() => setTabMenu(undefined)}>{ja ? '閉じる' : 'Close'}</button></div>}
+        {tabMenu?.pane === node.id && <div className="workbench-menu" role="menu">
+          <button className="btn btn-ghost" role="menuitem" onClick={() => splitTab(node.id, tabMenu.tab, 'right')}>{text.splitRight}</button>
+          <button className="btn btn-ghost" role="menuitem" onClick={() => splitTab(node.id, tabMenu.tab, 'bottom')}>{text.splitDown}</button>
+          <button className="btn btn-ghost" role="menuitem" disabled={panes.length < 2} onClick={() => { const next = panes[(panes.findIndex(pane => pane.id === node.id) + 1) % panes.length]; setTree(current => current && moveTab(current, tabMenu.tab.id, next.id)); setFocused(next.id); setTabMenu(undefined); }}>{text.moveToOtherPane}</button>
+          <button className="btn btn-ghost" role="menuitem" onClick={() => { close(tabMenu.tab); setTabMenu(undefined); }}>{text.close}</button>
+          <button className="btn btn-ghost" role="menuitem" onClick={() => { for (const tab of node.tabs) if (tab.id !== tabMenu.tab.id) close(tab); setTabMenu(undefined); }}>{text.closeOthers}</button>
+          <button className="btn btn-ghost" role="menuitem" onClick={() => beginRename(node.id, tabMenu.tab)}>{ja ? '名前を変える' : 'Rename'}</button>
+        </div>}
       </header>
       {!node.tabs.length && <div className="workbench-empty"><div className="empty-state">
         <Icon name="overview" size={20}/><h2>{ja ? '空の区画' : 'Empty pane'}</h2>
@@ -191,6 +219,7 @@ export function Workbench({ project, session, conversationId, client, language, 
       </div></div>}
       {node.tabs.map(tab => <div key={tab.id} role="tabpanel" id={`workspace-body-${tab.id}`} aria-labelledby={`workspace-tab-${tab.id}`} hidden={tab.id !== node.active} className="workbench-body">
         {tab.kind === 'conversation' ? <WorkspaceConversationHeader.Provider value={{ tabId: tab.id, report: reportConversation }}><OpenWorkspaceTerminal.Provider value={terminalId => openTerminal(terminalId, node.id)}>{renderConversation(tab.conversationId, conversationId => replaceConversation(node.id, tab.id, conversationId))}</OpenWorkspaceTerminal.Provider></WorkspaceConversationHeader.Provider> : tab.kind === 'code' ? <CodeTab path={tab.path} document={getDocument(tab)} language={language}/> : <TerminalTab key={`${tab.id}:${restart}`} session={getTerminal(tab)} language={language} reopen={() => { terminals.current.get(tab.id)?.dispose(); terminals.current.delete(tab.id); setRestart(value => value + 1); }}/>}</div>)}
+      {tabDrag.preview?.pane === node.id && !tabDrag.preview.tablist && <div className={`workbench-drop-preview ${tabDrag.preview.edge ?? 'center'}`} aria-hidden="true"/>}
     </section>;
   }
   return <OpenWorkspaceConversation.Provider value={openConversation}><OpenWorkspaceFile.Provider value={openFile}><div className="workbench workspace-conversation" tabIndex={-1} ref={root} aria-label={ja ? '作業場' : 'Workbench'} onKeyDownCapture={event => { if (handler(event.nativeEvent)) { event.preventDefault(); event.stopPropagation(); } }}>

@@ -37,3 +37,15 @@
 .workbench-actions[hidden], .workbench-back[hidden] { display: none; }
 .workbench-back:empty, .workbench-actions:empty { display: none; }
 .workbench-back .root-back { display: flex; align-items: center; gap: var(--space-1); max-width: 128px; }
+
+.workbench-pane { position: relative; }
+.workbench-tab { position: relative; touch-action: none; user-select: none; }
+.workbench-tab button[role='tab'] { touch-action: none; }
+.workbench-tab[data-dragging='true'] { opacity: 0.5; }
+.workbench-tab[data-drop-before='true']::before { content: ''; position: absolute; inset: 0 auto 0 0; width: 2px; background: var(--fg-1); }
+.workbench-drop-end { flex: none; width: 2px; height: var(--control); background: var(--fg-1); }
+.workbench-drop-preview { position: absolute; inset: 0; z-index: 10; pointer-events: none; background: color-mix(in srgb, var(--fg-2) 20%, transparent); border: 1px solid var(--fg-2); }
+.workbench-drop-preview.left { right: 50%; }
+.workbench-drop-preview.right { left: 50%; }
+.workbench-drop-preview.top { bottom: 50%; }
+.workbench-drop-preview.bottom { top: 50%; }

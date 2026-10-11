@@ -84,7 +84,7 @@ export function GraphOutline(props: OutlineProps) {
     {model.rows.map(row => {
       const node = row.node; const state = toDisplayState(node?.state ?? 'idle');
       const running = ['starting', 'running'].includes(state);
-      const target = node?.provider === 'codex' ? 'Codex' : agentName(node?.provider ?? '', node?.model ?? '').replace(/^Claude\s*/, '') || 'Claude';
+      const target = node?.provider === 'codex' ? 'Codex' : agentName(node?.provider ?? '', node?.model ?? '').replace(/^Claude\s+/, '') || 'Agent';
       const groupWords = row.group ? ROLES.filter(role => row.group!.roles[role]).map(role => `${roleWord(role, language)} ${row.group!.roles[role]}`).join(' · ') : '';
       const who = row.group ? groupWords : `${roleWord(row.role!, language)}${row.role === 'main' ? '' : ` · ${target}`}`;
       const title = row.group?.more ? t.showMore : row.group ? `${row.group.kind === 'today' ? t.today : t.earlier} ${row.group.count}` : node!.label;

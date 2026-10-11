@@ -10,6 +10,7 @@ export interface Delta { runId: string; text: string; conversationId?: string; m
 export interface ScreenState extends Snapshot {
   connection: ConnectionState;
   deltas: Record<string, Delta>;
+  projectionError?: string;
 }
 export function createStore() {
   let state: ScreenState = { seq: 0, generation: 0, projection: {}, connection: 'connecting', deltas: {} };
@@ -19,9 +20,9 @@ export function createStore() {
     getSnapshot: () => state,
     subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
     setConnection: (connection: ConnectionState) => update({ ...state, connection }),
-    setSnapshot: (snapshot: Snapshot) => update({ ...state, ...snapshot, pages: snapshot.pages, projection: resolveProjection(snapshot.projection, snapshot.identities), deltas: {} }),
+    setSnapshot: (snapshot: Snapshot) => update({ ...state, ...snapshot, pages: snapshot.pages, projection: resolveProjection(snapshot.projection, snapshot.identities), deltas: {}, projectionError: undefined }),
     clearDeltas: () => update({ ...state, deltas: {} }),
-    mergeProjection(projection: Record<string, Row[]>, generation: number, identities = state.identities) {
+    mergeProjection(projection: Record<string, Row[]>, generation: number, identities = state.identities, pages = state.pages, projectionError = state.projectionError) {
       if (generation !== state.generation) return;
       const next = { ...state.projection };
       for (const [table, incoming] of Object.entries(resolveProjection(projection, identities))) {
@@ -29,7 +30,7 @@ export function createStore() {
         for (const row of incoming) if (!rows.has(String(row.id))) rows.set(String(row.id), row);
         next[table] = [...rows.values()];
       }
-      update({ ...state, projection: next });
+      update({ ...state, projection: next, pages, projectionError });
     },
     applyPatch(patch: Patch): boolean {
       if (patch.generation !== state.generation || patch.from_seq > state.seq) return false;

@@ -75,22 +75,27 @@ export function App({ target = store, client = unavailableClient, searchClient =
   const rootIndex = useRootIndex(state);
   const registeredIds = new Set(projects.map(row => row.id));
   const hasOther = roots.some(row => rootProject(row, registeredIds) === OTHER_PROJECT);
-  const [listError, setListError] = useState('');
   useEffect(() => {
     const controller = new AbortController();
-    setListError('');
+    const projection: Record<string, Row[]> = {};
+    const pages = { ...state.pages };
     void (async () => {
       for (const [table, page] of Object.entries(state.pages ?? {})) {
+        pages[table] = { ...page, next: null };
         let after = page.next;
         while (after) {
           const next = await fetchProjection<{ rows: Row[]; next: string | null; generation: number }>(`/projection?table=${encodeURIComponent(table)}&after=${encodeURIComponent(after)}`, controller.signal);
           if (controller.signal.aborted || next.generation !== target.getSnapshot().generation) return;
-          target.mergeProjection({ [table]: next.rows }, next.generation);
+          (projection[table] ??= []).push(...next.rows);
           if (next.next === after) throw new Error('Unable to advance activity list');
           after = next.next;
         }
       }
-    })().catch(error => { if (!controller.signal.aborted) setListError(`Unable to load the full activity list. ${error instanceof Error ? error.message : ''}`.trim()); });
+      if (Object.keys(projection).length) target.mergeProjection(projection, state.generation, undefined, pages);
+    })().catch(error => {
+      if (!controller.signal.aborted) target.mergeProjection(projection, state.generation, undefined, pages,
+        `Unable to load the full activity list. ${error instanceof Error ? error.message : ''}`.trim());
+    });
     return () => controller.abort();
   }, [state.pages, state.generation, target]);
   const approvals = getInbox(state).pending.length;
@@ -240,7 +245,7 @@ export function App({ target = store, client = unavailableClient, searchClient =
     </div><UsageBar client={client} language={language} visible={!sidebarCollapsed && (!compactScreen || mobileView === 'sessions')} connected={state.connection === 'connected' || state.connection === 'runner_unavailable'}/><NavLink className="settings-link" to="/settings"><Icon name="settings" size={16}/>{t('settings')}</NavLink></div><ResizeDivider className="sidebar-resize" label={language === 'ja' ? 'サイドバーの幅' : 'Sidebar width'} orientation="vertical" value={sidebarWidth} min={SIDEBAR_MIN_WIDTH} max={SIDEBAR_MAX_WIDTH} step={20}
       onChange={value => setSidebarWidth(clampSidebar(value))} onDrag={delta => setSidebarWidth(clampSidebar(sidebarWidth + delta))} onReset={() => setSidebarWidth(sidebarDefault())}/></aside>
     <nav className="mobile-tabs" aria-label={language === 'ja' ? '画面' : 'Views'}>{(['sessions', 'conversation', 'panel'] as const).map(view => <button key={view} aria-pressed={mobileView === view} onClick={() => setMobileView(view)}>{language === 'ja' ? { sessions: 'セッション', conversation: '会話', panel: 'パネル' }[view] : { sessions: 'Sessions', conversation: 'Conversation', panel: 'Panel' }[view]}</button>)}</nav>
-    <div className="main-column">{listError && <p role="alert" className="status-line danger list-error">{listError}</p>}<main ref={mainRef} className={fullHeight ? 'full-height' : undefined}><Routes>
+    <div className="main-column">{state.projectionError && <p role="alert" className="status-line danger list-error">{state.projectionError}</p>}<main ref={mainRef} className={fullHeight ? 'full-height' : undefined}><Routes>
       <Route path="/" element={<HomePage target={target} client={client} language={language} backAction={backAction}/>}/>
       <Route path="/p/:project" element={<WorkspacePage target={target} client={client} language={language} bindings={bindings} showRootList={false}/>}/>
       <Route path="/c/:conversation" element={<WorkspacePage project={project ?? OTHER_PROJECT} conversationId={pathConversation ? decodeURIComponent(pathConversation) : undefined} target={target} client={client} language={language} bindings={bindings} showRootList={false}/>}/>

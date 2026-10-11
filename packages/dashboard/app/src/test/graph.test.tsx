@@ -26,6 +26,43 @@ function renderGraph(embedded = false, language: 'en' | 'ja' = 'en', entry = '/p
 }
 beforeEach(() => vi.spyOn(Date, 'now').mockReturnValue(now));
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+it('waits for every graph projection page before drawing a large root in its final groups', () => {
+  const target = fixture();
+  const complete = target.getSnapshot();
+  const projection = complete.projection;
+  const pages = { conversations: { total: 53, next: 'conversations-page' }, runs: { total: 53, next: 'runs-page' } };
+  target.setSnapshot({ ...complete, pages, projection: { ...projection, conversations: projection.conversations!.slice(0, 1), runs: [] } });
+  render(<MemoryRouter initialEntries={['/p/repo?root=root']}><GraphPage project="repo" target={target} client={{ command: vi.fn() }} embedded/></MemoryRouter>);
+  expect(screen.getByRole('status').textContent).toBe('Loading…');
+  expect(screen.queryByRole('tree')).toBeNull();
+  expect(document.querySelectorAll('[data-node-id]')).toHaveLength(0);
+  act(() => target.mergeProjection({ conversations: projection.conversations! }, 1, undefined, { ...pages, conversations: { total: 53, next: null } }));
+  expect(screen.queryByRole('tree')).toBeNull();
+  act(() => target.mergeProjection({ runs: projection.runs! }, 1, undefined, { conversations: { total: 53, next: null }, runs: { total: 53, next: null } }));
+  expect(screen.queryByRole('status')).toBeNull();
+  expect(screen.getByRole('treeitem', { name: /Earlier 45/ })).toBeTruthy();
+  expect(document.querySelectorAll('[data-node-id^="old-"]')).toHaveLength(0);
+  const row = screen.getByRole('treeitem', { name: /Request work · Implementation · Codex/ });
+  expect(row.getAttribute('href')).toContain('child=work');
+  const element = row.closest('[data-node-id]');
+  act(() => target.setConnection('reconnecting'));
+  expect(screen.getByRole('treeitem', { name: /Request work · Implementation · Codex/ }).closest('[data-node-id]')).toBe(element);
+});
+it('uses each role once in unnamed child labels and does not turn an unknown provider into Claude', () => {
+  const target = fixture();
+  const snapshot = target.getSnapshot();
+  target.setSnapshot({ ...snapshot, projection: { ...snapshot.projection,
+    relations: snapshot.projection.relations!.map(row => ({ ...row, evidence: { role: 'implement' } })),
+    conversations: snapshot.projection.conversations!.filter(row => row.id !== 'other'),
+  } });
+  render(<MemoryRouter initialEntries={['/p/repo?root=root&child=other']}><GraphPage project="repo" target={target} client={{ command: vi.fn() }} embedded/></MemoryRouter>);
+  const work = document.querySelector('[data-node-id="work"] [role="treeitem"]')!;
+  expect(work.getAttribute('aria-label')).toMatch(/^Codex · .+ · Implementation · Codex · Running$/);
+  expect(work.getAttribute('aria-label')?.match(/Implementation/g)).toHaveLength(1);
+  const unknown = document.querySelector('[data-node-id="other"] [role="treeitem"]')!;
+  expect(unknown.getAttribute('aria-label')).toContain('Agent · Implementation · Agent');
+  expect(unknown.getAttribute('aria-label')).not.toContain('Claude');
+});
 it.each(['en', 'ja'] as const)('shows all role shapes and words, running work and ancestor lines in %s', language => {
   renderGraph(true, language);
   for (const [role, icon] of Object.entries({ main: 'message', research: 'search', advisor: 'plan', implement: 'tool', review: 'check', document: 'file' })) {

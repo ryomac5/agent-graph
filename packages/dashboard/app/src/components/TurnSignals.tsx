@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import { createKeyHandler, type KeyBindings } from '../lib/keys.ts';
 import { store, useScreenStore, type ScreenStore } from '../lib/store.ts';
-import { orderSeries, rootProject, selectRoots, type Root } from '../lib/roots.ts';
+import { currentRootConversation, rootProject, selectRoots, type Root } from '../lib/roots.ts';
 import { OTHER_PROJECT, getRegisteredProjects, resolveProjectId } from '../lib/projects.ts';
 import { publishTurns, readHistory, recordTransitions, rememberConversation, selectTurns, useTurns, READ_KEY, READY_KEY, RECENT_KEY } from '../lib/turns.ts';
 
@@ -65,7 +65,7 @@ export function TurnSignals({ target = store, bindings }: { target?: ScreenStore
     const registered = new Set(getRegisteredProjects(state).map(row => String(row.id)));
     const projectRoots = roots.filter(row => row.project === project || project === OTHER_PROJECT && rootProject(row, registered) === OTHER_PROJECT);
     const root = projectPath ? projectRoots.find(row => row.id === search.get('root')) ?? projectRoots[0] : undefined;
-    const id = direct ? decodeURIComponent(direct[1]) : root ? search.get('child') ?? orderSeries(state, root.conversation_ids).at(-1) : undefined;
+    const id = direct ? decodeURIComponent(direct[1]) : root ? search.get('child') ?? currentRootConversation(root) : undefined;
     if (id) {
       if (opened.current !== id) next = rememberConversation(next, id);
       // 系列の会話は同じ画面で読めるので、根を開いたときは系列全体を既読にする。

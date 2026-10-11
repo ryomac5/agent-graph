@@ -32,7 +32,7 @@ import { resolveProjectId } from '../../lib/projects.ts';
 import { ChangedFiles } from './ChangedFiles.tsx';
 import { groupToolRuns, instructionKind } from '../../components/conversation/timeline.ts';
 import { isDelegationTool, resolveDelegationNode } from '../../components/conversation/DelegationCard.tsx';
-import { selectRoots, useRootIndex } from '../../lib/roots.ts';
+import { currentRootConversation, selectRoots, useRootIndex } from '../../lib/roots.ts';
 import { resolveActivity } from '../../lib/activity.ts';
 import { isWorkingTurn, useTurnConversations, useWorkingTurn, workingElapsed } from '../../lib/turns.ts';
 import { useAttachments, MAX_ATTACHMENTS } from './useAttachments.ts';
@@ -569,7 +569,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const detailsId = workspaceHeader ? `conversation-details-${workspaceHeader.tabId}` : 'conversation-details';
   const filesId = workspaceHeader ? `conversation-changed-files-${workspaceHeader.tabId}` : 'conversation-changed-files';
   const actionsId = workspaceHeader ? `conversation-actions-${workspaceHeader.tabId}` : 'conversation-actions';
-  const back = breadcrumb ?? (root && !root.conversation_ids.includes(conversationId) && <button className="btn btn-ghost btn-sm root-back" aria-label={`${language === 'ja' ? '戻る:' : 'Back to'} ${root.name}`} title={root.name} onClick={() => onConversation?.(root.conversation_ids.at(-1)!)}><Icon name="chevronLeft"/><span className="truncate">{root.name}</span></button>);
+  const back = breadcrumb ?? (root && !root.conversation_ids.includes(conversationId) && <button className="btn btn-ghost btn-sm root-back" aria-label={`${language === 'ja' ? '戻る:' : 'Back to'} ${root.name}`} title={root.name} onClick={() => onConversation?.(currentRootConversation(root)!)}><Icon name="chevronLeft"/><span className="truncate">{root.name}</span></button>);
   const headerActions = <div className="conv-header-actions">
       <button type="button" className="btn btn-ghost conv-more" aria-label={language === 'ja' ? '会話のメニュー' : 'Conversation menu'} title={language === 'ja' ? '会話のメニュー' : 'Conversation menu'} aria-expanded={menuOpen} aria-controls={actionsId} onClick={() => setMenuOpen(value => !value)}>…</button>
       <div id={actionsId} className={`conv-action-menu${menuOpen ? ' open' : ''}`} onKeyDown={event => { if (event.key === 'Escape') { setMenuOpen(false); (event.currentTarget.previousElementSibling as HTMLElement | null)?.focus(); } }}>

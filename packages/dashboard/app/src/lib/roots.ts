@@ -8,6 +8,7 @@ import { readAttempts, type DelegationTree, type TreeNode } from '../pages/tree/
 
 export interface Root {
   id: string; name: string; project: string | null; state: string; last_activity_ts: string | null;
+  current_conversation_id?: string;
   conversation_ids: string[]; running_children: number; total_children: number;
   /** キットが付けた番号の名前。画面ではプロジェクト名と始めた日の名前で呼び、番号は補足に出す。 */
   kit_name?: string;
@@ -95,7 +96,8 @@ export function selectRoots(state: ScreenState, project?: string): Root[] {
   return renameKitRoots(state, (state.projection.roots ?? []).filter(row => project === undefined || row.project === project
       || project === OTHER_PROJECT && rootProject(row as unknown as Root, registered) === OTHER_PROJECT)
     .filter(row => !((row.conversation_ids as string[] | undefined) ?? []).some(id => reviews.has(id)))
-    .map(row => { const root = { ...(row as unknown as Root) }; root.conversation_ids ??= []; root.name = root.auto_name ?? root.name; root.name = rootName(state, root); root.state = resolveActivity(state, root.conversation_ids, root.state).state;
+    .map(row => { const root = { ...(row as unknown as Root) }; root.conversation_ids ??= []; root.name = root.auto_name ?? root.name; root.name = rootName(state, root); const activity = resolveActivity(state, root.conversation_ids, root.state); root.state = activity.state;
+      root.current_conversation_id ??= readText(activity.run?.conversation_id) || undefined;
       const spoken = root.conversation_ids.map(id => times.get(id)?.last).filter((value): value is string => Boolean(value));
       if (spoken.length) root.last_activity_ts = spoken.sort().at(-1)!;
       return root; }), times)
@@ -130,6 +132,16 @@ export function useRootIndex(state: ScreenState) {
   }, [state.projection.conversations, state.projection.runs, state.projection.relations, state.projection.delegations]);
 }
 export type RootIndex = ReturnType<typeof useRootIndex>;
+/** 継続元も再開できるため、末尾でなく投影が選んだ操作先を使う。旧い配信では最新世代の状態と時刻で補う。 */
+export function currentRootConversation(root: Root, index?: RootIndex): string | undefined {
+  if (root.current_conversation_id && root.conversation_ids.includes(root.current_conversation_id)) return root.current_conversation_id;
+  const rank = (id: string) => ['waiting_approval', 'waiting_input'].includes(readText(index?.runs.get(id)?.state)) ? 2
+    : ['starting', 'running'].includes(readText(index?.runs.get(id)?.state)) ? 1 : 0;
+  return [...root.conversation_ids].sort((a, b) => rank(b) - rank(a)
+    || readText(index?.runs.get(b)?.last_evidence_ts ?? index?.conversations.get(b)?.last_message_ts ?? index?.conversations.get(b)?.created_ts)
+      .localeCompare(readText(index?.runs.get(a)?.last_evidence_ts ?? index?.conversations.get(a)?.last_message_ts ?? index?.conversations.get(a)?.created_ts))
+    || a.localeCompare(b))[0];
+}
 /** 会話の最後の動きの時刻。core の根の投影と同じく、最後の発言と最新の実行の時刻の遅い方を使う。 */
 export function conversationActivity(state: ScreenState, id: string): string {
   const conversation = state.projection.conversations?.find(row => row.id === id);
@@ -179,8 +191,9 @@ export function buildRootTree(root: Root, index: RootIndex): DelegationTree {
   const nodes: TreeNode[] = [];
   const edges: DelegationTree['edges'] = [];
   const visited = new Set(root.conversation_ids);
-  const rootNode: TreeNode = { id: root.id, kind: 'conversation', conversationId: root.conversation_ids.at(-1), label: root.name,
-    role: 'root', provider: readText(index.conversations.get(root.conversation_ids.at(-1) ?? '')?.provider), model: '', state: root.state, children: [], attempts: [] };
+  const current = currentRootConversation(root, index);
+  const rootNode: TreeNode = { id: root.id, kind: 'conversation', conversationId: current, label: root.name,
+    role: 'root', provider: readText(index.conversations.get(current ?? '')?.provider), model: '', state: root.state, children: [], attempts: [] };
   nodes.push(rootNode);
   function addChildren(parent: TreeNode, conversationId: string) {
     for (const relation of index.children.get(conversationId) ?? []) {

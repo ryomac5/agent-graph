@@ -1,12 +1,16 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { readFileSync } from 'node:fs';
 import { ConversationPage, type ConversationClient } from '../pages/conversation/ConversationPage.tsx';
+import { CHILD, createRootlineFacts, ROOT, START as START_ROOT } from '../../../../core/test/ledger/fixtures/rootline.ts';
+import { project } from '../../../../core/src/ledger/projections/index.ts';
+import type { Fact } from '../../../../core/src/ledger/facts.ts';
+import { WorkspacePage } from '../pages/workspace/WorkspacePage.tsx';
 import { RootList } from '../components/RootViews.tsx';
 import { Workbench } from '../pages/workspace/Workbench.tsx';
 import { createStore, type Row, type ScreenState } from '../lib/store.ts';
-import { selectRoots } from '../lib/roots.ts';
+import { currentRootConversation, selectRoots } from '../lib/roots.ts';
 import { isWorkingTurn, publishTurns, resolveWorkingTurn, workingElapsed } from '../lib/turns.ts';
 
 const START = '2026-10-11T00:00:00Z';
@@ -214,4 +218,48 @@ it('places your turn and approval waits before running in an ungrouped list', ()
   const rows = screen.getAllByRole('link');
   expect(rows.map(row => row.getAttribute('aria-label'))).toEqual(['Approval', 'Main agent', 'Busy']);
   expect(rows[1].querySelector('.activity-mark')?.getAttribute('data-state')).toBe('waiting_input');
+});
+
+it('opens the production root body and shows its work in both list and conversation, then shows the child clock', async () => {
+  const target = createStore();
+  const facts = createRootlineFacts().map((input, index) => ({ ...input, seq: index + 1,
+    fact_id: String(index), payload_hash: '', observed_ts: input.source_ts, schema_version: 1, cursor: null, supersedes: null })) as Fact[];
+  const projection = JSON.parse(JSON.stringify(project(facts))) as Record<string, Row[]>;
+  target.setSnapshot({ seq: facts.length, generation: 1, projection: {
+    ...projection,
+    projects: [{ id: 'repo', display_name: 'Repo', root_path: '/repo', state: 'registered' }],
+  } });
+  vi.setSystemTime(Date.parse(START_ROOT) + 40_000);
+  const root = selectRoots(target.getSnapshot())[0];
+  expect(root.conversation_ids).toEqual([ROOT]);
+  expect(currentRootConversation(root)).toBe(ROOT);
+  const view = render(<MemoryRouter initialEntries={['/p/repo?root=' + encodeURIComponent(ROOT)]}>
+    <RootList roots={[root]} state={target.getSnapshot()} language="en"/>
+    <WorkspacePage project="repo" target={target} client={client}/>
+  </MemoryRouter>);
+  await act(async () => {});
+  expect(screen.getByRole('status', { name: 'Working' }).textContent).toContain('40s');
+  expect(within(screen.getByRole('tablist', { name: 'Workspace tabs' })).getByRole('tab', { selected: true }).querySelector('.status-running')).toBeTruthy();
+  expect(document.querySelector('.root-row .activity-mark')?.getAttribute('data-state')).toBe('running');
+  expect(screen.queryByText('Review of Build a sample feature')).toBeNull();
+  view.unmount();
+  render(<MemoryRouter><ConversationPage conversationId={CHILD} target={target} client={client}/></MemoryRouter>);
+  await act(async () => {});
+  expect(screen.getByRole('status', { name: 'Working' }).textContent).toContain(
+    workingElapsed(resolveWorkingTurn(projection.runs.find(row => row.conversation_id === CHILD)), Date.now()));
+  expect(screen.getByRole('timer')).toBeTruthy();
+});
+
+it('opens a working continuation source even when an idle continuation has newer messages', () => {
+  const target = setup('running');
+  const snapshot = target.getSnapshot();
+  target.setSnapshot({ ...snapshot, projection: { ...snapshot.projection,
+    roots: [{ id: 'c', name: 'Main agent', project: 'p', state: 'running', current_conversation_id: 'c', conversation_ids: ['c', 'continued'] }],
+    conversations: [...snapshot.projection.conversations, { id: 'continued', name: 'Later conversation', provider: 'claude', last_message_ts: '2026-10-11T00:03:00Z' }],
+    runs: [...snapshot.projection.runs, { id: 'continued-run', conversation_id: 'continued', generation: 1, state: 'idle', last_evidence_ts: '2026-10-11T00:03:00Z' }],
+  } });
+  const root = selectRoots(target.getSnapshot())[0];
+  expect(currentRootConversation(root)).toBe('c');
+  render(<MemoryRouter><WorkspacePage project="p" target={target} client={client}/></MemoryRouter>);
+  expect(screen.getByRole('status', { name: 'Working' }).textContent).toContain('3m 12s');
 });

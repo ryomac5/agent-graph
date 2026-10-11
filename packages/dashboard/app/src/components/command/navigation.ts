@@ -2,7 +2,7 @@ import type { Command } from './Commands.tsx';
 import type { TurnSnapshot } from '../../lib/turns.ts';
 import { rootHref } from '../../lib/turns.ts';
 import { conversationName } from '../../lib/format.ts';
-import { reviewConversations, selectRoots } from '../../lib/roots.ts';
+import { currentRootConversation, reviewConversations, selectRoots } from '../../lib/roots.ts';
 import type { Language } from '../../lib/i18n.ts';
 
 export function orderCommands(commands: Command[], snapshot: TurnSnapshot, language: Language): Command[] {
@@ -40,7 +40,7 @@ export function orderCommands(commands: Command[], snapshot: TurnSnapshot, langu
   }
   for (const id of history.recent) addConversation(id);
   const priority = candidates.length;
-  for (const root of roots) addConversation(root.conversation_ids.at(-1) ?? root.id);
+  for (const root of roots) addConversation(currentRootConversation(root) ?? root.id);
   for (const id of conversations.keys()) addConversation(id);
   const ordered = [...candidates.slice(0, priority), ...remaining, ...candidates.slice(priority)];
   return deduplicate(ordered);

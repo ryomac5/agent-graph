@@ -359,10 +359,11 @@ async function main() {
       await openParent();
       const row = await childRow('Codex');
       const title = (await row.getAttribute('aria-label') ?? await row.innerText()).split(' · ')[0];
+      const beforeTab = await page.getByRole('tablist', { name: 'Workspace tabs' }).getByRole('tab', { selected: true }).textContent() ?? '';
       await row.click();
       await page.waitForURL(url => url.searchParams.get('child')?.startsWith('["codex"'), { timeout: UI_TIMEOUT_MS });
       const child = new URL(page.url()).searchParams.get('child');
-      await waitForCenter(title);
+      await waitForCenter(title, beforeTab);
       const input = composer().getByRole('textbox', { name: 'Message', exact: true });
       const draft = 'smoke: this message is blocked before it reaches Codex';
       await input.fill(draft);

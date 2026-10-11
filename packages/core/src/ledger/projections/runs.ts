@@ -1,6 +1,6 @@
 import type { Fact, JsonValue, RunPayload } from "../facts.ts";
 import { orderActiveFacts } from "./connections.ts";
-import { rejectUnobservedLiveState } from "../turns.ts";
+import { isTurnEvidence, rejectUnobservedLiveState } from "../turns.ts";
 
 // ホストと観測側は、この構造を end_evidence に正規化して追記する。
 export type EndEvidence =
@@ -133,8 +133,8 @@ export function projectRuns(facts: readonly Fact[]): RunProjection[] {
         const startsTurn = turnEvidence?.kind === "turn_started" || turnEvidence?.hook_event_name === "UserPromptSubmit";
         if (startsTurn) {
           run.turn_started_ts = payload.last_evidence_ts ?? fact.source_ts;
-        } else if (payload.state === "running" && fact.source.startsWith("host-") && !["running", "waiting_approval", "waiting_input"].includes(run.state)) {
-          run.turn_started_ts ??= fact.source_ts;
+        } else if (payload.state === "running" && (fact.source.startsWith("host-") || isTurnEvidence(payload.last_evidence)) && !["running", "waiting_approval", "waiting_input"].includes(run.state)) {
+          run.turn_started_ts ??= payload.last_evidence_ts ?? fact.source_ts;
         }
         if (["idle", "ended", "failed"].includes(payload.state)) delete run.turn_started_ts;
         run.state = payload.state;

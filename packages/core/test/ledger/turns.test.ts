@@ -162,3 +162,22 @@ test("hook の running 中は transcript の turn_completed だけを無視す�
   assert.equal(projectRuns([start, absent, next, end])[0].state, "idle");
   assert.equal(projectRuns([start, absent, next, end])[0].turn_started_ts, undefined);
 });
+
+test('履歴で子が道具から再開する時刻を保持し、道具の結果で時計を戻さない', () => {
+  const event = (kind: string, state: 'running' | 'idle', ts: string) => fact({
+    source: 'transcript-claude', source_event_id: ts, source_ts: ts, confidence: 'confirmed',
+    kind: 'run.state_changed', subject: 'run:child', payload: { conversation_id: 'child', generation: 1,
+      state, last_evidence: { kind }, last_evidence_ts: ts },
+  });
+  const start = event('turn_started', 'running', '2026-10-11T12:49:05.124Z');
+  const stop = event('turn_completed', 'idle', '2026-10-11T12:49:22.390Z');
+  for (const kind of ['tool_call', 'tool_result']) {
+    const resume = event(kind, 'running', '2026-10-11T12:49:29.326Z');
+    const tool = event('tool_result', 'running', '2026-10-11T12:49:30.000Z');
+    assert.equal(projectRuns([start, stop, resume, tool])[0].turn_started_ts, resume.source_ts);
+    assert.deepEqual(projectRuns([tool, resume, stop, start]), projectRuns([start, stop, resume, tool]));
+    const idle = event('turn_completed', 'idle', '2026-10-11T12:49:31.873Z');
+    assert.equal(projectRuns([start, stop, resume, tool, idle])[0].turn_started_ts, undefined);
+  }
+  assert.equal(projectRuns([{ ...event('tool_call', 'running', '2026-10-11T12:49:29.326Z'), confidence: 'inferred' }])[0].turn_started_ts, undefined);
+});

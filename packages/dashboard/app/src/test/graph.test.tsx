@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
-import { GraphPage } from '../pages/graph/GraphPage.tsx';
+import { GraphPage, AssignedGraphPage } from '../pages/graph/GraphPage.tsx';
 import { createStore } from '../lib/store.ts';
 const now = Date.parse('2026-10-11T12:00:00Z');
 export function fixture() {
@@ -150,4 +150,13 @@ it('extends running bars to Now every ten seconds and persists automatic expansi
     act(() => { vi.advanceTimersByTime(10_000); });
     expect(readBar()).not.toBe(before);
   } finally { vi.useRealTimers(); }
+});
+
+it('resolves the root assignment display name while keeping model-less children honest', async () => {
+  const target = fixture();
+  const client = { command: vi.fn(async (command: string) => ({ type: 'ack' as const, cmd_id: 'a', ok: true, result: command === 'settings.read' ? { policy: { roles: { orchestrate: { standard: [{ executor: 'claude', model: 'opus' }] } } } } : { models: [{ model: 'opus', displayName: 'Opus 5.5' }] } })) };
+  render(<MemoryRouter><AssignedGraphPage project="repo" target={target} client={client} embedded language="ja"/></MemoryRouter>);
+  await waitFor(() => expect(document.querySelector('[data-node-id="root"] .graph-row-who')?.textContent).toBe('メインエージェント · Opus 5.5 · サブエージェント 52'));
+  expect(document.querySelector('[data-node-id="work"] .graph-row-who')?.textContent).toBe('実装 · Codex');
+  expect(document.querySelector('[data-node-id="docs"] .graph-row-who')?.textContent).toBe('ドキュメント · Claude Opus 5.5');
 });

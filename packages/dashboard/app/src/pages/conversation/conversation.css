@@ -203,7 +203,7 @@
 @media (max-width: 760px) {
   .message-user .message-main, .message-user > .message-header, .message-agent .message-main { max-width: 92%; }
 }
-.choice-trigger { max-width: 240px; gap: var(--space-1); }
+.choice-trigger { min-width: max-content; flex: none; max-width: none; gap: var(--space-1); }
 .choice-trigger[aria-expanded='true'] { background: var(--bg-2); }
 .choice-trigger > .icon { pointer-events: none; }
 .choice-trigger .request-avatar { width: 16px; height: 16px; flex: none; }

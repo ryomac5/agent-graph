@@ -43,13 +43,14 @@ export function GraphSummary({ model, role, onRole, language, embedded }: { mode
   </div>;
 }
 export interface OutlineProps {
+  rootAssignment?: { provider: string; model: string; modelId?: string };
   model: GraphRows; language: Language; selected: string; now: number; embedded: boolean;
   href: (row: GraphRow) => string; onSelect: (row: GraphRow) => void; onGroup: (id: string, action: 'more' | 'close') => void;
   onAnswer: (approval: Row, action: 'allow' | 'deny') => void; sent: ReadonlySet<string>; connected: boolean;
   timeline?: (row: GraphRow) => ReactNode;
 }
 export function GraphOutline(props: OutlineProps) {
-  const { model, language, selected, now, embedded, href, onSelect, onGroup, onAnswer, sent, connected, timeline } = props;
+  const { rootAssignment, model, language, selected, now, embedded, href, onSelect, onGroup, onAnswer, sent, connected, timeline } = props;
   const navigate = useNavigate();
   const refs = useRef(new Map<string, HTMLElement>());
   const t = graphText[language];
@@ -83,7 +84,8 @@ export function GraphOutline(props: OutlineProps) {
     {model.rows.map(row => {
       const node = row.node; const state = toDisplayState(node?.state ?? 'idle');
       const running = ['starting', 'running'].includes(state);
-      const agent = agentName(node?.provider ?? '', node?.model ?? '') || 'Agent';
+      const rootModel = row.role === 'main' && rootAssignment && rootAssignment.provider === node?.provider && (!node?.model || node.model === rootAssignment.modelId) ? rootAssignment.model : '';
+      const agent = agentName(node?.provider ?? '', rootModel || node?.model);
       const target = node?.provider === 'codex' && !agent.startsWith('Codex') ? 'Codex ' + agent : agent;
       const groupWords = row.group ? ROLES.filter(role => row.group!.roles[role]).map(role => `${roleWord(role, language)} ${row.group!.roles[role]}`).join(' · ') : '';
       const descendants = row.role === 'main' ? model.all.filter(item => item.ancestors.includes(row.id) && item.node).length : 0;
@@ -103,7 +105,7 @@ export function GraphOutline(props: OutlineProps) {
         {node && <span className={`graph-row-end state-${state}`} title={rowEnd(row, language, now)}>{rowEnd(row, language, now)}</span>}
       </>;
       const ref = (element: HTMLElement | null) => { if (element) refs.current.set(row.id, element); else refs.current.delete(row.id); };
-      const shared = { className: 'graph-row-main', tabIndex: 0, onKeyDown: (event: KeyboardEvent) => move(event, row), ref, 'aria-level': row.depth + 1, role: 'treeitem', 'aria-selected': selected === row.id, 'aria-current': embedded && selected === row.id ? 'page' as const : undefined, 'aria-label': row.group ? `${title} · ${groupWords}` : `${title} · ${roleWord(row.role!, language)}${row.role === 'main' ? '' : ` · ${target}`} · ${row.role === 'main' && row.runningBelow ? (language === 'ja' ? 'サブエージェント ' + row.runningBelow + ' 件が実行中' : row.runningBelow + ' running below') : stateLabel(node!.state, language)}` };
+      const shared = { className: 'graph-row-main', tabIndex: 0, onKeyDown: (event: KeyboardEvent) => move(event, row), ref, 'aria-level': row.depth + 1, role: 'treeitem', 'aria-selected': selected === row.id, 'aria-current': embedded && selected === row.id ? 'page' as const : undefined, 'aria-label': row.group ? `${title} · ${groupWords}` : `${title} · ${roleWord(row.role!, language)}${row.role === 'main' ? '' : ` · ${target || (node?.kind === 'conversation' ? 'Agent' : '')}`} · ${row.role === 'main' && row.runningBelow ? (language === 'ja' ? 'サブエージェント ' + row.runningBelow + ' 件が実行中' : row.runningBelow + ' running below') : stateLabel(node!.state, language)}` };
       return <div key={row.id} className={`graph-row${running ? ' is-running' : ''}${selected === row.id ? ' is-selected' : ''}${['ended', 'idle'].includes(state) ? ' is-quiet' : ''}${timeline ? ' has-timeline' : ''}`} data-node-id={row.id} style={{ minHeight: row.height }}>
         <div className="graph-tree-cell">
           {row.group ? <button {...shared} aria-expanded={row.group.more ? undefined : row.group.shown > 0} onClick={() => onGroup(row.group!.groupId ?? row.id, row.group!.more || !row.group!.shown ? 'more' : 'close')}>{content}</button>

@@ -1,5 +1,5 @@
 import { CommandDialog } from '../../components/command/Commands.tsx';
-import { Fragment, useEffect, useId, useRef, useState } from 'react';
+import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { Segments } from '../../components/settings/Controls.tsx';
 import { ProviderMark } from '../../components/RootViews.tsx';
 import type { Policy } from '../../lib/settings.ts';
@@ -24,9 +24,9 @@ const DEPTHS = { claude: ['low', 'medium', 'high', 'xhigh', 'max'], codex: ['non
 const DEFAULT_MODEL = { claude: 'opus', codex: 'gpt-6-astra', antigravity: 'gemini-3.8-flash-high' };
 export type ModelCatalog = Record<string, { state: string; models: { model: string; displayName: string; effort?: string }[] }>;
 const PROVIDERS = { claude: 'Claude', codex: 'Codex', antigravity: 'Antigravity' };
-export function ModelAssignments({ policy, onChange, language, models, onRefresh, onApply, applyDisabled }: {
+export function ModelAssignments({ policy, onChange, language, models, onRefresh, onApply, applyDisabled, saveAction }: {
   policy: Policy; onChange(value: Policy): void; language: 'en' | 'ja'; models: ModelCatalog;
-  onRefresh?(provider: Candidate['executor']): void; onApply?(): void; applyDisabled?: boolean;
+  saveAction?: ReactNode; onRefresh?(provider: Candidate['executor']): void; onApply?(): void; applyDisabled?: boolean;
 }) {
   const ja = language === 'ja';
   const headingId = useId();
@@ -153,7 +153,7 @@ export function ModelAssignments({ policy, onChange, language, models, onRefresh
         })}</tr>{criteriaRole === role && <tr className="assignment-criteria-row"><td><button className="btn btn-ghost" onClick={() => setCriteriaRole(undefined)}>{text('Close', '閉じる')}</button></td>{WEIGHTS.map(weight => <td key={weight}><textarea rows={1} autoFocus={weight === 'light'} aria-label={NAMES[role][ja ? 1 : 0] + ' ' + weightName(weight) + ' ' + text('Weight criteria', '重さの基準')} value={displayText(policy.criteria[role]?.[weight] ?? '')} onChange={event => onChange({ ...policy, criteria: { ...policy.criteria, [role]: { ...policy.criteria[role], [weight]: event.target.value } } })}/></td>)}</tr>}</Fragment>;
       })}</tbody>
     </table></div>
-    <div className="button-row assignment-actions"><span>{text('Presets', 'おすすめの組み合わせ')}</span><Segments label={text('Presets', 'おすすめの組み合わせ')} value={preset ?? ''} options={(['performance', 'balanced', 'economy'] as const).map(value => ({ value, label: ({ performance: text('Performance', '性能重視'), balanced: text('Balanced', 'バランス'), economy: text('Economy', '節約') })[value] }))} onChange={value => { close(); setPreset(value as Preset); }}/>{onApply && <button className="btn btn-secondary assignment-apply-button" disabled={applyDisabled} title={applyDisabled ? text('Save first', '先に保存する') : text('Writes to the Claude Code, Codex and Antigravity config files', 'Claude Code、Codex、Antigravity の設定ファイルを書き換える')} onClick={onApply}>{text('Export', '書き出す')}</button>}</div>
+    <div className="button-row assignment-actions"><span>{text('Presets', 'おすすめの組み合わせ')}</span><Segments label={text('Presets', 'おすすめの組み合わせ')} value={preset ?? ''} options={(['performance', 'balanced', 'economy'] as const).map(value => ({ value, label: ({ performance: text('Performance', '性能重視'), balanced: text('Balanced', 'バランス'), economy: text('Economy', '節約') })[value] }))} onChange={value => { close(); setPreset(value as Preset); }}/>{onApply && <button className="btn btn-secondary assignment-apply-button" disabled={applyDisabled} title={applyDisabled ? text('Save first', '先に保存する') : text('Writes to the Claude Code, Codex and Antigravity config files', 'Claude Code、Codex、Antigravity の設定ファイルを書き換える')} onClick={onApply}>{text('Export', '書き出す')}</button>}{saveAction}</div>
   </section>;
 }
 

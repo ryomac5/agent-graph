@@ -7,7 +7,7 @@ import { Link, useSearchParams } from 'react-router';
 import type { ScreenStore } from '../../lib/store.ts';
 import type { Language } from '../../lib/i18n.ts';
 import type { ConversationClient } from '../conversation/ConversationPage.tsx';
-import { GraphPage } from '../graph/GraphPage.tsx';
+import { AssignedGraphPage } from '../graph/GraphPage.tsx';
 import { ChangesPage } from '../changes/ChangesPage.tsx';
 import { FileNotices, FileTreePanel, FileViewerPanel, useFileExplorer } from '../files/FilesPage.tsx';
 import { Icon } from '../../components/Icon.tsx';
@@ -65,7 +65,7 @@ export function WorkspacePanel({ project, target, client, language, rootId, bind
     </header>
     {!collapsed && <div className="panel-content" role="tabpanel" id="workspace-panel-content" aria-labelledby={`panel-tab-${tab}`}>
 
-      {tab === 'graph' ? <GraphPage project={project} target={target} client={client} language={language} rootId={rootId} embedded/>
+      {tab === 'graph' ? <AssignedGraphPage project={project} target={target} client={client} language={language} rootId={rootId} embedded/>
         : tab === 'changes' ? <ChangesPage project={project} target={target} client={client} language={language} embedded/>
           : <div className="panel-files"><FileNotices explorer={explorer}/><ResizableStack storageKey={FILES_SPLIT_KEY} defaults={[0.45, 0.55]} labels={[ja ? 'ファイルの木の高さ' : 'File tree height']} collapsedFirst={treeCollapsed} children={[<FileTreePanel key="tree" compact explorer={explorer} language={language} actions={treeToggle}/>, <FileViewerPanel explorer={explorer} language={language} actions={<>{treeCollapsed && treeToggle}{explorer.selectedPath && <button className="btn btn-ghost btn-xs" onClick={() => { const next = new URLSearchParams(search); next.delete('path'); setSearch(next); }}>{ja ? 'ファイルを閉じる' : 'Close file'}</button>}</>}/>]}/></div>}
     </div>}

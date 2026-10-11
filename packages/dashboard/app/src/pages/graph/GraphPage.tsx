@@ -13,9 +13,13 @@ import { buildRows, readCurrentWork, readExpanded, readReport, PAGE_SIZE, GRAPH_
 import { GraphOutline, GraphSummary, type OutlineProps } from './GraphOutline.tsx';
 import { GraphTimeline, type TimeRange } from './GraphTimeline.tsx';
 import { GraphDetail } from './GraphDetail.tsx';
+import { requestSettings, type SettingsSnapshot } from '../../lib/settings.ts';
+import { readBands } from '../settings/assignment-presets.ts';
+import type { ModelCatalog } from '../settings/ModelAssignments.tsx';
 import './graph.css';
 
-export function GraphPage({ project: suppliedProject, target = store, client, language = 'en', embedded = false, rootId }: {
+export function GraphPage({ project: suppliedProject, target = store, client, language = 'en', embedded = false, rootId, rootAssignment }: {
+  rootAssignment?: OutlineProps['rootAssignment'];
   project?: string; target?: ScreenStore; client: ConversationClient; language?: Language; embedded?: boolean; rootId?: string;
 }) {
   const params = useParams(); const [search, setSearch] = useSearchParams();
@@ -107,7 +111,7 @@ export function GraphPage({ project: suppliedProject, target = store, client, la
     if (row.role !== 'main' && row.node?.conversationId) query.set('child', row.node.conversationId);
     return `/p/${encodeURIComponent(route)}?${query}`;
   }
-  const props: OutlineProps = { model, language, selected, now, embedded, href, onSelect: row => {
+  const props: OutlineProps = { rootAssignment, model, language, selected, now, embedded, href, onSelect: row => {
     setDetail(embedded && row.node?.conversationId ? undefined : row.id);
     if (!embedded) setSearch(current => { const query = new URLSearchParams(current); query.set('root', root!.id); query.delete('child'); if (row.role !== 'main' && row.node?.conversationId) query.set('child', row.node.conversationId); return query; });
   }, onGroup: group, onAnswer: answer, sent, connected: state.connection === 'connected' };
@@ -122,4 +126,26 @@ export function GraphPage({ project: suppliedProject, target = store, client, la
       {(!embedded || detail) && selectedRow?.node && <GraphDetail row={selectedRow} language={language} now={now} href={href(selectedRow)} onClose={() => { setDetail(undefined); if (!embedded) setSearch(current => { const query = new URLSearchParams(current); query.delete('child'); return query; }); }}/>}
     </> : <div className="graph-empty">{language === 'ja' ? '会話がありません' : 'No conversations yet'}</div>}
   </div>;
+}
+
+export function AssignedGraphPage(props: Parameters<typeof GraphPage>[0]) {
+  const { client, target = store } = props;
+  const state = useScreenStore(target);
+  const [rootAssignment, setRootAssignment] = useState<OutlineProps['rootAssignment']>();
+  useEffect(() => {
+    let active = true;
+    setRootAssignment(undefined);
+    if (state.connection !== 'connected') return;
+    void requestSettings<SettingsSnapshot>(client, 'settings.read').then(async settings => {
+      if (!settings?.policy) return;
+      const candidate = readBands(settings.policy, 'orchestrate').standard?.[0];
+      if (!candidate) return;
+      let name = candidate.model;
+      const catalog = await requestSettings<ModelCatalog[string]>(client, 'settings.models', { provider: candidate.executor }).catch(() => undefined);
+      name = catalog?.models.find(model => model.model === candidate.model)?.displayName || name;
+      if (active) setRootAssignment({ provider: candidate.executor, model: name, modelId: candidate.model });
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [client, state.connection, props.rootId]);
+  return <GraphPage {...props} rootAssignment={rootAssignment}/>;
 }

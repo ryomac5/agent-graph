@@ -61,3 +61,22 @@ it('focuses the selected menu row, navigates with arrows and returns focus after
   expect(screen.queryByRole('listbox')).toBeNull();
   expect(document.activeElement).toBe(trigger);
 });
+
+it('keeps the model save action alongside export and the preset controls', () => {
+  const client = { command: vi.fn() };
+  const { container } = render(<PolicyEditor client={client} policy={defaultPolicy()} models={{}} language="ja" dirty={false} onChange={vi.fn()} onSaved={vi.fn()} onRefresh={vi.fn()}/>);
+  const actions = container.querySelector('#settings-models .assignment-actions')!;
+  expect(within(actions as HTMLElement).getByRole('button', { name: '保存' })).toBeTruthy();
+  expect(within(actions as HTMLElement).getByRole('button', { name: '書き出す' })).toBeTruthy();
+  expect(actions.lastElementChild?.textContent).toBe('保存');
+  const summary = container.querySelector('#settings-rules .settings-summary')!;
+  expect(summary.parentElement?.tagName).toBe('SUMMARY');
+});
+it('uses the documented shortcut descriptions in both languages', () => {
+  for (const language of ['ja', 'en'] as const) {
+    const { container, unmount } = render(<SettingsLayout client={{ command: vi.fn(async () => ({ ok: true, type: 'ack' as const, cmd_id: 'test', result: { connections: [] } })) }} projects={[]} language={language} theme="light" onTheme={vi.fn()} onLanguage={vi.fn()} bindings={DEFAULT_KEYS} onKeys={vi.fn()}><></></SettingsLayout>);
+    const keys = container.querySelector('#settings-keys')!;
+    for (const label of language === 'ja' ? ['承認を許可', '承認を拒否', '次の行へ', '前の行へ', 'この一覧を開く'] : ['Allow approval', 'Deny approval', 'Next row', 'Previous row', 'Show shortcuts']) expect(keys.textContent).toContain(label);
+    unmount();
+  }
+});

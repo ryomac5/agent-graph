@@ -15,7 +15,7 @@ import type { ConversationClient } from './pages/conversation/ConversationPage.t
 import { HomePage } from './pages/home/HomePage.tsx';
 import { FileNotices, FileTreePanel, FileViewerPanel, useFileExplorer } from './pages/files/FilesPage.tsx';
 import { WorkspacePage } from './pages/workspace/WorkspacePage.tsx';
-import { GraphPage } from './pages/graph/GraphPage.tsx';
+import { AssignedGraphPage } from './pages/graph/GraphPage.tsx';
 import { ChangesPage } from './pages/changes/ChangesPage.tsx';
 import { SearchPage } from './pages/search/SearchPage.tsx';
 import { createSearchClient, type SearchClient } from './pages/search/model.ts';
@@ -258,7 +258,7 @@ export function App({ target = store, client = unavailableClient, searchClient =
       <Route path="/c/:conversation" element={<WorkspacePage project={project ?? OTHER_PROJECT} conversationId={pathConversation ? decodeURIComponent(pathConversation) : undefined} target={target} client={client} language={language} bindings={bindings} showRootList={false}/>}/>
       <Route path="/inbox" element={<Inbox target={target} client={client} language={language} backAction={backAction}/>}/>
       <Route path="/p/:project/tree" element={<RequestsRedirect/>}/>
-      <Route path="/p/:project/graph" element={<GraphPage target={target} client={client} language={language}/>}/>
+      <Route path="/p/:project/graph" element={<AssignedGraphPage target={target} client={client} language={language}/>}/>
       <Route path="/p/:project/changes" element={<ChangesPage target={target} client={client} language={language}/>}/>
       <Route path="/p/:project/files" element={<div className="files-page"><FileTreePanel explorer={explorer} language={language}/><FileNotices explorer={explorer}/><FileViewerPanel explorer={explorer} actions={<button className="btn btn-ghost btn-xs" onClick={explorer.closeFile}><Icon name="chevronLeft" size={12}/>Back</button>}/></div>}/>
       <Route path="/search" element={<SearchPage target={target} client={searchClient} language={language} backAction={backAction}/>}/>

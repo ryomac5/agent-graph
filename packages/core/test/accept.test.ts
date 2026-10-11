@@ -53,3 +53,13 @@ test("作業ツリーが清潔でも baseRef 以降の変更を検出する", as
   const result = await runAcceptance({ commands: ["true"], cwd, scope: ["allowed.txt"], baseRef: "HEAD~1" });
   assert.deepEqual(result.scopeViolations, ["outside space.txt"]);
 });
+
+test("project exclusions override allowed scope and work without a scope list", async () => {
+  const cwd = makeRepo();
+  writeFileSync(join(cwd, "secret.txt"), "private");
+  for (const scope of [undefined, ["**"]]) {
+    const result = await runAcceptance({ commands: [], cwd, scope, exclude: ["secret.*"], baseRef: "HEAD" });
+    assert.equal(result.passed, false);
+    assert.deepEqual(result.scopeViolations, ["secret.txt"]);
+  }
+});

@@ -2,7 +2,7 @@ import { expect, it } from 'vitest';
 import { buildRows, readExpanded, PAGE_SIZE, type GraphNode, type GraphTree } from '../pages/graph/rows.ts';
 import { createTimeScale } from '../pages/graph/GraphTimeline.tsx';
 const now = new Date(2026, 9, 11, 12).getTime();
-function node(id: string, state = 'ended', children: string[] = [], age = 0, role = 'work'): GraphNode {
+function node(id: string, state = 'ended', children: string[] = [], age = 0, role = 'implement'): GraphNode {
   return { id, kind: 'conversation', label: id, conversationId: id, state, role, provider: 'codex', model: '', children, attempts: [], activity: new Date(now - age).toISOString() };
 }
 function tree(nodes: GraphNode[]): GraphTree { return { nodes, roots: ['root'], edges: [], unresolved: [] }; }
@@ -27,14 +27,14 @@ it('retains five recent completions per parent, today groups, earlier groups and
   expect(result.rows.find(row => row.id === 'earlier:root')?.group?.count).toBe(2);
   expect(result.rows.some(row => row.id === 'failure')).toBe(true);
   expect(result.needsYou).toBe(1);
-  expect(result.roles.work).toBe(13);
+  expect(result.roles.implement).toBe(13);
 });
 it('opens groups twenty children at a time and restores expansion from the URL', () => {
   const children = Array.from({ length: 45 }, (_, i) => node(`old-${i}`, 'ended', [], 48 * 3600_000));
   const input = tree([node('root', 'idle', children.map(row => row.id)), ...children]);
   const result = buildRows(input, { now, expanded: readExpanded(['earlier:root@40']) });
   expect(result.rows.filter(row => row.node && row.parent)).toHaveLength(PAGE_SIZE * 2);
-  expect(result.rows.find(row => row.group)?.group).toMatchObject({ shown: 40, count: 45, roles: { work: 45 } });
+  expect(result.rows.find(row => row.group)?.group).toMatchObject({ shown: 40, count: 45, roles: { implement: 45 } });
   const selected = buildRows(input, { now, selected: 'old-44' });
   expect(selected.rows.some(row => row.id === 'old-44')).toBe(true);
 });
@@ -42,7 +42,7 @@ it('filters by role including folded rows while retaining ancestors and stable t
   const input = tree([node('root', 'idle', ['work', 'docs']), node('work', 'ended', ['review'], 48 * 3600_000), node('review', 'ended', [], 48 * 3600_000, 'review'), node('docs', 'ended', [], 48 * 3600_000, 'write')]);
   const result = buildRows(input, { now, role: 'review' });
   expect(result.rows.map(row => row.id)).toEqual(['root', 'work', 'review']);
-  expect(result.roles).toEqual({ work: 1, review: 1, write: 1 });
+  expect(result.roles).toEqual({ implement: 1, review: 1, document: 1 });
 });
 it('uses actual attempt times and compresses only gaps beyond thirty minutes', () => {
   const segments = [{ start: now - 4 * 3600_000, end: now - 3 * 3600_000, state: 'ended' }, { start: now - 3600_000, end: now, state: 'running' }];

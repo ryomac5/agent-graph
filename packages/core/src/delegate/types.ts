@@ -1,4 +1,4 @@
-export type Role = "orchestrate" | "implement" | "research" | "document" | "review" | "advisor" | "plan" | "proofread";
+export type Role = "orchestrate" | "implement" | "research" | "document" | "review" | "advisor" | "verify" | "proofread";
 export type Weight = "light" | "standard" | "heavy";
 export type Executor = "claude" | "codex" | "antigravity";
 export type ModelFamily = "anthropic" | "openai" | "google";

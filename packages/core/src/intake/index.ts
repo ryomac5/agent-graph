@@ -6,6 +6,7 @@ import { serializeValue } from "../ledger/projections/relations.ts";
 export interface IntakeRequest extends DelegateRequest {
   requestId: string;
   source: "ui" | "mcp" | "planner" | "kit";
+  repositoryId?: string;
   parentRun?: string;
   origin?: { provider: "claude" | "codex"; nativeId: string };
 }
@@ -67,12 +68,12 @@ export function validateRequest(value: unknown): asserts value is IntakeRequest 
   const r = value as IntakeRequest;
   for (const field of ["requestId", "title", "task"] as const) if (typeof r[field] !== "string" || !r[field]) throw new TypeError(`Invalid ${field}`);
   if (!["ui", "mcp", "planner", "kit"].includes(r.source)) throw new TypeError("Invalid source");
-  if (!["implement", "review", "research", "document", "orchestrate", "advisor", "plan", "proofread"].includes(r.role)) throw new TypeError("Invalid role");
+  if (!["implement", "review", "research", "document", "orchestrate", "advisor", "verify", "proofread"].includes(r.role)) throw new TypeError("Invalid role");
   if (r.weight !== undefined && !["light", "standard", "heavy"].includes(r.weight)) throw new TypeError("Invalid weight");
   for (const field of ["accept", "scope", "outputs"] as const) {
     if ((field === "accept" || r[field] !== undefined) && (!Array.isArray(r[field]) || !r[field]!.every((v) => typeof v === "string"))) throw new TypeError(`Invalid ${field}`);
   }
-  for (const field of ["cwd", "parentRun"] as const) if (r[field] !== undefined && (typeof r[field] !== "string" || !r[field])) throw new TypeError(`Invalid ${field}`);
+  for (const field of ["cwd", "parentRun", "repositoryId"] as const) if (r[field] !== undefined && (typeof r[field] !== "string" || !r[field])) throw new TypeError(`Invalid ${field}`);
   if (r.origin !== undefined && (!r.origin || !["claude", "codex"].includes(r.origin.provider) || typeof r.origin.nativeId !== "string" || !r.origin.nativeId)) throw new TypeError("Invalid origin");
   if (r.timeoutSec !== undefined && (!Number.isFinite(r.timeoutSec) || r.timeoutSec <= 0)) throw new TypeError("Invalid timeoutSec");
   if (r.constraints !== undefined) {

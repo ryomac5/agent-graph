@@ -493,3 +493,20 @@ test("models commands use the API request adapter without forwarding to a runner
     assert.equal(resolved.ok, true); assert.equal((resolved.result as { model: string }).model, "fable");
   } finally { detach(); await f.close(); }
 });
+
+test("legacy plan policies can be saved as advisor, including files that already have both roles", async () => {
+  const f = await createFixture();
+  try {
+    for (const withAdvisor of [false, true]) {
+      const candidate = (role: string, model: string) => `[[roles.${role}]]\nexecutor = "claude"\nmodel = "${model}"\nfamily = "anthropic"\ntier = "high"\n`;
+      await writeFile(f.paths.policy, candidate("plan", "legacy") + (withAdvisor ? candidate("advisor", "preferred") : "") + '# retained note\n');
+      await f.service.reload("policy");
+      const patch = f.service.read("policy");
+      const preview = f.service.previewPolicy(patch);
+      await f.service.write("policy", patch, { previewToken: preview.token });
+      const saved = await readFile(f.paths.policy, "utf8");
+      assert.match(saved, /# retained note/); assert.ok(!saved.includes("roles.plan"));
+      assert.equal(getCandidates(f.service.read("policy"), "advisor")[0].model, withAdvisor ? "preferred" : "legacy");
+    }
+  } finally { await f.close(); }
+});

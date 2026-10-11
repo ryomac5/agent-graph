@@ -3,8 +3,10 @@ import { connectIntake } from "../../planner/src/intake-client.ts";
 
 const options = JSON.parse(process.argv[2]) as RunOptions;
 try {
-  const result = await runGraph(options, { connect: (connection) => connectIntake({ ...connection,
-    socketPath: process.env.AGENT_GRAPH_RUNNER_SOCKET }) });
+  const result = await runGraph(options, { connect: async (connection) => {
+    const client = await connectIntake({ ...connection, socketPath: process.env.AGENT_GRAPH_RUNNER_SOCKET });
+    return { close: () => client.close(), delegate: request => client.delegate({ ...request, repositoryId: options.repo }) };
+  } });
   console.log(JSON.stringify(result));
   if (result.tasks.some((task) => task.state !== "done")) process.exitCode = 1;
 } catch (error) {

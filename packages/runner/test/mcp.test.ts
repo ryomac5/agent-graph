@@ -6,7 +6,7 @@ function send(socket: ReturnType<ReturnType<typeof fixture>["connect"]>["client"
   socket.write(JSON.stringify(value) + "\n");
 }
 
-test("MCP initializes, lists exactly three tools and delegates before launching", async (t) => {
+test("MCP initializes, lists five tools and delegates before launching", async (t) => {
   const f = fixture(t); const { client } = f.connect(); const replies = messages(client);
   send(client, { type: "hello", role: "mcp", version: 1 });
   send(client, { jsonrpc: "2.0", id: 0, method: "initialize", params: { protocolVersion: "2024-11-05", clientInfo: { name: "codex" } } });
@@ -17,7 +17,7 @@ test("MCP initializes, lists exactly three tools and delegates before launching"
   client.on("data", () => { if (replies.some((r) => r.id === 2)) startsAtAcceptance ??= f.host.starts.length; });
   await until(() => replies.some((r) => r.id === 2));
   assert.equal(replies.find((r) => r.id === 0).result.protocolVersion, "2024-11-05");
-  assert.deepEqual(replies.find((r) => r.id === 1).result.tools.map((tool: { name: string }) => tool.name), ["delegate", "status", "wait"]);
+  assert.deepEqual(replies.find((r) => r.id === 1).result.tools.map((tool: { name: string }) => tool.name), ["resolve_model", "assignment_table", "delegate", "status", "wait"]);
   assert.equal(replies.find((r) => r.id === 2).result.structuredContent.state, "accepted");
   assert.equal(startsAtAcceptance, 0);
   await until(() => f.host.starts.length === 1);

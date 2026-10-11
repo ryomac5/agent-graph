@@ -12,13 +12,19 @@ import { RunnerRuntime } from "../runtime.ts";
 import { RunnerPlanner } from "../planner.ts";
 import { MAX_FRAME_BYTES, PROTOCOL_VERSION, RunnerProtocol, type RunnerEvent } from "../socket.ts";
 
+import { resolveModel } from "../../../core/src/assign/models.ts";
+import { ROLES, defaultPolicy, type Policy } from "../../../core/src/assign/policy.ts";
+import type { Role, Weight } from "../../../core/src/delegate/types.ts";
+
 const SOCKET_PROBE_TIMEOUT_MS = 5000;
 
 export const TOOLS = [
+  { name: "resolve_model", description: "Resolve the assignment for a role and weight.", inputSchema: { type: "object", required: ["role"], properties: { role: { type: "string", enum: ROLES }, weight: { type: "string", enum: ["light", "standard", "heavy"] } } } },
+  { name: "assignment_table", description: "Read the complete assignment policy.", inputSchema: { type: "object", properties: {} } },
   { name: "delegate", description: "Accept a delegation without waiting for its result. Use agent-graph watch for long tasks.", inputSchema: {
     type: "object", required: ["role", "title", "task", "accept"], properties: {
       weight: { type: "string", enum: ["light", "standard", "heavy"] },
-      requestId: { type: "string" }, role: { type: "string", enum: ["implement", "review", "research", "document", "orchestrate", "advisor", "plan", "proofread"] },
+      requestId: { type: "string" }, role: { type: "string", enum: ROLES },
       title: { type: "string" }, task: { type: "string" }, accept: { type: "array", items: { type: "string" } },
       scope: { type: "array", items: { type: "string" } }, cwd: { type: "string" },
       outputs: { type: "array", items: { type: "string" } }, constraints: { type: "object" }, timeoutSec: { type: "number" }, review: { type: "boolean" },
@@ -46,7 +52,8 @@ export class McpProtocol {
   private waiters = new Set<Waiter>();
   private intake: Pick<Intake, "submit" | "status">;
   private fallback?: RunnerProtocol;
-  constructor(intake: Pick<Intake, "submit" | "status">, fallback?: RunnerProtocol) { this.intake = intake; this.fallback = fallback; }
+  private readPolicy: () => Policy;
+  constructor(intake: Pick<Intake, "submit" | "status">, fallback?: RunnerProtocol, readPolicy = defaultPolicy) { this.intake = intake; this.fallback = fallback; this.readPolicy = readPolicy; }
   attach(socket: Socket): void {
     this.clients.add(socket);
     let buffer = "";
@@ -103,9 +110,13 @@ export class McpProtocol {
       } else if (method === "ping") result(socket, id, {});
       else if (method === "tools/list") result(socket, id, { tools: TOOLS });
       else if (method === "tools/call") {
-        const args = params.arguments as Record<string, unknown> | undefined;
+        const args = (params.arguments ?? (params.name === "assignment_table" ? {} : undefined)) as Record<string, unknown> | undefined;
         if (!args || typeof args !== "object" || Array.isArray(args)) throw new TypeError("Invalid tool arguments");
-        if (params.name === "delegate") {
+        if (params.name === "resolve_model" || params.name === "assignment_table") {
+          const policy = this.readPolicy();
+          const value = params.name === "assignment_table" ? policy : resolveModel(policy, args.role as Role, (args.weight ?? "standard") as Weight);
+          result(socket, id, { content: [{ type: "text", text: JSON.stringify(value) }], structuredContent: value });
+        } else if (params.name === "delegate") {
           const status = this.intake.submit({ ...args, source: "mcp" });
           result(socket, id, toolResult(status));
         } else if (params.name === "status" || params.name === "wait") {
@@ -174,18 +185,21 @@ async function listen(server: Server, path: string): Promise<void> {
 export async function serveMcpRunner(ledger: Ledger, path: string,
   options: IntakeOptions & { hosts?: readonly AgentHost[]; isolation?: "shared" | "worktree" } = {}) {
   let ready = false;
-  const planner = new RunnerPlanner(path);
-  const fallback = new RunnerProtocol((request) => {
+  const fallback = new RunnerProtocol((request, role) => {
     if (!ready) throw new Error("Runner is recovering");
     if (request.command === "planner.run" || request.command === "planner.status") return planner.command(request);
-    return intake.command(request);
+    return intake.command(request, role);
   });
   const protocol = new McpProtocol({
     submit(value) { if (!ready) throw new Error("Runner is recovering"); return intake.submit(value); },
     status(id) { if (!ready) throw new Error("Runner is recovering"); return intake.status(id); },
-  }, fallback);
+  }, fallback, () => {
+    if (!ready) throw new Error("Runner is recovering");
+    return runtime.settings.forNextDelegation(options.cwd).policy;
+  });
   const publish = (event: RunnerEvent) => { fallback.publish(event); protocol.publish(event); options.publish?.(event); };
   const runtime = new RunnerRuntime(ledger, options.hosts ?? [new ClaudeHost(), new CodexHost()], publish, options.isolation);
+  const planner = new RunnerPlanner(path);
   const intake = new Intake(ledger, runtime, { ...options, publish });
   secureSocketDirectory(path);
   const server = createServer((socket) => protocol.attach(socket));

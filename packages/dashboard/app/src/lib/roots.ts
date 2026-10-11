@@ -141,22 +141,29 @@ export function orderSeries(state: ScreenState, ids: readonly string[]): string[
   const activity = new Map(ids.map(id => [id, conversationActivity(state, id)]));
   return ids.map((id, index) => ({ id, index })).toSorted((a, b) => activity.get(a.id)!.localeCompare(activity.get(b.id)!) || a.index - b.index).map(item => item.id);
 }
-export type ChildRole = 'research' | 'plan' | 'work' | 'review' | 'write' | 'other';
+export type ChildRole = 'orchestrate' | 'advisor' | 'research' | 'implement' | 'document' | 'review' | 'verify' | 'proofread';
 /** 委譲の依頼を優先し、観測したエージェントの種別から同じ語彙へ写す。 */
 export function resolveChildRole(evidence: Row = {}, delegation?: Row): ChildRole {
   const value = readText(readObject(delegation?.request).role ?? delegation?.role ?? evidence.agentType ?? evidence.role);
   switch (value) {
     case 'Explore': case 'claude-code-guide': case 'research': return 'research';
-    case 'Plan': case 'plan': return 'plan';
-    case 'general-purpose': case 'implement': case 'codex-exec': case 'work': return 'work';
+    case 'Plan': case 'plan': case 'advisor': return 'advisor';
+    case 'orchestrate': return 'orchestrate';
+    case 'verify': return 'verify';
+    case 'proofread': return 'proofread';
+    case 'general-purpose': {
+      const title = readText(readObject(delegation?.request).title ?? delegation?.title ?? evidence.description ?? evidence.title);
+      return /(?:\b(?:test|tests|testing|verify|verification|validate|validation|e2e|smoke)\b|検証|試験|テスト|実機|動作確認|本番.*確認)/i.test(title) ? 'verify' : 'implement';
+    }
+    case 'implement': case 'codex-exec': case 'work': return 'implement';
     case 'reviewer': case 'review': return 'review';
-    case 'doc-light': case 'doc-heavy': case 'document': case 'write': return 'write';
-    default: return 'other';
+    case 'doc-light': case 'doc-heavy': case 'document': case 'write': return 'document';
+    default: return 'implement';
   }
 }
 const ROLE_NAMES: Record<ChildRole, [string, string]> = {
-  research: ['Research', '調査'], plan: ['Plan', '計画'], work: ['Work', '作業'],
-  review: ['Review', 'レビュー'], write: ['Write', '文書'], other: ['Other', 'その他'],
+  orchestrate: ['Orchestrate', '根'], advisor: ['Advisor', '助言'], research: ['Research', '調査'], implement: ['Implement', '実装'],
+  document: ['Document', '文書'], review: ['Review', 'レビュー'], verify: ['Verify', '検証'], proofread: ['Proofread', '校正'],
 };
 export function shownRole(role: string, language = typeof document !== 'undefined' ? document.documentElement.lang : 'en'): string {
   return ROLE_NAMES[role as ChildRole]?.[language === 'ja' ? 1 : 0] ?? (['general-purpose', 'subagent'].includes(role) ? '' : role);

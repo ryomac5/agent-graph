@@ -3,7 +3,6 @@ import { SettingsFields, SettingsSection } from '../../components/settings/Setti
 import { APPEARANCE_CHOICES, loadAppearance, saveAppearance, requestSettings, describeDecision,
   type Appearance, type PolicyPreview, type SettingsClient, type SettingsSnapshot, type SettingsStatus } from '../../lib/settings.ts';
 import { loadPreferences, NOTIFICATION_KINDS, notificationLabel, PREFERENCES_KEY, type NotificationPreferences } from '../../components/notifications/model.ts';
-import { modelName } from '../../lib/format.ts';
 import { ModelAssignments, type ModelCatalog } from './ModelAssignments.tsx';
 import './settings.css';
 
@@ -20,6 +19,8 @@ export function SettingsPage({ client, language, onAppearance, policyOnly = fals
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<PolicyPreview>();
+  const [providerPreview, setProviderPreview] = useState<{ token: string; provider: string; files: { path: string; diff: string }[]; mcpCommand?: string }>();
+  const [providerConfirmed, setProviderConfirmed] = useState(false);
   const [apiKey, setApiKey] = useState('');
   const [confirmation, setConfirmation] = useState(false);
   const [preferences, setPreferences] = useState<NotificationPreferences>(() => loadPreferences(localStorage));
@@ -66,7 +67,7 @@ export function SettingsPage({ client, language, onAppearance, policyOnly = fals
     edits.current[store] += 1;
     dirty.current.add(store);
     setSettings(previous => previous && { ...previous, [store]: value });
-    if (store === 'policy') setPreview(undefined);
+    if (store === 'policy') { setPreview(undefined); setProviderPreview(undefined); setProviderConfirmed(false); }
   }
   async function save(store: FileStore) {
     const revision = edits.current[store];
@@ -109,9 +110,16 @@ export function SettingsPage({ client, language, onAppearance, policyOnly = fals
 
     </SettingsSection>}
     <SettingsSection title={text('Assignment policy', '割り当ての決まり')} store="policy.toml" hint={nextDelegation}>
-      {(['claude', 'codex', 'antigravity'] as const).map(provider => <div key={provider} className="settings-models"><button className="btn btn-secondary" disabled={busy} onClick={() => void perform(async () => { const result = await requestSettings<{ state: string; models: { model: string; displayName: string }[] }>(client, 'settings.models', { provider }); setModels(previous => ({ ...previous, [provider]: result })); })}>{text(`Refresh ${provider} models`, `${provider} のモデルを更新`)}</button>
-        <p>{models[provider]?.state === 'known' ? models[provider].models.map(model => modelName(model.model || model.displayName)).join(', ') : text('Available models: Unknown', '利用できるモデル: 不明')}</p></div>)}
-      <ModelAssignments policy={settings.policy} models={models} language={lang} onChange={next => edit('policy', next)}/>
+      <ModelAssignments policy={settings.policy} models={models} language={lang} onChange={next => edit('policy', next)} onRefresh={provider => void perform(async () => { const result = await requestSettings<ModelCatalog[string]>(client, 'settings.models', { provider }); setModels(previous => ({ ...previous, [provider]: result })); })}/>
+      <div className="button-row">{(['claude', 'codex', 'antigravity'] as const).map(provider => <button key={provider} className="btn btn-secondary" disabled={busy || dirty.current.has('policy')} onClick={() => void perform(async () => { setProviderConfirmed(false); setProviderPreview(await requestSettings(client, 'settings.previewProvider', { provider })); })}>{text('Apply to', '反映')} {({ claude: 'Claude', codex: 'Codex', antigravity: 'Antigravity' })[provider]}</button>)}</div>
+      <p className="muted-text">{text('Save the assignment policy before applying it to provider files.', '提供元に反映する前に割り当てを保存してください。')}</p>
+      {providerPreview && <div role="region" aria-label={text('Provider changes', '提供元への変更')}>
+        {providerPreview.files.map(file => <div key={file.path}><p><code>{file.path}</code></p><pre className="provider-diff">{file.diff}</pre></div>)}
+        {!providerPreview.files.length && <p>{text('No changes', '変更はありません')}</p>}
+        {providerPreview.mcpCommand && <p>{text('Register agent-graph MCP:', 'agent-graph の MCP を登録:')} <code>{providerPreview.mcpCommand}</code></p>}
+        <label><input type="checkbox" checked={providerConfirmed} onChange={event => setProviderConfirmed(event.target.checked)}/>{text('I confirm these file changes', 'ファイルの変更を確認しました')}</label>
+        <div className="button-row"><button className="btn btn-secondary" disabled={busy || !providerConfirmed} onClick={() => void perform(async () => { await requestSettings(client, 'settings.applyProvider', { provider: providerPreview.provider, token: providerPreview.token, confirmation: true }); setProviderPreview(undefined); setProviderConfirmed(false); setNotice(text('Applied', '反映しました')); })}>{text('Confirm and apply', '確認して反映')}</button><button className="btn btn-ghost" onClick={() => { setProviderPreview(undefined); setProviderConfirmed(false); }}>{text('Cancel', '取り消す')}</button></div>
+      </div>}
       <SettingsFields value={{ maxRoundTrips: settings.policy.maxRoundTrips, quota: settings.policy.quota, performance: settings.policy.performance, constraints: settings.policy.constraints }} language={lang} hint={nextDelegation} onChange={next => edit('policy', { ...settings.policy, ...next })}/>
       <p className="muted-text">{text('Preview past delegations before saving. Missing historical quota or performance data uses the static candidate order.', '保存前に過去の委譲で試算します。過去の利用枠や実績が記録されていない場合は静的な候補順を使います。')}</p>
       <div className="button-row"><button className="btn btn-secondary" disabled={busy} onClick={() => void previewPolicy()}>{text('Preview policy', '割り当てを試算')}</button>

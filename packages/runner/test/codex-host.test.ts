@@ -153,7 +153,10 @@ test("output schema is sent with every turn of the run and omitted otherwise", {
   const schema = { type: "object", additionalProperties: false, required: ["verdict"], properties: { verdict: { type: "string" } } };
   const constrained = await host.start({ ...createRequest("constrained", "READY"), outputSchema: schema });
   const stream = collect(constrained);
-  await stream.wait((events) => hasFinal(events, "READY") && hasState(events, "idle"));
+  await stream.wait((events) => hasFinal(events, "READY") && facts(events).some(fact => {
+    const evidence = fact.kind === "run.state_changed" ? fact.payload.last_evidence : undefined;
+    return evidence && typeof evidence === "object" && !Array.isArray(evidence) && evidence.status === "completed";
+  }));
   await host.send("constrained", { text: "NEXT" });
   await stream.wait((events) => hasFinal(events, "NEXT"));
   const plain = await host.start(createRequest("plain", "READY"));

@@ -105,11 +105,11 @@ it('shows the flow under its root in the workspace, selects requests and sends t
   // 根を頂点に置き、依頼はその下に字下げで続ける。
   const apex = within(flow).getByRole('treeitem', { name: /^Terminal/ });
   expect(apex.getAttribute('aria-current')).toBe('page');
-  const implement = within(flow).getByRole('treeitem', { name: /Work · Codex/ });
+  const implement = within(flow).getByRole('treeitem', { name: /Implement · Codex/ });
   expect(implement.getAttribute('aria-level')).toBe('2');
   expect(apex.closest('.graph-row')?.getAttribute('data-node-id')).toBe('origin');
   fireEvent.click(implement);
-  expect(within(flow).getByRole('treeitem', { name: /Work · Codex/ }).getAttribute('aria-current')).toBe('page');
+  expect(within(flow).getByRole('treeitem', { name: /Implement · Codex/ }).getAttribute('aria-current')).toBe('page');
   expect(within(flow).getByRole('treeitem', { name: /^Terminal/ }).getAttribute('aria-current')).toBeNull();
   expect(within(flow).queryByRole('button', { name: 'Retry' })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
@@ -138,8 +138,8 @@ it('groups retry executions in one delegation node and reports retry errors', as
   const command = vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'retry', ok: false, error: 'Runner unavailable' }));
   render(<MemoryRouter><WorkspacePage project={PROJECT} target={target} client={{ command }}/></MemoryRouter>);
   const flow = screen.getByRole('complementary', { name: 'Panel' });
-  expect(within(flow).getAllByRole('treeitem', { name: /Work · Codex/ })).toHaveLength(1);
-  fireEvent.click(within(flow).getByRole('treeitem', { name: /Work · Codex/ }));
+  expect(within(flow).getAllByRole('treeitem', { name: /Implement · Codex/ })).toHaveLength(1);
+  fireEvent.click(within(flow).getByRole('treeitem', { name: /Implement · Codex/ }));
   expect(within(flow).queryByRole('button', { name: 'Retry' })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
   await waitFor(() => expect(screen.getAllByRole('alert')[0].textContent).toBe('Runner unavailable'));
@@ -169,7 +169,7 @@ it('keeps a resumed delegated conversation under its origin with two attempts an
   render(<MemoryRouter><WorkspacePage project={PROJECT} target={target} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: true })) }}/></MemoryRouter>);
   const flow = screen.getByRole('complementary', { name: 'Panel' });
   fireEvent.click(within(flow).getByRole('treeitem', { name: /Earlier 1/ }));
-  expect(within(flow).getAllByRole('treeitem', { name: /Work · Codex/ })).toHaveLength(1);
+  expect(within(flow).getAllByRole('treeitem', { name: /Implement · Codex/ })).toHaveLength(1);
 });
 
 it.each(['running', 'ended', 'failed', 'unknown'])('uses the resumed run state %s and resolves original run aliases independently of row order', status => {

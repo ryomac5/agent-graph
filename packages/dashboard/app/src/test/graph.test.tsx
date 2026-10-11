@@ -28,7 +28,7 @@ beforeEach(() => vi.spyOn(Date, 'now').mockReturnValue(now));
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 it.each(['en', 'ja'] as const)('shows all role shapes and words, running work and ancestor lines in %s', language => {
   renderGraph(true, language);
-  for (const [role, icon] of Object.entries({ main: 'message', research: 'search', plan: 'plan', work: 'tool', review: 'check', write: 'file', other: 'dot' })) {
+  for (const [role, icon] of Object.entries({ main: 'message', research: 'search', advisor: 'plan', implement: 'tool', review: 'check', document: 'file' })) {
     expect(document.querySelector(`[data-role="${role}"]`)?.getAttribute('data-icon')).toBe(icon);
   }
   const row = document.querySelector('[data-node-id="work"]')!;
@@ -38,11 +38,11 @@ it.each(['en', 'ja'] as const)('shows all role shapes and words, running work an
   expect(document.querySelector('[data-child=work]')?.classList.contains('is-running')).toBe(true);
   expect(screen.getByText(language === 'ja' ? '下で 2 件が実行中' : '2 running below')).toBeTruthy();
   expect(screen.queryByText('待機中')).toBeNull();
-  expect(screen.getByText(language === 'ja' ? '文書 · Opus 5.5' : 'Docs · Opus 5.5')).toBeTruthy();
+  expect(screen.getByText(language === 'ja' ? '文書 · Opus 5.5' : 'Document · Opus 5.5')).toBeTruthy();
 });
 it('counts hidden roles, filters without losing ancestors, and toggles back', () => {
   renderGraph();
-  expect(screen.getByRole('button', { name: 'Work 47' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Implement 48' })).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Review 1' }));
   expect([...document.querySelectorAll('[data-node-id]')].map(row => row.getAttribute('data-node-id'))).toEqual(['root', 'work', 'review']);
   fireEvent.click(screen.getByRole('button', { name: 'Review 1' }));

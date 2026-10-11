@@ -1,14 +1,13 @@
 import { readProjection } from "../projection.ts";
 import { randomUUID } from "node:crypto";
 import { decide, type DecisionInput } from "../../../core/src/assign/assign.ts";
-import { loadPolicy } from "../../../core/src/assign/policy.ts";
 import { runAcceptance } from "../../../core/src/accept/run.ts";
 import type { Assignment, DelegateResult } from "../../../core/src/delegate/types.ts";
 import { fingerprintRequest, retryStatus, transitionStatus, validateRequest, type IntakeRequest, type IntakeStatus } from "../../../core/src/intake/index.ts";
 import type { ConversationPayload, FactInput, JsonValue, RunPayload } from "../../../core/src/ledger/facts.ts";
 import type { Ledger } from "../../../core/src/ledger/ledger.ts";
 import type { RunnerRuntime } from "../runtime.ts";
-import type { RunnerEvent, SocketRequest } from "../socket.ts";
+import type { RunnerEvent, SocketRequest, ClientRole } from "../socket.ts";
 import type { WorktreeRecord } from "../worktree.ts";
 import type { StartRequest } from "../host/contract.ts";
 import { finalizeArtifactsAsync } from "../artifacts/index.ts";
@@ -40,7 +39,7 @@ export class Intake {
   private reviewTimer: NodeJS.Timeout;
   constructor(ledger: Ledger, runtime: RunnerRuntime, options: IntakeOptions = {}) {
     this.ledger = ledger; this.runtime = runtime; this.options = options;
-    this.decision = options.decision ?? { policy: loadPolicy(), quota: () => undefined, performance: () => undefined };
+    this.decision = options.decision ?? { get policy() { return runtime.settings.forNextDelegation(options.cwd).policy; }, quota: () => undefined, performance: () => undefined };
     this.review = new ReviewFlow(ledger, runtime, this.decision, options.publish, options.reviewBlobDirectory, (runId) => this.finishRun(runId));
     this.reviewTimer = setInterval(() => {
       if (readProjection(this.ledger).rows("findings", "state = 'sent'").length) {
@@ -193,12 +192,14 @@ export class Intake {
     let result: DelegateResult | undefined;
     try {
       const request = this.request(requestId);
+      const settings = this.runtime.settings.forNextDelegation(request.repositoryId ?? request.cwd ?? this.options.cwd ?? process.cwd());
+      const decision = { ...this.decision, policy: this.options.decision?.policy ?? settings.policy };
       const attempt = this.status(requestId).attempt;
       const savedAttempt = readProjection(this.ledger).row("delegations", requestId)!.attempts.at(-1)!;
       if (!recovering && this.status(requestId).state !== "accepted") return;
       const selected = recovering
         ? { ok: true as const, assignment: savedAttempt.assignment as unknown as Assignment }
-        : decide(request, this.decision);
+        : decide(request, decision);
       if (!selected.ok) { this.change(requestId, "denied", { reason: selected.reason.join("\n") }); return; }
       const runId = recovering ? savedAttempt.run_id! : randomUUID();
       const conversationId = recovering ? this.readRun(runId).conversation_id! : randomUUID();
@@ -213,7 +214,7 @@ export class Intake {
       }
       const tree = this.readRun(runId);
       const fixedArtifact = await this.captureArtifact(runId);
-      const acceptance = await runAcceptance({ commands: request.accept, cwd: tree.cwd!, scope: request.scope, baseRef: fixedArtifact.base_sha,
+      const acceptance = await runAcceptance({ commands: [...settings.project.acceptance.commands, ...request.accept], cwd: tree.cwd!, scope: request.scope, exclude: settings.project.scope.exclude, baseRef: fixedArtifact.base_sha,
         timeoutMs: request.timeoutSec === undefined ? undefined : request.timeoutSec * 1000 });
       const captured = await this.captureArtifact(runId);
       if (captured.patch_hash !== fixedArtifact.patch_hash) throw new Error("Artifact changed after verification");
@@ -226,7 +227,7 @@ export class Intake {
       if (!acceptance.passed) { this.change(requestId, "failed", { result, reason: "Acceptance failed" }); return; }
       const savedReview = savedAttempt.review as { run_id?: string; assignment?: Assignment } | undefined;
       const reviewer = savedReview?.assignment ? { ok: true as const, assignment: savedReview.assignment } : decide({ role: "review", weight: request.weight, title: request.title, task: request.task, accept: [],
-        constraints: { excludeFamily: [selected.assignment.family] } }, { ...this.decision, implementerFamily: selected.assignment.family });
+        constraints: { excludeFamily: [selected.assignment.family] } }, { ...decision, implementerFamily: selected.assignment.family });
       if (!reviewer.ok) { this.change(requestId, "failed", { result, reason: reviewer.reason.join("\n") }); return; }
       if (this.status(requestId).state === "verifying") this.change(requestId, "reviewing");
       const reviewRunId = savedReview?.run_id ?? randomUUID();
@@ -301,7 +302,7 @@ export class Intake {
       } else this.change(d.request_id, "interrupted", { reason: "Runner restarted; explicit retry required" });
     }
   }
-  command(request: SocketRequest): JsonValue | Promise<JsonValue> {
+  command(request: SocketRequest, role: ClientRole = "cli"): JsonValue | Promise<JsonValue> {
     if (request.command.startsWith("review.")) return this.review.command(request);
     const p = request.payload as Record<string, JsonValue> | undefined;
     if (request.command === "intake.submit") return json(this.submit(p));
@@ -310,7 +311,7 @@ export class Intake {
       if (typeof p?.requestId !== "string") throw new TypeError("Invalid requestId");
       return json(request.command === "intake.status" ? this.status(p.requestId) : this.retry(p.requestId));
     }
-    return this.runtime.command(request);
+    return this.runtime.command(request, role);
   }
   async close(): Promise<void> {
     this.closing = true;

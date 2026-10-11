@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Candidate, Role, Tier, Weight } from "../delegate/types.ts";
 
-export const ROLES: Role[] = ["orchestrate", "implement", "research", "document", "review", "advisor", "plan", "proofread"];
+export const ROLES: Role[] = ["orchestrate", "advisor", "research", "implement", "document", "review", "verify", "proofread"];
 export const WEIGHTS: Weight[] = ["light", "standard", "heavy"];
 export type RoleModels = Candidate[] | Partial<Record<Weight, Candidate[]>>;
 export interface ModelNote { model: string; latest: boolean; strength: string; specialties: string }
@@ -29,7 +29,7 @@ export function defaultPolicy(): Policy {
       review: { light: [claude("opus"), codex("gpt-6-astra", "high")], standard: [claude("opus"), codex("gpt-6-astra", "high")], heavy: [claude("fable"), codex("gpt-6-astra", "xhigh")] },
       research: { standard: [claude("sonnet")] },
       document: { light: [claude("sonnet")], standard: [claude("opus")], heavy: [claude("opus")] },
-      orchestrate: { standard: [claude("opus")] }, advisor: { standard: [claude("fable")] }, plan: { standard: [claude("opus")] },
+      orchestrate: { standard: [claude("opus")] }, advisor: { standard: [claude("fable")] }, verify: { standard: [claude("sonnet")] },
       proofread: { standard: [{ executor: "antigravity", model: "gemini-3.8-flash-high", family: "google", tier: "high" }] },
     },
     criteria: {
@@ -59,7 +59,16 @@ function readObject(value: unknown, name: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 export function validatePolicyOverride(value: unknown): Partial<Policy> {
-  const object = readObject(value, "policy");
+  const object = structuredClone(readObject(value, "policy"));
+  for (const field of ["roles", "criteria"]) {
+    if (object[field] === undefined) continue;
+    const entries = readObject(object[field], field);
+    if (Object.hasOwn(entries, "plan")) { entries.advisor ??= entries.plan; delete entries.plan; }
+  }
+  if (Array.isArray(object.constraints)) object.constraints = object.constraints.map(value => {
+    const constraint = readObject(value, "constraint");
+    return constraint.role === "plan" ? { ...constraint, role: "advisor" } : constraint;
+  });
   const defaults = defaultPolicy();
   for (const key of Object.keys(object)) if (!Object.hasOwn(defaults, key)) throw new TypeError(`Unknown policy field: ${key}`);
   const choice = (value: unknown, choices: string[], name: string) => { if (typeof value !== "string" || !choices.includes(value)) throw new TypeError(`Invalid ${name}`); };

@@ -30,14 +30,18 @@
 .settings-card label { min-height: 48px; padding: var(--space-3) 0; }
 .settings-card label:last-child { border-bottom: var(--border); }
 .model-assignments { margin: var(--space-4) 0; }
-.assignment-scroll { overflow-x: auto; }
-.assignment-table { table-layout: fixed; min-width: 960px; }
-.assignment-table th:first-child { width: 120px; }
+.assignment-scroll { width: 100%; min-width: 0; }
+.assignment-table { table-layout: fixed; width: 100%; }
+.assignment-table th:first-child { width: 72px; }
 .assignment-table td { vertical-align: top; }
 .assignment-candidates { margin: 0; padding: 0; list-style: none; }
-.assignment-candidates li { border-bottom: var(--border); padding: var(--space-2) 0; display: grid; gap: var(--space-2); }
-.assignment-choice { display: flex; gap: var(--space-2); align-items: center; }
-.assignment-candidates input, .assignment-candidates select { width: 100%; min-width: 0; height: 32px; }
+.assignment-candidates > li { border-bottom: var(--border); padding: var(--space-2) 0; display: grid; gap: var(--space-2); }
+.assignment-line { display: grid; grid-template-columns: 28px minmax(0, 1fr) 64px 28px; gap: var(--space-1); align-items: center; }
+.assignment-choice { position: relative; width: 28px; height: 32px; display: grid; place-items: center; }
+.assignment-choice select { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.assignment-choice:focus-within { outline: 2px solid var(--focus); outline-offset: 1px; }
+.assignment-refresh { width: 28px; padding: 0; }
+.settings-page .assignment-candidates input, .settings-page .assignment-candidates select { width: 100%; min-width: 0; height: 32px; padding-left: var(--space-1); padding-right: var(--space-1); }
 .assignment-note { font: var(--type-meta); color: var(--fg-3); }
 .settings-page .assignment-inherit { min-height: 32px; display: flex; justify-content: flex-start; gap: var(--space-2); }
 .settings-page .assignment-criteria { display: grid; gap: var(--space-2); }
@@ -45,3 +49,15 @@
 .model-assignments h3 { font: var(--type-title); margin: var(--space-4) 0; }
 .model-assignments td input { max-width: 100%; }
 .settings-page .model-assignments input[type='checkbox'] { width: 16px; height: 16px; flex: 0 0 16px; }
+
+.assignment-options summary, .assignment-fallback summary { cursor: pointer; font: var(--type-meta); color: var(--fg-3); padding: var(--space-1) 0; }
+.assignment-options { min-width: 0; }
+.assignment-options .button-row { flex-wrap: wrap; gap: var(--space-1); }
+.settings-page .assignment-options select { width: 100%; min-width: 0; }
+.provider-diff { overflow: auto; max-height: 320px; background: var(--bg-1); border: var(--border); border-radius: var(--radius-1); padding: var(--space-3); font: var(--type-mono); }
+@media (max-width: 760px) {
+  .assignment-table th:first-child { width: 48px; }
+  .assignment-line { grid-template-columns: 24px minmax(0, 1fr) 40px 24px; gap: 0; }
+  .assignment-choice, .assignment-refresh { width: 24px; }
+  .assignment-table td, .assignment-table th { padding: var(--space-1); }
+}

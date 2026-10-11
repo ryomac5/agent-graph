@@ -67,7 +67,7 @@ it('projects the complete root series without duplicate children and preserves n
   expect(built.nodes.filter(node => node.id === 'old-a')).toHaveLength(1);
   expect(built.nodes.find(node => node.role === 'planner')?.label).toBe('batch');
   const rows = buildRows(built, { now: NOW });
-  expect(rows.all.filter(row => row.role === 'work')).toHaveLength(14);
+  expect(rows.all.filter(row => row.role === 'implement')).toHaveLength(14);
   expect(rows.rows.some(row => row.id === 'graph:batch')).toBe(true);
 });
 it('selects hidden old children from the URL and leaves undated planner times blank', () => {

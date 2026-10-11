@@ -14,9 +14,9 @@ export const GRAPH_ROW_HEIGHT = 32;
 export const RUNNING_ROW_HEIGHT = 52;
 export const APPROVAL_ROW_HEIGHT = 28;
 export type GraphRole = ChildRole | 'main';
-export const ROLES: ChildRole[] = ['work', 'write', 'review', 'research', 'plan', 'other'];
-export const ROLE_ICONS: Record<GraphRole, IconName> = { main: 'message', research: 'search', plan: 'plan', work: 'tool', review: 'check', write: 'file', other: 'dot' };
-const ROLE_WORDS: Record<GraphRole, [string, string]> = { main: ['Main', 'メイン'], research: ['Research', '調査'], plan: ['Plan', '計画'], work: ['Work', '作業'], review: ['Review', 'レビュー'], write: ['Docs', '文書'], other: ['Other', 'その他'] };
+export const ROLES: ChildRole[] = ['orchestrate', 'advisor', 'research', 'implement', 'document', 'review', 'verify', 'proofread'];
+export const ROLE_ICONS: Record<GraphRole, IconName> = { main: 'message', orchestrate: 'message', advisor: 'plan', research: 'search', implement: 'tool', document: 'file', review: 'check', verify: 'check', proofread: 'file' };
+const ROLE_WORDS: Record<GraphRole, [string, string]> = { main: ['Orchestrate', '根'], orchestrate: ['Orchestrate', '根'], advisor: ['Advisor', '助言'], research: ['Research', '調査'], implement: ['Implement', '実装'], document: ['Document', '文書'], review: ['Review', 'レビュー'], verify: ['Verify', '検証'], proofread: ['Proofread', '校正'] };
 export function roleWord(role: GraphRole, language: Language) { return ROLE_WORDS[role][language === 'ja' ? 1 : 0]; }
 export interface GraphNode extends TreeNode { activity?: string; currentWork?: string; report?: string; approvals?: Row[]; inferred?: boolean }
 export interface GraphTree extends Omit<DelegationTree, 'nodes'> { nodes: GraphNode[] }
@@ -82,7 +82,7 @@ export function buildRows(tree: GraphTree, options: { now: number; expanded?: Re
     if (!node || seen.has(id)) return;
     seen.add(id);
     const main = tree.roots.includes(id);
-    const rowRole = main ? 'main' : node.role === 'planner' ? 'plan' : resolveChildRole({ role: node.role }, node.delegation);
+    const rowRole = main ? 'main' : node.role === 'planner' ? 'advisor' : resolveChildRole({ role: node.role }, node.delegation);
     const running = ['starting', 'running'].includes(toDisplayState(node.state));
     all.push({ id, parent: ancestors.at(-1), depth: ancestors.length, ancestors, node, role: rowRole, runningBelow: 0, runningPath: running, selectedPath: id === selected,
       height: (running ? RUNNING_ROW_HEIGHT : GRAPH_ROW_HEIGHT) + (node.approvals?.length ?? 0) * APPROVAL_ROW_HEIGHT, segments: readSegments(node, now, state) });

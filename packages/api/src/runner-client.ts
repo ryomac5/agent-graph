@@ -18,6 +18,7 @@ export type RunnerEvent = { type: "evt"; seq: number } | {
 export function runnerSocketPath(): string { return join(dirname(ledgerDbPath()), "runner.sock"); }
 
 export class RunnerClient {
+  connectionGeneration = 0;
   private socket?: Socket;
   private ready = false;
   private stopped = false;
@@ -84,6 +85,7 @@ export class RunnerClient {
           }
           clearTimeout(handshake);
           this.ready = true;
+          this.connectionGeneration++;
           for (const pending of this.pending.values()) this.send(pending.request);
         } else if (message.type === "res" && typeof message.cmd_id === "string" && typeof message.ok === "boolean"
           && (message.ok ? "result" in message : typeof message.error === "string")) {

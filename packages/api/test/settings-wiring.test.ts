@@ -198,3 +198,51 @@ test("serve reads the saved API port and falls back on invalid manual configurat
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("late runner connection and subsequent reconnections resend every current settings store", async () => {
+  const { createServeSettings } = await import("../src/ws/settings.ts");
+  const root = await mkdtemp(join(tmpdir(), "settings-late-runner-"));
+  const oldConfigHome = process.env.XDG_CONFIG_HOME;
+  process.env.XDG_CONFIG_HOME = root;
+  const observation = openObservationService({ dbPath: join(root, "ledger.db"), readerOnly: true });
+  const commands: import("../src/runner-client.ts").RunnerRequest[] = [];
+  let pause: (() => Promise<void>) | undefined;
+  const runner = { available: false, connectionGeneration: 0, async request(request: import("../src/runner-client.ts").RunnerRequest): Promise<RunnerResponse> {
+    if (!this.available) return { type: "res", cmd_id: request.cmd_id, ok: false, error: "Runner unavailable" };
+    commands.push(request);
+    if (request.command === "runner.settings.apply" && (request.payload as { store: string }).store === "config") await pause?.();
+    return { type: "res", cmd_id: request.cmd_id, ok: true, result: { [request.command.endsWith("preflight") ? "valid" : "applied"]: true } };
+  } };
+  const service = createServeSettings(observation, { repository: root, runner: runner as unknown as import("../src/runner-client.ts").RunnerClient, keychain: createKeychain(async () => 44), resync() {} });
+  try {
+    const { mkdir } = await import("node:fs/promises");
+    await mkdir(join(root, "agent-graph"));
+    await writeFile(settingsPaths(root).policy, '[[roles.verify.standard]]\nexecutor = "claude"\nmodel = "late-model"\nfamily = "anthropic"\ntier = "mid"\n');
+    await service.settings.start();
+    assert.equal(Object.keys(service.settings.readErrors()).length, 3);
+    runner.available = true; runner.connectionGeneration++;
+    const applied = () => commands.filter(command => command.command === "runner.settings.apply");
+    await waitUntil(() => applied().length >= 3);
+    assert.deepEqual(applied().slice(0, 3).map(command => (command.payload as { store: string }).store), ["config", "policy", "project"]);
+    assert.match(JSON.stringify(applied()[1]), /late-model/);
+    assert.deepEqual(service.settings.readErrors(), {});
+    // 監視の間に切断と再接続を終えても、hello の世代で送り直す。
+    const before = applied().length;
+    runner.connectionGeneration++;
+    await waitUntil(() => applied().length >= before + 3);
+    assert.match(JSON.stringify(applied().at(-2)), /late-model/);
+    const beforePaused = applied().length;
+    let release!: () => void;
+    pause = () => { pause = undefined; return new Promise<void>(resolve => { release = resolve; }); };
+    runner.connectionGeneration++;
+    await waitUntil(() => applied().length === beforePaused + 1);
+    runner.connectionGeneration++;
+    await new Promise(resolve => setTimeout(resolve, 550));
+    release();
+    await waitUntil(() => applied().length >= beforePaused + 6);
+  } finally {
+    service.close(); observation.close();
+    if (oldConfigHome === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = oldConfigHome;
+    await rm(root, { recursive: true, force: true });
+  }
+});

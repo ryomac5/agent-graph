@@ -10,8 +10,9 @@ type Launch = { cwd: string; model: ModelChoice; integrationMode?: IntegrationMo
 import { AntigravityHost } from "./hosts/antigravity/index.ts";
 import { CodexHost } from "./hosts/codex/index.ts";
 import { Recovery, type RecoveryAction } from "./recovery.ts";
-import { type SocketRequest, type RunnerEvent } from "./socket.ts";
+import { type SocketRequest, type RunnerEvent, type ClientRole } from "./socket.ts";
 import { serveMcpRunner } from "./mcp/index.ts";
+import { RunnerSettings } from "./settings.ts";
 import type { IntakeOptions } from "./intake/index.ts";
 import { Supervisor } from "./supervisor.ts";
 
@@ -55,6 +56,7 @@ function parseNativeRunId(target: string): { conversationId: string; generation:
 
 export class RunnerRuntime {
   readonly supervisor: Supervisor;
+  readonly settings: RunnerSettings;
   private hosts: Map<Provider, AgentHost>;
   private actions: RecoveryAction[] = [];
   private opening = new Set<string>();
@@ -68,6 +70,12 @@ export class RunnerRuntime {
     this.hosts = new Map(hosts.map((host) => [host.provider, host]));
     this.supervisor = new Supervisor(ledger, publish, { recover: false, isolation });
     for (const host of hosts) this.supervisor.registerHost(host);
+    const activeRuns = () => this.readRuns().filter(run => this.supervisor.isOpen(run.id));
+    this.settings = new RunnerSettings({
+      activeRuns: () => activeRuns().map(run => run.id),
+      activeClaudeRuns: () => activeRuns().filter(run => this.readConversation(run.conversation_id).provider === "claude").map(run => run.id),
+      recordApprovalRelaxed: (runId, mode) => this.write({ source: "ui", kind: "setting.changed", subject: `setting:approval:${runId}`, confidence: "confirmed", payload: { store: "config", fields: ["approval.mode"], origin: "api", revision: mode, run_id: runId } }),
+    });
   }
   private readRuns(conversationId?: string) { return readProjection(this.ledger).records<RunPayload & { launch?: Launch }>("run", conversationId ? "conversation_id = ?" : "", conversationId ? [conversationId] : []) as (RunPayload & { id: string; launch?: Launch })[]; }
   private readConversation(id: string) {
@@ -100,9 +108,10 @@ export class RunnerRuntime {
     if (result.status === "conflict") throw new Error("Conflicting command fact");
     if (result.status === "appended") this.publish({ type: "evt", seq: result.seq });
   }
-  async command(request: SocketRequest): Promise<JsonValue> {
+  async command(request: SocketRequest, role: ClientRole = "cli"): Promise<JsonValue> {
     if (this.closing) throw new Error("Runner is shutting down");
     const { command } = request;
+    if (command.startsWith("runner.settings.")) return this.settings.handleRequest(request, role);
     if (command === "status") return toJson({ ...this.supervisor.status(), recovery: this.actions,
       hosts: Object.fromEntries([...this.hosts].map(([provider, host]) => [provider, host.capabilities()])) });
     const p = request.payload === undefined ? {} : readObject(request.payload);

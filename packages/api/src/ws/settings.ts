@@ -83,16 +83,17 @@ export function createServeSettings(observation: ReturnType<typeof openObservati
     }, resync: options.resync,
   });
   let connected = options.runner.available;
+  let generation = options.runner.connectionGeneration;
+  let syncing = false;
   const timer = setInterval(() => {
     const next = options.runner.available;
-    if (next && !connected) {
+    const currentGeneration = options.runner.connectionGeneration;
+    if (next && !syncing && (!connected || generation !== currentGeneration || Object.values(settings.readErrors()).includes("Settings application failed"))) {
       // 起動直後の hello と再接続の後にも、監視中の設定を runner へ送る。
+      syncing = true;
       void (async () => {
-        for (const store of ["config", "policy", "project"] as const) {
-          await settings.reload(store);
-          await transport.apply(store, settings.read(store), false);
-        }
-      })().catch(() => undefined);
+        await settings.synchronizeRunner();
+      })().then(() => { generation = currentGeneration; }).catch(() => undefined).finally(() => { syncing = false; });
     }
     connected = next;
   }, RUNNER_SETTINGS_POLL_MS);

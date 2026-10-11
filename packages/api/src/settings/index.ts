@@ -12,6 +12,9 @@ import type { DelegateRequest, Role, Weight } from "../../../core/src/delegate/t
 import type { Ledger } from "../../../core/src/ledger/ledger.ts";
 import type { JsonValue } from "../../../core/src/ledger/facts.ts";
 import type { ScreenCommand } from "../ws/contract.ts";
+import { fileURLToPath } from "node:url";
+import { ProviderSettings } from "./providers.ts";
+import type { Executor } from "../../../core/src/delegate/types.ts";
 import { parseSettingsToml, updateSettingsToml } from "./toml.ts";
 export const SETTINGS_WATCH_INTERVAL_MS = 100;
 
@@ -19,6 +22,9 @@ export interface KeychainPort { setClaudeApiKey(value: string): Promise<void>; d
 export interface PastDelegation { id: string; request: DelegateRequest; context: Omit<DecisionInput, "policy"> }
 export interface SettingsOptions {
   paths: Record<FileStore, string>;
+  providerHome?: string;
+  mcpRegistration?: { command: string; args: string[] };
+  modelOptions?: Parameters<typeof readAvailableModels>[2];
   ledger: Ledger;
   keychain: KeychainPort;
   history(): PastDelegation[];
@@ -69,7 +75,12 @@ export class SettingsService {
   private previews = new Map<string, { policy: SettingsByStore["policy"]; base: string }>();
   private commands = new Map<string, { fingerprint: string; promise: Promise<JsonValue> }>();
   private rebuildState: SettingsStatus["rebuild"] = { state: "idle", completed: 0, total: 0 };
-  constructor(options: SettingsOptions) { this.options = options; }
+  private providers: ProviderSettings;
+  private catalogs: Record<string, import("../../../core/src/settings/index.ts").AvailableModel[]> = {};
+  constructor(options: SettingsOptions) {
+    this.options = options;
+    this.providers = new ProviderSettings(options.providerHome ?? homedir(), options.mcpRegistration ?? { command: process.execPath, args: [fileURLToPath(new URL("../../../adapters/src/shim-v2/cli.ts", import.meta.url))] });
+  }
   private serialize<T>(operation: () => Promise<T>): Promise<T> {
     const next = this.queue.then(operation); this.queue = next.catch(() => undefined); return next;
   }
@@ -87,6 +98,7 @@ export class SettingsService {
     }
   }
   close(): void { for (const stop of this.watchers) stop(); this.watchers = []; }
+  readErrors(): Partial<Record<FileStore, string>> { return { ...this.errors }; }
   read<S extends FileStore>(store: S): SettingsByStore[S] { return structuredClone(this.values[store]) as SettingsByStore[S]; }
   private async readKeyConfigured(): Promise<boolean> {
     try { return await this.options.keychain.hasClaudeApiKey(); }
@@ -110,6 +122,12 @@ export class SettingsService {
       throw new Error("Settings audit failed");
     }
     this.values = { ...this.values, [store]: structuredClone(next) }; delete this.errors[store];
+  }
+  async synchronizeRunner(): Promise<void> {
+    for (const store of ["config", "policy", "project"] as const) {
+      await this.reload(store, true);
+      if (this.errors[store] && this.errors[store] !== "Settings application failed") await this.applyRunner(store, this.read(store), false);
+    }
   }
   reload(store: FileStore, initial = false): Promise<void> {
     return this.serialize(async () => {
@@ -159,7 +177,7 @@ export class SettingsService {
     const fingerprint = revision({ command: message.command, payload: message.payload });
     try {
       // 読み取りは毎回取得し、再送で副作用が重複する操作だけを保持する。
-      const cache = ["settings.write", "settings.apiKey", "settings.rebuild"].includes(message.command);
+      const cache = ["settings.write", "settings.apiKey", "settings.rebuild", "settings.applyProvider"].includes(message.command);
       const previous = this.commands.get(message.cmd_id);
       if (previous && previous.fingerprint !== fingerprint) throw new TypeError("cmd_id reused for another command");
       const promise = previous?.promise ?? this.execute(message.command, message.payload);
@@ -171,6 +189,11 @@ export class SettingsService {
   }
   private async execute(command: string, payload?: JsonValue): Promise<JsonValue> {
     const p = (payload ?? {}) as Record<string, JsonValue>;
+    if (command === "settings.previewProvider") return JSON.parse(JSON.stringify(await this.providers.preview(p.provider as Executor, this.values.policy, this.catalogs[String(p.provider)])));
+    if (command === "settings.applyProvider") {
+      await this.serialize(() => this.providers.apply(String(p.token), p.provider as Executor, this.values.policy, p.confirmation === true));
+      return { applied: true };
+    }
     if (command === "models.table") return JSON.parse(JSON.stringify(this.values.policy));
     if (command === "models.resolve") return JSON.parse(JSON.stringify(resolveModel(this.values.policy, p.role as Role, (p.weight ?? "standard") as Weight, p.usage as unknown as ModelUsage)));
     if (command === "settings.read") return JSON.parse(JSON.stringify({ config: this.values.config, policy: this.values.policy, project: this.values.project, errors: this.errors, apiKeyConfigured: await this.readKeyConfigured() }));
@@ -192,7 +215,9 @@ export class SettingsService {
     if (command === "settings.status") return JSON.parse(JSON.stringify({ ...await this.options.status(), rebuild: this.rebuildState }));
     if (command === "settings.models") {
       if (p.provider !== "claude" && p.provider !== "codex" && p.provider !== "antigravity") throw new TypeError("Invalid provider");
-      return JSON.parse(JSON.stringify(await readAvailableModels(p.provider, provider => this.options.listModels(provider))));
+      const catalog = await readAvailableModels(p.provider, provider => this.options.listModels(provider), { home: this.options.providerHome, ...this.options.modelOptions });
+      this.catalogs[p.provider] = catalog.models;
+      return JSON.parse(JSON.stringify(catalog));
     }
     if (command === "settings.rebuild") {
       if (this.rebuildState.state === "running") throw new TypeError("Rebuild already running");

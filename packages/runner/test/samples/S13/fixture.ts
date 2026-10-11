@@ -47,7 +47,7 @@ export function messages(stream: Duplex | PassThrough) {
   });
   return received;
 }
-export function fixture(t: TestContext) {
+export function fixture(t: TestContext, options: { liveSettings?: boolean } = {}) {
   const directory = mkdtempSync(join(tmpdir(), "s13-"));
   const cwd = join(directory, "repo"); mkdirSync(cwd);
   const git = (...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" });
@@ -56,14 +56,14 @@ export function fixture(t: TestContext) {
   const ledger = openLedger(join(directory, "ledger.db"), { storageScope: "full_diff" });
   const host = new FakeHost("codex");
   let protocol: McpProtocol;
-  const api = new RunnerProtocol((request) => intake.command(request));
+  const api = new RunnerProtocol((request, role) => intake.command(request, role));
   const publish = (event: Parameters<McpProtocol["publish"]>[0]) => { protocol?.publish(event); if (event) api.publish(event); };
   const runtime = new RunnerRuntime(ledger, [host], (event) => publish(event), "shared");
   const intake = new Intake(ledger, runtime, { cwd, publish,
-    decision: { policy: defaultPolicy(), quota: () => undefined, performance: () => undefined } });
-  protocol = new McpProtocol(intake, api);
+    ...(options.liveSettings ? {} : { decision: { policy: defaultPolicy(), quota: () => undefined, performance: () => undefined } }) });
+  protocol = new McpProtocol(intake, api, () => runtime.settings.forNextDelegation(cwd).policy);
   const request: IntakeRequest = { requestId: "sample", source: "mcp", role: "implement", title: "S13", task: "Run once", accept: ["exit 7"], cwd };
   t.after(async () => { protocol.disconnect(); api.disconnect(); await intake.close(); ledger.close(); rmSync(directory, { recursive: true, force: true }); });
   function connect() { const [client, server] = pair(); protocol.attach(server); return { client, server }; }
-  return { intake, ledger, host, protocol, request, connect, directory };
+  return { intake, ledger, host, protocol, runtime, request, connect, directory };
 }

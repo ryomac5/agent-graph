@@ -37,7 +37,7 @@ it('edits and saves model assignments from the production settings route', async
   render(<MemoryRouter initialEntries={['/settings']}><App client={f.client}/></MemoryRouter>);
   await screen.findByRole('region', { name: 'Model assignments' });
   expect(screen.getByLabelText('Theme')).toBeTruthy();
-  fireEvent.change(screen.getByLabelText('Implementation Heavy 1 Model'), { target: { value: 'custom-astra' } });
+  fireEvent.change(screen.getByLabelText('Implement Heavy 1 Model'), { target: { value: 'custom-astra' } });
   fireEvent.click(screen.getByRole('button', { name: 'Preview policy' }));
   await screen.findByRole('region', { name: 'Policy preview' });
   fireEvent.click(screen.getByRole('button', { name: 'Save policy' }));
@@ -117,8 +117,8 @@ it('saves notification routes locally and falls back when browser permission is 
   expect(JSON.parse(localStorage.getItem(PREFERENCES_KEY)!)).toHaveProperty('completed', 'in_app');
 });
 it('refreshes models and starts a rebuild with visible progress', async () => {
-  const f = createFixture(); render(<SettingsPage client={f.client}/>); await screen.findByRole('button', { name: 'Refresh codex models' });
-  fireEvent.click(screen.getByRole('button', { name: 'Refresh codex models' })); await waitFor(() => expect(f.command).toHaveBeenCalledWith('settings.models', { provider: 'codex' }));
+  const f = createFixture(); render(<SettingsPage client={f.client}/>); await screen.findByRole('button', { name: 'Implement Standard 1 Refresh codex models' });
+  fireEvent.click(screen.getByRole('button', { name: 'Implement Standard 1 Refresh codex models' })); await waitFor(() => expect(f.command).toHaveBeenCalledWith('settings.models', { provider: 'codex' }));
   fireEvent.click(screen.getByRole('button', { name: 'Rebuild ledger projection' })); await waitFor(() => expect(screen.getByRole('button', { name: 'Rebuild ledger projection' })).toHaveProperty('disabled', true));
   await waitFor(() => expect(screen.getByLabelText('Rebuild progress')).toHaveProperty('value', 2), { timeout: 3000 });
 });
@@ -179,14 +179,14 @@ it('edits weighted assignments, candidate order, criteria and model notes then s
   const f = createFixture(); render(<SettingsPage client={f.client}/>);
   const assignments = await screen.findByRole('region', { name: 'Model assignments' });
   expect(within(assignments).getAllByText('Top performance on SWE-bench.').length).toBeGreaterThan(0);
-  fireEvent.change(screen.getByLabelText('Implementation Heavy 1 Effort'), { target: { value: 'max' } });
-  fireEvent.change(screen.getByLabelText('Implementation Heavy Weight criteria'), { target: { value: 'Changes across packages' } });
-  fireEvent.click(screen.getByLabelText('Implementation Heavy 2 Move up'));
-  expect(screen.getByLabelText('Implementation Heavy 1 Model')).toHaveProperty('value', 'opus');
-  fireEvent.click(screen.getByLabelText('Implementation Heavy Add candidate'));
-  fireEvent.change(screen.getByLabelText('Implementation Heavy 3 Provider'), { target: { value: 'antigravity' } });
-  fireEvent.change(screen.getByLabelText('Implementation Heavy 3 Model'), { target: { value: 'manual-gemini' } });
-  fireEvent.click(screen.getByLabelText('Implementation Heavy 2 Remove'));
+  fireEvent.change(screen.getByLabelText('Implement Heavy 1 Effort'), { target: { value: 'max' } });
+  fireEvent.change(screen.getByLabelText('Implement Heavy Weight criteria'), { target: { value: 'Changes across packages' } });
+  fireEvent.click(screen.getByLabelText('Implement Heavy 2 Move up'));
+  expect(screen.getByLabelText('Implement Heavy 1 Model')).toHaveProperty('value', 'opus');
+  fireEvent.click(screen.getByLabelText('Implement Heavy Add candidate'));
+  fireEvent.change(screen.getByLabelText('Implement Heavy 3 Provider'), { target: { value: 'antigravity' } });
+  fireEvent.change(screen.getByLabelText('Implement Heavy 3 Model'), { target: { value: 'manual-gemini' } });
+  fireEvent.click(screen.getByLabelText('Implement Heavy 2 Remove'));
   fireEvent.click(screen.getByLabelText('Advisor Light Use standard'));
   fireEvent.change(screen.getByLabelText('Advisor Light 1 Model'), { target: { value: 'sonnet' } });
   fireEvent.change(screen.getByLabelText('Model note 1 strength'), { target: { value: 'Strong implementation' } });
@@ -215,4 +215,48 @@ it('supports drag reordering and standard inheritance with Japanese labels and p
   fireEvent.click(screen.getByRole('button', { name: '割り当てを保存' })); await screen.findByText('保存しました');
   const save = f.command.mock.calls.find(([name]) => name === 'settings.write')![1] as { patch: SettingsSnapshot['policy'] };
   expect(save.patch.roles.implement).not.toHaveProperty('heavy');
+});
+
+it('shows eight roles, lets the root select every provider, and folds fallback candidates', async () => {
+  const f = createFixture(); render(<SettingsPage client={f.client}/>);
+  const region = await screen.findByRole('region', { name: 'Model assignments' });
+  const table = region.querySelector('.assignment-table')!;
+  expect(table.querySelectorAll('tbody > tr')).toHaveLength(8);
+  expect([...table.querySelectorAll('tbody > tr > th')].map(cell => cell.textContent)).toEqual(['Orchestrate', 'Advisor', 'Research', 'Implement', 'Document', 'Review', 'Verify', 'Proofread']);
+  expect(screen.queryByText('Planning')).toBeNull();
+  const root = screen.getByLabelText('Orchestrate Standard 1 Provider');
+  fireEvent.change(root, { target: { value: 'antigravity' } });
+  expect(root).toHaveProperty('value', 'antigravity');
+  fireEvent.change(root, { target: { value: 'codex' } });
+  expect(root).toHaveProperty('value', 'codex');
+  expect(screen.getByLabelText('Implement Standard 2 Model').closest('details')).toHaveProperty('open', false);
+  fireEvent.click(screen.getByLabelText('Implement Standard 2 Model').closest('details')!.querySelector('summary')!);
+  // details の開閉はブラウザの標準操作に任せる。
+  expect(screen.queryByText('Available models: Unknown')).toBeNull();
+  expect(screen.getByLabelText('Implement Standard 1 Refresh codex models').textContent).toBe('↻');
+});
+
+it('previews provider file diffs and requires confirmation before applying each provider', async () => {
+  const f = createFixture(); const original = f.command.getMockImplementation()!;
+  f.command.mockImplementation(async (name, payload) => {
+    if (name === 'settings.previewProvider') {
+      const provider = (payload as { provider: string }).provider;
+      return { type: 'ack', cmd_id: name, ok: true, result: { token: `token-${provider}`, provider, files: [{ path: `/fixture/${provider}/settings`, diff: '-model: old\n+model: new' }], ...(provider === 'antigravity' ? { mcpCommand: 'agy mcp add agent-graph -- node shim.ts' } : {}) } };
+    }
+    if (name === 'settings.applyProvider') return { type: 'ack', cmd_id: name, ok: true, result: { applied: true } };
+    return original(name, payload);
+  });
+  render(<SettingsPage client={f.client}/>); await screen.findByRole('button', { name: 'Apply to Claude' });
+  for (const [provider, name] of [['claude', 'Claude'], ['codex', 'Codex'], ['antigravity', 'Antigravity']]) {
+    fireEvent.click(screen.getByRole('button', { name: `Apply to ${name}` }));
+    await screen.findByText(`/fixture/${provider}/settings`);
+    expect(screen.getByText(/-model: old/).textContent).toContain('+model: new');
+    expect(screen.getByRole('button', { name: 'Confirm and apply' })).toHaveProperty('disabled', true);
+    expect(f.command.mock.calls.some(([command, value]) => command === 'settings.applyProvider' && (value as { provider: string }).provider === provider)).toBe(false);
+    if (provider === 'antigravity') expect(screen.getByText('agy mcp add agent-graph -- node shim.ts')).toBeTruthy();
+    fireEvent.click(screen.getByLabelText('I confirm these file changes'));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm and apply' }));
+    await waitFor(() => expect(f.command).toHaveBeenCalledWith('settings.applyProvider', { token: `token-${provider}`, provider, confirmation: true }));
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Provider changes' })).toBeNull());
+  }
 });

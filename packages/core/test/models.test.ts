@@ -86,3 +86,15 @@ test("標準への継承を保存でき、編集元の参照を割り当てへ�
   patch.roles.implement.standard[0].model = "mutated";
   assert.equal(resolveModel(merged, "implement").model, "gpt-6-astra");
 });
+
+test("8 roles migrate legacy plan to advisor and default verify to Claude Sonnet", () => {
+  const policy = mergePolicy(defaultPolicy(), parsePolicyToml('[[roles.plan]]\nexecutor = "claude"\nmodel = "legacy-plan"\nfamily = "anthropic"\ntier = "high"\n[criteria.plan]\nheavy = "planning"\n'));
+  assert.equal(Object.keys(policy.roles).length, 8);
+  assert.ok(!Object.hasOwn(policy.roles, "plan"));
+  assert.equal(resolveModel(policy, "advisor").model, "legacy-plan");
+  assert.equal(policy.criteria.advisor?.heavy, "planning");
+  assert.equal(resolveModel(policy, "verify").model, "sonnet");
+  assert.equal(resolveModel(policy, "verify").executor, "claude");
+  const preferred = mergePolicy(defaultPolicy(), { roles: { plan: [{ executor: "claude", model: "old", family: "anthropic", tier: "high" }], advisor: [{ executor: "claude", model: "new", family: "anthropic", tier: "high" }] } });
+  assert.equal(resolveModel(preferred, "advisor").model, "new");
+});

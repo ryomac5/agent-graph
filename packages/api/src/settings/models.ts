@@ -18,10 +18,13 @@ export function parseModelList(value: unknown): AvailableModel[] {
 }
 export function parseAgyModels(text: string): AvailableModel[] {
   try { return parseModelList(JSON.parse(text)); } catch {
-    return [...new Set(text.split(/\r?\n/).flatMap(line => {
-      const model = /^\s*(?:[-*]\s*)?((?:gemini|claude|gpt)[\w.-]+)(?:\s|$)/i.exec(line)?.[1];
-      return model ? [model] : [];
-    }))].map(model => ({ model, displayName: model }));
+    return [...new Map(text.split(/\r?\n/).flatMap(line => {
+      const match = /^\s*(?:[-*]\s*)?((?:gemini|claude|gpt)[\w.-]+)(?:\s+(.*))?$/i.exec(line);
+      if (!match) return [];
+      const model = match[1];
+      const displayName = match[2]?.replace(/^\s*[|:]\s*/, "").trim() || model;
+      return [[model, { model, displayName }] as const];
+    })).values()];
   }
 }
 export async function readAvailableModels(provider: "claude" | "codex" | "antigravity", list: (provider: "claude" | "codex") => Promise<unknown>, options: { home?: string; agy?: () => Promise<string> } = {}): Promise<AvailableModels> {

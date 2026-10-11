@@ -43,19 +43,20 @@ function collectStatusPaths(output: string): string[] {
 }
 
 export async function runAcceptance({
-  commands, cwd, timeoutMs, scope, baseRef,
+  commands, cwd, timeoutMs, scope, baseRef, exclude = [],
 }: {
   commands: string[];
   cwd: string;
   timeoutMs?: number;
   scope?: string[];
+  exclude?: string[];
   baseRef?: string;
 }): Promise<AcceptanceResult> {
   const results: AcceptanceResult["results"] = [];
   for (const command of commands) results.push(await runCommand(command, cwd, timeoutMs));
 
   const scopeViolations: string[] = [];
-  if (scope) {
+  if (scope || exclude.length) {
     const status = await runCommand("git status --porcelain -z --untracked-files=all", cwd, undefined, Infinity);
     if (status.exitCode !== 0) throw new Error(`git status failed: ${status.output}`);
     const paths = new Set(collectStatusPaths(status.output));
@@ -65,7 +66,7 @@ export async function runAcceptance({
       for (const path of diff.output.split("\0").filter(Boolean)) paths.add(path);
     }
     for (const path of paths) {
-      if (!scope.some((pattern) => matchesGlob(path, pattern))) scopeViolations.push(path);
+      if (scope && !scope.some((pattern) => matchesGlob(path, pattern)) || exclude.some(pattern => matchesGlob(path, pattern))) scopeViolations.push(path);
     }
     scopeViolations.sort();
   }

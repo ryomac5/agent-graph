@@ -146,6 +146,18 @@ function serializeValue(value: unknown): string {
 }
 export function updateSettingsToml(text: string, patch: Record<string, unknown>, policy = false): string {
   if (policy && patch.roles) {
+    if (Object.hasOwn(patch.roles as object, "advisor")) {
+      const legacy = readDocument(text);
+      const removed = new Set<number>();
+      for (const prefix of ["roles", "criteria"]) {
+        const entries = legacy.value[prefix] as Record<string, unknown> | undefined;
+        if (!entries?.advisor || !entries.plan) continue;
+        for (const entry of legacy.entries) if (entry.path === `@${prefix}.plan` || entry.path === `${prefix}.plan` || entry.path.startsWith(`${prefix}.plan.`) || entry.path.startsWith(`@${prefix}.plan.`)) {
+          for (let line = entry.line; line <= entry.end; line++) removed.add(line);
+        }
+      }
+      text = legacy.lines.filter((_, line) => !removed.has(line)).join("\n").replace(/(\[\[?roles\.)plan(?=[.\]])/g, "$1advisor").replace(/(\[criteria\.)plan(?=\])/g, "$1advisor");
+    }
     const old = readDocument(text);
     const roles = patch.roles as Record<string, unknown>;
     // 旧い候補の注釈を残し、見出しだけを standard へ移す。
@@ -244,4 +256,59 @@ export function updateSettingsToml(text: string, patch: Record<string, unknown>,
     else if (!removed.has(i)) output.push(document.lines[i]);
   }
   return [...output, ...append, ""].join("\n");
+}
+
+// 提供元の未知の項目は解析せず、指定した葉の行だけを更新する。
+export function updateTomlFields(text: string, patch: Record<string, string | null>): string {
+  const newline = text.includes("\r\n") ? "\r\n" : "\n";
+  const lines = text.split(/\r?\n/);
+  const remaining = new Map(Object.entries(patch));
+  let section = "";
+  let multiline = "";
+  const seen = new Set<string>();
+  const output: string[] = [];
+  const flush = () => {
+    for (const [path, value] of remaining) {
+      const at = path.lastIndexOf(".");
+      if (path.slice(0, at < 0 ? 0 : at) !== section) continue;
+      if (value !== null) output.push(`${path.slice(at + 1)} = ${serializeValue(value)}`);
+      remaining.delete(path);
+    }
+  };
+  for (const line of lines) {
+    if (multiline) {
+      output.push(line);
+      if (line.includes(multiline)) multiline = "";
+      continue;
+    }
+    const delimiter = /("""|''')/.exec(stripComment(line).value)?.[0];
+    if (delimiter && line.split(delimiter).length === 2) {
+      multiline = delimiter;
+      output.push(line);
+      continue;
+    }
+    const header = /^\s*\[([^\[\]]+)\]\s*(?:#.*)?$/.exec(line);
+    if (header || /^\s*\[\[/.test(line)) { flush(); section = header ? header[1].replace(/["']/g, "") : "@array"; }
+    const pair = /^(\s*(?:[\w.-]+|"[^"]+"|'[^']+')\s*=\s*)(.*)$/.exec(line);
+    const key = pair?.[1].split("=")[0].trim().replace(/^["']|["']$/g, "");
+    const path = section ? `${section}.${key}` : key;
+    if (path && Object.hasOwn(patch, path)) {
+      if (seen.has(path)) throw new TypeError(`Duplicate TOML key: ${path}`);
+      seen.add(path); remaining.delete(path);
+      const value = patch[path];
+      if (value !== null) {
+        const comment = stripComment(pair![2]).comment;
+        output.push(`${pair![1]}${serializeValue(value)}${comment ? ` ${comment}` : ""}`);
+      }
+    } else output.push(line);
+  }
+  flush();
+  for (const [path, value] of remaining) {
+    if (value === null) continue;
+    const at = path.lastIndexOf(".");
+    const next = path.slice(0, at);
+    if (section !== next) { output.push(`[${next}]`); section = next; }
+    output.push(`${path.slice(at + 1)} = ${serializeValue(value)}`);
+  }
+  return output.join(newline);
 }

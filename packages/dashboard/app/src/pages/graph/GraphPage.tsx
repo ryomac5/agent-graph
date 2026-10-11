@@ -3,7 +3,7 @@ import { useParams, useSearchParams } from 'react-router';
 import { store, useScreenStore, type Row, type ScreenStore } from '../../lib/store.ts';
 import type { Language } from '../../lib/i18n.ts';
 import { agentName, conversationName, readModel } from '../../lib/format.ts';
-import { buildRootTree, orderSeries, selectRoots, useRootIndex, type ChildRole } from '../../lib/roots.ts';
+import { buildRootTree, currentRootConversation, selectRoots, useRootIndex, type ChildRole } from '../../lib/roots.ts';
 import { getProjectName, resolveProjectId } from '../../lib/projects.ts';
 import { ProjectHeader } from '../workspace/WorkspacePage.tsx';
 import type { ConversationClient } from '../conversation/ConversationPage.tsx';
@@ -28,7 +28,7 @@ export function GraphPage({ project: suppliedProject, target = store, client, la
   const tree = useMemo<GraphTree>(() => {
     if (!root) return { nodes: [], edges: [], roots: [], unresolved: [] };
     const built = buildRootTree(root, index);
-    const rootConversation = orderSeries(state, root.conversation_ids).at(-1);
+    const rootConversation = currentRootConversation(root, index);
     const pending = (state.projection.approvals ?? []).filter(isPending);
     const nodes = built.nodes.map(node => {
       const conversationId = node.id === root.id ? rootConversation : node.conversationId;

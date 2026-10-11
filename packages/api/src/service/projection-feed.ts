@@ -374,7 +374,7 @@ export class ProjectionFeed {
       const ts = run?.last_evidence_ts ?? run?.ended_ts ?? run?.started_ts;
       if (typeof ts === "string" && ts > (row.last_activity_ts ?? "")) row.last_activity_ts = ts;
     }
-    return projectRoots(conversations, this.prepare("SELECT from_id, to_id, type, active FROM relations").all() as { from_id: string; to_id: string; type: string; active: number }[]);
+    return projectRoots(conversations, this.prepare("SELECT from_id, to_id, type, active, confidence FROM relations").all() as { from_id: string; to_id: string; type: string; active: number; confidence: string }[]);
   }
   private rootDelegations(rows: Record<string, unknown>[]): Record<string, unknown>[] {
     return rows.map(row => {

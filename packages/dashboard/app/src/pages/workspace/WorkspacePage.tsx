@@ -5,7 +5,7 @@ import { dictionaries, type Language } from '../../lib/i18n.ts';
 import { resolveProjectId } from '../../lib/projects.ts';
 import type { ConversationClient } from '../conversation/ConversationPage.tsx';
 import { ConversationPage } from '../conversation/ConversationPage.tsx';
-import { selectRoots, useRootIndex, buildRootTree, orderSeries } from '../../lib/roots.ts';
+import { selectRoots, useRootIndex, buildRootTree, currentRootConversation, orderSeries } from '../../lib/roots.ts';
 import { RootList } from '../../components/RootViews.tsx';
 import { CreateTaskForm } from '../../components/CreateTaskForm.tsx';
 import { Icon } from '../../components/Icon.tsx';
@@ -59,9 +59,9 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
   const requestedChild = search.get('child') ?? suppliedConversation;
   const selectedNode = tree.nodes.find(node => node.conversationId === requestedChild || node.id === requestedChild);
   const childId = requestedChild && !selected?.conversation_ids.includes(requestedChild) ? selectedNode?.conversationId : undefined;
-  // 系列は最後に動いた会話を末尾に並べ、その会話を開く。
+  // 表示の並びと操作先は分け、再開した継続元も開けるようにする。
   const series = useMemo(() => selected ? orderSeries(state, selected.conversation_ids) : [], [selected, state.projection.conversations, state.projection.runs]);
-  const conversationId = search.get('conversation') ?? childId ?? suppliedConversation ?? series.at(-1);
+  const conversationId = search.get('conversation') ?? childId ?? suppliedConversation ?? (selected ? currentRootConversation(selected, index) : undefined);
   // 子の会話は、頼んだ内容を名前として出す。
   const childNode = selectedNode;
   const childTitle = childNode ? tree.edges.find(edge => edge.target === childNode.id)?.title || undefined : undefined;

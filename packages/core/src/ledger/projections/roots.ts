@@ -7,6 +7,7 @@ export interface RootProjection {
   state: string;
   last_activity_ts: string | null;
   conversation_ids: string[];
+  current_conversation_id: string;
   running_children: number;
   total_children: number;
 }
@@ -16,9 +17,9 @@ export interface RootConversation {
   project?: string | null; repository_id?: string | null; created_ts?: string | null;
   last_activity_ts?: string | null; state?: string;
 }
-interface RootRelation { from_id?: string; to_id?: string; type?: string; active?: boolean | number }
+interface RootRelation { from_id?: string; to_id?: string; type?: string; active?: boolean | number; confidence?: string }
 
-/** 継続とキット名で系列を作り、系列の外から子になっている会話を根から除く。 */
+/** 確定した継続・対話の分岐と根のキット名で系列を作り、子の会話を同名の根に混ぜない。 */
 export function projectRoots(conversations: readonly RootConversation[], relations: readonly RootRelation[]): RootProjection[] {
   const rows = new Map(conversations.map(row => [row.id, row]));
   const parents = new Map(conversations.map(row => [row.id, row.id]));
@@ -32,16 +33,31 @@ export function projectRoots(conversations: readonly RootConversation[], relatio
   function join(left: string, right: string): void {
     if (rows.has(left) && rows.has(right)) parents.set(find(right), find(left));
   }
+  const active = relations.filter(row => row.active !== false && row.active !== 0 && row.from_id && row.to_id);
+  for (const row of active) if (row.type === 'continued' && row.confidence === 'confirmed'
+    && rows.get(row.from_id!)?.type === 'interactive' && rows.get(row.to_id!)?.type === 'interactive') join(row.from_id!, row.to_id!);
+  // sdk-cli は unattended、native の子は subagent、親付き委譲は delegated の終点、審査役は review_of の始点として記録される。
+  const childGroups = new Set(conversations.filter(row => row.type !== 'interactive').map(row => find(row.id)));
+  for (const row of active) {
+    const child = row.type === 'delegated' ? row.to_id : row.type === 'review_of' ? row.from_id : undefined;
+    if (child && rows.has(child)) childGroups.add(find(child));
+  }
+  const forks = active.filter(row => row.type === 'forked' && row.confidence === 'confirmed');
+  for (const group of childGroups) for (const row of forks) {
+    if (rows.has(row.from_id!) && rows.has(row.to_id!)
+      && find(row.from_id!) === group) childGroups.add(find(row.to_id!));
+  }
+  // 利用者の対話の分岐は同じ根を継ぐ。子と審査役の系列は分岐でも根に混ぜない。
+  for (const row of forks) if (rows.get(row.from_id!)?.type === 'interactive' && rows.get(row.to_id!)?.type === 'interactive'
+    && !childGroups.has(find(row.from_id!)) && !childGroups.has(find(row.to_id!))) join(row.from_id!, row.to_id!);
   const names = new Map<string, string>();
   for (const row of conversations) {
-    if (!row.kit_name) continue;
+    if (!row.kit_name || childGroups.has(find(row.id))) continue;
     const key = JSON.stringify([row.project ?? row.repository_id ?? null, row.kit_name]);
     const previous = names.get(key);
     if (previous) join(previous, row.id);
     else names.set(key, row.id);
   }
-  const active = relations.filter(row => row.active !== false && row.active !== 0 && row.from_id && row.to_id);
-  for (const row of active) if (row.type === 'continued' || row.type === 'compacted') join(row.from_id!, row.to_id!);
   const groups = new Map<string, RootConversation[]>();
   for (const row of conversations) {
     const key = find(row.id);
@@ -54,13 +70,14 @@ export function projectRoots(conversations: readonly RootConversation[], relatio
     const ids = children.get(row.from_id!) ?? new Set<string>();
     ids.add(row.to_id!); children.set(row.from_id!, ids);
   }
-  // キットは、人が最初の指示を出した会話にだけ名前を付ける。キットのあるプロジェクトでは、名前のある系列だけを根にする。
-  // 名前のない会話は、旧い daemon や planner が起こした実装役とレビュー役の会話である。
+  // キットのあるプロジェクトでは、名前のある対話の系列だけを根にする。
   const kitProjects = new Set(conversations.filter(row => row.kit_name).map(row => row.project ?? row.repository_id ?? null));
   const roots: RootProjection[] = [];
   for (const group of groups.values()) {
     const ids = new Set(group.map(row => row.id));
-    if (!group.some(row => row.type === 'interactive') || active.some(row => ids.has(row.to_id!) && !ids.has(row.from_id!))) continue;
+    if (!group.some(row => row.type === 'interactive') || active.some(row => row.type !== 'review_of'
+      && (row.type === 'delegated' || row.confidence === 'confirmed') && ids.has(row.to_id!) && !ids.has(row.from_id!))
+      || active.some(row => row.type === 'review_of' && ids.has(row.from_id!))) continue;
     const project = group[0].project ?? group[0].repository_id ?? null;
     if (kitProjects.has(project) && !group.some(row => row.kit_name)) continue;
     group.sort((a, b) => (a.created_ts ?? '').localeCompare(b.created_ts ?? '') || a.id.localeCompare(b.id));
@@ -83,7 +100,7 @@ export function projectRoots(conversations: readonly RootConversation[], relatio
     roots.push({ id: first.id, name: first.user_name || automatic,
       ...(first.user_name ? { user_name: first.user_name, auto_name: automatic } : {}),
       project: first.project ?? first.repository_id ?? null, state: latest.state ?? 'unknown', last_activity_ts: activity,
-      conversation_ids: group.map(row => row.id), running_children: descendants.filter(row => row.state === 'running').length,
+      conversation_ids: group.map(row => row.id), current_conversation_id: latest.id, running_children: descendants.filter(row => row.state === 'running').length,
       total_children: descendants.length });
   }
   return roots.sort((a, b) => a.id.localeCompare(b.id));

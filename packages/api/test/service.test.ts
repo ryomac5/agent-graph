@@ -836,5 +836,7 @@ test("既存の Claude の子の親を補い、根の snapshot にキットの�
   assert.deepEqual(rows[0].conversation_ids, [createNativeId("claude", "first"), createNativeId("claude", "second")]);
   assert.equal(rows[0].name, "agent-graph-001");
   assert.equal(rows[0].total_children, 1);
-  assert.deepEqual(Object.keys(rows[0]).sort(), ["id", "name", "project", "state", "last_activity_ts", "conversation_ids", "running_children", "total_children"].sort());
+  assert.ok(typeof rows[0].current_conversation_id === 'string');
+  assert.ok(rows[0].conversation_ids.includes(rows[0].current_conversation_id));
+  assert.deepEqual(Object.keys(rows[0]).sort(), ["id", "name", "project", "state", "last_activity_ts", "conversation_ids", "current_conversation_id", "running_children", "total_children"].sort());
 });

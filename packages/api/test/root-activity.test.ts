@@ -1,9 +1,10 @@
+import { CHILD, CHILD_START, createRootlineFacts, ROOT, START } from '../../core/test/ledger/fixtures/rootline.ts';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { applyIncremental, openLedger, readLedgerDatabase, rebuild, type FactInput, type JsonValue } from '../../core/src/ledger/index.ts';
+import { applyIncremental, createNativeId, openLedger, readLedgerDatabase, rebuild, type FactInput, type JsonValue } from '../../core/src/ledger/index.ts';
 import { createClaudeSessionObserver } from '../src/observe/claude/sessions.ts';
 import { ProjectionFeed } from '../src/service/projection-feed.ts';
 import { createHookFacts, type HookEvent } from '../src/hook/index.ts';
@@ -58,7 +59,7 @@ test('hook の根の状態と開始時刻を snapshot と patch に配り、旧 
     ledger.close(); ledger = openLedger(path);
     feed = new ProjectionFeed(path, () => applyIncremental(readLedgerDatabase(ledger), 0));
     assert.deepEqual(feed.snapshot().projection, projected);
-    assert.equal(readLedgerDatabase(ledger).prepare('SELECT version FROM runner_projection_version').get()?.version, 7);
+    assert.equal(readLedgerDatabase(ledger).prepare('SELECT version FROM runner_projection_version').get()?.version, 8);
     const before = feed.snapshot().generation;
     rebuild(readLedgerDatabase(ledger));
     assert.equal(feed.refresh(), 'resync');
@@ -111,5 +112,84 @@ test('本番 seq 262199–262309 の背景完了のターンは、遅れて届�
     assert.deepEqual(db.prepare('SELECT * FROM runs').all(), expected);
   } finally {
     ledger.close(); rmSync(directory, { recursive: true });
+  }
+});
+
+test('本番の根と審査役の別名の並びを分離し、子の再開の時計を snapshot と patch と再構築に保つ', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'rootline-'));
+  const path = join(directory, 'ledger.db');
+  let ledger = openLedger(path);
+  let feed: ProjectionFeed | undefined;
+  try {
+    const facts = createRootlineFacts();
+    for (const fact of facts.slice(0, -1)) ledger.append(fact);
+    feed = new ProjectionFeed(path, () => applyIncremental(readLedgerDatabase(ledger), 0));
+    assert.equal(feed.snapshot().projection.roots[0].state, 'idle');
+    ledger.append(facts.at(-1)!);
+    const patch = feed.refresh();
+    assert.ok(patch && patch !== 'resync');
+    assert.deepEqual(patch.changes.roots.upsert[0].conversation_ids, [ROOT]);
+    assert.equal(patch.changes.roots.upsert[0].current_conversation_id, ROOT);
+    assert.equal(patch.changes.roots.upsert[0].state, 'running');
+    const snapshot = feed.snapshot().projection;
+    assert.equal(snapshot.roots.length, 1);
+    assert.deepEqual(snapshot.roots[0].conversation_ids, [ROOT]);
+    assert.equal(snapshot.runs.find(row => row.conversation_id === ROOT)?.turn_started_ts, START);
+    assert.equal(snapshot.runs.find(row => row.conversation_id === CHILD)?.turn_started_ts, CHILD_START);
+    const db = readLedgerDatabase(ledger);
+    db.exec("UPDATE runs SET turn_started_ts = NULL; UPDATE runner_projection_version SET version = 7");
+    feed.close();
+    ledger.close(); ledger = openLedger(path);
+    feed = new ProjectionFeed(path, () => applyIncremental(readLedgerDatabase(ledger), 0));
+    assert.deepEqual(feed.snapshot().projection, snapshot);
+    assert.equal(readLedgerDatabase(ledger).prepare('SELECT version FROM runner_projection_version').get()?.version, 8);
+    rebuild(readLedgerDatabase(ledger));
+    assert.equal(feed.refresh(), 'resync');
+    assert.deepEqual(feed.snapshot().projection, snapshot);
+  } finally {
+    feed?.close(); ledger.close(); rmSync(directory, { recursive: true });
+  }
+});
+
+test('fork の関係の有無で根の系列を保ち、snapshot と patch と再構築の操作先が一致する', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'root-kit-fork-'));
+  const ledger = openLedger(join(directory, 'ledger.db'));
+  const db = readLedgerDatabase(ledger);
+  let feed: ProjectionFeed | undefined;
+  try {
+    const appendSession = (native: string, ts: string) => {
+      const event: HookEvent = { version: 1, session_id: native, generation: 1, event_id: 'session:' + native,
+        hook_event_name: 'SessionStart', source_ts: ts, input: {}, managed: false };
+      for (const fact of createHookFacts(event)) ledger.append(fact);
+      ledger.append({ source: 'kit', source_event_id: 'alias:' + native, kind: 'alias.created', subject: `alias:${native}`,
+        source_ts: ts, confidence: 'confirmed', payload: { entity_id: createNativeId('claude', native), kind: 'kit', name: 'example-001' } });
+    };
+    appendSession('root', '2026-10-11T00:00:00Z');
+    feed = new ProjectionFeed(join(directory, 'ledger.db'), () => applyIncremental(db, 0));
+    appendSession('fork', '2026-10-11T00:01:00Z');
+    const patch = feed.refresh();
+    assert.ok(patch && patch !== 'resync');
+    const root = createNativeId('claude', 'root');
+    const fork = createNativeId('claude', 'fork');
+    assert.deepEqual(patch.changes.roots.upsert[0].conversation_ids, [root, fork]);
+    assert.equal(patch.changes.roots.upsert[0].current_conversation_id, fork);
+    const snapshot = feed.snapshot().projection;
+    assert.equal(snapshot.roots.length, 1);
+    assert.equal(snapshot.roots[0].id, root);
+    assert.equal(snapshot.roots[0].current_conversation_id, fork);
+    assert.equal(snapshot.relations.length, 0);
+    ledger.append({ source: 'host-claude', source_event_id: 'recorded-fork', kind: 'relation.created', subject: 'relation:recorded-fork',
+      source_ts: '2026-10-11T00:02:00Z', confidence: 'confirmed', payload: { from_id: root, to_id: fork, type: 'forked',
+        evidence: { native_id: 'fork' }, confidence: 'confirmed', active: true } });
+    const recordedPatch = feed.refresh();
+    assert.ok(recordedPatch && recordedPatch !== 'resync');
+    const recorded = feed.snapshot().projection;
+    assert.equal(recorded.relations.length, 1);
+    assert.deepEqual(recorded.roots, snapshot.roots);
+    rebuild(db);
+    assert.equal(feed.refresh(), 'resync');
+    assert.deepEqual(feed.snapshot().projection, recorded);
+  } finally {
+    feed?.close(); ledger.close(); rmSync(directory, { recursive: true });
   }
 });

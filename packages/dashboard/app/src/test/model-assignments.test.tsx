@@ -28,15 +28,15 @@ it.each(['ja', 'en'] as const)('explains each preset and the required save witho
   const change = setup(defaultPolicy(), language);
   const ja = language === 'ja';
   const presets = [
-    [ja ? '性能重視' : 'Performance', ja ? '各役割で覚え書きの強さが最大の候補を選び、同点ならモデル水準と候補順で決めます。' : 'Choose the strongest noted candidate for each role, breaking ties by model tier and candidate order.'],
-    [ja ? 'バランス' : 'Balanced', ja ? '既定の組み合わせに戻します。' : 'Restore the default combination.'],
+    [ja ? '性能重視' : 'Performance', ja ? '各役割でメモの強みが最大の候補を選び、同点ならモデルランクと候補順で決めます。' : 'Choose the strongest noted candidate for each role, breaking ties by model tier and candidate order.'],
+    [ja ? 'バランス' : 'Balanced', ja ? '初期設定の組み合わせに戻します。' : 'Restore the default combination.'],
     [ja ? '節約' : 'Economy', ja ? '軽量モデルを標準の負荷にも使います。' : 'Use light models for standard workloads too.'],
   ];
   for (const [name, description] of presets) {
     fireEvent.click(screen.getByRole('button', { name }));
     const dialog = screen.getByRole('dialog');
     expect(within(dialog).getByText(description).className).toBe('assignment-note');
-    expect(within(dialog).getByText(ja ? '確認して表に反映した後、試算して「割り当てを保存」で保存します。' : 'Confirm to update the table, then preview and save the policy.')).toBeTruthy();
+    expect(within(dialog).getByText(ja ? '確認して表に反映した後、プレビューして「割り当てを保存」で保存します。' : 'Confirm to update the table, then preview and save the policy.')).toBeTruthy();
     expect(change).not.toHaveBeenCalled();
     fireEvent.click(within(dialog).getByRole('button', { name: ja ? '取り消す' : 'Cancel' }));
   }
@@ -96,7 +96,7 @@ it('selects grouped catalog rows, preserves family and shows official provider m
 
 it('switches effort using provider-specific buttons and clears incompatible effort on provider changes', () => {
   const change = setup(); edit();
-  const group = screen.getByRole('group', { name: '実装 標準 1 深さ' });
+  const group = screen.getByRole('group', { name: '実装 標準 1 思考量' });
   fireEvent.click(within(group).getByRole('button', { name: 'xhigh' }));
   expect(readCandidates(change.mock.lastCall![0], 'implement', 'standard')[0].effort).toBe('xhigh');
   fireEvent.click(within(screen.getByRole('list', { name: '実装 標準 1 モデルの一覧' })).getByRole('button', { name: 'Claude Opus' }));
@@ -105,12 +105,12 @@ it('switches effort using provider-specific buttons and clears incompatible effo
   fireEvent.click(within(group).getByRole('button', { name: 'max' }));
   fireEvent.click(within(screen.getByRole('list', { name: '実装 標準 1 モデルの一覧' })).getByRole('button', { name: 'Gemini Flash' }));
   expect(readCandidates(change.mock.lastCall![0], 'implement', 'standard')[0]).not.toHaveProperty('effort');
-  expect(within(group).getAllByRole('button').map(button => button.textContent)).toEqual(['既定']);
+  expect(within(group).getAllByRole('button').map(button => button.textContent)).toEqual(['おまかせ']);
 });
 
 it('adds fallbacks from the same list and supports drag ordering', () => {
   const change = setup(); edit();
-  fireEvent.click(screen.getByRole('button', { name: '実装 標準 代わりに使うモデルを足す' }));
+  fireEvent.click(screen.getByRole('button', { name: '実装 標準 フォールバックモデルを追加' }));
   expect(change).not.toHaveBeenCalled();
   fireEvent.click(within(screen.getByRole('list', { name: '実装 標準 3 モデルの一覧' })).getByRole('button', { name: 'Gemini Flash' }));
   expect(readCandidates(change.mock.lastCall![0], 'implement', 'standard')).toHaveLength(3);

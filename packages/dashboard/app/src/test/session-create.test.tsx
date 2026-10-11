@@ -25,7 +25,7 @@ it.each(['en', 'ja'] as const)('shows creation fields and creates a worktree on 
   expect(screen.getByText('/remote/demo')).toBeTruthy();
   await waitFor(() => expect(f.command).toHaveBeenCalledWith('git.branches', { projectId: 'demo', target: { kind: 'ssh', id: 'server' } }));
   expect(screen.getByLabelText(ja ? '作成元' : 'Create from').getAttribute('value')).toBeNull();
-  fireEvent.change(screen.getByLabelText(ja ? '作業ツリーの名前' : 'Worktree name'), { target: { value: 'feature' } });
+  fireEvent.change(screen.getByLabelText(ja ? 'ワークツリー名' : 'Worktree name'), { target: { value: 'feature' } });
   expect(document.querySelector('.provider-claude')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: /^(作成|Create) / }));
   await waitFor(() => expect(f.onCreated).toHaveBeenCalledWith('demo', 'conversation'));
@@ -59,8 +59,8 @@ it.each(['en', 'ja'] as const)('edits and tests SSH connections in %s', async la
   const f = fixture(), ja = language === 'ja'; render(<SshSettings client={f.client} projects={projects} language={language}/>);
   await screen.findByDisplayValue('dev@host');
   fireEvent.change(screen.getByLabelText(ja ? '名前' : 'Name'), { target: { value: 'Remote' } });
-  fireEvent.change(screen.getByLabelText(ja ? '向こうのパス' : 'Remote path'), { target: { value: '~/project' } });
-  fireEvent.click(screen.getByRole('button', { name: ja ? '接続を確かめる' : 'Test connection' }));
+  fireEvent.change(screen.getByLabelText(ja ? 'リモートパス' : 'Remote path'), { target: { value: '~/project' } });
+  fireEvent.click(screen.getByRole('button', { name: ja ? '接続テスト' : 'Test connection' }));
   await screen.findByRole('status');
   expect(f.command).toHaveBeenCalledWith('ssh.test', { destination: 'dev@host' });
   fireEvent.click(screen.getByRole('button', { name: ja ? 'SSH の接続先を保存' : 'Save SSH connections' }));

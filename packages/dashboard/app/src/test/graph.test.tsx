@@ -73,7 +73,7 @@ it.each(['en', 'ja'] as const)('shows all role shapes and words, running work an
   expect(row.getAttribute('style')).toContain('52px');
   expect(row.querySelector('.graph-current-work')?.textContent).toBe(language === 'ja' ? 'roles.ts を編集中'.replace('ts ', 'ts') : 'Editing roles.ts');
   expect(document.querySelector('[data-child=work]')?.classList.contains('is-running')).toBe(true);
-  expect(screen.getByText(language === 'ja' ? '下で 2 件が実行中' : '2 running below')).toBeTruthy();
+  expect(screen.getByText(language === 'ja' ? 'サブエージェント 2 件が実行中' : '2 running below')).toBeTruthy();
   expect(screen.queryByText('待機中')).toBeNull();
   expect(screen.getByText(language === 'ja' ? 'ドキュメント · Opus 5.5' : 'Documentation · Opus 5.5')).toBeTruthy();
 });

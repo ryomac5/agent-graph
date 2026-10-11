@@ -387,7 +387,7 @@ it('omits weight criteria summaries and keeps each band editable', async () => {
   fireEvent.click(screen.getByRole('button', { name: '完了' }));
   expect(screen.queryByLabelText('実装 軽量 重さの基準')).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: '割り当てをプレビュー' }));
-  await screen.findByRole('region', { name: '割り当てをプレビュー' });
+  await screen.findByRole('region', { name: '割り当てのプレビュー' });
   fireEvent.click(screen.getByRole('button', { name: '割り当てを保存' }));
   await screen.findByText('保存しました');
   const save = f.command.mock.calls.find(([name]) => name === 'settings.write')![1] as { patch: SettingsSnapshot['policy'] };
@@ -544,7 +544,7 @@ it.each(['en', 'ja'] as const)('redistributes slider and number changes and save
   fireEvent.change(slider, { target: { value: '0' } });
   expect(readShares()).toEqual([0, 34, 33, 33]);
   fireEvent.click(screen.getByRole('button', { name: ja ? '割り当てをプレビュー' : 'Preview policy' }));
-  await screen.findByRole('region', { name: ja ? '割り当てをプレビュー' : 'Policy preview' });
+  await screen.findByRole('region', { name: ja ? '割り当てのプレビュー' : 'Policy preview' });
   fireEvent.click(screen.getByRole('button', { name: ja ? '割り当てを保存' : 'Save policy' }));
   await screen.findByText(ja ? '保存しました' : 'Saved');
   const patch = (f.command.mock.calls.find(([name]) => name === 'settings.write')![1] as { patch: SettingsSnapshot['policy'] }).patch;
@@ -560,7 +560,7 @@ it.each(['en', 'ja'] as const)('blocks reversed quota limits and marks both fiel
   const preview = screen.getByRole('button', { name: ja ? '割り当てをプレビュー' : 'Preview policy' });
   const save = screen.getByRole('button', { name: ja ? '割り当てを保存' : 'Save policy' });
   fireEvent.click(preview);
-  await screen.findByRole('region', { name: ja ? '割り当てをプレビュー' : 'Policy preview' });
+  await screen.findByRole('region', { name: ja ? '割り当てのプレビュー' : 'Policy preview' });
   fireEvent.change(soft, { target: { value: '95' } });
   for (const input of [soft, hard]) expect(input.getAttribute('aria-invalid')).toBe('true');
   expect(preview).toHaveProperty('disabled', true);
@@ -572,7 +572,7 @@ it.each(['en', 'ja'] as const)('blocks reversed quota limits and marks both fiel
   for (const input of [soft, hard]) expect(input.getAttribute('aria-invalid')).toBeNull();
   expect(preview).toHaveProperty('disabled', false);
   fireEvent.click(preview);
-  await screen.findByRole('region', { name: ja ? '割り当てをプレビュー' : 'Policy preview' });
+  await screen.findByRole('region', { name: ja ? '割り当てのプレビュー' : 'Policy preview' });
   fireEvent.click(save);
   await screen.findByText(ja ? '保存しました' : 'Saved');
   expect(f.command).toHaveBeenCalledWith('settings.write', expect.objectContaining({ patch: expect.objectContaining({ quota: { softLimitPercent: 95, hardLimitPercent: 95 } }) }));

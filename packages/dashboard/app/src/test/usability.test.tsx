@@ -76,11 +76,11 @@ it('2: Files starts collapsed, remembers its toggle, groups old worktrees and fi
   expect(client.command.mock.calls.some(([command]) => command === 'files.list')).toBe(false);
   fireEvent.click(screen.getByRole('tab', { name: 'ファイル' }));
   await screen.findByRole('tree', { name: 'ファイル' });
-  const select = screen.getByRole('combobox', { name: '作業ツリー' });
+  const select = screen.getByRole('combobox', { name: 'ワークツリー' });
   expect(within(select).getAllByRole('option').map(option => option.textContent)).toEqual(['main · repo', 'active · active']);
   expect(screen.getByPlaceholderText('名前で絞り込む')).toBeTruthy();
-  expect(screen.getByRole('button', { name: 'ほかの作業ツリー 1 件' }).getAttribute('aria-expanded')).toBe('false');
-  fireEvent.click(screen.getByRole('button', { name: 'ほかの作業ツリー 1 件' }));
+  expect(screen.getByRole('button', { name: 'ほかのワークツリー 1 件' }).getAttribute('aria-expanded')).toBe('false');
+  fireEvent.click(screen.getByRole('button', { name: 'ほかのワークツリー 1 件' }));
   expect(within(select).getAllByRole('option')).toHaveLength(3);
   act(() => resize?.([{ contentRect: { height: 103 } } as ResizeObserverEntry], {} as ResizeObserver));
   expect((document.querySelector('.explorer-scroll') as HTMLElement).style.height).toBe('78px');
@@ -162,9 +162,9 @@ it('7: command palette and shortcut settings follow Japanese and the html langua
   localStorage.setItem('agent-graph-language', 'ja');
   render(<MemoryRouter initialEntries={['/settings']}><App target={target()} client={client}/></MemoryRouter>);
   expect(document.documentElement.lang).toBe('ja');
-  expect(screen.getByRole('heading', { name: 'キー操作' })).toBeTruthy();
+  expect(screen.getByRole('heading', { name: 'キーボードショートカット' })).toBeTruthy();
   fireEvent.keyDown(document.body, { key: 'k', metaKey: true });
-  expect(screen.getByRole('dialog', { name: '検索と操作' })).toBeTruthy();
+  expect(screen.getByRole('dialog', { name: 'コマンドと検索' })).toBeTruthy();
   expect(screen.getByRole('button', { name: '会話を検索' })).toBeTruthy();
   expect(screen.getByRole('button', { name: '閉じる' })).toBeTruthy();
   expect(modelName('GPT-6.1-Sol')).toBe(modelName('GPT-6.1 Sol'));

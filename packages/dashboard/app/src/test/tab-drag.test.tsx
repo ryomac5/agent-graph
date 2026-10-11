@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { Workbench } from '../pages/workspace/Workbench.tsx';
 import { listPanes, restoreWorkspace, workspaceKey, type PaneTree } from '../lib/panes.ts';
 import type { ConversationClient } from '../pages/conversation/ConversationPage.tsx';
@@ -204,4 +204,47 @@ it('keeps nested splits valid when splitting the last tab from another pane', ()
   expect(panes()).toHaveLength(2); expect(panes().some(pane => pane.dataset.paneId === source)).toBe(false);
   expect(saved()).toMatchObject({ kind: 'split', direction: 'vertical' });
   expect(restoreWorkspace(localStorage.getItem(key), 'a')).toEqual(saved());
+});
+it('rejects splitting the sole tab at its own edge and shows an invalid ghost', () => {
+  fixture(); fireEvent.contextMenu(screen.getByRole('tab', { name: 'b' })); fireEvent.click(screen.getByRole('menuitem', { name: 'Split right' }));
+  const pane = panes()[1]; bound(pane); hit(pane.querySelector('[data-content]')!);
+  const before = saved(); start('b'); move(395, 200);
+  expect(document.querySelector('.workbench-drop-preview')).toBeNull();
+  const ghost = document.querySelector<HTMLElement>('.workbench-drag-ghost')!;
+  expect(ghost.textContent).toBe('b'); expect(ghost.style.left).toBe('407px'); expect(ghost.dataset.valid).toBe('false');
+  expect(document.documentElement.dataset.pointerDrag).toBe('not-allowed');
+  end(395, 200); expect(saved()).toEqual(before); expect(document.documentElement.dataset.pointerDrag).toBeUndefined();
+});
+it('autoscrolls at the edge and inserts after the visible tab with a visible line', () => {
+  fixture(); const pane = panes()[0], list = pane.querySelector<HTMLElement>('.workbench-tablist')!;
+  vi.spyOn(list, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 180, 40));
+  const elements = [...list.querySelectorAll<HTMLElement>('[data-tab-id]')];
+  elements.forEach((tab, i) => vi.spyOn(tab, 'getBoundingClientRect').mockImplementation(() => new DOMRect(i * 100 - list.scrollLeft, 0, 100, 40)));
+  let tick!: FrameRequestCallback;
+  vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => { tick = callback; return 1; });
+  hit(list); start('a', 20); move(175, 20);
+  expect(document.querySelector<HTMLElement>('.workbench-drop-end')!.style.left).toBe('178px');
+  expect(elements[2].dataset.dropBefore).toBe('true');
+  act(() => tick(0)); expect(list.scrollLeft).toBe(12);
+  end(175, 20); expect(names()).toEqual(['b', 'a', 'c']);
+});
+it('scrolls selected tabs into view after moving and splitting', () => {
+  const scroll = vi.fn(); Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scroll });
+  fixture(); scroll.mockClear();
+  fireEvent.contextMenu(screen.getByRole('tab', { name: 'b' })); fireEvent.click(screen.getByRole('menuitem', { name: 'Split right' }));
+  expect(scroll.mock.instances).toContain(screen.getByRole('tab', { name: 'b' }));
+  expect(scroll).toHaveBeenCalledWith({ block: 'nearest', inline: 'nearest' });
+  delete (HTMLElement.prototype as unknown as { scrollIntoView?: unknown }).scrollIntoView;
+});
+it('clamps the context menu to the viewport and ignores right clicks during a drag', () => {
+  fixture();
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 160, 200));
+  fireEvent.contextMenu(screen.getByRole('tab', { name: 'b' }), { clientX: 1000, clientY: 750 });
+  const menu = screen.getByRole('menu');
+  expect(menu.style.left).toBe(`${Math.min(1000, window.innerWidth - 160)}px`);
+  expect(menu.style.top).toBe(`${window.innerHeight - 200}px`);
+  fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+  hit(panes()[0].querySelector('.workbench-tablist')!); start('b'); move(100, 20);
+  fireEvent.contextMenu(screen.getByRole('tab', { name: 'b' })); expect(screen.queryByRole('menu')).toBeNull();
+  end(100, 20);
 });

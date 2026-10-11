@@ -7,6 +7,11 @@ import { loadProjectList, PROJECT_LIST_KEY } from '../lib/project-list.ts';
 
 beforeEach(() => {
   localStorage.clear();
+  class TestPointerEvent extends MouseEvent {
+    pointerId: number;
+    constructor(type: string, init: PointerEventInit = {}) { super(type, init); this.pointerId = init.pointerId ?? 1; }
+  }
+  vi.stubGlobal('PointerEvent', TestPointerEvent);
   vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -37,27 +42,17 @@ it('reorders with Alt arrows and preserves focus, with boundaries unchanged', ()
 
 it('drags rows in both directions, marks the insertion edge and clears cancelled drags', () => {
   mount();
-  const dataTransfer = { effectAllowed: '', dropEffect: '', setData: vi.fn() };
-  const alpha = row('Alpha'); const charlie = row('Charlie');
-  vi.spyOn(charlie, 'getBoundingClientRect').mockReturnValue({ top: 100, height: 40 } as DOMRect);
-  fireEvent.dragStart(alpha, { dataTransfer });
-  fireEvent.dragOver(charlie, { dataTransfer, clientY: 135 });
-  // jsdom の DragEvent は座標を持たないので MouseEvent で同じ DOM イベントを送る。
-  fireEvent(charlie, Object.assign(new MouseEvent('dragover', { bubbles: true, cancelable: true, clientY: 135 }), { dataTransfer }));
-  expect(charlie.parentElement?.classList.contains('project-drop-after')).toBe(true);
-  fireEvent.drop(charlie, { dataTransfer });
-  expect(order()).toEqual(['Bravo', 'Charlie', 'Alpha']);
-  expect(list().querySelector('.project-drop-after')).toBeNull();
-  const bravo = row('Bravo');
-  vi.spyOn(bravo, 'getBoundingClientRect').mockReturnValue({ top: 100, height: 40 } as DOMRect);
-  fireEvent.dragStart(alpha, { dataTransfer });
-  fireEvent(bravo, Object.assign(new MouseEvent('dragover', { bubbles: true, cancelable: true, clientY: 105 }), { dataTransfer }));
-  expect(bravo.parentElement?.classList.contains('project-drop-before')).toBe(true);
-  fireEvent.drop(bravo, { dataTransfer });
-  expect(order()).toEqual(['Alpha', 'Bravo', 'Charlie']);
-  fireEvent.dragStart(alpha, { dataTransfer });
-  fireEvent.dragOver(bravo, { dataTransfer });
-  fireEvent.dragEnd(alpha, { dataTransfer });
+  let hit: Element = row('Charlie');
+  Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => hit });
+  for (const name of ['Bravo', 'Charlie']) vi.spyOn(row(name).parentElement!, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 100, 200, 40));
+  const start = () => fireEvent.pointerDown(row('Alpha').querySelector('a')!, { button: 0, pointerId: 1, clientX: 20, clientY: 20 });
+  const move = (y: number) => fireEvent.pointerMove(window, { pointerId: 1, clientX: 20, clientY: y });
+  const end = (y: number) => fireEvent.pointerUp(window, { pointerId: 1, clientX: 20, clientY: y });
+  start(); move(135); expect(row('Charlie').parentElement?.classList.contains('project-drop-after')).toBe(true);
+  end(135); expect(order()).toEqual(['Bravo', 'Charlie', 'Alpha']); expect(list().querySelector('.project-drop-after')).toBeNull();
+  hit = row('Bravo'); start(); move(105); expect(row('Bravo').parentElement?.classList.contains('project-drop-before')).toBe(true);
+  end(105); expect(order()).toEqual(['Alpha', 'Bravo', 'Charlie']);
+  start(); move(105); fireEvent.pointerCancel(window, { pointerId: 1 });
   expect(list().querySelector('.project-drop-before, .project-drop-after, .project-dragging')).toBeNull();
   expect(order()).toEqual(['Alpha', 'Bravo', 'Charlie']);
 });
@@ -128,4 +123,34 @@ it('keeps menu keyboard navigation local and closes it with focus restored', () 
   fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
   expect(screen.queryByRole('menu')).toBeNull();
   expect(document.activeElement).toBe(row('Bravo'));
+});
+it('clears insertion on leaving a project block', () => {
+  mount(); Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => row('Bravo') });
+  fireEvent.pointerDown(row('Alpha').querySelector('a')!, { button: 0, pointerId: 1, clientX: 20, clientY: 20 });
+  fireEvent.pointerMove(window, { pointerId: 1, clientX: 20, clientY: 100 });
+  expect(list().querySelector('.project-drop-before, .project-drop-after')).toBeTruthy();
+  fireEvent.dragLeave(row('Bravo'), { relatedTarget: document.body });
+  expect(list().querySelector('.project-drop-before, .project-drop-after')).toBeNull();
+});
+it('uses touch pointers to reorder complete expanded blocks and clears invalid drops', () => {
+  class TestPointerEvent extends MouseEvent { pointerId = 1; }
+  vi.stubGlobal('PointerEvent', TestPointerEvent);
+  const target = fixture(); const snapshot = target.getSnapshot();
+  target.setSnapshot({ ...snapshot, projection: { ...snapshot.projection, roots: [{ id: 'session', name: 'Expanded conversation', project: 'bravo', state: 'idle', conversation_ids: ['session'] }] } });
+  mount(target); fireEvent.click(screen.getByRole('button', { name: 'Toggle sessions for Bravo' }));
+  const conversation = within(screen.getByRole('region', { name: 'Bravo sessions' })).getByRole('link', { name: /Expanded conversation/ });
+  const block = row('Bravo').parentElement!;
+  vi.spyOn(block, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 100, 200, 200));
+  let hit: Element = conversation;
+  Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => hit });
+  const source = row('Alpha').querySelector('a')!;
+  fireEvent.pointerDown(source, { button: 0, pointerId: 1, pointerType: 'touch', clientX: 50, clientY: 20 });
+  fireEvent.pointerMove(window, { pointerId: 1, clientX: 50, clientY: 250 });
+  expect(block.classList.contains('project-drop-after')).toBe(true);
+  hit = document.body; fireEvent.pointerMove(window, { pointerId: 1, clientX: 500, clientY: 500 });
+  expect(list().querySelector('.project-drop-before, .project-drop-after')).toBeNull();
+  hit = conversation; fireEvent.pointerMove(window, { pointerId: 1, clientX: 50, clientY: 250 });
+  fireEvent.pointerUp(window, { pointerId: 1, clientX: 50, clientY: 250 });
+  expect(loadProjectList().order).toEqual(['bravo', 'alpha', 'charlie']);
+  expect(list().querySelector('.project-drop-before, .project-drop-after, .project-dragging')).toBeNull();
 });

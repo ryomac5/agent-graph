@@ -132,7 +132,9 @@ it.each(['claude', 'codex'])('creates a %s session from the project menu, opens 
 });
 
 it('renames tabs, cancels with Escape, restores names and order, and clears custom names', () => {
-  const f = fixture(); const view = render(<f.Wrapper/>);
+  const f = fixture();
+  localStorage.setItem(workspaceKey('p', 'root'), JSON.stringify({ kind: 'pane', id: 'pane', tabs: [{ kind: 'conversation', id: 'first', conversationId: 'c' }, { kind: 'conversation', id: 'second', conversationId: 'other', name: 'Other session' }], active: 'first' }));
+  const view = render(<f.Wrapper/>);
   fireEvent.doubleClick(screen.getByRole('tab', { name: 'Session' }));
   let input = screen.getByRole('textbox', { name: 'タブの名前' });
   fireEvent.change(input, { target: { value: '作業の相談' } }); fireEvent.keyDown(input, { key: 'Enter' });
@@ -145,12 +147,13 @@ it('renames tabs, cancels with Escape, restores names and order, and clears cust
   fireEvent.click(screen.getByRole('menuitem', { name: '会話' }));
   const saved = localStorage.getItem(workspaceKey('p', 'root'));
   view.unmount(); render(<f.Wrapper/>);
-  expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual(['作業の相談', 'Session']);
+  expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual(['作業の相談', 'Other session']);
   expect(localStorage.getItem(workspaceKey('p', 'root'))).toBe(saved);
   fireEvent.doubleClick(screen.getByRole('tab', { name: '作業の相談' }));
   input = screen.getByRole('textbox', { name: 'タブの名前' });
   fireEvent.change(input, { target: { value: '   ' } }); fireEvent.keyDown(input, { key: 'Enter' });
-  expect(screen.getAllByRole('tab', { name: 'Session' })).toHaveLength(2);
+  expect(screen.getAllByRole('tab', { name: 'Session' })).toHaveLength(1);
+  expect(screen.getByRole('tab', { name: 'Other session' })).toBeTruthy();
 });
 
 it('opens exactly one empty tab for a project without sessions and keeps it when its root arrives', async () => {

@@ -195,7 +195,7 @@ export function App({ target = store, client = unavailableClient, searchClient =
     function onKey(event: KeyboardEvent) {
       if (event.target instanceof Element) {
         const projectRow = event.target.closest('.sidebar-project-row');
-        if (event.target.closest('.project-actions-menu')
+        if (event.target.closest('.project-actions-menu, .workbench-menu')
           || projectRow && event.altKey && ['ArrowUp', 'ArrowDown'].includes(event.key)
           || projectRow && event.key === 'Escape' && projectRow.querySelector('.project-actions[aria-expanded="true"]')) return;
       }

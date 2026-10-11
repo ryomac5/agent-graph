@@ -44,7 +44,7 @@ it.each(['ja', 'en'] as const)('explains each preset and the required save witho
 
 it('omits Japanese descriptions and the same role names in assignments and graphs', () => {
   setup();
-  expect(screen.getByRole('heading', { name: 'モデル割り当て設定' })).toBeTruthy();
+  expect(screen.getByRole('heading', { name: '役割別のモデル' })).toBeTruthy();
   expect(screen.queryByText('エージェントの役割とタスクの負荷に応じて、使用するAIモデルを設定します。')).toBeNull();
   const roles = {
     orchestrate: ['Main agent', 'メインエージェント', '直接の対話とタスクの進行を担当'],

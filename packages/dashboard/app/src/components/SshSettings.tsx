@@ -5,11 +5,13 @@ import { request, type SshConnection } from './SessionCreate.tsx';
 export function SshSettings({ client, projects, language = 'en' }: { client: ConversationClient; projects: Row[]; language?: 'ja' | 'en' }) {
   const text = (en: string, ja: string) => language === 'ja' ? ja : en;
   const [connections, setConnections] = useState<SshConnection[]>([]);
+  const [saved, setSaved] = useState<SshConnection[]>([]);
+  const dirty = JSON.stringify(connections) !== JSON.stringify(saved);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [loaded, setLoaded] = useState(false);
-  useEffect(() => { let active = true; void request<{ connections: SshConnection[] }>(client, 'ssh.read').then(result => { if (active) { setConnections(result?.connections ?? []); setLoaded(true); } }, cause => { if (active) setError(text('Unable to load SSH connections', 'SSH の接続先を読み込めません')); }); return () => { active = false; }; }, [client]);
+  useEffect(() => { let active = true; void request<{ connections: SshConnection[] }>(client, 'ssh.read').then(result => { if (active) { setConnections(result?.connections ?? []); setSaved(result?.connections ?? []); setLoaded(true); } }, cause => { if (active) setError(text('Unable to load SSH connections', 'SSH の接続先を読み込めません')); }); return () => { active = false; }; }, [client]);
   function edit(id: string, patch: Partial<SshConnection>) { setConnections(rows => rows.map(row => row.id === id ? { ...row, ...patch } : row)); setMessage(''); }
   async function perform(operation: () => Promise<void>) { setBusy(true); setMessage(''); setError(''); try { await operation(); } catch (cause) { setError(text('SSH operation failed', 'SSH の操作に失敗しました')); } finally { setBusy(false); } }
   return <section className="ssh-settings" aria-label={text('SSH connections', 'SSH の接続先')}><h2>{text('SSH connections', 'SSH の接続先')}</h2>
@@ -27,7 +29,7 @@ export function SshSettings({ client, projects, language = 'en' }: { client: Con
       <button className="btn btn-ghost" onClick={() => setConnections(rows => rows.filter(item => item.id !== row.id))}>{text('Remove connection', '接続先を外す')}</button></div>
     </fieldset>)}
     <div className="button-row"><button className="btn btn-secondary" disabled={busy || !loaded} onClick={() => setConnections(rows => [...rows, { id: crypto.randomUUID(), name: '', destination: '', projects: [] }])}>{text('Add SSH connection', 'SSH の接続先を追加')}</button>
-    <button className="btn btn-primary" disabled={busy || !loaded} onClick={() => void perform(async () => { await request(client, 'ssh.write', { connections }); setMessage(text('Saved', '保存しました')); })}>{text('Save SSH connections', 'SSH の接続先を保存')}</button></div>
+    <button className={`btn ${dirty ? 'btn-primary' : 'btn-secondary'}`} disabled={busy || !loaded || !dirty} onClick={() => void perform(async () => { await request(client, 'ssh.write', { connections }); setSaved(connections); setMessage(text('Saved', '保存しました')); })}>{text('Save SSH connections', 'SSH の接続先を保存')}</button></div>
     {message && <p role="status">{message}</p>}{error && <p role="alert">{error}</p>}
   </section>;
 }

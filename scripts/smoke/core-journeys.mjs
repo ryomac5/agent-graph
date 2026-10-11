@@ -326,14 +326,18 @@ async function main() {
       await waitFor(async () => (await tab.textContent() ?? '') !== before, `child conversation "${title.slice(0, 30)}" in the center tab`);
       await active().locator('article.message').first().waitFor({ timeout: UI_TIMEOUT_MS });
     }
-    // 子の行は、提供元の名前を名前に含む。日付の束の行は含まない。
+    // 会話へ移るリンクだけを選び、会話の無い課題の行を除く。
     async function childRow(provider) {
       const pattern = new RegExp(` · (${provider}) · `);
-      const rows = tree().getByRole('treeitem', { name: pattern });
-      if (await rows.count()) return rows.first();
+      const rows = tree().getByRole('treeitem', { name: pattern }).and(tree().locator('a[href*="child="]'));
+      for (const row of await rows.all()) {
+        if (new URL(await row.getAttribute('href'), BASE).searchParams.get('child')) return row;
+      }
       for (const group of await tree().getByRole('treeitem', { name: /^(Today|Earlier|Yesterday)/ }).all()) {
         await group.click();
-        if (await rows.count()) return rows.first();
+        for (const row of await rows.all()) {
+          if (new URL(await row.getAttribute('href'), BASE).searchParams.get('child')) return row;
+        }
       }
       throw new Error(`no ${provider} child row in the graph`);
     }

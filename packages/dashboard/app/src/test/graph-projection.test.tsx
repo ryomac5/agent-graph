@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { cleanup, render, renderHook, screen, fireEvent } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
+import { Link, MemoryRouter } from 'react-router';
 import { createStore } from '../lib/store.ts';
 import { buildRootTree, selectRoots, useRootIndex } from '../lib/roots.ts';
 import { GraphPage } from '../pages/graph/GraphPage.tsx';
@@ -107,4 +107,50 @@ it('uses known review targets as parents and marks reviews without targets as in
   const row = document.querySelector('[data-node-id="recent-a"]')!;
   expect(row.querySelector('[data-role="review"]')).toBeTruthy();
   expect(document.querySelector('[data-child="recent-a"][data-parent="recent-b"]')).toBeTruthy();
+});
+
+it.each([true, false])('opens task details on a single click (embedded=%s)', embedded => {
+  render(<MemoryRouter><GraphPage project="repo" target={createProjectionFixture()} client={{ command: vi.fn() }} embedded={embedded}/></MemoryRouter>);
+  fireEvent.click(screen.getByRole('treeitem', { name: /^Earlier 4/ }));
+  const row = screen.getByRole('treeitem', { name: /Finished task A/ });
+  expect(row.tagName).toBe('BUTTON');
+  fireEvent.click(row);
+  const detail = screen.getByRole('complementary', { name: 'Request' });
+  expect(detail.textContent).toContain('Finished task A');
+  expect(detail.querySelector('a')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Close details' }));
+  expect(screen.queryByRole('complementary', { name: 'Request' })).toBeNull();
+});
+
+it.each([
+  { change: 'child', url: '/p/repo?root=root&child=recent-b', selected: 'recent-b' },
+  { change: 'main conversation', url: '/p/repo?root=root', selected: 'root' },
+  { change: 'root query', url: '/p/repo?root=other-root', selected: 'other-root' },
+  { change: 'root prop', url: '/p/repo?root=root&child=old-a', selected: 'other-root' },
+])('resets embedded task details when switching the $change without remounting', ({ change, url, selected }) => {
+  const target = createProjectionFixture();
+  target.getSnapshot().projection.roots!.push({ id: 'other-root', name: 'repo-002', project: 'repo', state: 'idle', conversation_ids: ['other-main'] });
+  target.getSnapshot().projection.conversations!.push({ id: 'other-main', provider: 'claude' });
+  const client = { command: vi.fn() };
+  const view = (rootId?: string) => <MemoryRouter initialEntries={['/p/repo?root=root&child=old-a']}>
+    <Link to={url}>Switch conversation</Link>
+    <GraphPage embedded project="repo" rootId={rootId} target={target} client={client}/>
+  </MemoryRouter>;
+  const { container, rerender } = render(view(change === 'root prop' ? 'root' : undefined));
+  const graph = container.querySelector('.graph-page');
+  fireEvent.click(screen.getByRole('treeitem', { name: /^Earlier 4/ }));
+  const task = screen.getByRole('treeitem', { name: /Finished task A/ });
+  fireEvent.click(task);
+  expect(task.getAttribute('aria-selected')).toBe('true');
+  expect(screen.getByRole('complementary', { name: 'Request' }).textContent).toContain('Finished task A');
+
+  if (change === 'root prop') rerender(view('other-root'));
+  else fireEvent.click(screen.getByRole('link', { name: 'Switch conversation' }));
+
+  expect(container.querySelector('.graph-page')).toBe(graph);
+  expect(screen.queryByRole('complementary', { name: 'Request' })).toBeNull();
+  const selectedRows = screen.getAllByRole('treeitem', { selected: true });
+  expect(selectedRows).toHaveLength(1);
+  expect(selectedRows[0].closest('[data-node-id]')?.getAttribute('data-node-id')).toBe(selected);
+  expect(selectedRows[0].getAttribute('aria-current')).toBe('page');
 });

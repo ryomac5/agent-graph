@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { defaultConfig, defaultProject } from '../../../../core/src/settings/index.ts';
 import { defaultPolicy } from '../../../../core/src/assign/policy.ts';
+import { labelSetting, labelConstraint } from '../components/settings/SettingsFields.tsx';
 import { SettingsPage } from '../pages/settings/SettingsPage.tsx';
 import { loadAppearance, type SettingsSnapshot, type SettingsStatus } from '../lib/settings.ts';
 import { PREFERENCES_KEY } from '../components/notifications/model.ts';
@@ -23,23 +24,28 @@ it.each(['en', 'ja'] as const)('restores key storage and last-valid-value inform
   expect(screen.getByText(ja ? 'api の再起動で反映します。旧 daemon のポートは使えません。' : 'Applies after API restart. The legacy daemon port is not allowed.').className).toBe('settings-note');
   expect(screen.getByText(ja ? 'Keychain に保存して再表示せず、次の起動から反映します。' : 'Stored in Keychain without redisplay and applied on the next launch.')).toBeTruthy();
 });
-it.each(['en', 'ja'] as const)('shows short policy labels and numbered constraints with full accessible names in %s', async language => {
+it.each(['en', 'ja'] as const)('shows translated policy labels and named constraints with full accessible names in %s', async language => {
   const f = createFixture();
   const { container } = render(<SettingsPage client={f.client} language={language}/>);
   const ja = language === 'ja';
   await screen.findByRole('button', { name: ja ? '割り当てを保存' : 'Save policy' });
-  for (const heading of ja ? ['利用枠', '実績', '重み', '制約'] : ['quota', 'performance', 'weights', 'constraints']) expect(screen.getByText(heading, { selector: 'legend' }).tagName).toBe('LEGEND');
+  for (const heading of ja ? ['利用枠', '実績', '評価の重み', '制約'] : ['Quota', 'Performance', 'Score weights', 'Constraints']) expect(screen.getByText(heading, { selector: 'legend' }).tagName).toBe('LEGEND');
   const hardLimit = screen.getByLabelText(ja ? '利用枠 · 利用枠の使用を止める上限' : 'quota · Quota hard limit (%)');
-  const acceptance = screen.getByLabelText(ja ? '実績 · 重み · 受け入れ率の重み' : 'performance · weights · Acceptance weight');
+  const acceptance = screen.getByLabelText(ja ? '実績 · 評価の重み · 受け入れ率の重み' : 'performance · weights · Acceptance weight');
   expect(hardLimit.closest('label')?.querySelector('strong')?.textContent).toBe(ja ? '使用を止める上限' : 'Hard limit (%)');
   expect(acceptance.closest('label')?.querySelector('strong')?.textContent).toBe(ja ? '受け入れ率' : 'Acceptance rate');
-  expect(screen.getByRole('button', { name: ja ? '制約を追加' : 'Add constraints' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: ja ? '制約を追加' : 'Add constraint' })).toBeTruthy();
   const rows = [...container.querySelectorAll('.settings-array-row')];
   expect(rows).toHaveLength(f.value.policy.constraints.length);
   expect(rows.length).toBeGreaterThan(0);
   rows.forEach((row, index) => {
-    expect(row.querySelector('legend')?.textContent).toBe(String(index + 1));
+    expect(row.querySelector('legend')).toBeNull();
+    expect(screen.getByRole('group', { name: `${ja ? '制約' : 'Constraint'} ${index + 1}` })).toBe(row);
     const constraint = within(row as HTMLElement).getByLabelText(ja ? `制約 · ${index + 1} · 制約` : `constraints · ${index + 1} · Constraint`);
+    for (const option of constraint.querySelectorAll('option')) {
+      expect(option.textContent).toBe(labelConstraint(option.value, language));
+      expect(option.textContent).not.toBe(option.value);
+    }
     expect(constraint.closest('label')?.querySelector('strong')?.textContent).toBe(ja ? '制約' : 'Constraint');
   });
 });
@@ -65,7 +71,7 @@ function createFixture() {
 it('edits and saves model assignments from the production settings route', async () => {
   const f = createFixture();
   render(<MemoryRouter initialEntries={['/settings']}><App client={f.client}/></MemoryRouter>);
-  await screen.findByRole('region', { name: 'Model assignment settings' });
+  await screen.findByRole('region', { name: 'Models by role' });
   expect(screen.getByLabelText('Theme')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Implementation Heavy Edit assignment' }));
   fireEvent.change(screen.getByLabelText('Implementation Heavy 1 Model'), { target: { value: 'custom-astra' } });
@@ -229,7 +235,7 @@ it('discards a policy preview if the policy changes before its response', async 
 
 it('edits weighted assignments, candidate order, criteria and model notes then saves the previewed policy', async () => {
   const f = createFixture(); render(<SettingsPage client={f.client}/>);
-  const assignments = await screen.findByRole('region', { name: 'Model assignment settings' });
+  const assignments = await screen.findByRole('region', { name: 'Models by role' });
   expect(within(assignments).getAllByText(/On limits or errors:/)).toHaveLength(6);
   fireEvent.click(screen.getByRole('button', { name: 'Implementation Heavy Edit assignment' }));
   expect(within(assignments).getByText('Top performance on SWE-bench.')).toBeTruthy();
@@ -258,7 +264,7 @@ it('edits weighted assignments, candidate order, criteria and model notes then s
 it('supports drag reordering and standard inheritance with Japanese labels and provider catalogs', async () => {
   const f = createFixture(); const original = f.command.getMockImplementation()!;
   f.command.mockImplementation(async (name, payload) => name === 'settings.models' ? { type: 'ack', cmd_id: name, ok: true, result: { state: 'known', models: [{ model: `${(payload as { provider: string }).provider}-listed`, displayName: 'Listed model' }] } } : original(name, payload));
-  render(<SettingsPage client={f.client} language="ja"/>); await screen.findByRole('region', { name: 'モデル割り当て設定' });
+  render(<SettingsPage client={f.client} language="ja"/>); await screen.findByRole('region', { name: '役割別のモデル' });
   fireEvent.click(screen.getByRole('button', { name: '実装 高負荷 割り当てを編集' }));
   const model = screen.getByLabelText('実装 高負荷 1 モデル') as HTMLInputElement;
   await screen.findByRole('list', { name: '実装 高負荷 1 モデルの一覧' });
@@ -277,7 +283,7 @@ it('supports drag reordering and standard inheritance with Japanese labels and p
 
 it('shows eight roles, lets the root select every provider, and folds fallback candidates', async () => {
   const f = createFixture(); render(<SettingsPage client={f.client}/>);
-  const region = await screen.findByRole('region', { name: 'Model assignment settings' });
+  const region = await screen.findByRole('region', { name: 'Models by role' });
   const table = region.querySelector('.assignment-table')!;
   expect(table.querySelectorAll('tbody > tr')).toHaveLength(8);
   expect([...table.querySelectorAll('tbody > tr > th')].map(cell => cell.querySelector('.assignment-role > span')?.textContent)).toEqual(['Main agent', 'Advisor', 'Research', 'Implementation', 'Documentation', 'Code review', 'Verification', 'Proofreading']);
@@ -341,7 +347,7 @@ it('shows catalog display names and efforts in assignment buttons even before or
 
 it('closes the editor with Escape or outside presses and shows fallback chains', async () => {
   const f = createFixture(); render(<SettingsPage client={f.client}/>);
-  const assignments = await screen.findByRole('region', { name: 'Model assignment settings' });
+  const assignments = await screen.findByRole('region', { name: 'Models by role' });
   const advisor = screen.getByRole('button', { name: 'Advisor Light Edit assignment' });
   expect(advisor.textContent).toBe('Use standard model');
   expect(advisor.closest('td')?.querySelector('.assignment-count')).toBeNull();
@@ -369,7 +375,7 @@ it('closes the editor with Escape or outside presses and shows fallback chains',
 
 it('omits weight criteria summaries and keeps each band editable', async () => {
   const f = createFixture(); render(<SettingsPage client={f.client} language="ja"/>);
-  await screen.findByRole('region', { name: 'モデル割り当て設定' });
+  await screen.findByRole('region', { name: '役割別のモデル' });
   expect(screen.queryByRole('button', { name: 'メインエージェント 基準を編集' })).toBeNull();
   const edit = screen.getByRole('button', { name: '実装 基準を編集' });
   expect(edit.closest('th')!.querySelector('.assignment-criteria-summary')).toBeNull();
@@ -477,4 +483,23 @@ it.each(['en', 'ja'] as const)('keeps removed descriptions absent while restorin
   expect(container.textContent).not.toContain(language === 'ja' ? 'このブラウザで即座に反映します。' : 'Applies immediately to this browser.');
   fireEvent.click(screen.getByRole('button', { name: language === 'ja' ? '性能重視' : 'Performance' }));
   expect(screen.getByRole('dialog').querySelectorAll('.assignment-note')).toHaveLength(2);
+});
+
+it.each(['en', 'ja'] as const)('never displays internal policy section keys in %s', async language => {
+  const f = createFixture();
+  const { container } = render(<SettingsPage client={f.client} language={language} policyOnly/>);
+  await screen.findByRole('button', { name: language === 'ja' ? '割り当てを保存' : 'Save policy' });
+  for (const key of ['quota', 'performance', 'weights', 'constraints']) {
+    expect(labelSetting(key, language)).not.toBe(key);
+    expect([...container.querySelectorAll('legend')].some(legend => legend.textContent === key)).toBe(false);
+  }
+  expect(screen.queryByRole('heading', { name: 'Model assignment settings' })).toBeNull();
+  const heading = screen.getByRole('heading', { name: language === 'ja' ? '役割別のモデル' : 'Models by role' });
+  expect(screen.getByRole('region', { name: heading.textContent! }).getAttribute('aria-labelledby')).toBe(heading.id);
+  const select = screen.getByLabelText(language === 'ja' ? '制約 · 1 · 制約' : 'constraints · 1 · Constraint');
+  fireEvent.change(select, { target: { value: 'minTierForRole' } });
+  expect(select.closest('fieldset')?.querySelector('legend')).toBeNull();
+  expect(screen.getByRole('group', { name: language === 'ja' ? '制約 1' : 'Constraint 1' })).toBe(select.closest('fieldset'));
+  expect((select as HTMLSelectElement).selectedOptions[0].textContent).toBe(labelConstraint('minTierForRole', language));
+  expect(screen.getByLabelText(language === 'ja' ? '制約 · 1 · モデルの水準' : 'constraints · 1 · Model tier')).toBeTruthy();
 });

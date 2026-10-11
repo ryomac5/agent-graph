@@ -26,13 +26,12 @@
 .graph-row-main { height: var(--row); width: 100%; padding: 0 var(--space-2); display: flex; align-items: center; gap: var(--space-1); border: 0; border-radius: 0; background: transparent; text-decoration: none; color: var(--fg-1); font: var(--type-ui); cursor: pointer; text-align: left; }
 .graph-row-main > .status, .graph-role, .graph-row-main > .icon { flex: 0 0 var(--space-4); width: var(--space-4); display: flex; align-items: center; justify-content: center; }
 .graph-role { color: var(--fg-2); }
-.graph-row-title { flex: 1; min-width: var(--space-8); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.graph-row-title { flex: 1 1 auto; min-width: var(--space-8); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .graph-row.is-quiet .graph-row-title { color: var(--fg-2); }
 .graph-row-who, .graph-row-inferred, .graph-rounds, .graph-task-number, .graph-row-end, .graph-more { font: var(--type-meta); color: var(--fg-3); white-space: nowrap; }
-.graph-row-who { max-width: 40%; overflow: hidden; text-overflow: ellipsis; }
-.graph-role[data-role='main'] ~ .graph-row-who { flex: 0 6 auto; min-width: 0; max-width: 20%; }
-.graph-role[data-role='main'] ~ .graph-row-title { flex: 1 1 auto; }
-.graph-row-end { margin-left: auto; }
+.graph-row-who { flex: 0 6 auto; min-width: 0; max-width: 20%; overflow: hidden; text-overflow: ellipsis; }
+.graph-row-inferred { flex: 0 6 auto; min-width: 0; max-width: 12%; overflow: hidden; text-overflow: ellipsis; }
+.graph-row-end { flex: 0 3 auto; min-width: 0; max-width: 20%; overflow: hidden; text-overflow: ellipsis; margin-left: auto; }
 .graph-row-end.state-waiting_approval, .graph-time-end.state-waiting_approval { color: var(--state-approval); }
 .graph-row-end.state-waiting_input, .graph-time-end.state-waiting_input { color: var(--state-reply); }
 .graph-row-end.state-failed, .graph-time-end.state-failed { color: var(--state-failed); }

@@ -86,6 +86,7 @@ export function GraphOutline(props: OutlineProps) {
       const running = ['starting', 'running'].includes(state);
       const target = node?.provider === 'codex' ? 'Codex' : agentName(node?.provider ?? '', node?.model ?? '').replace(/^Claude\s*/, '') || 'Claude';
       const groupWords = row.group ? ROLES.filter(role => row.group!.roles[role]).map(role => `${roleWord(role, language)} ${row.group!.roles[role]}`).join(' · ') : '';
+      const who = row.group ? groupWords : `${roleWord(row.role!, language)}${row.role === 'main' ? '' : ` · ${target}`}`;
       const title = row.group?.more ? t.showMore : row.group ? `${row.group.kind === 'today' ? t.today : t.earlier} ${row.group.count}` : node!.label;
       const kit = readObject(node?.delegation?.kit ?? readObject(node?.delegation?.payload).kit);
       const task = readText(node?.delegation?.task_id ?? kit.node_id);
@@ -95,10 +96,10 @@ export function GraphOutline(props: OutlineProps) {
         {row.group ? <Icon name={row.group.shown ? 'chevronDown' : 'chevronRight'}/> : <StatusDot state={row.role === 'main' && row.runningBelow && state === 'idle' ? 'running' : node!.state} dotOnly dotLabel={row.role === 'main' && row.runningBelow ? t.running : undefined}/>}
         {!row.group && <span className="graph-role" data-role={row.role} data-icon={ROLE_ICONS[row.role!]}><Icon name={ROLE_ICONS[row.role!]}/></span>}
         <span className="graph-row-title" title={title}>{Boolean(taskNumber) && <span className="graph-task-number">{taskNumber} </span>}{title}</span>
-        <span className="graph-row-who">{row.group ? groupWords : `${roleWord(row.role!, language)}${row.role === 'main' ? '' : ` · ${target}`}`}</span>
-        {node?.inferred && <span className="graph-row-inferred">{t.inferred}</span>}
+        <span className="graph-row-who" title={who}>{who}</span>
+        {node?.inferred && <span className="graph-row-inferred" title={t.inferred}>{t.inferred}</span>}
         {(node?.attempts.length ?? 0) > 1 && <span className="graph-rounds">×{node!.attempts.length}</span>}
-        {node && (!timeline || row.role === 'main' && row.runningBelow > 0) && <span className={`graph-row-end state-${state}`}>{rowEnd(row, language, now)}</span>}
+        {node && (!timeline || row.role === 'main' && row.runningBelow > 0) && <span className={`graph-row-end state-${state}`} title={rowEnd(row, language, now)}>{rowEnd(row, language, now)}</span>}
       </>;
       const ref = (element: HTMLElement | null) => { if (element) refs.current.set(row.id, element); else refs.current.delete(row.id); };
       const shared = { className: 'graph-row-main', tabIndex: 0, onKeyDown: (event: KeyboardEvent) => move(event, row), ref, 'aria-level': row.depth + 1, role: 'treeitem', 'aria-selected': selected === row.id, 'aria-current': embedded && selected === row.id ? 'page' as const : undefined, 'aria-label': row.group ? `${title} · ${groupWords}` : `${title} · ${roleWord(row.role!, language)}${row.role === 'main' ? '' : ` · ${target}`} · ${row.role === 'main' && row.runningBelow ? rowEnd(row, language, now) : stateLabel(node!.state, language)}` };

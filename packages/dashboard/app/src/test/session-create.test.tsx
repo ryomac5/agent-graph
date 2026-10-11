@@ -66,3 +66,29 @@ it.each(['en', 'ja'] as const)('edits and tests SSH connections in %s', async la
   fireEvent.click(screen.getByRole('button', { name: ja ? 'SSH の接続先を保存' : 'Save SSH connections' }));
   await waitFor(() => expect(f.command).toHaveBeenCalledWith('ssh.write', { connections: [{ ...connection, name: 'Remote', projects: [{ projectId: 'demo', path: '~/project' }] }] }));
 });
+
+it('disables SSH save until changed, after reverting and after saving', async () => {
+  const f = fixture(); render(<SshSettings client={f.client} projects={projects}/>);
+  const save = screen.getByRole('button', { name: 'Save SSH connections' });
+  expect(save.hasAttribute('disabled')).toBe(true);
+  await screen.findByDisplayValue('dev@host');
+  expect(save.hasAttribute('disabled')).toBe(true);
+  expect(save.classList.contains('btn-secondary')).toBe(true);
+  fireEvent.click(save);
+  expect(f.command.mock.calls.some(([name]) => name === 'ssh.write')).toBe(false);
+  const name = screen.getByLabelText('Name');
+  fireEvent.change(name, { target: { value: 'Changed' } });
+  expect(save.hasAttribute('disabled')).toBe(false);
+  expect(save.classList.contains('btn-primary')).toBe(true);
+  fireEvent.change(name, { target: { value: 'Server' } });
+  expect(save.hasAttribute('disabled')).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'Remove connection' }));
+  expect(save.hasAttribute('disabled')).toBe(false);
+  fireEvent.click(save);
+  await screen.findByText('Saved');
+  expect(f.command).toHaveBeenCalledWith('ssh.write', { connections: [] });
+  expect(save.hasAttribute('disabled')).toBe(true);
+  expect(save.classList.contains('btn-secondary')).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'Add SSH connection' }));
+  expect(save.hasAttribute('disabled')).toBe(false);
+});

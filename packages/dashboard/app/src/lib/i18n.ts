@@ -1,6 +1,8 @@
 export const dictionaries = {
   en: {
+    splitRight: 'Split right', splitDown: 'Split down', moveToOtherPane: 'Move to other pane', close: 'Close', closeOthers: 'Close others',
     working: 'Working',
+    projectActions: 'Project actions', moveUp: 'Move up', moveDown: 'Move down', hideFromList: 'Hide from list', showInList: 'Show in list', hiddenProjects: 'Hidden',
     english: 'English', japanese: '日本語', brand: 'agent-graph', workspace: 'Workspace', overview: 'Overview', projects: 'Projects',
     inbox: 'Approvals', tree: 'Sub-agents', changes: 'Changes', search: 'Search', settings: 'Settings',
     conversation: 'Conversation', conversations: 'Conversations', project: 'Project', notifications: 'Notifications',
@@ -17,7 +19,9 @@ export const dictionaries = {
     other: 'Other', agent: 'Agent', commands: 'Search and commands', retry: 'Retry', showOlder: 'Earlier',
   },
   ja: {
+    splitRight: '右に分割', splitDown: '下に分割', moveToOtherPane: '別のペインへ移動', close: '閉じる', closeOthers: 'ほかのタブを閉じる',
     working: '作業中',
+    projectActions: 'プロジェクトの操作', moveUp: '上へ移動', moveDown: '下へ移動', hideFromList: '一覧から外す', showInList: '一覧に戻す', hiddenProjects: '非表示',
     english: 'English', japanese: '日本語', brand: 'agent-graph', workspace: '作業場', overview: '一覧', projects: 'プロジェクト',
     inbox: '承認待ち', tree: 'サブエージェント', changes: '変更', search: '検索', settings: '設定',
     conversation: '会話', conversations: '会話', project: 'プロジェクト', notifications: '通知',

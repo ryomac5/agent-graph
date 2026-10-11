@@ -144,14 +144,25 @@ it('renders terminal output and exit, reopens and closes terminal sessions', asy
   fireEvent.click(screen.getByRole('button', { name: 'Close Terminal' }));
   expect(f.client.command).toHaveBeenCalledWith('terminal.close', { terminalId: 'terminal-2' });
 });
-it('reorders tabs and moves the last tab into its neighbour through drag and drop', async () => {
-  fixture(); await openCode(); fireEvent.keyDown(screen.getByRole('textbox', { name: 'Code' }), { key: 'd', metaKey: true });
-  const transfer = { setData: vi.fn(), getData: () => '' };
-  fireEvent.click(within(panes()[1]).getByRole('button', { name: 'Open conversation' }));
+it('reorders tabs and moves the last tab into its neighbour through pointer drag and drop', async () => {
+  class TestPointerEvent extends MouseEvent {
+    pointerId: number;
+    constructor(type: string, init: PointerEventInit = {}) { super(type, init); this.pointerId = init.pointerId ?? 1; }
+  }
+  vi.stubGlobal('PointerEvent', TestPointerEvent);
+  const f = fixture(); await openCode();
+  const stored = JSON.parse(localStorage.getItem(workspaceKey('p', 'session'))!);
+  const sourcePane = { kind: 'pane', id: 'other-pane', tabs: [{ kind: 'conversation', id: 'other-tab', conversationId: 'other', name: 'Other conversation' }], active: 'other-tab' };
+  f.view.unmount(); localStorage.setItem(workspaceKey('p', 'session'), JSON.stringify({ kind: 'split', id: 'split', direction: 'horizontal', ratio: .5, first: stored, second: sourcePane }));
+  render(<MemoryRouter><f.Wrapper/></MemoryRouter>);
   const source = panes()[1].querySelector('.workbench-tab')!;
   const destination = panes()[0].querySelector('.workbench-tab')!;
-  fireEvent.dragStart(source, { dataTransfer: transfer }); fireEvent.drop(destination, { dataTransfer: transfer });
-  expect(panes()).toHaveLength(1); expect(tabs().map(tab => tab.textContent)).toEqual(['Conversation', 'Conversation', 'file.ts']);
+  vi.spyOn(destination, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 100, 40));
+  Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: vi.fn(() => destination) });
+  fireEvent.pointerDown(source.querySelector('[role="tab"]')!, { button: 0, pointerId: 1, clientX: 50, clientY: 20 });
+  fireEvent.pointerMove(window, { pointerId: 1, clientX: 10, clientY: 20 });
+  fireEvent.pointerUp(window, { pointerId: 1, clientX: 10, clientY: 20 });
+  expect(panes()).toHaveLength(1); expect(tabs().map(tab => tab.textContent)).toEqual(['Other conversation', 'Conversation', 'file.ts']);
 });
 it('resizes a divider with pointer movement and remembers the size', async () => {
   fixture(); fireEvent.keyDown(screen.getByRole('textbox', { name: 'Message' }), { key: 'd', metaKey: true });
@@ -218,7 +229,9 @@ it('opens all three empty pane actions and keeps the add menu usable', async () 
   expect(panes()).toHaveLength(1);
   fireEvent.keyDown(screen.getByRole('textbox', { name: 'Message' }), { key: 'd', metaKey: true });
   fireEvent.click(within(panes()[1]).getByRole('button', { name: 'Open conversation' }));
-  expect(within(panes()[1]).getByRole('textbox', { name: 'Message' })).toBeTruthy();
+  expect(panes()[0].dataset.focused).toBe('true');
+  expect(tabs(panes()[0])).toHaveLength(1);
+  expect(within(panes()[1]).getByRole('heading', { name: 'Empty pane' })).toBeTruthy();
   fireEvent.keyDown(panes()[1], { key: 'd', metaKey: true });
   fireEvent.click(within(panes()[2]).getByRole('button', { name: 'Open file' }));
   fireEvent.click(within(await screen.findByRole('option', { name: 'other.txt' })).getByRole('button'));

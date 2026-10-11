@@ -11,7 +11,7 @@ import type { Ack, createClient } from '../../lib/client.ts';
 import { store, useScreenStore, type Row, type ScreenState, type ScreenStore } from '../../lib/store.ts';
 import type { Language } from '../../lib/i18n.ts';
 import { dictionaries } from '../../lib/i18n.ts';
-import { approvalOutcome, approvalReasonText, type ApprovalOutcome, conversationName, decisionLabel, evidenceLabel, formatClock, agentName, modelName, isPositiveDecision, readApprovalRequest, readModel, runLabel, worktreeLabel } from '../../lib/format.ts';
+import { approvalOutcome, approvalReasonText, type ApprovalOutcome, conversationName, conversationStart, decisionLabel, evidenceLabel, formatClock, agentName, modelName, isPositiveDecision, readApprovalRequest, readModel, runLabel, worktreeLabel } from '../../lib/format.ts';
 import { AppLink } from '../../components/AppLink.tsx';
 import { StateBadge } from '../../components/StateBadge.tsx';
 import { reasonText } from '../../lib/reasons.ts';
@@ -139,7 +139,7 @@ function ConversationTabHeader({ metadata, breadcrumb, actions }: { metadata: Co
     const actions = document.getElementById(`workspace-actions-${header.tabId}`);
     if (back && actions) setSlots({ back, actions });
   }, [header?.tabId]);
-  useLayoutEffect(() => { if (header) header.report(header.tabId, metadata); }, [header?.tabId, header?.report, metadata.name, metadata.state, metadata.title]);
+  useLayoutEffect(() => { if (header) header.report(header.tabId, metadata); }, [header?.tabId, header?.report, metadata.name, metadata.state, metadata.title, metadata.autoName, metadata.startedAt]);
   return slots ? <>{breadcrumb && createPortal(<div className="conv-breadcrumb">{breadcrumb}</div>, slots.back)}{createPortal(actions, slots.actions)}</> : null;
 }
 export function ConversationPage({ client, conversationId: explicitId, target = store, language = 'en', embedded = false, seriesIds, seriesState, displayName, breadcrumb, onConversation, newSession }: ConversationPageProps) {
@@ -579,7 +579,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
       </div>
     </div>;
   return <section className={`conversation-page${embedded ? ' embedded' : ''}`} aria-label={t('conversation')}>
-    {workspaceHeader ? <ConversationTabHeader metadata={{ name: nameRoot?.user_name || nameRoot?.name || title, state: status, title: [nameRoot?.name || title, dictionaries[language][status], elapsed ? `${t(status.startsWith('waiting') ? 'waiting' : 'elapsed')} ${elapsed}` : '', shownModel].filter(Boolean).join(' · ') }} breadcrumb={back} actions={headerActions}/> : <header className="conv-header">
+    {workspaceHeader ? <ConversationTabHeader metadata={{ autoName: nameRoot?.auto_name, startedAt: conversationStart(state, conversationId), name: nameRoot?.user_name || nameRoot?.name || title, state: status, title: [nameRoot?.name || title, dictionaries[language][status], elapsed ? `${t(status.startsWith('waiting') ? 'waiting' : 'elapsed')} ${elapsed}` : '', shownModel].filter(Boolean).join(' · ') }} breadcrumb={back} actions={headerActions}/> : <header className="conv-header">
       <div className="conv-title-row" onClick={event => {
         if (!(event.target instanceof Element) || !event.target.closest('.state-badge')) return;
         event.preventDefault(); setDetailsOpen(true);

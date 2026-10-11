@@ -27,7 +27,7 @@ import { join } from "node:path";
 import { openLedger } from "../../core/src/ledger/ledger.ts";
 import { SettingsService, settingsPaths, type SettingsOptions } from "../src/settings/index.ts";
 import { parseSettingsToml, updateSettingsToml } from "../src/settings/toml.ts";
-import { defaultPolicy } from "../../core/src/assign/policy.ts";
+import { defaultPolicy, getCandidates } from "../../core/src/assign/policy.ts";
 
 async function createFixture() {
   const root = await mkdtemp(join(tmpdir(), "graph-settings-"));
@@ -58,14 +58,14 @@ test("atomic writes to each file store preserve untouched comments and preview p
     const saved = await readFile(f.paths.config, "utf8"); assert.match(saved, /# hand note/); assert.match(saved, /claude = true # untouched/); assert.match(saved, /7501 # port note/);
     await f.service.write("project", { scope: { exclude: ["secret"] } });
     assert.deepEqual(parseSettingsToml(await readFile(f.paths.project, "utf8")), { scope: { exclude: ["secret"] } });
-    const patch = { roles: { implement: [...defaultPolicy().roles.implement].reverse() } };
+    const patch = { roles: { implement: [...getCandidates(defaultPolicy(), "implement")].reverse() } };
     const previous = f.service.read("policy");
     const preview = f.service.previewPolicy(patch);
     assert.deepEqual(f.service.read("policy"), previous);
     assert.notDeepEqual(preview.rows[0].before, preview.rows[0].after);
     await assert.rejects(f.service.write("policy", patch), /preview/);
     await f.service.write("policy", patch, { previewToken: preview.token });
-    assert.equal(f.service.read("policy").roles.implement[0].model, "opus");
+    assert.equal(getCandidates(f.service.read("policy"), "implement")[0].model, "opus");
     assert.ok(!(await readdir(join(f.root, "agent-graph"))).some((file) => file.endsWith(".tmp")));
     const facts = f.ledger.readSince(0, 100).filter((fact) => fact.kind === "setting.changed");
     assert.ok(facts.length >= 3); assert.ok(facts.every((fact) => !JSON.stringify(fact.payload).includes("7501")));
@@ -153,7 +153,7 @@ test("saving unchanged arrays preserves multiline comments and policy candidate 
     const patch = { roles: { implement: f.service.read("policy").roles.implement }, quota: { hardLimitPercent: 95 } };
     const preview = f.service.previewPolicy(patch);
     await f.service.write("policy", patch, { previewToken: preview.token });
-    assert.ok((await readFile(f.paths.policy, "utf8")).includes(candidate));
+    assert.ok((await readFile(f.paths.policy, "utf8")).includes(candidate.replace("[[roles.implement]]", "[[roles.implement.standard]]")));
     assert.equal(f.service.read("policy").quota.hardLimitPercent, 95);
   } finally { await f.close(); }
 });
@@ -444,4 +444,52 @@ test("authenticated WebSocket serves Settings commands without an available runn
     observation.close();
     await f.close();
   }
+});
+
+test("weighted policy edits migrate legacy role tables and round-trip through both readers", async () => {
+  const f = await createFixture();
+  try {
+    await writeFile(f.paths.policy, '# keep this note\n[[roles.implement]]\nexecutor = "codex"\nmodel = "custom"\nfamily = "openai"\ntier = "high"\n');
+    await f.service.reload("policy");
+    assert.equal(getCandidates(f.service.read("policy"), "implement")[0].model, "custom");
+    const patch = structuredClone(f.service.read("policy"));
+    patch.roles.implement = { standard: getCandidates(patch, "implement"), light: [{ executor: "codex", model: "gpt-6.1-sol", effort: "low", family: "openai", tier: "mid" }], heavy: [{ executor: "codex", model: "gpt-6-astra", effort: "max", family: "openai", tier: "high" }] };
+    patch.criteria.implement = { ...patch.criteria.implement, heavy: '安全と "設計"\n長い差分 # 基準' };
+    patch.modelNotes = [{ model: "gpt-6-astra", latest: true, strength: "Strong", specialties: "Implementation" }];
+    patch.quota = { softLimitPercent: 60, hardLimitPercent: 85 };
+    const preview = f.service.previewPolicy(patch);
+    await f.service.write("policy", patch, { previewToken: preview.token });
+    const saved = await readFile(f.paths.policy, "utf8");
+    assert.match(saved, /# keep this note/); assert.match(saved, /\[\[roles.implement.heavy\]\]/);
+    const { loadPolicy, parsePolicyToml, mergePolicy } = await import("../../core/src/assign/policy.ts");
+    assert.deepEqual(loadPolicy({ path: f.paths.policy, env: {} }), patch);
+    assert.deepEqual(mergePolicy(defaultPolicy(), parsePolicyToml(saved)), patch);
+    await f.service.reload("policy"); assert.deepEqual(f.service.read("policy"), patch);
+    patch.roles.implement = { standard: getCandidates(patch, "implement") };
+    const inherit = f.service.previewPolicy(patch); await f.service.write("policy", patch, { previewToken: inherit.token });
+    await f.service.reload("policy"); assert.deepEqual(f.service.read("policy").roles.implement, patch.roles.implement);
+  } finally { await f.close(); }
+});
+test("models.table and models.resolve expose active weighted policy and validate payloads", async () => {
+  const f = await createFixture();
+  try {
+    const table = await f.service.handle({ type: "cmd", cmd_id: "models-table", command: "models.table" });
+    assert.equal(table.ok, true); assert.deepEqual(table.result, defaultPolicy());
+    const resolved = await f.service.handle({ type: "cmd", cmd_id: "models-resolve", command: "models.resolve", payload: { role: "implement", weight: "heavy", usage: { quota: { codex: 95 } } } });
+    assert.equal(resolved.ok, true); assert.equal((resolved.result as { model: string }).model, "opus");
+    const invalid = await f.service.handle({ type: "cmd", cmd_id: "invalid-model", command: "models.resolve", payload: { role: "implement", weight: "huge" } }); assert.equal(invalid.ok, false);
+  } finally { await f.close(); }
+});
+
+test("models commands use the API request adapter without forwarding to a runner", async () => {
+  const f = await createFixture();
+  const { bindSettingsRequests } = await import("../src/settings/websocket.ts");
+  const port = { async request(_request: import("../src/runner-client.ts").RunnerRequest): Promise<import("../src/runner-client.ts").RunnerResponse> { throw new Error("Runner unavailable"); } };
+  const detach = bindSettingsRequests(port, f.service);
+  try {
+    const response = await port.request({ type: "req", cmd_id: "table", command: "models.table" });
+    assert.equal(response.ok, true);
+    const resolved = await port.request({ type: "req", cmd_id: "resolve", command: "models.resolve", payload: { role: "advisor" } });
+    assert.equal(resolved.ok, true); assert.equal((resolved.result as { model: string }).model, "fable");
+  } finally { detach(); await f.close(); }
 });

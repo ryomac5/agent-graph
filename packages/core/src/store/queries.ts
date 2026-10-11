@@ -17,10 +17,11 @@ export interface DelegationRow {
   taskId?: string;
   kind: "delegation" | "subagent";
   role: string;
+  weight: "light" | "standard" | "heavy";
   title: string;
   status: DelegationStatus;
   roundTrips: number;
-  assignment?: { executor: string; model: string; family: ModelFamily; tier: string; reason: string[]; policyVersion: string };
+  assignment?: { executor: string; model: string; effort?: string; family: ModelFamily; tier: string; reason: string[]; policyVersion: string };
   acceptance?: AcceptanceResult;
   review?: { verdict: "approve" | "request_changes"; comment: string; reviewerDelegationId: string };
   tokens?: { input: number; output: number };
@@ -114,7 +115,7 @@ export function listRecentTurns(db: DatabaseSync, sessionId: string, limit: numb
 export function listDelegations(db: DatabaseSync, repoKey: string): DelegationRow[] {
   const rows = db.prepare(`
     SELECT d.*,
-      a.executor, a.model, a.family, a.tier, a.reason, a.policy_version,
+      a.executor, a.model, a.effort, a.family, a.tier, a.reason, a.policy_version,
       c.passed, c.results, c.scope_violations,
       r.verdict, r.comment, r.reviewer_delegation_id,
       (SELECT comment FROM reviews WHERE reviewer_delegation_id = d.id ORDER BY rowid DESC LIMIT 1) AS review_output,
@@ -146,14 +147,14 @@ export function listDelegations(db: DatabaseSync, repoKey: string): DelegationRo
     const delegation: DelegationRow = {
       id: String(row.id), repoKey: String(row.repo_key), sessionId: String(row.session_id),
       kind: row.kind === "subagent" ? "subagent" : "delegation",
-      role: String(row.role), title: String(row.title), status: String(row.status) as DelegationStatus,
+      role: String(row.role), weight: String(row.weight ?? "standard") as DelegationRow["weight"], title: String(row.title), status: String(row.status) as DelegationStatus,
       roundTrips: Number(row.round_trips ?? 0),
     };
     if (text(row.parent_id) !== undefined) delegation.parentId = String(row.parent_id);
     if (text(row.task_id) !== undefined) delegation.taskId = String(row.task_id);
     if (text(row.executor) !== undefined) {
       delegation.assignment = { executor: String(row.executor), model: String(row.model),
-        family: String(row.family) as ModelFamily, tier: String(row.tier),
+        ...(text(row.effort) ? { effort: String(row.effort) } : {}), family: String(row.family) as ModelFamily, tier: String(row.tier),
         reason: parseJson<string[]>(row.reason, []), policyVersion: String(row.policy_version) };
     }
     if (row.passed !== null && row.passed !== undefined) {

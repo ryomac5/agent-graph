@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { loadPolicy, parsePolicyToml } from "../src/assign/policy.ts";
+import { getCandidates, loadPolicy, defaultPolicy, parsePolicyToml } from "../src/assign/policy.ts";
 
 test("TOML の数値と役割候補を読む", () => {
   const parsed = parsePolicyToml(`
@@ -22,7 +22,7 @@ tier = "high"
 `);
   assert.equal(parsed.quota?.hardLimitPercent, 80);
   assert.equal(parsed.performance?.weights.acceptRate, 0.5);
-  assert.equal(parsed.roles?.review[0].model, "custom");
+  assert.equal(getCandidates({ ...defaultPolicy(), roles: { ...defaultPolicy().roles, ...parsed.roles } }, "review")[0].model, "custom");
 });
 
 test("対応外構文は行番号を返す", () => {

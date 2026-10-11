@@ -2,6 +2,9 @@
 import { mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { loadPolicy, ROLES, WEIGHTS } from "../../core/src/assign/policy.ts";
+import { resolveModel, modelNotice } from "../../core/src/assign/models.ts";
+import type { Role, Weight } from "../../core/src/delegate/types.ts";
 import { startObservationWorker } from "./service/worker-client.ts";
 import { migrateLegacyDatabases } from "./migrate/index.ts";
 import { openObservationService } from "./service/index.ts";
@@ -27,6 +30,20 @@ function listDatabases(path: string, excludedPaths: Set<string>): string[] {
 export async function runCli(args = process.argv.slice(2)): Promise<void> {
   const [command, ...flags] = args;
   if (command === "--help" || command === "-h") { console.log(HELP); return; }
+  if (command === "models") {
+    const [action, role, ...options] = flags;
+    const policy = loadPolicy();
+    if (action === "notice" && !role) { console.log(modelNotice(policy)); return; }
+    if (action !== "resolve" || !ROLES.includes(role as Role)) throw new TypeError("Usage: models resolve <role> [--weight light|standard|heavy] [--json] | models notice");
+    let weight: Weight = "standard"; let json = false;
+    for (let i = 0; i < options.length; i++) {
+      if (options[i] === "--json") json = true;
+      else if (options[i] === "--weight" && WEIGHTS.includes(options[i + 1] as Weight)) weight = options[++i] as Weight;
+      else throw new TypeError("Invalid models option");
+    }
+    const result = resolveModel(policy, role as Role, weight);
+    console.log(json ? JSON.stringify(result) : [result.executor, result.model, result.effort].filter(Boolean).join(" ")); return;
+  }
   if (command === "watch") { process.exitCode = await runWatchCli(flags); return; }
   if (!["ingest", "migrate", "rebuild", "serve"].includes(command)) throw new TypeError(HELP);
   let dbPath: string | undefined;

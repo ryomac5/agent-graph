@@ -91,7 +91,7 @@ export class Intake {
     this.write("delegation.created", `delegation:${request.requestId}`, {
       request_id: request.requestId, parent_run_id: request.parentRun,
       origin: request.origin && { provider: request.origin.provider, native_id: request.origin.nativeId },
-      role: request.role, title: request.title, task: request.task, accept: request.accept, scope: request.scope,
+      role: request.role, weight: request.weight ?? "standard", title: request.title, task: request.task, accept: request.accept, scope: request.scope,
       cwd: request.cwd, constraints: request.constraints, request, request_hash: fingerprintRequest(request), state: "received", attempt: 1,
     });
     this.change(request.requestId, "accepted");
@@ -142,7 +142,7 @@ export class Intake {
     outputSchema?: StartRequest["outputSchema"]): Promise<void> {
     if (this.closing) throw new Error("interrupted");
     const launch = this.runtime.supervisor.start(assignment.executor, { runId, conversationId, generation: 1, cwd,
-      input: { text }, model: { model: assignment.model }, env: { AGENT_GRAPH_MANAGED: runId }, ...(outputSchema ? { outputSchema } : {}) });
+      input: { text }, model: { model: assignment.model, effort: assignment.effort }, env: { AGENT_GRAPH_MANAGED: runId }, ...(outputSchema ? { outputSchema } : {}) });
     this.launches.add(launch);
     try { await launch; } finally { this.launches.delete(launch); }
     this.reconcileOrigins();
@@ -225,7 +225,7 @@ export class Intake {
       this.write("delegation.attempt_created", `delegation:${requestId}`, { attempt, verification: acceptance });
       if (!acceptance.passed) { this.change(requestId, "failed", { result, reason: "Acceptance failed" }); return; }
       const savedReview = savedAttempt.review as { run_id?: string; assignment?: Assignment } | undefined;
-      const reviewer = savedReview?.assignment ? { ok: true as const, assignment: savedReview.assignment } : decide({ role: "review", title: request.title, task: request.task, accept: [],
+      const reviewer = savedReview?.assignment ? { ok: true as const, assignment: savedReview.assignment } : decide({ role: "review", weight: request.weight, title: request.title, task: request.task, accept: [],
         constraints: { excludeFamily: [selected.assignment.family] } }, { ...this.decision, implementerFamily: selected.assignment.family });
       if (!reviewer.ok) { this.change(requestId, "failed", { result, reason: reviewer.reason.join("\n") }); return; }
       if (this.status(requestId).state === "verifying") this.change(requestId, "reviewing");

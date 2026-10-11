@@ -25,7 +25,7 @@ export interface EventPayload {
   // 番号を付けた。reason は最初の人の指示か、片割れから移した由来。fork なら forkOf に親を残す
   "session.named": { sessionId: string; name: string; reason: "first_prompt" | "kit" | "unprompted" | `merged from ${string}`; forkOf?: string };
   "delegation.requested": { delegationId: string; task: string };
-  "assignment.decided": { delegationId: string; executor: "claude" | "codex"; model: string; reason: string[]; policyVersion: string };
+  "assignment.decided": { delegationId: string; executor: "claude" | "codex" | "antigravity"; model: string; reason: string[]; policyVersion: string };
   "execution.started": { delegationId: string };
   "execution.finished": { delegationId: string; exitCode: number };
   "acceptance.evaluated": { delegationId: string; passed: boolean };

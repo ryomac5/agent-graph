@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createConnection } from "node:net";
 import { test, type TestContext } from "node:test";
-import { defaultPolicy } from "../../core/src/assign/policy.ts";
+import { defaultPolicy, getCandidates } from "../../core/src/assign/policy.ts";
 import { fingerprintRequest, readOrigin, type IntakeRequest } from "../../core/src/intake/index.ts";
 import { openLedger } from "../../core/src/ledger/index.ts";
 import { projectDelegations, projectEntityRecords } from "../../core/src/ledger/projections/delegations.ts";
@@ -264,7 +264,7 @@ test("host turn completion closes the managed handle and proceeds to verificatio
 });
 
 async function seedRunning(f: ReturnType<typeof fixture>) {
-  const assignment = { ...defaultPolicy().roles.implement[0], reason: ["fixture"], policyVersion: "fixture" };
+  const assignment = { ...getCandidates(defaultPolicy(), "implement")[0], reason: ["fixture"], policyVersion: "fixture" };
   f.ledger.append({ source: "intake", source_event_id: "seed-request", source_ts: "2026-01-01T00:00:00Z",
     kind: "delegation.created", subject: `delegation:${f.request.requestId}`, confidence: "confirmed",
     payload: JSON.parse(JSON.stringify({ request_id: f.request.requestId, role: f.request.role, title: f.request.title,
@@ -465,4 +465,32 @@ test("a retried delegation links acceptance and review to the next task artifact
   assert.equal(second.verification!.passed, true);
   const attempt = projectDelegations(facts)[0].attempts[1];
   assert.equal((attempt.review as { artifact_id: string }).artifact_id, second.id);
+});
+
+for (const [weight, model, effort] of [["light", "gpt-6.1-sol", "low"], ["standard", "gpt-6-astra", "high"], ["heavy", "gpt-6-astra", "xhigh"]] as const) {
+  test(`intake persists ${weight} and passes selected model and effort to the host`, async t => {
+    const { intake, ledger, codex, claude, request } = fixture(t);
+    intake.submit({ ...request, weight, review: false });
+    await until(() => intake.status(request.requestId).state === "running");
+    emitReview(codex);
+    assert.deepEqual(codex.starts[0].model, { model, effort });
+    const projected = projectDelegations(ledger.readSince(0, 100))[0];
+    assert.equal(projected.role, "implement"); assert.equal(projected.weight, weight);
+    const creation = ledger.readSince(0, 100).find(fact => fact.kind === "delegation.created")!;
+    assert.equal((creation.payload as { weight: string }).weight, weight);
+    assert.throws(() => intake.submit({ ...request, weight: weight === "light" ? "heavy" : "light", review: false }), /Conflicting/);
+    await until(() => claude.starts.length === 1);
+    assert.equal(claude.starts[0].model.model, weight === "heavy" ? "fable" : "opus");
+    emitReview(claude);
+    assert.equal((await intake.wait(request.requestId)).state, "done");
+  });
+}
+test("intake accepts advisor and rejects invalid weights", async t => {
+  const { intake, request, claude, codex } = fixture(t);
+  assert.throws(() => intake.submit({ ...request, weight: "huge" }), /weight/);
+  intake.submit({ ...request, role: "advisor", review: false });
+  await until(() => intake.status(request.requestId).state === "running");
+  emitReview(claude); assert.equal(claude.starts[0].model.model, "fable");
+  await until(() => codex.starts.length === 1); emitReview(codex);
+  assert.equal((await intake.wait(request.requestId)).state, "done");
 });

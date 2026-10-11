@@ -22,7 +22,7 @@ function readObject(value: JsonValue | undefined): { [key: string]: JsonValue } 
 function confirmEnd(fact: Fact, run: RunProjection, evidence: { [key: string]: JsonValue }): boolean {
   if (fact.confidence !== "confirmed") return false;
   switch (evidence.kind) {
-    case "host_exit": return (fact.source === "host-claude" || fact.source === "host-codex")
+    case "host_exit": return (fact.source === "host-claude" || fact.source === "host-codex" || fact.source === "host-antigravity")
       && typeof evidence.exit_code === "number" && Number.isInteger(evidence.exit_code);
     case "thread_closed": return fact.source === "host-codex";
     case "session_end": return fact.source === "hook" && evidence.generation === run.generation;

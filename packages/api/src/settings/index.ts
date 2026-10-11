@@ -4,8 +4,11 @@ import { mkdir, readFile, open, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { getDefaults, mergeSettings, validateSettings, type FileStore, type SettingsByStore, type SettingsStatus } from "../../../core/src/settings/index.ts";
+import { mergePolicy } from "../../../core/src/assign/policy.ts";
+import { resolveModel, type ModelUsage } from "../../../core/src/assign/models.ts";
+import { readAvailableModels } from "./models.ts";
 import { decide, type DecisionInput } from "../../../core/src/assign/assign.ts";
-import type { DelegateRequest } from "../../../core/src/delegate/types.ts";
+import type { DelegateRequest, Role, Weight } from "../../../core/src/delegate/types.ts";
 import type { Ledger } from "../../../core/src/ledger/ledger.ts";
 import type { JsonValue } from "../../../core/src/ledger/facts.ts";
 import type { ScreenCommand } from "../ws/contract.ts";
@@ -44,10 +47,17 @@ export async function writeAtomic(path: string, text: string): Promise<void> {
     await rename(temporary, path);
   } finally { await unlink(temporary).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error; }); }
 }
-function revision(value: unknown): string { return createHash("sha256").update(JSON.stringify(value)).digest("hex"); }
+function revision(value: unknown): string {
+  const text = JSON.stringify(value, (_key, entry) => entry && typeof entry === "object" && !Array.isArray(entry) ? Object.fromEntries(Object.keys(entry).sort().map(key => [key, entry[key]])) : entry);
+  return createHash("sha256").update(text).digest("hex");
+}
 function changedFields(before: unknown, after: unknown, prefix = ""): string[] {
   if (JSON.stringify(before) === JSON.stringify(after)) return [];
-  if (after && typeof after === "object" && !Array.isArray(after)) return Object.entries(after).flatMap(([key, value]) => changedFields((before as Record<string, unknown>)[key], value, prefix ? `${prefix}.${key}` : key));
+  if (after && typeof after === "object" && !Array.isArray(after)) {
+    const old = before && typeof before === "object" ? before as Record<string, unknown> : {};
+    const next = after as Record<string, unknown>;
+    return [...new Set([...Object.keys(old), ...Object.keys(next)])].flatMap(key => changedFields(old[key], next[key], prefix ? `${prefix}.${key}` : key));
+  }
   return [prefix];
 }
 export class SettingsService {
@@ -116,7 +126,7 @@ export class SettingsService {
     });
   }
   previewPolicy(patch: unknown) {
-    const policy = validateSettings("policy", mergeSettings(this.values.policy, patch));
+    const policy = mergePolicy(this.values.policy, patch);
     const token = randomUUID();
     const rows = this.options.history().map(({ id, request, context }) => ({ id, before: decide(request, { ...context, policy: this.values.policy }), after: decide(request, { ...context, policy }) }));
     this.previews.set(token, { policy, base: revision(this.values.policy) });
@@ -124,7 +134,7 @@ export class SettingsService {
   }
   write(store: FileStore, patch: unknown, options: { previewToken?: string; confirmation?: boolean } = {}): Promise<void> {
     return this.serialize(async () => {
-      const next = validateSettings(store, mergeSettings(this.values[store], patch));
+      const next = store === "policy" ? mergePolicy(this.values.policy, patch) : validateSettings(store, mergeSettings(this.values[store], patch));
       if (store === "policy") {
         const preview = this.previews.get(options.previewToken ?? "");
         if (!preview || preview.base !== revision(this.values.policy) || revision(preview.policy) !== revision(next)) throw new TypeError("Matching policy preview required before save");
@@ -161,6 +171,8 @@ export class SettingsService {
   }
   private async execute(command: string, payload?: JsonValue): Promise<JsonValue> {
     const p = (payload ?? {}) as Record<string, JsonValue>;
+    if (command === "models.table") return JSON.parse(JSON.stringify(this.values.policy));
+    if (command === "models.resolve") return JSON.parse(JSON.stringify(resolveModel(this.values.policy, p.role as Role, (p.weight ?? "standard") as Weight, p.usage as unknown as ModelUsage)));
     if (command === "settings.read") return JSON.parse(JSON.stringify({ config: this.values.config, policy: this.values.policy, project: this.values.project, errors: this.errors, apiKeyConfigured: await this.readKeyConfigured() }));
     if (command === "settings.previewPolicy") return JSON.parse(JSON.stringify(this.previewPolicy(p.patch)));
     if (command === "settings.write") {
@@ -179,8 +191,8 @@ export class SettingsService {
     }
     if (command === "settings.status") return JSON.parse(JSON.stringify({ ...await this.options.status(), rebuild: this.rebuildState }));
     if (command === "settings.models") {
-      if (p.provider !== "claude" && p.provider !== "codex") throw new TypeError("Invalid provider");
-      try { return { state: "known", models: await this.options.listModels(p.provider) }; } catch { return { state: "unknown", models: [] }; }
+      if (p.provider !== "claude" && p.provider !== "codex" && p.provider !== "antigravity") throw new TypeError("Invalid provider");
+      return JSON.parse(JSON.stringify(await readAvailableModels(p.provider, provider => this.options.listModels(provider))));
     }
     if (command === "settings.rebuild") {
       if (this.rebuildState.state === "running") throw new TypeError("Rebuild already running");

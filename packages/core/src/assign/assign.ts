@@ -1,5 +1,5 @@
 import type { Assignment, Candidate, DelegateRequest, ModelFamily, Role, Tier } from "../delegate/types.ts";
-import { policyVersion, type Policy } from "./policy.ts";
+import { getCandidates, policyVersion, type Policy } from "./policy.ts";
 
 export type QuotaView = (candidate: Candidate) => { percent: number; source: string } | undefined;
 export type PerformanceView = (role: Role, model: string) => {
@@ -19,8 +19,8 @@ export function decide(
 ): { ok: true; assignment: Assignment } | { ok: false; reason: string[] } {
   const { policy } = input;
   const reason: string[] = [];
-  let candidates = [...(policy.roles[req.role] ?? [])];
-  reason.push(`stage 1 role ${req.role}: ${candidates.length} candidates`);
+  let candidates = [...getCandidates(policy, req.role, req.weight)];
+  reason.push(`stage 1 role ${req.role} weight ${req.weight ?? "standard"}: ${candidates.length} candidates`);
   const available: Candidate[] = [];
   const deferred: Candidate[] = [];
   for (const candidate of candidates) {

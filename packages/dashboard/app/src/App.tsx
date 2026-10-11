@@ -1,4 +1,5 @@
 import { SessionCreate } from './components/SessionCreate.tsx';
+import { SettingsPage } from './pages/settings/SettingsPage.tsx';
 import { SshSettings } from './components/SshSettings.tsx';
 import { ResizeDivider } from './components/ResizeDivider.tsx';
 import { SIDEBAR_WIDTH_KEY, SIDEBAR_COLLAPSED_KEY, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_INITIAL_WIDTH, SIDEBAR_COMPACT_WIDTH, SIDEBAR_RESTORE_WIDTH, clampSidebar, useStoredToggle } from './lib/layout.ts';
@@ -252,7 +253,7 @@ export function App({ target = store, client = unavailableClient, searchClient =
       <Route path="/settings" element={<div className="page settings-page"><header className="page-header">{backAction}<h1>{t('settings')}</h1></header><div className="settings-card">
         <label><span><strong>{t('theme')}</strong><small>{t('themeHint')}</small></span><select aria-label={t('theme')} value={theme} onChange={event => setTheme(event.target.value as Theme)}>{(['system', 'light', 'dark'] as const).map(value => <option key={value} value={value}>{t(value)}</option>)}</select></label>
         <label><span><strong>{t('language')}</strong><small>{t('languageHint')}</small></span><select aria-label={t('language')} value={language} onChange={event => setLanguage(event.target.value as Language)}><option value="en" lang="en">{t('english')}</option><option value="ja" lang="ja">{t('japanese')}</option></select></label>
-      </div><SshSettings client={client} projects={getRegisteredProjects(state)} language={language}/><KeyboardSettings language={language} bindings={bindings} client={client} onSave={setBindings}/></div>}/>
+      </div><SettingsPage client={client} language={language} policyOnly/><SshSettings client={client} projects={getRegisteredProjects(state)} language={language}/><KeyboardSettings language={language} bindings={bindings} client={client} onSave={setBindings}/></div>}/>
       <Route path="*" element={<EmptyView title="notFound" t={t}/>}/>
     </Routes>{commandError && <p role="alert" className="banner banner-danger">{commandError}</p>}</main></div>
     {creatingSession && <SessionCreate client={client} projects={getRegisteredProjects(state)} initialProject={creatingSession} language={language} onClose={() => setCreatingSession(undefined)} onCreated={(project, conversation) => { setCreatingSession(undefined); navigate(`/p/${encodeURIComponent(project)}?conversation=${encodeURIComponent(conversation)}`); setMobileView('conversation'); }}/>}

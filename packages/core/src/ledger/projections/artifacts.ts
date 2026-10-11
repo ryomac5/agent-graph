@@ -46,7 +46,7 @@ export function projectArtifacts(facts: readonly Fact[], evidence: readonly GitA
   const storedEvidence = prepared.flatMap((fact) => {
     const payload = fact.payload as (Partial<ArtifactPayload> & { attribution_evidence?: GitAttributionEvidence[] }) | null;
     return fact.kind.startsWith("artifact.") && fact.confidence === "confirmed"
-      && (fact.source === "host-claude" || fact.source === "host-codex") ? payload?.attribution_evidence ?? [] : [];
+      && (fact.source === "host-claude" || fact.source === "host-codex" || fact.source === "host-antigravity") ? payload?.attribution_evidence ?? [] : [];
   });
   const allEvidence = [...storedEvidence, ...evidence];
   const records = new Map<string, ArtifactProjection>();

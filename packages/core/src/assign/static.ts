@@ -1,9 +1,10 @@
 import type { Assignment, Candidate, DelegateRequest, Role } from "../delegate/types.ts";
 import { decide } from "./assign.ts";
-import { loadPolicy } from "./policy.ts";
+import { loadPolicy, getCandidates, ROLES } from "./policy.ts";
 
 export function defaultPolicyTable(): Record<Role, Candidate[]> {
-  return loadPolicy().roles;
+  const policy = loadPolicy();
+  return Object.fromEntries(ROLES.map(role => [role, getCandidates(policy, role)])) as Record<Role, Candidate[]>;
 }
 
 export function assign(

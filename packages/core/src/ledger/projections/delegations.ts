@@ -150,7 +150,7 @@ export function projectDelegations(facts: readonly Fact[]): DelegationProjection
     requests.set(payload.request_id, signature);
     subjects.set(fact.subject, payload.request_id);
     records.set(payload.request_id, {
-      ...selectRequest(payload), id: payload.request_id, request_id: payload.request_id,
+      ...selectRequest(payload), weight: payload.weight ?? "standard", id: payload.request_id, request_id: payload.request_id,
       state: payload.state ?? "received", attempt: payload.attempt ?? 0,
       attempts: payload.attempt === undefined ? [] : [{ attempt: payload.attempt, state: payload.state, result: payload.result }],
       parent: { confidence: "unknown" }, conflicts: [],

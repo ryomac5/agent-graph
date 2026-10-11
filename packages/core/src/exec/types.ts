@@ -1,9 +1,11 @@
 import { executeClaude } from "./claude.ts";
+import { executeAntigravity } from "./antigravity.ts";
 import { executeCodex } from "./codex.ts";
 import type { TraceContext } from "../trace.ts";
 
 export interface ExecRequest {
-  executor: "claude" | "codex";
+  executor: "claude" | "codex" | "antigravity";
+  effort?: string;
   model: string;
   task: string;
   cwd: string;
@@ -24,5 +26,5 @@ export interface ExecResult {
 }
 
 export function execute(req: ExecRequest): Promise<ExecResult> {
-  return req.executor === "claude" ? executeClaude(req) : executeCodex(req);
+  return req.executor === "claude" ? executeClaude(req) : req.executor === "antigravity" ? executeAntigravity(req) : executeCodex(req);
 }

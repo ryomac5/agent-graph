@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { RunnerSettings } from "../src/settings.ts";
 import { defaultConfig } from "../../core/src/settings/index.ts";
-import { defaultPolicy } from "../../core/src/assign/policy.ts";
+import { defaultPolicy, getCandidates } from "../../core/src/assign/policy.ts";
 
 test("runner applies settings at future boundaries and records relaxed approval", () => {
   const records: string[] = [];
@@ -17,7 +17,7 @@ test("runner applies settings at future boundaries and records relaxed approval"
   assert.throws(() => runner.applyConfig(config), /confirmation/);
   assert.equal(runner.forNewConversation("claude").authentication, "subscription");
   runner.applyConfig(config, true); assert.equal(runner.forNewConversation("claude").authentication, "api_key");
-  const policy = defaultPolicy(); policy.roles.implement.reverse(); runner.applyPolicy(policy);
+  const policy = defaultPolicy(); getCandidates(policy, "implement").reverse(); runner.applyPolicy(policy);
   assert.notDeepEqual(runner.forNextDelegation().policy.roles.implement, existingDelegation.policy.roles.implement);
   runner.applyProject("repo", { isolation: { policy: "read-only" }, acceptance: { commands: ["test"] }, scope: { exclude: ["secret"] } });
   assert.equal(runner.forNextExecution("repo").policy, "read-only");

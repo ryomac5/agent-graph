@@ -1,11 +1,13 @@
-export type Role = "orchestrate" | "implement" | "research" | "document" | "review";
-export type Executor = "claude" | "codex";
-export type ModelFamily = "anthropic" | "openai";
+export type Role = "orchestrate" | "implement" | "research" | "document" | "review" | "advisor" | "plan" | "proofread";
+export type Weight = "light" | "standard" | "heavy";
+export type Executor = "claude" | "codex" | "antigravity";
+export type ModelFamily = "anthropic" | "openai" | "google";
 export type Tier = "high" | "mid" | "low";
 
 export interface Candidate {
   executor: Executor;
   model: string;
+  effort?: string;
   family: ModelFamily;
   tier: Tier;
 }
@@ -17,6 +19,7 @@ export interface Assignment extends Candidate {
 
 export interface DelegateRequest {
   role: Role;
+  weight?: Weight;
   title: string;
   task: string;
   accept: string[];

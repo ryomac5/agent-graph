@@ -3,7 +3,7 @@ import { ProviderMark } from '../../components/RootViews.tsx';
 import type { Policy } from '../../lib/settings.ts';
 import type { Candidate, Role, Weight } from '../../../../../core/src/delegate/types.ts';
 
-import { ROLES, WEIGHTS, readBands, createPreset, listPresetChanges, type Preset } from './assignment-presets.ts';
+import { ROLES, WEIGHTS, readBands, createPreset, listPresetChanges, findModelNote, type Preset } from './assignment-presets.ts';
 const NAMES: Record<Role, [string, string]> = { orchestrate: ['Main agent', 'メインエージェント'], implement: ['Implementation', '実装'], research: ['Research', 'リサーチ'], document: ['Documentation', 'ドキュメント'], review: ['Code review', 'コードレビュー'], advisor: ['Advisor', 'アドバイザー'], verify: ['Verification', '動作検証'], proofread: ['Proofreading', '校正'] };
 const BUILTIN_TEXT: Record<string, string> = {
   '1 ファイルの小さな直しや、名前の置き換え。': 'Small changes or renaming in one file.',
@@ -53,6 +53,10 @@ export function ModelAssignments({ policy, onChange, language, models, onRefresh
   }, [open]);
   function bands(role: Role) { return readBands(policy, role); }
   function displayName(candidate: Candidate) { return models[candidate.executor]?.models.find(model => model.model === candidate.model)?.displayName || candidate.model; }
+  function describeNote(model: string) {
+    const note = findModelNote(policy, model);
+    return note ? [note.latest ? text('Latest', '最新') : '', displayText(note.strength), displayText(note.specialties)].filter(Boolean).join(' · ') : '';
+  }
   function update(role: Role, weight: Weight, candidates?: Candidate[]) {
     const next = { ...bands(role) };
     if (candidates === undefined) delete next[weight]; else next[weight] = candidates;
@@ -66,13 +70,14 @@ export function ModelAssignments({ policy, onChange, language, models, onRefresh
   const presetChanges = presetPolicy ? listPresetChanges(policy, presetPolicy) : [];
   return <section className="model-assignments" aria-label={text('Model assignment settings', 'モデル割り当て設定')}>
     <h3>{text('Model assignment settings', 'モデル割り当て設定')}</h3>
-    <div className="button-row">{(['performance', 'balanced', 'economy'] as const).map(value => <button key={value} className="btn btn-secondary" onClick={() => { close(); setPreset(value); }}>{({ performance: text('Performance', '性能重視'), balanced: text('Balanced', 'バランス'), economy: text('Economy', '節約') })[value]}</button>)}</div>
+    <div className="button-row assignment-actions">{(['performance', 'balanced', 'economy'] as const).map(value => <button key={value} className="btn btn-secondary" onClick={() => { close(); setPreset(value); }}>{({ performance: text('Performance', '性能重視'), balanced: text('Balanced', 'バランス'), economy: text('Economy', '節約') })[value]}</button>)}{onApply && <button className="btn btn-secondary assignment-apply-button" disabled={applyDisabled} onClick={onApply}>{text('Apply to configuration files', '設定ファイルに反映')}</button>}</div>
     {preset && <div role="dialog" aria-label={text('Preset changes', 'まとめて変更する内容')} className="assignment-preset">
       <table><thead><tr><th>{text('Assignment', '割り当て')}</th><th>{text('Before', '変更前')}</th><th>{text('After', '変更後')}</th></tr></thead><tbody>{presetChanges.map(change => <tr key={change.role + change.weight}><th>{NAMES[change.role][ja ? 1 : 0]} {weightName(change.weight)}</th>{(['before', 'after'] as const).map(side => <td key={side}>{change[side].map(candidate => displayName(candidate) + (candidate.effort ? ' · ' + candidate.effort : '')).join(' → ')}{change[side === 'before' ? 'inheritedBefore' : 'inheritedAfter'] && ' · ' + text('Use standard model', '標準モデルを使用')}</td>)}</tr>)}</tbody></table>
+      <p className="assignment-note">{({ performance: text('Choose the strongest noted candidate for each role, breaking ties by model tier and candidate order.', '各役割で覚え書きの強さが最大の候補を選び、同点ならモデル水準と候補順で決めます。'), balanced: text('Restore the default combination.', '既定の組み合わせに戻します。'), economy: text('Use light models for standard workloads too.', '軽量モデルを標準の負荷にも使います。') })[preset]}</p>
       {!presetChanges.length && <p>{text('No changes', '変更はありません')}</p>}
       <div className="button-row"><button className="btn btn-primary" onClick={() => { if (presetPolicy) onChange(presetPolicy); setPreset(undefined); }}>{text('Confirm changes', '確認して表に反映')}</button><button className="btn btn-ghost" onClick={() => setPreset(undefined)}>{text('Cancel', '取り消す')}</button></div>
+      <p className="assignment-note">{text('Confirm to update the table, then preview and save the policy.', '確認して表に反映した後、試算して「割り当てを保存」で保存します。')}</p>
     </div>}
-    {onApply && <button className="btn btn-secondary" disabled={applyDisabled} onClick={onApply}>{text('Apply to configuration files', '設定ファイルに反映')}</button>}
     <div className="assignment-scroll"><table className="assignment-table"><thead><tr><th>{text('Role', '役割')}</th>{WEIGHTS.map(weight => <th key={weight}>{weightName(weight)}</th>)}</tr></thead>
       <tbody>{ROLES.map(role => {
         const hasCriteria = policy.criteria[role] !== undefined;
@@ -92,6 +97,7 @@ export function ModelAssignments({ policy, onChange, language, models, onRefresh
               setSelecting(0);
               setOpen({ role, weight });
             }}>{inherited ? text('Use standard model', '標準モデルを使用') : candidate ? <><ProviderMark provider={candidate.executor}/><span className="assignment-model-name" title={name}>{name}</span><span className="assignment-effort">· {candidate.effort ?? text('Default', '既定')}</span><span aria-hidden="true">▾</span></> : text('Choose model', 'モデルを選ぶ')}</button>
+            {!inherited && candidates.length > 1 && <small className="assignment-count">{text('On limits or errors: ', '上限時やエラー時: ')}{candidates.slice(1).map(displayName).join(' → ')}</small>}
             {expanded && <div ref={popup} role="dialog" aria-label={prefix + ' ' + text('Assignment', '割り当て')} className="assignment-popover">
               <header><span>{prefix}</span><button className="btn btn-ghost assignment-icon" aria-label={text('Close assignment', '割り当てを閉じる')} onClick={close}>×</button></header>
               <ol className="assignment-candidates">{candidates.map((entry, index) => {
@@ -108,13 +114,13 @@ export function ModelAssignments({ policy, onChange, language, models, onRefresh
                 {(Object.keys(PROVIDERS) as Candidate['executor'][]).map(executor => {
                   const catalog = [...new Map([...(models[executor]?.models ?? []), ...ROLES.flatMap(role => WEIGHTS.flatMap(weight => bands(role)[weight] ?? [])).filter(candidate => candidate.executor === executor).map(candidate => ({ model: candidate.model, displayName: displayName(candidate) }))].map(model => [model.model, model])).values()];
                   return <li key={executor}><div className="assignment-provider"><span>{PROVIDERS[executor]}</span><button className="btn btn-ghost assignment-icon" aria-label={prefix + ' ' + text('Refresh ' + executor + ' models', executor + ' のモデルを更新')} onClick={() => onRefresh?.(executor)}>↻</button></div>
-                    {catalog.map(model => <button key={model.model} className="btn btn-ghost" aria-pressed={candidates[selecting]?.executor === executor && candidates[selecting]?.model === model.model} onClick={() => {
+                    {catalog.map(model => <button key={model.model} aria-label={model.displayName || model.model} className="btn btn-ghost" aria-pressed={candidates[selecting]?.executor === executor && candidates[selecting]?.model === model.model} onClick={() => {
                       const existing = candidates[selecting];
                       const known = ROLES.flatMap(role => WEIGHTS.flatMap(weight => bands(role)[weight] ?? [])).find(candidate => candidate.executor === executor && candidate.model === model.model);
                       const next: Candidate = { executor, family: FAMILY[executor], model: model.model, tier: known?.tier ?? 'mid' };
                       if (existing?.executor === executor && existing.effort && ([...DEPTHS[executor], ...models[executor]?.models.flatMap(model => model.effort ? [model.effort] : []) ?? []] as string[]).includes(existing.effort)) next.effort = existing.effort;
                       const entries = [...candidates]; entries[selecting] = next; update(role, weight, entries);
-                    }}><ProviderMark provider={executor}/><span>{model.displayName || model.model}</span></button>)}
+                    }}><ProviderMark provider={executor}/><span>{model.displayName || model.model}</span>{describeNote(model.model) && <small>{describeNote(model.model)}</small>}</button>)}
                   </li>;
                 })}
               </ul>

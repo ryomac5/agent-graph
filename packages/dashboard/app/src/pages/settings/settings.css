@@ -1,5 +1,5 @@
 .settings-page { max-width: 1100px; }
-.settings-section { margin: 0 0 var(--space-6); }
+.settings-page .settings-section { max-width: none; margin: 0 0 var(--space-6); }
 .settings-section header { display: grid; gap: var(--space-2); margin-bottom: var(--space-3); }
 .settings-page .settings-card { max-width: none; overflow: visible; }
 .settings-page .settings-card > p { margin: var(--space-4) var(--space-6); }
@@ -8,9 +8,9 @@
 .settings-models { margin: var(--space-4) var(--space-6); }
 .settings-page .settings-card > [role='region'] { margin: var(--space-4) var(--space-6); }
 .settings-page .settings-card > progress { margin: var(--space-4) var(--space-6); }
-.settings-page fieldset { border: 0; border-bottom: var(--border); padding: var(--space-3) 0; min-width: 0; }
+.settings-page fieldset { border: 0; margin: 0; padding: var(--space-3) 0; min-width: 0; }
 .settings-page textarea { min-width: 200px; max-width: 50%; }
-.settings-array-row { margin: var(--space-3); border: var(--border); border-radius: var(--radius-1); }
+.settings-array-row { margin: var(--space-3) 0; padding-left: var(--space-4); }
 .settings-array-row .button-row { padding: var(--space-2) var(--space-4); }
 .settings-page table { width: 100%; border-collapse: collapse; text-align: left; }
 .settings-page td { padding: var(--space-2); border-bottom: var(--border); overflow-wrap: anywhere; }
@@ -23,13 +23,13 @@
   .settings-page .settings-card label { flex-wrap: wrap; }
   .settings-page textarea { max-width: 100%; }
 }
-.settings-page legend { font-weight: 400; padding: 0 var(--space-6); font: var(--type-meta); color: var(--fg-3); }
+.settings-page legend { font-weight: 400; padding: 0; font: var(--type-meta); color: var(--fg-3); }
 .settings-section header h2 { font: var(--type-title); }
 .settings-card label > span { font: var(--type-body); }
 .settings-card { border: 0; border-radius: 0; box-shadow: none; }
 .settings-card label { min-height: 48px; padding: var(--space-3) 0; }
 .settings-card label:last-child { border-bottom: var(--border); }
-.model-assignments { margin: var(--space-4) 0; width: 100%; max-width: 1100px; }
+.model-assignments { margin: var(--space-4) var(--space-6); width: auto; max-width: 1100px; }
 .model-assignments h3 { font: var(--type-title); margin: var(--space-4) 0; }
 .assignment-scroll { width: 100%; min-width: 0; }
 .assignment-table { table-layout: fixed; width: 100%; }
@@ -81,3 +81,17 @@
 .assignment-model-options button > small { margin-left: auto; }
 .assignment-model-options button > .request-avatar { flex: 0 0 16px; }
 .assignment-custom { margin: var(--space-3) 0; }
+
+.settings-note { display: block; color: var(--fg-3); font: var(--type-meta); }
+.settings-page .banner-warning { display: block; }
+.settings-page .banner-warning .settings-note { margin-top: var(--space-1); }
+.settings-page .assignment-model-options > li > .btn { display: grid; grid-template-columns: 16px minmax(0, 1fr); }
+.assignment-model-options button > small { grid-column: 2; margin-left: 0; }
+.settings-page .settings-card > .settings-note { margin: var(--space-1) 0 var(--space-3); }
+.assignment-actions { flex-wrap: wrap; }
+.assignment-apply-button { margin-left: auto; white-space: nowrap; }
+.settings-page .settings-card :is(input:not([type="checkbox"]), select, textarea) { width: 240px; min-width: 0; max-width: 100%; flex: 0 0 240px; }
+.settings-page .assignment-popover :is(input:not([type="checkbox"]), select), .settings-page .assignment-criteria-editor textarea { width: 100%; flex: auto; }
+@media (max-width: 760px) {
+  .settings-page .settings-card :is(input:not([type="checkbox"]), select, textarea) { flex: 0 1 240px; }
+}

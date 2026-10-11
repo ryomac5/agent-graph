@@ -31,6 +31,8 @@
   --bg-1: #f7f7f8;
   --bg-2: #f0f0f2;
   --bg-3: #e8e8eb;
+  --bubble-user: #e3e7fa;
+  --bubble-agent: #f0f0f2;
   --fg-1: #1b1c20;
   --fg-2: #454750;
   --fg-3: #545660;
@@ -62,6 +64,8 @@
     --bg-1: #111215;
     --bg-2: #1f2025;
     --bg-3: #27282e;
+    --bubble-user: #22263b;
+    --bubble-agent: #1f2025;
     --fg-1: #e8e9ec;
     --fg-2: #c8cad2;
     --fg-3: #b1b4bf;
@@ -93,6 +97,8 @@
   --bg-1: #111215;
   --bg-2: #1f2025;
   --bg-3: #27282e;
+  --bubble-user: #22263b;
+  --bubble-agent: #1f2025;
   --fg-1: #e8e9ec;
   --fg-2: #c8cad2;
   --fg-3: #b1b4bf;
@@ -541,3 +547,6 @@ textarea::placeholder { color: var(--fg-4); }
 }
 
 .project-create-menu { position: absolute; right: var(--space-2); z-index: 10; display: flex; flex-direction: column; background: var(--bg-0); border: var(--border); border-radius: var(--radius-2); padding: var(--space-1); box-shadow: var(--shadow); }
+
+.sidebar-project-row:has(> a.active) { background: var(--bg-3); border-radius: var(--radius-1); }
+.sidebar-project-row > a.active { background: transparent; }

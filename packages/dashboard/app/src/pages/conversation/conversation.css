@@ -126,7 +126,7 @@
 .message-agent { align-items: flex-start; }
 .message-agent .message-main { width: fit-content; max-width: 88%; }
 .message-user .message-main { justify-items: end; width: fit-content; max-width: 80%; }
-.message-user .message-bubble { padding: var(--space-2) var(--space-3); background: var(--bg-3); border: 0; border-radius: var(--radius-2) var(--radius-1) var(--radius-2) var(--radius-2); }
+.message-user .message-bubble { padding: var(--space-2) var(--space-3); background: var(--bubble-user); border: 0; border-radius: var(--radius-2) var(--radius-1) var(--radius-2) var(--radius-2); }
 .message-user > .message-header { max-width: 80%; }
 .tool-call { overflow: hidden; min-width: 0; background: transparent; border: 0; border-radius: var(--radius-1); }
 .tool-call > summary { user-select: none; list-style: none; cursor: pointer; gap: var(--space-2); align-items: center; display: flex; height: var(--control); padding: 0 var(--space-2); font: var(--type-meta); color: var(--fg-3); }
@@ -163,7 +163,7 @@
 .message-report { max-width: 100%; background: var(--bg-0); margin: var(--space-2) 0; padding: 0 var(--space-3); border: var(--border); border-radius: var(--radius-2); }
 .composer-box { background: var(--bg-0); border-radius: var(--radius-1); transition: border-color var(--duration) var(--ease), box-shadow var(--duration) var(--ease); border: var(--input-border); box-shadow: none; }
 .message-bubble { min-width: 0; max-width: 100%; color: var(--fg-1); font: var(--type-body); }
-.message-agent .message-bubble { border-radius: var(--radius-1) var(--radius-2) var(--radius-2) var(--radius-2); border: 0; background: var(--bg-1); padding: var(--space-2) var(--space-3); box-shadow: none; }
+.message-agent .message-bubble { border-radius: var(--radius-1) var(--radius-2) var(--radius-2) var(--radius-2); border: var(--border); background: var(--bubble-agent); padding: var(--space-2) var(--space-3); box-shadow: none; }
 .message-header time { color: var(--fg-3); font-variant-numeric: tabular-nums; font: var(--type-meta); }
 .message-time-unknown { color: var(--fg-3); font-variant-numeric: tabular-nums; font: var(--type-meta); }
 .message-report .message-report-lead { color: var(--fg-2); white-space: nowrap; text-overflow: ellipsis; overflow: hidden; min-width: 0; flex: 1; font: var(--type-ui); }
@@ -199,7 +199,7 @@
 /* 添付の画像は、本文の上に縮小で並べる。押すと元の大きさで開く代わりに、最大の大きさだけを決める。 */
 .message-images { display: flex; flex-wrap: wrap; gap: var(--space-2); justify-content: flex-end; margin-bottom: var(--space-2); }
 .message-agent .message-images { justify-content: flex-start; }
-.message-images img { max-width: 240px; max-height: 180px; border-radius: 6px; border: 1px solid var(--line); object-fit: contain; background: var(--bg-2); }
+.message-images img { min-width: 64px; min-height: 64px; max-width: 240px; max-height: 180px; border-radius: 6px; border: 1px solid var(--line); object-fit: contain; background: var(--bg-2); }
 
 .conv-icon-action { width: var(--control); height: var(--control); padding: 0; }
 .conv-files-action { width: auto; gap: var(--space-1); padding: 0 var(--space-1); }

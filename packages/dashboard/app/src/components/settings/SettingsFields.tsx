@@ -7,6 +7,7 @@ const choices: Record<string, string[]> = {
   kind: ['reviewerDifferentFamily', 'implementerNotOrchestrator', 'minTierForRole'], role: ['implement', 'review', 'research', 'document', 'orchestrate', 'advisor', 'plan', 'proofread'],
 };
 const labels: Record<string, [string, string]> = {
+  quota: ['quota', '利用枠'], performance: ['performance', '実績'], weights: ['weights', '重み'], constraints: ['constraints', '制約'],
   model: ['Default model', '既定のモデル'], effort: ['Default effort', '既定の深さ'], authentication: ['Claude authentication', 'Claude の認証'], integrations: ['Claude integrations', 'Claude の外部連携'],
   mode: ['Approval mode', '承認の方式'], policy: ['Isolation policy', '隔離の方針'], repositories: ['Observed repositories', '観測するリポジトリ'],
   claude: ['Observe Claude', 'Claude を観測'], codex: ['Observe Codex', 'Codex を観測'], kit: ['Observe legacy kit', '旧キットを観測'],
@@ -29,7 +30,7 @@ export function SettingsFields({ value, onChange, language, prefix = '', inherit
   const ja = language === 'ja';
   return <>{Object.entries(value).map(([key, entry]) => {
     const path = prefix ? `${prefix}.${key}` : key;
-    const name = `${prefix ? prefix.replaceAll('.', ' · ') + ' · ' : ''}${labelSetting(key, language)}`;
+    const name = `${prefix ? prefix.split('.').map(part => ja ? labelSetting(part, language) : part).join(' · ') + ' · ' : ''}${labelSetting(key, language)}`;
     const update = (next: unknown) => onChange({ ...value, [key]: next });
     if (entry !== null && typeof entry === 'object' && !Array.isArray(entry)) return <fieldset key={key}><legend>{prefix === 'agents' ? key : labelSetting(key, language)}</legend><SettingsFields value={entry as Record<string, unknown>} onChange={update} language={language} prefix={path} inheritIsolation={inheritIsolation}/></fieldset>;
     if (Array.isArray(entry) && (key === 'constraints' || path.startsWith('roles.'))) {
@@ -41,7 +42,7 @@ export function SettingsFields({ value, onChange, language, prefix = '', inherit
         }} language={language} prefix={`${path}.${index + 1}`}/>
         <div className="button-row"><button type="button" className="btn btn-secondary btn-sm" disabled={index === 0} aria-label={`${name} ${index + 1} ${ja ? '上へ' : 'Move up'}`} onClick={() => { const next = [...entry]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; update(next); }}>{ja ? '上へ' : 'Move up'}</button>
         <button type="button" className="btn btn-ghost btn-sm" onClick={() => update(entry.filter((_, at) => at !== index))}>{ja ? '削除' : 'Remove'}</button></div></div>)}
-        <button type="button" className="btn btn-secondary btn-sm" onClick={() => update([...entry, template])}>{ja ? '追加' : 'Add'} {labelSetting(key, language)}</button></fieldset>;
+        <button type="button" className="btn btn-secondary btn-sm" onClick={() => update([...entry, template])}>{ja ? labelSetting(key, language) + 'を追加' : 'Add ' + labelSetting(key, language)}</button></fieldset>;
     }
     const options = choices[path] ?? choices[key];
     return <label key={key}><span><strong>{name}</strong></span>

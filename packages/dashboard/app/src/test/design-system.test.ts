@@ -112,6 +112,9 @@ it.each([['light', light], ['dark', dark]] as const)('meets contrast on the actu
   for (const sender of ['user', 'agent']) {
     const rule = css.match(new RegExp(`\\.message-${sender} \\.message-bubble\\s*\\{([^}]+)\\}`))![1];
     const background = rule.match(/background:\s*var\((--[\w-]+)\)/)![1];
+    expect(background).toBe('--bubble-' + sender);
+    expect(readColour(tokens, background)).not.toBe(readColour(tokens, '--bg-0'));
+    if (sender === 'agent') expect(rule).toContain('border: var(--border)');
     expect(calculateContrast(tokens, foreground, background), theme + ' ' + sender + ' bubble').toBeGreaterThanOrEqual(BODY_CONTRAST);
     for (const colour of ['--accent']) {
       expect(calculateContrast(tokens, colour, background), theme + ' ' + sender + ' ' + colour)

@@ -24,6 +24,23 @@ function setup(policy = defaultPolicy(), language: 'ja' | 'en' = 'ja') {
   return change;
 }
 const edit = () => fireEvent.click(screen.getByRole('button', { name: '実装 標準 割り当てを編集' }));
+it.each(['ja', 'en'] as const)('explains each preset and the required save without changing policy on selection in %s', language => {
+  const change = setup(defaultPolicy(), language);
+  const ja = language === 'ja';
+  const presets = [
+    [ja ? '性能重視' : 'Performance', ja ? '各役割で覚え書きの強さが最大の候補を選び、同点ならモデル水準と候補順で決めます。' : 'Choose the strongest noted candidate for each role, breaking ties by model tier and candidate order.'],
+    [ja ? 'バランス' : 'Balanced', ja ? '既定の組み合わせに戻します。' : 'Restore the default combination.'],
+    [ja ? '節約' : 'Economy', ja ? '軽量モデルを標準の負荷にも使います。' : 'Use light models for standard workloads too.'],
+  ];
+  for (const [name, description] of presets) {
+    fireEvent.click(screen.getByRole('button', { name }));
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText(description).className).toBe('assignment-note');
+    expect(within(dialog).getByText(ja ? '確認して表に反映した後、試算して「割り当てを保存」で保存します。' : 'Confirm to update the table, then preview and save the policy.')).toBeTruthy();
+    expect(change).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole('button', { name: ja ? '取り消す' : 'Cancel' }));
+  }
+});
 
 it('omits Japanese descriptions and the same role names in assignments and graphs', () => {
   setup();
@@ -51,22 +68,22 @@ it('omits Japanese descriptions and the same role names in assignments and graph
   expect(screen.getAllByText('標準モデルを使用').length).toBeGreaterThan(0);
 });
 
-it.each(['ja', 'en'] as const)('omits descriptions of ordered fallback models with catalog names in %s', language => {
+it.each(['ja', 'en'] as const)('shows ordered fallback models with catalog names in %s', language => {
   const policy = defaultPolicy();
   const standard = readCandidates(policy, 'implement', 'standard');
   policy.roles.implement = { standard: [...standard, { executor: 'antigravity', model: 'gemini-3.8-flash-high', family: 'google', tier: 'high' }] };
   setup(policy, language);
-  expect(screen.queryByText(language === 'ja' ? '上限時やエラー時は Claude Opus に切り替え、さらに Gemini Flash' : 'On limits or errors, switch to Claude Opus, then Gemini Flash')).toBeNull();
+  expect(screen.getByText(language === 'ja' ? '上限時やエラー時: Claude Opus → Gemini Flash' : 'On limits or errors: Claude Opus → Gemini Flash')).toBeTruthy();
   expect(screen.queryByText(/\+\d+ 候補|\+\d+ candidates/)).toBeNull();
 });
 
-it('selects grouped catalog rows, preserves family and shows official provider marks without notes', () => {
+it('selects grouped catalog rows, preserves family and shows official provider marks with notes', () => {
   const policy = defaultPolicy(); policy.modelNotes[0].latest = true;
   const change = setup(policy); edit();
   const list = screen.getByRole('list', { name: '実装 標準 1 モデルの一覧' });
   for (const provider of ['Claude', 'Codex', 'Antigravity']) expect(within(list).getByText(provider)).toBeTruthy();
-  expect(within(list).queryByText('最新 · SWE-bench で最上位。')).toBeNull();
-  expect(within(list).queryByText('日本語の性能が高い。')).toBeNull();
+  expect(within(list).getByText('最新 · SWE-bench で最上位。')).toBeTruthy();
+  expect(within(list).getByText('日本語の性能が高い。')).toBeTruthy();
   const row = within(list).getByRole('button', { name: 'Claude Sonnet' });
   expect(row.querySelector('img')?.getAttribute('src')).toBe('/brand/claude.svg');
   expect(screen.getByLabelText('実装 標準 1 モデル').closest('details')).toHaveProperty('open', false);

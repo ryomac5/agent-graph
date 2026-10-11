@@ -1,11 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
-import { SettingsFields, SettingsSection } from '../../components/settings/SettingsFields.tsx';
+import { labelSetting, SettingsFields, SettingsSection } from '../../components/settings/SettingsFields.tsx';
 import { APPEARANCE_CHOICES, loadAppearance, saveAppearance, requestSettings, describeDecision,
   type Appearance, type PolicyPreview, type SettingsClient, type SettingsSnapshot, type SettingsStatus } from '../../lib/settings.ts';
 import { loadPreferences, NOTIFICATION_KINDS, notificationLabel, PREFERENCES_KEY, type NotificationPreferences } from '../../components/notifications/model.ts';
 import { ModelAssignments, type ModelCatalog } from './ModelAssignments.tsx';
 import './settings.css';
 
+const ERROR_TEXT: Record<string, string> = {
+  'Settings application failed': '設定の反映に失敗しました',
+  'Settings audit failed': '設定の記録に失敗しました',
+  'Settings unavailable': '設定を取得できません',
+  'Settings operation failed': '設定の操作に失敗しました',
+  'Invalid redaction pattern': '秘匿の正規表現が不正です',
+  'Duplicate key binding': 'キー操作が重複しています',
+};
 const REFRESH_MS = 1500;
 type FileStore = 'config' | 'policy' | 'project';
 export function SettingsPage({ client, language, onAppearance, policyOnly = false }: { policyOnly?: boolean; client: SettingsClient; language?: 'en' | 'ja'; onAppearance?(value: Appearance): void }) {
@@ -13,6 +21,7 @@ export function SettingsPage({ client, language, onAppearance, policyOnly = fals
   const lang = language ?? appearance.language;
   const ja = lang === 'ja';
   const text = (en: string, jp: string) => ja ? jp : en;
+  const displayError = (reason: string) => ja ? ERROR_TEXT[reason] ?? reason.replace(/^Invalid (.+)$/, (_, key: string) => key.split('.').map(part => labelSetting(part, 'ja')).join(' · ') + 'の値が不正です') : reason;
   const [settings, setSettings] = useState<SettingsSnapshot>();
   const [status, setStatus] = useState<SettingsStatus>();
   const [error, setError] = useState('');
@@ -96,8 +105,8 @@ export function SettingsPage({ client, language, onAppearance, policyOnly = fals
   }
   return <div className={policyOnly ? "assignment-settings settings-page" : "page settings-page"}>{!policyOnly && <header className="page-header"><div className="page-title"><p className="eyebrow">agent-graph</p><h1>{text('Settings', '設定')}</h1></div>
     <button className="btn btn-secondary" disabled={busy} onClick={() => void perform(async () => { dirty.current.clear(); setPreview(undefined); setSettings(await requestSettings(client, 'settings.read')); })}>{text('Reload settings', '設定を読み直す')}</button></header>}
-    {error && <p role="alert" className="banner banner-danger">{error}</p>}{notice && <p role="status" className="banner">{notice}</p>}
-    {Object.entries(settings?.errors ?? {}).map(([store, reason]) => <p key={store} role="alert" className="banner banner-warning">{store}: {reason}</p>)}
+    {error && <p role="alert" className="banner banner-danger">{displayError(error)}</p>}{notice && <p role="status" className="banner">{notice}</p>}
+    {Object.entries(settings?.errors ?? {}).map(([store, reason]) => <p key={store} role="alert" className="banner banner-warning">{text(store, ({ config: '個人設定', policy: '割り当て', project: 'プロジェクト' })[store] ?? store)}: {displayError(reason)}<small className="settings-note">{text('Previous valid settings remain active.', '前の有効な値で動き続けます。')}</small></p>)}
     {!settings ? <p>{text('Loading settings…', '設定を読み込み中…')}</p> : <>
     {!policyOnly && <SettingsSection title={text('Agents and models', 'エージェントとモデル')}>
       {fields('config', settings.config.agents, 'agents')}
@@ -105,6 +114,7 @@ export function SettingsPage({ client, language, onAppearance, policyOnly = fals
       {fields('config', settings.config.isolation, 'isolation')}
       <label><span><strong>{text('Confirm authentication switch for active conversations', '動いている会話の認証切り替えを確認')}</strong></span><input type="checkbox" checked={confirmation} onChange={event => setConfirmation(event.target.checked)}/></label>
       <label><span><strong>{text('Claude API key', 'Claude API キー')}</strong><small>{settings.apiKeyConfigured ? text('Configured', '設定済み') : text('Not configured', '未設定')}</small></span><input type="password" aria-label="Claude API key" autoComplete="new-password" value={apiKey} onChange={event => setApiKey(event.target.value)}/></label>
+      <p className="settings-note">{text('Stored in Keychain without redisplay and applied on the next launch.', 'Keychain に保存して再表示せず、次の起動から反映します。')}</p>
       <div className="button-row"><button className="btn btn-secondary" disabled={busy || !apiKey} onClick={() => { const value = apiKey; setApiKey(''); void perform(async () => { const result = await requestSettings<{ configured: boolean }>(client, 'settings.apiKey', { value }); setSettings(previous => previous && { ...previous, apiKeyConfigured: result.configured }); }); }}>{text('Store API key', 'API キーを保存')}</button>
       <button className="btn btn-ghost" disabled={busy || !settings.apiKeyConfigured} onClick={() => void perform(async () => { await requestSettings(client, 'settings.apiKey', { remove: true }); setSettings(previous => previous && { ...previous, apiKeyConfigured: false }); })}>{text('Remove API key', 'API キーを削除')}</button></div>
 

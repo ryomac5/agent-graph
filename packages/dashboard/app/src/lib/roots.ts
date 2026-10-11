@@ -141,9 +141,27 @@ export function orderSeries(state: ScreenState, ids: readonly string[]): string[
   const activity = new Map(ids.map(id => [id, conversationActivity(state, id)]));
   return ids.map((id, index) => ({ id, index })).toSorted((a, b) => activity.get(a.id)!.localeCompare(activity.get(b.id)!) || a.index - b.index).map(item => item.id);
 }
-/** 画面に出す役割。既定の general-purpose と subagent は何も伝えないので省く。 */
-export function shownRole(role: string): string { return ['general-purpose', 'subagent'].includes(role) ? '' : role; }
-/** 相手と役割の 1 行。「Claude Opus 5.5 · general-purpose」の形にする。 */
+export type ChildRole = 'research' | 'plan' | 'work' | 'review' | 'write' | 'other';
+/** 委譲の依頼を優先し、観測したエージェントの種別から同じ語彙へ写す。 */
+export function resolveChildRole(evidence: Row = {}, delegation?: Row): ChildRole {
+  const value = readText(readObject(delegation?.request).role ?? delegation?.role ?? evidence.agentType ?? evidence.role);
+  switch (value) {
+    case 'Explore': case 'claude-code-guide': case 'research': return 'research';
+    case 'Plan': case 'plan': return 'plan';
+    case 'general-purpose': case 'implement': case 'codex-exec': case 'work': return 'work';
+    case 'reviewer': case 'review': return 'review';
+    case 'doc-light': case 'doc-heavy': case 'document': case 'write': return 'write';
+    default: return 'other';
+  }
+}
+const ROLE_NAMES: Record<ChildRole, [string, string]> = {
+  research: ['Research', '調査'], plan: ['Plan', '計画'], work: ['Work', '作業'],
+  review: ['Review', 'レビュー'], write: ['Write', '文書'], other: ['Other', 'その他'],
+};
+export function shownRole(role: string, language = typeof document !== 'undefined' ? document.documentElement.lang : 'en'): string {
+  return ROLE_NAMES[role as ChildRole]?.[language === 'ja' ? 1 : 0] ?? (['general-purpose', 'subagent'].includes(role) ? '' : role);
+}
+/** 相手と役割の 1 行。「Claude Opus 5.5 · Work」の形にする。 */
 export function nodeLine(node: TreeNode): string {
   return [agentName(node.provider, node.model) || 'Agent', shownRole(node.role)].filter(Boolean).join(' · ');
 }
@@ -166,7 +184,7 @@ export function buildRootTree(root: Root, index: RootIndex): DelegationTree {
       const delegation = request ? index.requests.get(request) : undefined;
       const node: TreeNode = { id, kind: 'conversation', conversationId: id, run, label: '', attempts: [], children: [],
         provider: readText(conversation?.provider), model: readModel(run).model || readText(run?.model ?? conversation?.model ?? evidence.model),
-        role: readText(delegation?.role ?? evidence.role ?? evidence.agentType) || 'subagent', state: readText(run?.state ?? conversation?.state) || 'unknown' };
+        role: resolveChildRole(evidence, delegation), state: readText(run?.state ?? conversation?.state) || 'unknown' };
       // Claude の子は、結果を返して止まると待機に戻る。頼まれた仕事は終えているので、完了として見せる。
       if (node.provider === 'claude' && evidence.agentType !== undefined && node.state === 'idle') node.state = 'ended';
       node.label = nodeLine(node);
@@ -198,11 +216,11 @@ export function buildRootTree(root: Root, index: RootIndex): DelegationTree {
     }
     const existing = nodes.find(node => node.conversationId === conversationId && conversationId);
     const node: TreeNode = existing ?? { id: `delegation:${readText(delegation.id)}`, kind: 'delegation', conversationId: conversationId || undefined,
-      run, delegation, label: '', role: readText(delegation.role) || 'task', provider: readText(index.conversations.get(conversationId)?.provider ?? delegation.provider ?? assignment.executor),
+      run, delegation, label: '', role: resolveChildRole({}, delegation), provider: readText(index.conversations.get(conversationId)?.provider ?? delegation.provider ?? assignment.executor),
       model: readModel(run).model || readText(delegation.model ?? assignment.model), state: readText(run?.state ?? delegation.state) || 'unknown', children: [], attempts };
     node.delegation = delegation; node.attempts = [...attempts];
     if (run && !node.attempts.some(attempt => attempt.run_id === run.id)) node.attempts.push({ attempt: node.attempts.length + 1, run_id: run.id, state: run.state });
-    node.model ||= readText(delegation.model ?? assignment.model); node.role = readText(delegation.role) || node.role;
+    node.model ||= readText(delegation.model ?? assignment.model); node.role = readObject(delegation.request).role || delegation.role ? resolveChildRole({}, delegation) : node.role;
     node.label = nodeLine(node);
     for (const attempt of attempts) {
       const priorConversation = readText(index.runsById.get(readText(attempt.run_id))?.conversation_id);

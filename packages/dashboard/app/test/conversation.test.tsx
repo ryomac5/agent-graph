@@ -123,7 +123,7 @@ it('loads models from runner and sends model and effort using set_model', async 
   fireEvent.change(screen.getByRole('combobox', { name: 'Effort' }), { target: { value: 'high' } });
   fireEvent.click(screen.getByRole('button', { name: 'Apply model and effort' }));
   await waitFor(() => expect(command).toHaveBeenCalledWith('set_model', { runId: 'r', model: { model: 'model-b', effort: 'high' } }));
-  expect(screen.queryByTitle('Codex model and effort changes apply from the next turn.')).toBeNull();
+  expect(screen.getByTitle('Codex model and effort changes apply from the next turn.')).toBeTruthy();
 });
 
 it('hides Codex model and effort changes and blocks sending during an active turn', async () => {
@@ -132,7 +132,7 @@ it('hides Codex model and effort changes and blocks sending during an active tur
   expect(screen.queryByRole('combobox', { name: 'Effort' })).toBeNull();
   expect(screen.queryByRole('button', { name: 'Apply model and effort' })).toBeNull();
   expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
-  expect(screen.queryByTitle('Codex controls are available after the active turn ends.')).toBeNull();
+  expect(screen.getByTitle('Codex controls are available after the active turn ends.')).toBeTruthy();
 });
 
 it('sends only on Cmd+Enter, preserves newlines on Enter and rejects composing input', async () => {

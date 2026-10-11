@@ -10,7 +10,6 @@
 .diff-sign { flex: 0 0 1ch; }
 .diff-code { flex: 1; min-width: 12ch; white-space: pre; font: var(--type-mono); padding: 0; }
 .diff-content .chip { font-family: var(--font); margin-left: var(--space-2); }
-.diff-folded { padding: var(--space-3); font: var(--type-mono); }
 .diff-file { overflow: hidden; min-width: 0; border: 0; border-radius: 0; background: var(--bg-0); }
 .diff-file-header .btn { overflow-wrap: anywhere; white-space: normal; margin-right: auto; font: var(--type-mono); }
 .diff-stat { font: var(--type-mono); }

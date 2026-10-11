@@ -157,34 +157,79 @@ it('uses accessible input borders separately from decorative separators', () => 
   expect(conversation.match(/\.composer-box:focus-within\s*\{([^}]+)\}/)![1]).toContain('outline: 2px solid var(--focus)');
 });
 
+function readChannels(colour: string): number[] {
+  if (colour.startsWith('#')) return colour.slice(1).match(/../g)!.map(channel => parseInt(channel, 16));
+  expect(colour).toMatch(/^rgb\(/);
+  return colour.match(/[\d.]+/g)!.map(Number);
+}
+function calculateRenderedContrast(element: Element, tokens: Map<string, string>): number {
+  const view = element.ownerDocument.defaultView!;
+  const computed = view.getComputedStyle(element);
+  let opacity = 1;
+  let background = readColour(tokens, '--bg-0');
+  let foundBackground = false;
+  for (let parent: Element | null = element; parent; parent = parent.parentElement) {
+    const style = view.getComputedStyle(parent);
+    opacity *= Number(style.opacity || 1);
+    if (!foundBackground && style.backgroundColor.startsWith('rgb(')) {
+      background = style.backgroundColor;
+      foundBackground = true;
+    }
+  }
+  const backdrop = readChannels(background);
+  const foreground = readChannels(computed.color).map((channel, index) => Math.round(channel * opacity + backdrop[index] * (1 - opacity)));
+  const toHex = (channels: number[]) => '#' + channels.map(channel => channel.toString(16).padStart(2, '0')).join('');
+  const luminances = [foreground, backdrop].map(channels => calculateLuminance(toHex(channels)));
+  return (Math.max(...luminances) + 0.05) / (Math.min(...luminances) + 0.05);
+}
+function withComputedStyles(tokens: Map<string, string>, markup: string, check: (document: Document) => void): void {
+  const frame = document.createElement('iframe');
+  document.body.append(frame);
+  const target = frame.contentDocument!;
+  const style = target.createElement('style');
+  // jsdom の変数と hover の制限を補い、カスケードと継承は CSSOM で計算する。
+  const resolve = (value: string): string => value.replace(/var\((--[\w-]+)\)/g, (_, token: string) => resolve(tokens.get(token)!));
+  style.textContent = resolve([shared, ...['components/activity.css', 'pages/inbox/inbox.css', 'pages/conversation/conversation.css']
+    .map(path => readFileSync('app/src/' + path, 'utf8'))].join('\n').replace(/:root[^{}]*\{[^}]*\}/g, '')).replace(/:hover/g, '[data-hover]');
+  target.head.append(style);
+  target.body.innerHTML = markup;
+  try { check(target); } finally { frame.remove(); }
+}
+
 it.each([['light', light], ['dark', dark]] as const)('keeps disabled send button contrast in %s', (theme, tokens) => {
-  const rule = shared.match(/\.btn-primary:disabled\s*\{([^}]+)\}/)![1];
-  const foreground = rule.match(/color:\s*var\((--[\w-]+)\)/)![1];
-  const background = rule.match(/background:\s*var\((--[\w-]+)\)/)![1];
-  expect(foreground).toBe('--fg-4');
-  expect(calculateContrast(tokens, foreground, background), theme).toBeGreaterThanOrEqual(SECONDARY_CONTRAST);
+  withComputedStyles(tokens, '<button class="btn btn-primary" disabled>Send</button><button class="btn btn-primary">Send</button>', target => {
+    const disabled = target.querySelector('button:disabled')!;
+    expect(calculateRenderedContrast(disabled, tokens), theme).toBeGreaterThanOrEqual(SECONDARY_CONTRAST);
+    const view = target.defaultView!;
+    expect(view.getComputedStyle(disabled).backgroundColor).not.toBe(view.getComputedStyle(target.querySelector('button:not(:disabled)')!).backgroundColor);
+  });
 });
 
-it('distinguishes disabled inputs and settled rows without dimming readable row text', () => {
-  for (const selector of ['input', 'select', 'textarea']) {
-    expect(shared.match(new RegExp(`${selector}:disabled\\s*\\{([^}]+)\\}`))![1]).toContain('opacity: .6');
-  }
-  const activity = readFileSync('app/src/components/activity.css', 'utf8');
-  const inbox = readFileSync('app/src/pages/inbox/inbox.css', 'utf8');
-  const conversation = readFileSync('app/src/pages/conversation/conversation.css', 'utf8');
-  for (const [css, selector] of [
-    [activity, '.activity-line.is-stopped > :not(.row-actions)'],
-    [activity, '.activity-row.is-stopped > .cell'],
-    [activity, '.activity-item.is-stopped > :not(.delegation-fold)'],
-    [activity, '.delegation-line.is-stopped > .delegation-line-row'],
-    [inbox, '.approval-row.sent'],
-    [conversation, '.timeline-approval.is-settled .approval-request'],
-  ]) {
-    const rule = css.split('\n').find(line => line.startsWith(selector + ' {'))!;
-    expect(rule).toContain('color: var(--fg-3)');
-    expect(rule).not.toContain('opacity:');
-  }
-  expect(activity).not.toContain('.activity-row.is-stopped:hover > .cell');
-  expect(activity).toContain('.is-stopped :is(.activity-name, .activity-excerpt, .agent-model, .cell-elapsed, .cell-changes) { color: var(--fg-3); }');
-  expect(conversation).not.toMatch(/\.composer-(?:box textarea|controls select):disabled\s*\{[^}]*opacity:/);
+it.each([['light', light], ['dark', dark]] as const)('distinguishes disabled inputs and keeps settled row text readable in %s', (theme, tokens) => {
+  const rows = [
+    '<div class="activity-line is-stopped"><span class="activity-name">Name</span><span class="activity-excerpt">Excerpt</span><span class="agent-model">Model</span><span class="cell-elapsed">Elapsed</span><span class="cell-changes">Changes</span></div>',
+    '<div class="activity-row is-stopped"><div class="cell"><span class="activity-name">Name</span></div></div>',
+    '<div class="activity-item is-stopped"><span class="activity-name">Name</span></div>',
+    '<div class="delegation-line is-stopped"><div class="delegation-line-row"><span class="delegation-line-summary">Summary</span><span class="delegation-line-title">Title</span></div></div>',
+    '<div class="approval-row sent"><span>Approval</span></div>',
+    '<div class="timeline-approval is-settled"><div class="approval-request"><span>Request</span></div></div>',
+  ];
+  withComputedStyles(tokens, '<input disabled><select disabled><option>Model</option></select><textarea disabled></textarea><div class="composer-box"><textarea disabled></textarea></div><div class="composer-controls"><select disabled><option>Model</option></select></div>' + rows.join(''), target => {
+    const view = target.defaultView!;
+    for (const input of target.querySelectorAll('input, select, textarea')) {
+      const opacity = Number(view.getComputedStyle(input).opacity);
+      expect(opacity, theme + ' ' + input.tagName).toBeGreaterThan(0);
+      expect(opacity, theme + ' ' + input.tagName).toBeLessThan(1);
+    }
+    const expected = readChannels(readColour(tokens, '--fg-3'));
+    for (const row of target.querySelectorAll('.is-stopped, .approval-row, .timeline-approval')) {
+      for (const hover of [false, true]) {
+        row.toggleAttribute('data-hover', hover);
+        for (const text of row.querySelectorAll('span')) {
+          expect(readChannels(view.getComputedStyle(text).color), theme + ' ' + row.className).toEqual(expected);
+          expect(calculateRenderedContrast(text, tokens), theme + ' ' + row.className).toBeGreaterThanOrEqual(SECONDARY_CONTRAST);
+        }
+      }
+    }
+  });
 });

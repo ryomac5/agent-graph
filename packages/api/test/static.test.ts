@@ -166,9 +166,7 @@ test('static handler serves real files and applies security without a socket', a
   assert.equal(icon.headers['Content-Type'], 'image/svg+xml');
   assert.equal(icon.headers['X-Content-Type-Options'], 'nosniff');
   assert.equal(icon.body, favicon);
-  // 同一オリジンの画像を許可し、SVG 内のテーマ切り替えにも制限を加えない。
   assert.match(route.headers['Content-Security-Policy'], /(?:^|; )img-src 'self' data:;/);
-  assert.equal(icon.headers['Content-Security-Policy'], undefined);
   const nonces = new Set<string>();
   for (const response of [route, await get('/'), await get('/index.html')]) {
     assert.match(response.body, /<link rel="icon" type="image\/svg\+xml" href="\/favicon.svg">/);

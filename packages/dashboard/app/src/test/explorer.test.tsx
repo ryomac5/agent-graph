@@ -85,6 +85,15 @@ const row = (element: HTMLElement) => element.querySelector<HTMLElement>(':scope
 const location = () => screen.getByTestId('location').textContent;
 
 describe('Files explorer', () => {
+  it.each(['connecting', 'reconnecting'] as const)('shows a connection warning while %s and clears it on connection', async connection => {
+    const { target } = setup();
+    await screen.findByRole('tree', { name: 'Files' });
+    act(() => target.setConnection(connection));
+    const warning = screen.getByText('Waiting for the connection. File requests are sent once connected.');
+    expect(warning.getAttribute('role')).toBe('status');
+    act(() => target.setConnection('connected'));
+    expect(screen.queryByText('Waiting for the connection. File requests are sent once connected.')).toBeNull();
+  });
   it('renders the first level with folders, files, icons and tree roles for the resolved project id', async () => {
     const { client } = setup();
     await screen.findByRole('tree', { name: 'Files' });

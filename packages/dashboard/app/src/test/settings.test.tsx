@@ -20,6 +20,7 @@ it.each(['en', 'ja'] as const)('restores key storage and last-valid-value inform
   const ja = language === 'ja';
   expect(await screen.findByText(ja ? '個人設定: 設定の反映に失敗しました' : 'config: Settings application failed')).toBeTruthy();
   expect(screen.getByText(ja ? '前の有効な値で動き続けます。' : 'Previous valid settings remain active.').tagName).toBe('SMALL');
+  expect(screen.getByText(ja ? 'api の再起動で反映します。旧 daemon のポートは使えません。' : 'Applies after API restart. The legacy daemon port is not allowed.').className).toBe('settings-note');
   expect(screen.getByText(ja ? 'Keychain に保存して再表示せず、次の起動から反映します。' : 'Stored in Keychain without redisplay and applied on the next launch.')).toBeTruthy();
 });
 it('translates policy headings, nested names and add-constraint order in Japanese', async () => {
@@ -218,7 +219,7 @@ it('discards a policy preview if the policy changes before its response', async 
 it('edits weighted assignments, candidate order, criteria and model notes then saves the previewed policy', async () => {
   const f = createFixture(); render(<SettingsPage client={f.client}/>);
   const assignments = await screen.findByRole('region', { name: 'Model assignment settings' });
-  expect(within(assignments).getAllByText(/On limits or errors:/).length).toBeGreaterThan(0);
+  expect(within(assignments).getAllByText(/On limits or errors:/)).toHaveLength(6);
   fireEvent.click(screen.getByRole('button', { name: 'Implementation Heavy Edit assignment' }));
   expect(within(assignments).getByText('Top performance on SWE-bench.')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Implementation Edit criteria' }));

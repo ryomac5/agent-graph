@@ -287,9 +287,10 @@ export function useFileExplorer({ client, target = store, project, enabled = tru
   const selectedEntry = rows.find(row => row.entry.path === selectedPath)?.entry
     ?? (dirs[parentPath(selectedPath)]?.status === 'loaded' ? (dirs[parentPath(selectedPath)] as { entries: FileEntry[] }).entries.find(entry => entry.path === selectedPath) : undefined);
   const worktreeValue = worktree ?? (worktrees.status === 'loaded' ? worktrees.result.worktree : '');
+  const offline = state.connection === 'connecting' || state.connection === 'reconnecting';
   const activePaths = (state.projection.runs ?? []).filter(run => isRunning(String(run.state)) || ['waiting_approval', 'waiting_input'].includes(String(run.state))).map(run => worktreeLabel(run)?.full).filter((path): path is string => Boolean(path));
   return { client, revision, worktree, project, projectId, activePaths, dirs, rows, current, needle, query, setQuery, selectedPath, selectedEntry, shown, root, worktrees, worktreeValue,
-    wantedWorktree, unknownWorktree, items, onKeyDown, activate, move, setParams,
+    wantedWorktree, unknownWorktree, offline, items, onKeyDown, activate, move, setParams,
     selectWorktree: (value: string) => setParams(next => next.set('worktree', value)),
     closeFile: () => { if (location.key !== 'default') navigate(-1); else navigate(`/p/${encodeURIComponent(project)}`); },
     refresh: () => { cache.current.clear(); setRevision(value => value + 1); } };
@@ -372,11 +373,12 @@ export function FileTreePanel({ explorer, actions, language = 'en', compact = fa
   </section>;
 }
 
-/** 作業ツリーの欠落と取得エラーを知らせる。 */
+/** 作業ツリーの欠落と接続待ちを知らせる。 */
 export function FileNotices({ explorer }: { explorer: FileExplorer }) {
-  const { unknownWorktree, wantedWorktree, worktrees } = explorer;
-  if (!unknownWorktree && worktrees.status !== 'error') return null;
+  const { offline, unknownWorktree, wantedWorktree, worktrees } = explorer;
+  if (!offline && !unknownWorktree && worktrees.status !== 'error') return null;
   return <div className="workspace-notices">
+    {offline && <p role="status" className="banner banner-unknown"><Icon name="unknown" size={14}/>Waiting for the connection. File requests are sent once connected.</p>}
     {unknownWorktree && <p role="alert" className="banner banner-warning"><Icon name="alert" size={14}/>Worktree {wantedWorktree} is not part of this project. Showing the project root.</p>}
     {worktrees.status === 'error' && <p role="alert" className="banner banner-danger"><Icon name="alert" size={14}/>Worktrees unavailable: {worktrees.error}</p>}
   </div>;

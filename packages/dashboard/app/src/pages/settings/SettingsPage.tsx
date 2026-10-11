@@ -156,6 +156,7 @@ export function SettingsPage({ client, language, onAppearance, policyOnly = fals
         <button className="btn btn-secondary" disabled={busy || status.rebuild.state === 'running'} onClick={() => void perform(async () => { await requestSettings(client, 'settings.rebuild'); setStatus(previous => previous && { ...previous, rebuild: { state: 'running', completed: 0, total: 0 } }); })}>{text('Rebuild ledger projection', '台帳の投影を再構築')}</button>
         <dl className="fields">{Object.entries(status.logs).map(([name, path]) => <div key={name}><dt>{name} {text('log', 'ログ')}</dt><dd><code>{path}</code> <button className="btn btn-link" onClick={() => void perform(async () => { await navigator.clipboard.writeText(path); setNotice(text('Log path copied', 'ログの場所をコピーしました')); })}>{text('Copy path', '場所をコピー')}</button></dd></div>)}</dl></> : <p>{text('Status unknown', '状態は不明です')}</p>}
       {fields('config', settings.config.dashboard, 'dashboard')}
+      <p className="settings-note">{text('Applies after API restart. The legacy daemon port is not allowed.', 'api の再起動で反映します。旧 daemon のポートは使えません。')}</p>
     </SettingsSection>}
     {!policyOnly && <SettingsSection title={text('Keyboard shortcuts', 'キー操作')}>
       {fields('config', settings.config.keys, 'keys')}

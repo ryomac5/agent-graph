@@ -2,11 +2,9 @@
 .explorer-header { gap: var(--space-1); padding-right: var(--space-2); }
 .explorer-worktree-row { flex: none; display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3) 0; color: var(--fg-3); }
 .explorer-filter { flex: none; display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); color: var(--fg-3); border-bottom: var(--border); }
-.explorer-hint { padding: var(--space-1) var(--space-3) 0; font: var(--type-meta); }
 .explorer-scroll-space { flex: 1; min-height: 26px; overflow: hidden; }
 .explorer-scroll { height: 100%; overflow: auto; padding: 0; }
 .explorer-inline { margin: var(--space-3); }
-.explorer-note { padding: var(--space-2) var(--space-4); font: var(--type-ui); }
 .file-tree { list-style: none; margin: 0; padding: 0; }
 .file-tree ul { list-style: none; margin: 0; padding: 0; }
 .file-tree li[role='treeitem'] { outline: none; }

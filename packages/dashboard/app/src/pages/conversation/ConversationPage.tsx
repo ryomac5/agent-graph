@@ -549,6 +549,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     ?? models.find(item => modelName(value) !== '' && [item.displayName, `Claude ${item.displayName}`].includes(modelName(value)))?.model ?? value;
   const selectedModel = matchModel(model);
   const dirty = Boolean(model) && (selectedModel !== matchModel(currentModel) || effort !== currentEffort);
+  const hint = provider === 'codex' ? codexActive ? 'activeCodex' : 'nextTurn' : 'claudeEffort';
   const participants = resolveParticipants(state, conversationId, { user: t('user'), assistant: t('assistant'), parent: t('parentAgent') });
   const agentSender = senderOf({ role: 'assistant' }, participants);
   const historyFormat = readText(conversation.history_format);
@@ -668,7 +669,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
           if (!files.length) return;
           event.preventDefault();
           if (!pending && connected) attachments.accept(files, terminalConversation);
-        }}>
+        }} title={[provider === 'codex' ? t(hint) : '', engaged && (!model || !cwd.trim()) ? t('launchReady') : ''].filter(Boolean).join(' ')}>
         {attachments.items.length > 0 && <div className="composer-attachments">
           {attachments.items.map(item => <div className="composer-attachment" key={item.key}>
             <img src={item.url || undefined} alt={item.file.name}/>
@@ -689,7 +690,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
               }}><option value="">{models.length ? t('chooseModel') : t('noModels')}</option>
                 {model && !models.some(item => item.model === selectedModel) && <option value={model} disabled>{modelName(model) || model}</option>}
                 {models.map(item => <option key={item.model} value={item.model}>{language === 'ja' && item.displayName === 'Default (recommended)' ? t('defaultModel') : item.displayName}</option>)}</select><Icon name="chevronDown" size={16}/></span>
-              <span className="composer-select"><select className="select-sm" aria-label={t('effort')} title={t('effort')} value={effort}
+              <span className="composer-select"><select className="select-sm" aria-label={t('effort')} title={provider === 'codex' ? t('effort') : t('claudeEffort')} value={effort}
                 disabled={!connected || pending || provider !== 'codex'} onChange={event => setEffort(event.target.value)}>
                 <option value="">{t('defaultEffort')}</option>{[...new Set([...CODEX_EFFORTS, ...(effort ? [effort] : [])])].map(value => <option key={value} value={value}>{effortLabel(value, language)}</option>)}
               </select><Icon name="chevronDown" size={16}/></span>

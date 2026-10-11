@@ -80,7 +80,7 @@ it('styles model and effort selectors as ghost controls with matching noninterac
   render(<MemoryRouter><ConversationPage conversationId="c" target={setup()} client={client} language="ja"/></MemoryRouter>);
   await screen.findByRole('option', { name: '既定' });
   for (const name of ['モデル', '思考の深さ']) {
-    expect(screen.getByRole('combobox', { name }).getAttribute('title')).toBe(name);
+    expect(screen.getByRole('combobox', { name }).getAttribute('title')).toBe(name === '思考の深さ' ? '思考の深さの変更は次の会話から効きます。' : name);
     const select = screen.getByRole('combobox', { name });
     const wrapper = select.closest('.composer-select')!;
     expect(wrapper.querySelector('svg')?.getAttribute('width')).toBe('16');
@@ -174,12 +174,12 @@ it('excludes internal records, sorts paths and omits zero change counts', () => 
   expect(screen.getByText('deleted').closest('summary')!.textContent).toContain('−2');
 });
 
-it('omits the back row in roots and omits Codex hints from the composer title with the badge beside the heading', async () => {
+it('omits the back row in roots and retains the Codex composer title with the badge beside the heading', async () => {
   const target = setup([], { conversations: [{ id: 'c', name: 'Root', project: 'p', provider: 'codex', origin: 'managed' }] });
   render(<MemoryRouter><WorkspacePage project="p" target={target} client={client} language="ja"/></MemoryRouter>);
   expect(document.querySelector('.root-back-placeholder')).toBeNull();
   expect(document.querySelector('.composer-hint')).toBeNull();
-  expect(document.querySelector('.composer-box')!.getAttribute('title')).toBeNull();
+  expect(document.querySelector('.composer-box')!.getAttribute('title')).toBe('Codex のモデルの変更は次の返答から効きます。');
   expect(screen.getByRole('tab', { name: 'Root' }).querySelector('.status-idle')).toBeTruthy();
   expect(document.querySelector('.workbench-body .conv-header')).toBeNull();
   const css = readFileSync(resolve(process.cwd(), 'app/src/pages/conversation/conversation.css'), 'utf8');

@@ -86,7 +86,8 @@ it('shows API validation and manual edit errors while retaining edited values', 
   const f = createFixture(); f.value.errors.config = 'Invalid redaction pattern';
   const original = f.command.getMockImplementation()!;
   f.command.mockImplementation(async (name, payload) => name === 'settings.write' ? { type: 'ack', cmd_id: name, ok: false, error: 'Duplicate key binding', result: undefined } : original(name, payload));
-  render(<SettingsPage client={f.client}/>); await screen.findByText(/Previous valid settings remain active/);
+  render(<SettingsPage client={f.client}/>); await screen.findByText(/Invalid redaction pattern/);
+  expect(screen.queryByText(/Previous valid settings remain active/)).toBeNull();
   fireEvent.change(screen.getByLabelText('keys · command'), { target: { value: 'j' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save personal settings' })); await screen.findByText('Duplicate key binding');
   expect(screen.getByLabelText('keys · command')).toHaveProperty('value', 'j'); expect(screen.queryByText('Saved')).toBeNull();
@@ -180,9 +181,9 @@ it('discards a policy preview if the policy changes before its response', async 
 it('edits weighted assignments, candidate order, criteria and model notes then saves the previewed policy', async () => {
   const f = createFixture(); render(<SettingsPage client={f.client}/>);
   const assignments = await screen.findByRole('region', { name: 'Model assignment settings' });
-  expect(within(assignments).getAllByText(/On limits or errors, switch to/)).toHaveLength(6);
+  expect(within(assignments).queryByText(/On limits or errors, switch to/)).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Implementation Heavy Edit assignment' }));
-  expect(within(assignments).getByText('Top performance on SWE-bench.')).toBeTruthy();
+  expect(within(assignments).queryByText('Top performance on SWE-bench.')).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Implementation Edit criteria' }));
   fireEvent.click(within(screen.getByRole('group', { name: 'Implementation Heavy 1 Effort' })).getByRole('button', { name: 'max' }));
   fireEvent.change(screen.getByLabelText('Implementation Heavy Weight criteria'), { target: { value: 'Changes across packages' } });
@@ -289,7 +290,7 @@ it('shows catalog display names and efforts in assignment buttons even before or
   expect(document.querySelector('.assignment-settings.settings-page')).toBeTruthy();
 });
 
-it('closes the editor with Escape or outside presses and counts only explicit fallback candidates', async () => {
+it('closes the editor with Escape or outside presses and omits fallback descriptions', async () => {
   const f = createFixture(); render(<SettingsPage client={f.client}/>);
   const assignments = await screen.findByRole('region', { name: 'Model assignment settings' });
   const advisor = screen.getByRole('button', { name: 'Advisor Light Edit assignment' });
@@ -305,7 +306,7 @@ it('closes the editor with Escape or outside presses and counts only explicit fa
   fireEvent.click(advisor);
   fireEvent.click(screen.getByLabelText('Advisor Light Add fallback model'));
   fireEvent.click(within(screen.getByRole('list', { name: 'Advisor Light 2 Available models' })).getByRole('button', { name: 'opus' }));
-  expect(advisor.closest('td')?.querySelector('.assignment-count')?.textContent).toBe('On limits or errors, switch to opus');
+  expect(advisor.closest('td')?.querySelector('.assignment-count')).toBeNull();
   fireEvent.click(screen.getByLabelText('Advisor Light 2 Remove'));
   expect(advisor.closest('td')?.querySelector('.assignment-count')).toBeNull();
   fireEvent.pointerDown(within(assignments).getByRole('heading'));
@@ -317,18 +318,17 @@ it('closes the editor with Escape or outside presses and counts only explicit fa
   expect(screen.queryByRole('button', { name: 'Advisor Standard Use standard model' })).toBeNull();
 });
 
-it('keeps weight criteria in one role summary, edits each band inline and leaves unweighted roles clear', async () => {
+it('omits weight criteria summaries and keeps each band editable', async () => {
   const f = createFixture(); render(<SettingsPage client={f.client} language="ja"/>);
   await screen.findByRole('region', { name: 'モデル割り当て設定' });
   expect(screen.queryByRole('button', { name: 'メインエージェント 基準を編集' })).toBeNull();
   const edit = screen.getByRole('button', { name: '実装 基準を編集' });
-  const summary = edit.closest('th')!.querySelector('.assignment-criteria-summary')!;
-  expect(summary.textContent).toContain('1 ファイルの小さな直し');
+  expect(edit.closest('th')!.querySelector('.assignment-criteria-summary')).toBeNull();
   fireEvent.click(edit);
   fireEvent.change(screen.getByLabelText('実装 軽量 重さの基準'), { target: { value: '小さな変更' } });
   fireEvent.change(screen.getByLabelText('実装 標準 重さの基準'), { target: { value: '機能の追加' } });
   fireEvent.change(screen.getByLabelText('実装 高負荷 重さの基準'), { target: { value: '設計の変更' } });
-  expect(summary.textContent).toBe('小さな変更 · 機能の追加 · 設計の変更');
+  expect(edit.closest('th')!.querySelector('.assignment-criteria-summary')).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: '完了' }));
   expect(screen.queryByLabelText('実装 軽量 重さの基準')).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: '割り当てを試算' }));
@@ -339,7 +339,7 @@ it('keeps weight criteria in one role summary, edits each band inline and leaves
   expect(save.patch.criteria.implement).toEqual({ light: '小さな変更', standard: '機能の追加', heavy: '設計の変更' });
 });
 
-it('selects catalog models with latest and strength notes next to their display names', async () => {
+it('selects catalog models without latest and strength descriptions', async () => {
   const f = createFixture();
   const original = f.command.getMockImplementation()!;
   f.value.policy.modelNotes[0].latest = true;
@@ -348,8 +348,8 @@ it('selects catalog models with latest and strength notes next to their display 
   await screen.findByRole('button', { name: 'Implementation Standard Edit assignment' });
   fireEvent.click(screen.getByRole('button', { name: 'Implementation Standard Edit assignment' }));
   const choices = await screen.findByRole('list', { name: 'Implementation Standard 1 Available models' });
-  const astra = within(choices).getByRole('button', { name: 'GPT-6 Astra Latest · Top performance on SWE-bench.' });
-  expect(astra.querySelector('small')?.textContent).toBe('Latest · Top performance on SWE-bench.');
+  const astra = within(choices).getByRole('button', { name: 'GPT-6 Astra' });
+  expect(astra.querySelector('small')).toBeNull();
   fireEvent.click(within(choices).getByRole('button', { name: 'GPT-6.1 Sol' }));
   expect(screen.getByLabelText('Implementation Standard 1 Model')).toHaveProperty('value', 'gpt-6.1-sol');
   fireEvent.keyDown(document, { key: 'Escape' });
@@ -415,4 +415,17 @@ it('retains only unfinished provider diffs after an apply failure so retry does 
   await screen.findByText('Applied');
   const calls = f.command.mock.calls.filter(([name]) => name === 'settings.applyProvider').map(([, payload]) => (payload as { provider: string }).provider);
   expect(calls).toEqual(['claude', 'codex', 'codex', 'antigravity']);
+});
+
+it.each(['en', 'ja'] as const)('renders settings without explanatory paragraphs or field hints in %s', async language => {
+  const f = createFixture();
+  const { container } = render(<SettingsPage client={f.client} language={language}/>);
+  await screen.findByRole('region', { name: language === 'ja' ? 'エージェントとモデル' : 'Agents and models' });
+  expect(container.querySelector('.page-subtitle')).toBeNull();
+  expect(container.querySelector('.settings-section header p, .settings-section header code')).toBeNull();
+  expect(container.querySelector('.assignment-note, .assignment-role-description, .assignment-count, .assignment-criteria-summary')).toBeNull();
+  expect(container.textContent).not.toContain(language === 'ja' ? '次の実行から反映します。' : 'Applies to the next execution.');
+  expect(container.textContent).not.toContain(language === 'ja' ? 'このブラウザで即座に反映します。' : 'Applies immediately to this browser.');
+  fireEvent.click(screen.getByRole('button', { name: language === 'ja' ? '性能重視' : 'Performance' }));
+  expect(screen.getByRole('dialog').querySelector('.assignment-note')).toBeNull();
 });

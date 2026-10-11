@@ -57,7 +57,7 @@ function FileDiff({ file, layout, attribution, evidenceUrl, selection, onSelectL
       {layout === 'split' && <thead><tr><th>Before</th><th>After</th></tr></thead>}
       <tbody>{layout === 'unified' ? file.lines.map((line, index) => <tr key={index}>{cell(line)}</tr>) : pairLines(file.lines).map(([old, next], index) =>
         <tr key={index}>{old?.kind === 'meta' ? <td colSpan={2} className="diff-meta"><code>{old.text}</code></td> : <>{cell(old, 'old')}{cell(next, 'new')}</>}</tr>)}</tbody>
-    </table></div> : <p className="diff-folded muted-text">{file.lines.length > LARGE_FILE_LINES ? 'Large file collapsed initially.' : 'File collapsed.'} Expand to view {file.lines.length} lines.</p>}
+    </table></div> : null}
   </article>;
 }
 export function DiffView(props: DiffViewProps) {

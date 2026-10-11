@@ -128,7 +128,7 @@ function AgentChangesPage({ client, target = store, project, artifactId }: Chang
         <option value="">Base</option>{artifacts.filter(row => family.has(readText(row.id)) && row.id !== id).map(row => <option key={readText(row.id)} value={readText(row.id)}>Version {String(row.version)} · {readText(row.id)}</option>)}</select></label>
       <div className="button-row" role="group" aria-label="Diff layout">{(['unified', 'split'] as const).map(value => <button key={value} className="btn btn-secondary btn-sm" aria-pressed={layout === value}
         onClick={() => setLayout(value)}>{value === 'unified' ? 'Unified' : 'Split'}</button>)}</div></div>}
-    {!artifact ? <div className="empty-state"><Icon name="diff" size={22}/><h2>No changes</h2><p>Changes appear when agents edit files.</p></div> :
+    {!artifact ? <div className="empty-state"><Icon name="diff" size={22}/><h2>No changes</h2></div> :
       <div className="changes-columns"><aside className="changes-files" aria-label="Files"><h2>Files <span className="count-pill">{files.length}</span></h2>
         <ul>{files.map(file => <li key={file.path}><button className="changes-file-button" aria-pressed={selectedFile === file.path} onClick={() => { setSelectedFile(file.path); setCompareId(''); }}><Icon name="file" size={14}/><span>{file.path}</span>
           <span className="diff-stat">+{file.additions} −{file.deletions}</span></button>
@@ -139,7 +139,7 @@ function AgentChangesPage({ client, target = store, project, artifactId }: Chang
           <p>{attribution === 'unknown' ? 'Changes whose author could not be identified' : `Attribution: ${attribution}`}</p>
           <AppLink className="btn btn-link" to={`/c/${encodeURIComponent(readText(state.projection.runs?.find(row => row.id === artifact.run_id)?.conversation_id))}`}>Open conversation</AppLink></details></aside>
         <section className="changes-diff" aria-label="Difference">
-          {compare ? <><h2>Patch comparison · Version {String(compare.version)} → {String(artifact.version)}</h2><p className="muted-text">Comparing saved patch text. Switch to Base commit to comment on artifact lines.</p>
+          {compare ? <><h2>Patch comparison · Version {String(compare.version)} → {String(artifact.version)}</h2>
             {comparisonFiles ? comparisonFiles.length ? <DiffView worktree={runPlace} key={`${compare.id}:${id}`} files={comparisonFiles} layout={layout} attribution="unknown" evidenceUrl={evidenceUrl}/> : <p>No patch changes.</p> : <p>Saved diff unavailable for comparison.</p>}</>
             : typeof artifact.diff !== 'string' ? <p className="chip chip-inferred">Saved diff unavailable. Content may not have been retained.</p>
               : files.length ? <DiffView worktree={runPlace} key={id} files={selectedFile ? files.filter(file => file.path === selectedFile) : files} layout={layout} attribution={attribution} evidenceUrl={evidenceUrl} selection={activeSelection} selectedFile={selectedFile} onSelectLine={selectLine} fileHref={fileHref}/>
@@ -147,7 +147,7 @@ function AgentChangesPage({ client, target = store, project, artifactId }: Chang
           {selectedFile && !compare && <button className="btn btn-ghost btn-sm" onClick={() => setSelectedFile('')}>Show all files</button>}
         </section>
         <aside className="changes-review" aria-label="Findings and verification">
-          <section className="review-section"><h2>Comments</h2><p className="muted-text">Select a diff line. Shift-select to extend a range.</p>
+          <section className="review-section"><h2>Comments</h2>
             {activeSelection && <form onSubmit={event => { event.preventDefault(); const location = activeSelection;
               void command('review.add_finding', { artifactId: id, file: location.file, side: location.side, startLine: location.startLine, endLine: location.endLine, body: body.trim(), severity }, () => { setBody(''); setSelection(undefined); }); }}>
               <p>{activeSelection.file} · {activeSelection.side} · {activeSelection.startLine}–{activeSelection.endLine}</p>

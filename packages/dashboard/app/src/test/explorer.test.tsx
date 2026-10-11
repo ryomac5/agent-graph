@@ -325,7 +325,7 @@ describe('Files explorer', () => {
     fireEvent.click(row(item('huge.log')));
     expect(await screen.findByText('File too large to display')).toBeTruthy();
     expect(screen.getByText('Size: 1.5 MiB (1,572,864 bytes)')).toBeTruthy();
-    expect(screen.getByText('Files over 1.0 MiB are not shown.')).toBeTruthy();
+    expect(screen.queryByText('Files over 1.0 MiB are not shown.')).toBeNull();
   });
 
   it('moves through the tree with the keyboard', async () => {

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { App } from '../App.tsx';
+import { dictionaries } from '../lib/i18n.ts';
 import { createStore } from '../lib/store.ts';
 let dark = false;
 let change: (() => void) | undefined;
@@ -25,6 +26,8 @@ it('renders navigation, projects, pending approvals, connection state and bell',
 });
 it('uses the OS theme, reacts to changes, allows explicit overrides and Japanese', () => {
   render(<MemoryRouter initialEntries={['/settings']}><App/></MemoryRouter>);
+  expect(screen.getByLabelText('Theme').closest('label')?.querySelector('small')).toBeNull();
+  expect(screen.getByLabelText('Language').closest('label')?.querySelector('small')).toBeNull();
   expect(document.documentElement.dataset.theme).toBe('light');
   dark = true; change?.(); expect(document.documentElement.dataset.theme).toBe('dark');
   fireEvent.change(screen.getByLabelText('Theme'), { target: { value: 'light' } });
@@ -33,6 +36,8 @@ it('uses the OS theme, reacts to changes, allows explicit overrides and Japanese
   fireEvent.change(screen.getByLabelText('Language'), { target: { value: 'ja' } });
   expect(screen.getByRole('heading', { name: '設定' })).toBeTruthy();
   expect(document.documentElement.lang).toBe('ja');
+  expect(screen.getByLabelText('テーマ').closest('label')?.querySelector('small')).toBeNull();
+  expect(screen.getByLabelText('言語').closest('label')?.querySelector('small')).toBeNull();
 });
 it.each([['/p/demo', null], ['/c/demo', 'Conversation'], ['/inbox', 'Approvals'],
   ['/p/demo/tree', 'Other'], ['/p/demo/changes', 'Other'], ['/search', 'Search']])('renders route %s', (path, heading) => {
@@ -114,4 +119,14 @@ it('connects sidebar search to the authenticated search client', async () => {
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Search' })));
   expect(search.mock.calls[0][0]).toMatchObject({ query: 'review marker' });
   expect(screen.getByText('No results')).toBeTruthy();
+});
+
+it.each(['en', 'ja'] as const)('omits explanatory translation keys and empty-view paragraphs in %s', language => {
+  for (const key of ['themeHint', 'languageHint', 'emptyBody', 'futureBody', 'selectConversation']) {
+    expect(dictionaries[language]).not.toHaveProperty(key);
+  }
+  localStorage.setItem('agent-graph-language', language);
+  const { container } = render(<MemoryRouter initialEntries={['/missing']}><App/></MemoryRouter>);
+  expect(screen.getByRole('heading', { name: language === 'ja' ? 'ページが見つかりません' : 'Page not found' })).toBeTruthy();
+  expect(container.querySelector('.empty-state p')).toBeNull();
 });

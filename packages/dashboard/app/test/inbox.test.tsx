@@ -20,6 +20,11 @@ function approval(id: string, overrides: Row = {}): Row {
   return { id, state: 'pending', run_id: 'run', conversation_id: 'conversation', requested_ts: NOW,
     available_decisions: ['accept', 'decline', 'acceptForSession'], request: { command: 'printf "full command"\necho next', diff: '-old\n+new' }, ...overrides };
 }
+it('omits empty counts and explanatory paragraphs when no approvals are pending', () => {
+  setup();
+  expect(screen.getByRole('heading', { name: 'Nothing to approve' })).toBeTruthy();
+  expect(document.querySelector('.page-subtitle, .shortcut-hint, .empty-state p')).toBeNull();
+});
 it('orders all projects oldest first, displays commands, expanded diffs, wait and conversation tail', () => {
   // 待ち時間は今の時刻に依存するため、時計を固定する。
   vi.useFakeTimers({ toFake: ['Date'] });

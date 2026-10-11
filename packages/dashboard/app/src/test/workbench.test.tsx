@@ -144,13 +144,21 @@ it('renders terminal output and exit, reopens and closes terminal sessions', asy
   fireEvent.click(screen.getByRole('button', { name: 'Close Terminal' }));
   expect(f.client.command).toHaveBeenCalledWith('terminal.close', { terminalId: 'terminal-2' });
 });
-it('reorders tabs and moves the last tab into its neighbour through drag and drop', async () => {
+it('reorders tabs and moves the last tab into its neighbour through pointer drag and drop', async () => {
+  class TestPointerEvent extends MouseEvent {
+    pointerId: number;
+    constructor(type: string, init: PointerEventInit = {}) { super(type, init); this.pointerId = init.pointerId ?? 1; }
+  }
+  vi.stubGlobal('PointerEvent', TestPointerEvent);
   fixture(); await openCode(); fireEvent.keyDown(screen.getByRole('textbox', { name: 'Code' }), { key: 'd', metaKey: true });
-  const transfer = { setData: vi.fn(), getData: () => '' };
   fireEvent.click(within(panes()[1]).getByRole('button', { name: 'Open conversation' }));
   const source = panes()[1].querySelector('.workbench-tab')!;
   const destination = panes()[0].querySelector('.workbench-tab')!;
-  fireEvent.dragStart(source, { dataTransfer: transfer }); fireEvent.drop(destination, { dataTransfer: transfer });
+  vi.spyOn(destination, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 100, 40));
+  Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: vi.fn(() => destination) });
+  fireEvent.pointerDown(source.querySelector('[role="tab"]')!, { button: 0, pointerId: 1, clientX: 50, clientY: 20 });
+  fireEvent.pointerMove(window, { pointerId: 1, clientX: 10, clientY: 20 });
+  fireEvent.pointerUp(window, { pointerId: 1, clientX: 10, clientY: 20 });
   expect(panes()).toHaveLength(1); expect(tabs().map(tab => tab.textContent)).toEqual(['Conversation', 'Conversation', 'file.ts']);
 });
 it('resizes a divider with pointer movement and remembers the size', async () => {

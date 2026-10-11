@@ -28,6 +28,79 @@ function move(x: number, y: number) { fireEvent.pointerMove(window, { pointerId:
 function end(x: number, y: number) { fireEvent.pointerUp(window, { pointerId: 1, clientX: x, clientY: y }); }
 function bound(pane: HTMLElement) { vi.spyOn(pane, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 400, 400)); }
 
+it.each(['edge', 'center', 'tablist'])('cancels a drag over the %s with Escape without applying the drop or click', target => {
+  fixture();
+  if (target === 'center') {
+    fireEvent.contextMenu(screen.getByRole('tab', { name: 'c' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Split right' }));
+  }
+  const destination = panes().at(-1)!;
+  bound(destination);
+  hit(destination.querySelector(target === 'tablist' ? '.workbench-tabs' : '[data-content]')!);
+  const before = saved();
+  const x = target === 'edge' ? 395 : 200;
+  const source = screen.getByRole('tab', { name: 'b' });
+  start('b'); move(x, 200);
+  expect(source.parentElement!.dataset.dragging).toBe('true');
+  expect(document.querySelector(target === 'tablist' ? '.workbench-drop-end' : '.workbench-drop-preview')).toBeTruthy();
+  const escape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+  fireEvent(window, escape);
+  expect(escape.defaultPrevented).toBe(true);
+  expect(document.querySelector('.workbench-drop-preview, .workbench-drop-end')).toBeNull();
+  expect(source.parentElement!.dataset.dragging).toBe('false');
+  move(x, 200); end(x, 200); fireEvent.click(source);
+  expect(saved()).toEqual(before);
+  const idleEscape = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true });
+  fireEvent(window, idleEscape);
+  expect(idleEscape.defaultPrevented).toBe(false);
+});
+it('cleans up a drag on lost pointer capture without applying the drop', () => {
+  fixture(); bound(panes()[0]); hit(panes()[0].querySelector('[data-content="a"]')!);
+  const before = saved();
+  start('b'); move(395, 200);
+  expect(document.querySelector('.workbench-drop-preview')).toBeTruthy();
+  fireEvent.lostPointerCapture(screen.getByRole('tab', { name: 'b' }), { pointerId: 1 });
+  expect(document.querySelector('.workbench-drop-preview')).toBeNull();
+  move(395, 200); end(395, 200);
+  expect(saved()).toEqual(before);
+});
+it('focuses and navigates enabled tab menu items and returns focus on Escape', () => {
+  fixture();
+  const tab = screen.getByRole('tab', { name: 'b' });
+  tab.focus(); fireEvent.contextMenu(tab);
+  const first = screen.getByRole('menuitem', { name: 'Split right' });
+  const last = screen.getByRole('menuitem', { name: 'Rename' });
+  expect(document.activeElement).toBe(first);
+  function press(key: string) { fireEvent.keyDown(document.activeElement!, { key }); }
+  press('ArrowDown'); expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: 'Split down' }));
+  press('ArrowDown'); expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: /^Close$/ }));
+  press('ArrowUp'); expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: 'Split down' }));
+  press('End'); expect(document.activeElement).toBe(last);
+  press('ArrowDown'); expect(document.activeElement).toBe(first);
+  press('ArrowUp'); expect(document.activeElement).toBe(last);
+  press('Home'); expect(document.activeElement).toBe(first);
+  const before = saved();
+  press('Escape');
+  expect(screen.queryByRole('menu')).toBeNull();
+  expect(document.activeElement).toBe(tab);
+  expect(saved()).toEqual(before);
+});
+it.each(['header', 'tab'])('ignores HTML5 project drops on a pane %s without changing the tree or focused pane', target => {
+  fixture();
+  fireEvent.contextMenu(screen.getByRole('tab', { name: 'b' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Split right' }));
+  const before = saved();
+  const focused = panes().find(pane => pane.dataset.focused === 'true')!.dataset.paneId;
+  const destination = panes().find(pane => pane.dataset.paneId !== focused)!;
+  const element = destination.querySelector(target === 'header' ? '.workbench-tabs' : '[data-tab-id]')!;
+  const dataTransfer = { getData: vi.fn((format: string) => format === 'text/plain' ? 'project-id' : '') };
+  fireEvent.dragOver(element, { dataTransfer });
+  fireEvent.drop(element, { dataTransfer });
+  expect(saved()).toEqual(before);
+  expect(panes().find(pane => pane.dataset.focused === 'true')!.dataset.paneId).toBe(focused);
+  expect(dataTransfer.getData).not.toHaveBeenCalled();
+});
+
 it('reorders tabs to either side using pointer movement and shows insertion position', () => {
   fixture();
   const header = panes()[0].querySelector('.workbench-tabs')!;

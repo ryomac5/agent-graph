@@ -1,4 +1,6 @@
-import { useSyncExternalStore } from 'react';
+import { useRef, useSyncExternalStore } from 'react';
+import { readObject, readText } from '../components/conversation/model.ts';
+import { formatSeconds } from './format.ts';
 import type { Row, ScreenState } from './store.ts';
 import { isRunning, selectRoots, type Root } from './roots.ts';
 import { getConversation, getRequestedTime, isPending } from '../pages/inbox/model.ts';
@@ -7,6 +9,34 @@ export const READ_KEY = 'agent-graph-read-turns';
 export const READY_KEY = 'agent-graph-ready-turns';
 export const RECENT_KEY = 'agent-graph-recent-conversations';
 export const RECENT_LIMIT = 10;
+export interface WorkingTurn { runKey: string; state: string; started: number; startEvidence: string }
+/** ツールや子の更新では時計を戻さない。承認待ちの間も同じターンの開始を保持する。 */
+export function resolveWorkingTurn(run: Row | undefined, humanTime = '', previous?: WorkingTurn): WorkingTurn | undefined {
+  const state = readText(run?.state);
+  if (!['starting', 'running', 'waiting_approval', 'waiting_input'].includes(state)) return undefined;
+  const runKey = JSON.stringify([run?.id, run?.generation]);
+  const evidence = readObject(run?.last_evidence);
+  const startEvidence = evidence.kind === 'turn_started' || evidence.hook_event_name === 'UserPromptSubmit' ? readText(run?.last_evidence_ts) : '';
+  if (previous?.runKey === runKey && Number.isFinite(previous.started) && !(startEvidence && startEvidence !== previous.startEvidence)) {
+    return { ...previous, state };
+  }
+  const human = Date.parse(humanTime);
+  const runStarted = Date.parse(readText(run?.started_ts));
+  const started = startEvidence ? Date.parse(startEvidence)
+    : Number.isFinite(human) && (!Number.isFinite(runStarted) || human >= runStarted) ? human
+    : Date.parse(readText(run?.last_evidence_ts ?? run?.started_ts));
+  return { runKey, state, started, startEvidence };
+}
+export function useWorkingTurn(run: Row | undefined, humanTime = ''): WorkingTurn | undefined {
+  const previous = useRef<WorkingTurn | undefined>(undefined);
+  const turn = resolveWorkingTurn(run, humanTime, previous.current);
+  previous.current = turn;
+  return turn;
+}
+export function isWorkingTurn(turn: WorkingTurn | undefined): boolean { return turn?.state === 'running' || turn?.state === 'starting'; }
+export function workingElapsed(turn: WorkingTurn | undefined, now: number): string {
+  return turn && Number.isFinite(turn.started) ? formatSeconds(Math.max(0, Math.floor((now - turn.started) / 1000))) : '';
+}
 export interface Turn { id: string; kind: 'approval' | 'input' | 'idle'; conversationId: string; time: string; to: string }
 export interface NavigationHistory { read: Record<string, string>; ready: Record<string, string>; recent: string[] }
 export function readHistory(): NavigationHistory {

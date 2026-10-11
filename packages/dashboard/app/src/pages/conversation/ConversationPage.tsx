@@ -11,7 +11,7 @@ import type { Ack, createClient } from '../../lib/client.ts';
 import { store, useScreenStore, type Row, type ScreenState, type ScreenStore } from '../../lib/store.ts';
 import type { Language } from '../../lib/i18n.ts';
 import { dictionaries } from '../../lib/i18n.ts';
-import { approvalOutcome, approvalReasonText, type ApprovalOutcome, conversationName, decisionLabel, evidenceLabel, formatClock, formatSeconds, agentName, modelName, isPositiveDecision, readApprovalRequest, readModel, runLabel, worktreeLabel } from '../../lib/format.ts';
+import { approvalOutcome, approvalReasonText, type ApprovalOutcome, conversationName, decisionLabel, evidenceLabel, formatClock, agentName, modelName, isPositiveDecision, readApprovalRequest, readModel, runLabel, worktreeLabel } from '../../lib/format.ts';
 import { AppLink } from '../../components/AppLink.tsx';
 import { StateBadge } from '../../components/StateBadge.tsx';
 import { reasonText } from '../../lib/reasons.ts';
@@ -31,8 +31,9 @@ import { collectConversationChanges } from '../../lib/conversation-changes.ts';
 import { resolveProjectId } from '../../lib/projects.ts';
 import { ChangedFiles } from './ChangedFiles.tsx';
 import { groupToolRuns, instructionKind } from '../../components/conversation/timeline.ts';
-import { resolveDelegationNode } from '../../components/conversation/DelegationCard.tsx';
+import { isDelegationTool, resolveDelegationNode } from '../../components/conversation/DelegationCard.tsx';
 import { selectRoots, useRootIndex } from '../../lib/roots.ts';
+import { isWorkingTurn, useWorkingTurn, workingElapsed } from '../../lib/turns.ts';
 import { useAttachments, MAX_ATTACHMENTS } from './useAttachments.ts';
 import './conversation.css';
 
@@ -320,13 +321,17 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const changedFiles = collectConversationChanges(editRows, {
     cwd: readText(conversation?.cwd) || savedCwd, projectRoot: readText(project?.root_path),
   });
-  // 動いている間は、最後の人の発言からの経過と、最後に使った道具を末尾に出す。端末の「Cogitating…」に当たる。
-  // 経過は、実行が動き出した時刻から数える。発言の窓は新しい 200 件だけなので、人の発言は窓の外にあることがある。
-  const runningSince = readText(run?.state) === 'running' ? Date.parse(readText(run?.last_evidence_ts)) : NaN;
-  const lastHuman = [...messageEntries].reverse().find(entry => readText(entry.row.role) === 'user' && !isToolOnly(entry.row) && !isBlank(entry.row)
+  // 系列の古い会話が動いている場合も、その会話の時計と道具を使う。子の実行は親の終了を上書きしない。
+  const activityRun = seriesIds ? historyIds.map(id => rootIndex.runs.get(id)).filter((row): row is Row => Boolean(row))
+    .filter(row => ['starting', 'running'].includes(readText(row.state))).sort((a, b) => readText(b.last_evidence_ts).localeCompare(readText(a.last_evidence_ts)))[0] ?? run : run;
+  const activityMessages = messageEntries.filter(entry => owner.get(entry.key) === activityRun?.conversation_id);
+  const lastHuman = [...activityMessages].reverse().find(entry => readText(entry.row.role) === 'user' && !isToolOnly(entry.row) && !isBlank(entry.row)
     && harnessKind(readBody(entry.row.body)) === 'user');
-  const turnStarted = Number.isFinite(runningSince) ? runningSince : Date.parse(lastHuman?.time ?? '');
-  const lastTool = [...messageEntries].reverse().flatMap(entry => Array.isArray(entry.row.body) ? entry.row.body.map(readObject).filter(block => block.type === 'tool_use').map(block => readText(block.name)).reverse() : [])[0];
+  const workingTurn = useWorkingTurn(activityRun, lastHuman?.time);
+  const lastToolBlock = [...activityMessages].reverse().filter(entry => workingTurn && Date.parse(entry.time) >= workingTurn.started)
+    .flatMap(entry => Array.isArray(entry.row.body) ? entry.row.body.map(readObject).filter(block => block.type === 'tool_use').reverse() : [])[0];
+  const lastToolInput = readObject(lastToolBlock?.input);
+  const lastTool = lastToolBlock && (isDelegationTool(lastToolBlock) ? readText(lastToolInput.description ?? lastToolInput.title) || readText(lastToolBlock.name) : readText(lastToolBlock.name));
   const shownMessages = new Set(messageEntries.slice(-messageLimit).map(entry => entry.row.id));
   if (anchorId) shownMessages.add(anchorId);
   const entries = allEntries.filter(entry => entry.kind !== 'message' || shownMessages.has(entry.row.id));
@@ -537,8 +542,8 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     <Icon name="message" size={22}/><h1>{t('conversation')}</h1><p>{t('noConversation')}</p></div></section>;
   const Heading = embedded ? 'h2' : 'h1';
   const evidence = status === 'ended' ? run?.end_evidence : run?.last_evidence;
-  const started = Date.parse(readText(status.startsWith('waiting') ? run?.last_evidence_ts : run?.started_ts));
-  const elapsed = !seriesIds && ['running', 'starting'].includes(status) && Number.isFinite(started) ? formatSeconds(Math.max(0, Math.floor((now - started) / TICK_MS))) : '';
+  const turnElapsed = workingElapsed(workingTurn, now);
+  const elapsed = !seriesIds && isWorkingTurn(workingTurn) ? turnElapsed : '';
   const worktree = worktreeLabel(run);
   const shownModel = appliedModel?.model || currentModel;
   const shownEffort = appliedModel?.effort || currentEffort;
@@ -632,12 +637,14 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
       {sentMessages.filter(message => resolveConversation(message.conversationId) === conversationId).map(message => <Message key={message.id} language={language} sender={senderOf({ role: 'user' }, participants)} row={{ id: message.id, role: 'user', body: message.text, body_state: 'stored' }}/>) }
       {deltas.map(([key, delta]) => <Message key={key} language={language} streaming sender={agentSender} showName={nameShown(agentSender)}
         row={{ id: delta.messageId ?? key, role: 'assistant', body: delta.text, body_state: 'stored' } satisfies Row}/>)}
-      {rawStatus === 'running' && Number.isFinite(turnStarted) && <p className="working-line" role="status">
-        <span className="pulse" aria-hidden="true"/>{language === 'ja' ? '作業中' : 'Working'}… {formatSeconds(Math.max(0, Math.floor((now - turnStarted) / 1000)))}
-        {lastTool && <span className="working-tool"> · {lastTool}</span>}</p>}
     </div></div>
     {/* 外の会話には、runner が応答できる続きを用意する。 */}
     <footer className="composer" onFocusCapture={() => setEngaged(true)} onPointerDownCapture={() => setEngaged(true)}>
+      {isWorkingTurn(workingTurn) && <div className="working-line" role="status" aria-label={t('working')}>
+        <div className="working-summary"><span className="working-spinner" aria-hidden="true"/>{t('working')}
+          {turnElapsed && <span role="timer" aria-live="off"> · {turnElapsed}</span>}</div>
+        {lastTool && <span className="working-tool" title={lastTool}>{lastTool}</span>}
+      </div>}
       {(host?.disconnected || run?.reason === 'disconnected') && <p role="status" className="status-line">{language === 'ja' ? '接続が切れました' : 'Connection lost'}</p>}
       {terminalConversation && !starting && !host && !stopped && <p className="status-line">{language === 'ja' ? 'この会話は別の場所で動いています。ここで送ると、別の続きになります。' : 'This conversation is running elsewhere. Sending here will start a separate continuation.'}</p>}
       {(error || pending || continued || modelsError && engaged || handoffBlocked) && <div className="composer-status">

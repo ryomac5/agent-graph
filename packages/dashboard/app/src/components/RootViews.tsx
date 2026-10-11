@@ -1,9 +1,12 @@
 import { SessionName, type RenameClient } from './SessionName.tsx';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
-import { rootHref, useTurnConversations } from '../lib/turns.ts';
+import { rootHref, useTurnConversations, useWorkingTurn, workingElapsed } from '../lib/turns.ts';
 import { isRunning, shownRole, type Root } from '../lib/roots.ts';
-import { agentName, formatWhen, formatSeconds, summarizeApproval } from '../lib/format.ts';
+import { agentName, formatWhen, summarizeApproval } from '../lib/format.ts';
+import { readText, selectTimeline } from './conversation/model.ts';
+import { isBlank, isToolOnly } from './conversation/Message.tsx';
+import { harnessKind, readBody } from '../lib/message-body.ts';
 import type { Row, ScreenState } from '../lib/store.ts';
 import { dictionaries, type Language } from '../lib/i18n.ts';
 import type { DelegationTree, TreeNode } from '../pages/tree/model.ts';
@@ -54,6 +57,19 @@ function runningText(count: number, language: Language): string {
   const t = dictionaries[language];
   return language === 'ja' ? `${count} ${t.agentsRunning}` : `${count} ${count === 1 ? t.agentRunning : t.agentsRunning}`;
 }
+function RootElapsed({ state, root, now, language }: { state?: ScreenState; root: Root; now: number; language: Language }) {
+  const latest = new Map<string, Row>();
+  for (const run of state?.projection.runs ?? []) if (root.conversation_ids.includes(readText(run.conversation_id))) {
+    const id = readText(run.conversation_id);
+    if (Number(run.generation ?? 0) >= Number(latest.get(id)?.generation ?? 0)) latest.set(id, run);
+  }
+  const run = [...latest.values()].filter(row => ['starting', 'running'].includes(readText(row.state)))
+    .sort((a, b) => readText(b.last_evidence_ts).localeCompare(readText(a.last_evidence_ts)))[0];
+  const human = state && run && selectTimeline(state, readText(run.conversation_id)).reverse().find(entry => entry.kind === 'message'
+    && entry.row.role === 'user' && !isToolOnly(entry.row) && !isBlank(entry.row) && harnessKind(readBody(entry.row.body)) === 'user');
+  const turn = useWorkingTurn(run, human ? human.time : '');
+  return <span className="root-elapsed numeric" aria-label={language === 'ja' ? '経過時間' : 'Elapsed time'}>{workingElapsed(turn, now) || '—'}</span>;
+}
 
 /** 根の会話の 1 行。1 行目に名前、2 行目に状態と動いている子の数と時刻を出す。 */
 export function RootList({ roots, selected, onSelect, project, language = 'en', grouped = false, state, client }: { client?: RenameClient; state?: ScreenState; grouped?: boolean; roots: Root[]; selected?: string; onSelect?: (root: Root) => void; project?: string; language?: Language }) {
@@ -69,14 +85,12 @@ export function RootList({ roots, selected, onSelect, project, language = 'en', 
   const groups = [0, 1, 2, 3].map(value => roots.filter(root => group(root) === value).toSorted((a, b) => (b.last_activity_ts ?? '').localeCompare(a.last_activity_ts ?? '')));
   const labels = language === 'ja' ? ['あなたの番', '実行中', '最近', '以前'] : ['Your turn', 'Running', 'Recent', 'Earlier'];
   const row = (root: Root) => {
-    const started = state?.projection.runs?.filter(run => root.conversation_ids.includes(String(run.conversation_id)) && run.state === 'running')
-      .map(run => Date.parse(String(run.last_evidence_ts ?? ''))).filter(Number.isFinite).sort((a, b) => b - a)[0];
     const shownState = yourTurn(root) && !WAITING.includes(root.state) ? 'waiting_input' : root.state;
-    const content = <><StatusDot className="root-state" dotOnly dotLabel={root.conversation_ids.some(id => turns.has(id)) ? language === 'ja' ? '自分の番' : 'Your turn' : stateLabel(shownState, language)} state={shownState} language={language}/>
+    const content = <><StatusDot className="root-state" dotOnly activity dotLabel={root.conversation_ids.some(id => turns.has(id)) ? language === 'ja' ? '自分の番' : 'Your turn' : stateLabel(shownState, language)} state={shownState} language={language}/>
       <span className="root-row-line"><span className="root-name">{root.name}</span></span>
-      <span className="root-row-meta">{yourTurn(root) || root.state === 'failed' ? <StatusDot state={shownState} language={language}/>
-        : isRunning(root.state) ? <span className="root-elapsed numeric" aria-label={language === 'ja' ? '経過時間' : 'Elapsed time'}>{started === undefined ? '—' : formatSeconds(Math.max(0, Math.floor((now - started) / 1000)))}</span>
-        : root.last_activity_ts && <time className="root-time" dateTime={root.last_activity_ts} title={formatWhen(root.last_activity_ts, language)}>{formatWhen(root.last_activity_ts, language)}</time>}</span></>;
+      <span className="root-row-meta"><StatusDot state={shownState} language={language} activity/>
+        {isRunning(root.state) && <RootElapsed state={state} root={root} now={now} language={language}/>}
+        {!isRunning(root.state) && !yourTurn(root) && root.state !== 'failed' && root.last_activity_ts && <time className="root-time" dateTime={root.last_activity_ts} title={formatWhen(root.last_activity_ts, language)}>{formatWhen(root.last_activity_ts, language)}</time>}</span></>;
     if (editing === root.id && client) return <div key={root.id} className="root-row"><SessionName key={root.id} root={root} client={client} language={language} editing onFinish={() => setEditing(undefined)}/></div>;
     return <div key={root.id} className="root-list-item" onKeyDown={event => { if (event.key === 'Escape') setMenu(undefined); }}><Link
       onDoubleClick={client ? event => { event.preventDefault(); setEditing(root.id); setMenu(undefined); } : undefined}

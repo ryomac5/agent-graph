@@ -426,6 +426,15 @@ textarea::placeholder { color: var(--fg-4); }
 .status-ended .status-dot { background: var(--state-done); }
 .status-failed .status-dot { background: var(--state-failed); }
 .status-failed .status-label { color: var(--state-failed); }
+.status.activity-mark .status-dot { width: 9px; height: 9px; }
+.status.activity-mark .status-label:empty::after { content: attr(data-label); }
+.status.activity-mark.status-running { color: var(--state-running); }
+.status.activity-mark.status-running .status-dot { background: var(--bg-0); border: 1px solid var(--state-running); border-right-color: transparent; animation: working-spin 2400ms linear infinite; }
+.status.activity-mark.status-waiting { color: var(--state-approval); }
+.status.activity-mark.status-input { color: var(--state-reply); }
+.status.activity-mark.status-waiting .status-dot, .status.activity-mark.status-input .status-dot { border-radius: 2px; animation: session-pulse 2400ms var(--ease) infinite; }
+.status.activity-mark.status-idle { color: var(--state-idle); }
+@keyframes working-spin { to { transform: rotate(360deg); } }
 .status-waiting { color: var(--fg-2); }
 .status-input { color: var(--fg-2); }
 .provider-mark::before { background: var(--fg-3); content: ''; width: 16px; height: 16px; border-radius: 50%; }

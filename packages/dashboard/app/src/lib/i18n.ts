@@ -1,5 +1,6 @@
 export const dictionaries = {
   en: {
+    working: 'Working',
     english: 'English', japanese: '日本語', brand: 'agent-graph', workspace: 'Workspace', overview: 'Overview', projects: 'Projects',
     inbox: 'Approvals', tree: 'Sub-agents', changes: 'Changes', search: 'Search', settings: 'Settings',
     conversation: 'Conversation', conversations: 'Conversations', project: 'Project', notifications: 'Notifications',
@@ -16,6 +17,7 @@ export const dictionaries = {
     other: 'Other', agent: 'Agent', commands: 'Search and commands', retry: 'Retry', showOlder: 'Earlier',
   },
   ja: {
+    working: '作業中',
     english: 'English', japanese: '日本語', brand: 'agent-graph', workspace: '作業場', overview: '一覧', projects: 'プロジェクト',
     inbox: '承認待ち', tree: 'サブエージェント', changes: '変更', search: '検索', settings: '設定',
     conversation: '会話', conversations: '会話', project: 'プロジェクト', notifications: '通知',

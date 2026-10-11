@@ -24,9 +24,10 @@ export function toDisplayState(state: string): ExecutionState {
 }
 export function stateLabel(state: string, language: Language = 'en'): string { return dictionaries[language][toDisplayState(state)]; }
 /** 小さな色の点と短い語で状態を出す。 */
-export function StatusDot({ state, language = 'en', className = '', dotOnly = false, dotLabel }: { state: string; language?: Language; className?: string; dotOnly?: boolean; dotLabel?: string }) {
+export function StatusDot({ state, language = 'en', className = '', dotOnly = false, dotLabel, activity = false }: { state: string; language?: Language; className?: string; dotOnly?: boolean; dotLabel?: string; activity?: boolean }) {
   const shown = toDisplayState(state);
-  return <span className={`status status-${stateTone(shown)} ${className}`.trim()} data-state={shown}><span className="status-dot" aria-hidden={dotLabel ? undefined : true} role={dotLabel ? 'img' : undefined} aria-label={dotLabel}/>{!dotOnly && <span className="status-label">{stateLabel(shown, language)}</span>}</span>;
+  const label = activity && shown === 'running' ? dictionaries[language].working : stateLabel(shown, language);
+  return <span className={`status status-${stateTone(shown)} ${activity ? 'activity-mark' : ''} ${className}`.trim()} data-state={shown} title={label}><span className="status-dot" aria-hidden={dotLabel ? undefined : true} role={dotLabel ? 'img' : undefined} aria-label={dotLabel}/>{(!dotOnly || activity) && <span className="status-label" aria-hidden={dotOnly || undefined} data-label={label}>{dotOnly ? undefined : label}</span>}</span>;
 }
 interface StateBadgeProps {
   state: ExecutionState;

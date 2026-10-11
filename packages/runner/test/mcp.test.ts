@@ -82,3 +82,22 @@ test("cancelled and disconnected wait calls stop emitting progress", async (t) =
   await f.intake.wait("sample");
   assert.equal(replies.length, count);
 });
+
+test("run failure cause reaches MCP wait, delegate resends and status", async t => {
+  const f = fixture(t);
+  const { client } = f.connect(); const replies = messages(client);
+  send(client, { type: "hello", role: "mcp", version: 1 });
+  send(client, { jsonrpc: "2.0", id: "delegate", method: "tools/call", params: { name: "delegate", arguments: f.request } });
+  await until(() => f.host.starts.length === 1);
+  send(client, { jsonrpc: "2.0", id: "wait", method: "tools/call", params: { name: "wait", arguments: { requestId: "sample" } } });
+  const cause = 'jetski: no output produced — command permission auto-denied';
+  f.host.emit(f.host.starts[0].runId, { type: "exit", exitCode: 1, cause });
+  await until(() => replies.some(r => r.id === "wait"));
+  assert.equal(replies.find(r => r.id === "wait").result.structuredContent.reason, cause);
+  assert.equal((await f.intake.wait("sample")).reason, cause);
+  assert.equal(f.intake.list()[0].reason, cause);
+  send(client, { jsonrpc: "2.0", id: "resend", method: "tools/call", params: { name: "delegate", arguments: f.request } });
+  send(client, { jsonrpc: "2.0", id: "status", method: "tools/call", params: { name: "status", arguments: { requestId: "sample" } } });
+  await until(() => replies.some(r => r.id === "status"));
+  for (const id of ["resend", "status"]) assert.equal(replies.find(r => r.id === id).result.structuredContent.reason, cause);
+});

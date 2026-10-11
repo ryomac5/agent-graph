@@ -58,12 +58,14 @@ export class Intake {
     if (result.status === "appended") this.options.publish?.({ type: "evt", seq: result.seq });
   }
   list(): IntakeStatus[] {
-    return this.readDelegations().map((d) => ({ requestId: d.request_id, state: d.state, attempt: d.attempt,
-      ...(d.attempts.at(-1)?.result === undefined ? {} : { result: d.attempts.at(-1)!.result as unknown as DelegateResult }) }));
+    return this.readDelegations().map((d) => this.status(d.request_id));
   }
   status(requestId: string): IntakeStatus {
     const d = readProjection(this.ledger).row("delegations", requestId);
-    const result = d && { requestId: d.request_id, state: d.state, attempt: d.attempt, ...(d.attempts.at(-1)?.result === undefined ? {} : { result: d.attempts.at(-1)!.result as unknown as DelegateResult }) };
+    const reason = readProjection(this.ledger).record<{ reason?: string }>("delegation", requestId)?.reason;
+    const result = d && { requestId: d.request_id, state: d.state, attempt: d.attempt,
+      ...(["failed", "denied", "interrupted"].includes(d.state) && reason ? { reason } : {}),
+      ...(d.attempts.at(-1)?.result === undefined ? {} : { result: d.attempts.at(-1)!.result as unknown as DelegateResult }) };
     if (!result) throw new Error("Unknown requestId");
     return result;
   }
@@ -138,10 +140,10 @@ export class Intake {
       : Array.isArray(m.body) ? m.body.flatMap((block) => block && typeof block === "object" && !Array.isArray(block) && typeof block.text === "string" ? [block.text] : []) : []).join("\n");
   }
   private async launch(runId: string, conversationId: string, assignment: Assignment, cwd: string, text: string,
-    outputSchema?: StartRequest["outputSchema"]): Promise<void> {
+    outputSchema?: StartRequest["outputSchema"], role?: StartRequest["role"]): Promise<void> {
     if (this.closing) throw new Error("interrupted");
     const launch = this.runtime.supervisor.start(assignment.executor, { runId, conversationId, generation: 1, cwd,
-      input: { text }, model: { model: assignment.model, effort: assignment.effort }, env: { AGENT_GRAPH_MANAGED: runId }, ...(outputSchema ? { outputSchema } : {}) });
+      role, input: { text }, model: { model: assignment.model, effort: assignment.effort }, env: { AGENT_GRAPH_MANAGED: runId }, ...(outputSchema ? { outputSchema } : {}) });
     this.launches.add(launch);
     try { await launch; } finally { this.launches.delete(launch); }
     this.reconcileOrigins();
@@ -205,7 +207,7 @@ export class Intake {
       const conversationId = recovering ? this.readRun(runId).conversation_id! : randomUUID();
       if (!recovering) {
         this.change(requestId, "assigned", { run_id: runId, assignment: selected.assignment });
-        await this.launch(runId, conversationId, selected.assignment, request.cwd ?? this.options.cwd ?? process.cwd(), request.task);
+        await this.launch(runId, conversationId, selected.assignment, request.cwd ?? this.options.cwd ?? process.cwd(), request.task, undefined, request.role);
       }
       if (this.status(requestId).state === "assigned") this.change(requestId, "running");
       if (this.status(requestId).state === "running") {
@@ -236,7 +238,7 @@ export class Intake {
         this.write("delegation.attempt_created", `delegation:${requestId}`, { attempt,
           review: { run_id: reviewRunId, artifact_id: artifactId, patch_hash: artifact.patch_hash, assignment: reviewer.assignment } });
         await this.launch(reviewRunId, reviewConversationId, reviewer.assignment, tree.cwd!,
-          buildReviewPrompt({ request, reply: result.output, artifact }), json(REVIEW_OUTPUT_SCHEMA) as StartRequest["outputSchema"]);
+          buildReviewPrompt({ request, reply: result.output, artifact }), json(REVIEW_OUTPUT_SCHEMA) as StartRequest["outputSchema"], "review");
         this.write("relation.created", `relation:${reviewRunId}`, { type: "review_of", from_id: reviewConversationId,
           to_id: conversationId, active: true, confidence: "confirmed", evidence: { artifact_id: artifactId, patch_hash: artifact.patch_hash } });
       } else {

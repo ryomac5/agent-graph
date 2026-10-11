@@ -19,7 +19,7 @@ export interface RootConversation {
 }
 interface RootRelation { from_id?: string; to_id?: string; type?: string; active?: boolean | number; confidence?: string }
 
-/** 確定した継続と根のキット名で系列を作り、子の会話を同名の根に混ぜない。 */
+/** 確定した継続・対話の分岐と根のキット名で系列を作り、子の会話を同名の根に混ぜない。 */
 export function projectRoots(conversations: readonly RootConversation[], relations: readonly RootRelation[]): RootProjection[] {
   const rows = new Map(conversations.map(row => [row.id, row]));
   const parents = new Map(conversations.map(row => [row.id, row.id]));
@@ -33,8 +33,8 @@ export function projectRoots(conversations: readonly RootConversation[], relatio
   function join(left: string, right: string): void {
     if (rows.has(left) && rows.has(right)) parents.set(find(right), find(left));
   }
-  const active = relations.filter(row => row.active !== false && row.active !== 0 && row.from_id && row.to_id && row.confidence === 'confirmed');
-  for (const row of active) if (row.type === 'continued'
+  const active = relations.filter(row => row.active !== false && row.active !== 0 && row.from_id && row.to_id);
+  for (const row of active) if (row.type === 'continued' && row.confidence === 'confirmed'
     && rows.get(row.from_id!)?.type === 'interactive' && rows.get(row.to_id!)?.type === 'interactive') join(row.from_id!, row.to_id!);
   // sdk-cli は unattended、native の子は subagent、親付き委譲は delegated の終点、審査役は review_of の始点として記録される。
   const childGroups = new Set(conversations.filter(row => row.type !== 'interactive').map(row => find(row.id)));
@@ -42,11 +42,17 @@ export function projectRoots(conversations: readonly RootConversation[], relatio
     const child = row.type === 'delegated' ? row.to_id : row.type === 'review_of' ? row.from_id : undefined;
     if (child && rows.has(child)) childGroups.add(find(child));
   }
-  // 明示された独立分岐は従来どおり分け、関係が欠けた根の継承だけをキット名で補う。
-  const forkGroups = new Set(active.filter(row => row.type === 'forked' && rows.has(row.to_id!)).map(row => find(row.to_id!)));
+  const forks = active.filter(row => row.type === 'forked' && row.confidence === 'confirmed');
+  for (const group of childGroups) for (const row of forks) {
+    if (rows.has(row.from_id!) && rows.has(row.to_id!)
+      && find(row.from_id!) === group) childGroups.add(find(row.to_id!));
+  }
+  // 利用者の対話の分岐は同じ根を継ぐ。子と審査役の系列は分岐でも根に混ぜない。
+  for (const row of forks) if (rows.get(row.from_id!)?.type === 'interactive' && rows.get(row.to_id!)?.type === 'interactive'
+    && !childGroups.has(find(row.from_id!)) && !childGroups.has(find(row.to_id!))) join(row.from_id!, row.to_id!);
   const names = new Map<string, string>();
   for (const row of conversations) {
-    if (!row.kit_name || childGroups.has(find(row.id)) || forkGroups.has(find(row.id))) continue;
+    if (!row.kit_name || childGroups.has(find(row.id))) continue;
     const key = JSON.stringify([row.project ?? row.repository_id ?? null, row.kit_name]);
     const previous = names.get(key);
     if (previous) join(previous, row.id);
@@ -69,7 +75,8 @@ export function projectRoots(conversations: readonly RootConversation[], relatio
   const roots: RootProjection[] = [];
   for (const group of groups.values()) {
     const ids = new Set(group.map(row => row.id));
-    if (!group.some(row => row.type === 'interactive') || active.some(row => row.type !== 'review_of' && ids.has(row.to_id!) && !ids.has(row.from_id!))
+    if (!group.some(row => row.type === 'interactive') || active.some(row => row.type !== 'review_of'
+      && (row.type === 'delegated' || row.confidence === 'confirmed') && ids.has(row.to_id!) && !ids.has(row.from_id!))
       || active.some(row => row.type === 'review_of' && ids.has(row.from_id!))) continue;
     const project = group[0].project ?? group[0].repository_id ?? null;
     if (kitProjects.has(project) && !group.some(row => row.kit_name)) continue;

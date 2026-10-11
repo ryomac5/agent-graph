@@ -151,7 +151,7 @@ test('本番の根と審査役の別名の並びを分離し、子の再開の�
   }
 });
 
-test('fork の関係が欠けてもキット名で根の系列を継ぎ、snapshot と patch の操作先を更新する', () => {
+test('fork の関係の有無で根の系列を保ち、snapshot と patch と再構築の操作先が一致する', () => {
   const directory = mkdtempSync(join(tmpdir(), 'root-kit-fork-'));
   const ledger = openLedger(join(directory, 'ledger.db'));
   const db = readLedgerDatabase(ledger);
@@ -178,9 +178,17 @@ test('fork の関係が欠けてもキット名で根の系列を継ぎ、snapsh
     assert.equal(snapshot.roots[0].id, root);
     assert.equal(snapshot.roots[0].current_conversation_id, fork);
     assert.equal(snapshot.relations.length, 0);
+    ledger.append({ source: 'host-claude', source_event_id: 'recorded-fork', kind: 'relation.created', subject: 'relation:recorded-fork',
+      source_ts: '2026-10-11T00:02:00Z', confidence: 'confirmed', payload: { from_id: root, to_id: fork, type: 'forked',
+        evidence: { native_id: 'fork' }, confidence: 'confirmed', active: true } });
+    const recordedPatch = feed.refresh();
+    assert.ok(recordedPatch && recordedPatch !== 'resync');
+    const recorded = feed.snapshot().projection;
+    assert.equal(recorded.relations.length, 1);
+    assert.deepEqual(recorded.roots, snapshot.roots);
     rebuild(db);
     assert.equal(feed.refresh(), 'resync');
-    assert.deepEqual(feed.snapshot().projection, snapshot);
+    assert.deepEqual(feed.snapshot().projection, recorded);
   } finally {
     feed?.close(); ledger.close(); rmSync(directory, { recursive: true });
   }

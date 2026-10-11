@@ -1,4 +1,5 @@
 import type { FactInput, JsonValue, Provider, RunState } from "../../../core/src/ledger/facts.ts";
+import type { Role } from "../../../core/src/delegate/types.ts";
 
 export type RunId = string;
 export type ApprovalId = string;
@@ -24,6 +25,7 @@ export interface HostLaunchOptions {
   persistSession?: boolean;
 }
 export interface StartRequest {
+  role?: Role;
   runId: RunId;
   conversationId: string;
   generation: number;

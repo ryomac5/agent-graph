@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { ConversationPage, type ConversationClient } from '../pages/conversation/ConversationPage.tsx';
 import { Workbench } from '../pages/workspace/Workbench.tsx';
@@ -51,7 +51,7 @@ function fixture({ hosted = false, state = 'running', evidence }: { hosted?: boo
   return { target, command, client, Wrapper, reconnect: () => connected.forEach(listener => listener()), setDiscover: (value: boolean) => { discover = value; }, setHosted: (value: boolean) => { launched = value; }, emit: (notice: TerminalNotice) => subscribers.forEach(listener => listener(notice)) };
 }
 async function send(text = '続けてください') {
-  await screen.findByRole('option', { name: 'Opus' });
+  await waitFor(() => expect(screen.getByRole('button', { name: /^(Model|モデル) · / }).textContent).toContain('Opus'));
   fireEvent.change(screen.getByRole('textbox', { name: '入力' }), { target: { value: text } });
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: '送信' })); });
 }

@@ -9,7 +9,7 @@ import { ProjectHeader } from '../workspace/WorkspacePage.tsx';
 import type { ConversationClient } from '../conversation/ConversationPage.tsx';
 import { readObject, readText } from '../../components/conversation/model.ts';
 import { answerApproval, getConversation, isPending } from '../inbox/model.ts';
-import { buildRows, readCurrentWork, readExpanded, readReport, PAGE_SIZE, type GraphRow, type GraphTree } from './rows.ts';
+import { buildRows, readCurrentWork, readExpanded, readReport, PAGE_SIZE, GRAPH_COMPACT_WIDTH, type GraphRow, type GraphTree } from './rows.ts';
 import { GraphOutline, GraphSummary, type OutlineProps } from './GraphOutline.tsx';
 import { GraphTimeline, type TimeRange } from './GraphTimeline.tsx';
 import { GraphDetail } from './GraphDetail.tsx';
@@ -64,8 +64,21 @@ export function GraphPage({ project: suppliedProject, target = store, client, la
   useEffect(() => { setDetail(undefined); }, [requested, root?.id]);
   const selected = detail ?? requested ?? root?.id ?? '';
   const expanded = readExpanded(search.getAll('expanded'));
-  const model = buildRows(tree, { now, expanded, selected, role, state });
+  const [compact, setCompact] = useState(true);
+  const model = buildRows(tree, { now, expanded, selected, role, state, compact });
   const surface = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const element = surface.current;
+    if (!element) return;
+    const update = () => {
+      const width = element.querySelector('.graph-tree-cell')?.getBoundingClientRect().width || (embedded ? element.clientWidth : 400);
+      if (width) setCompact(width < GRAPH_COMPACT_WIDTH);
+    };
+    update();
+    const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(update);
+    observer?.observe(element); window.addEventListener('resize', update);
+    return () => { observer?.disconnect(); window.removeEventListener('resize', update); };
+  }, [embedded, loading, root?.id]);
   useEffect(() => {
     if (!requested) return;
     if (role && !model.rows.some(row => row.id === requested)) setRole(undefined);
@@ -99,7 +112,7 @@ export function GraphPage({ project: suppliedProject, target = store, client, la
     if (!embedded) setSearch(current => { const query = new URLSearchParams(current); query.set('root', root!.id); query.delete('child'); if (row.role !== 'main' && row.node?.conversationId) query.set('child', row.node.conversationId); return query; });
   }, onGroup: group, onAnswer: answer, sent, connected: state.connection === 'connected' };
   const selectedRow = model.all.find(row => row.id === (detail ?? requested));
-  return <div className="graph-page" ref={surface} aria-busy={loading}>
+  return <div className={'graph-page' + (compact ? ' is-compact' : '')} ref={surface} aria-busy={loading}>
     {!embedded && <ProjectHeader route={route} name={getProjectName(state, project)} language={language}/>}
     {loading ? <div className="graph-empty" role="status">{language === 'ja' ? '読み込み中…' : 'Loading…'}</div> : root ? <>
       {!embedded && <div className="graph-toolbar"><span title={root.name}>{root.name}</span></div>}

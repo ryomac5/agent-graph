@@ -26,12 +26,12 @@
 .graph-row-main { height: var(--row); width: 100%; padding: 0 var(--space-2); display: flex; align-items: center; gap: var(--space-1); border: 0; border-radius: 0; background: transparent; text-decoration: none; color: var(--fg-1); font: var(--type-ui); cursor: pointer; text-align: left; }
 .graph-row-main > .status, .graph-role, .graph-row-main > .icon { flex: 0 0 var(--space-4); width: var(--space-4); display: flex; align-items: center; justify-content: center; }
 .graph-role { color: var(--fg-2); }
-.graph-row-title { flex: 1 1 auto; min-width: var(--space-8); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.graph-row-title { flex: 1 1 auto; min-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .graph-row.is-quiet .graph-row-title { color: var(--fg-2); }
 .graph-row-who, .graph-row-inferred, .graph-rounds, .graph-task-number, .graph-row-end, .graph-more { font: var(--type-meta); color: var(--fg-3); white-space: nowrap; }
-.graph-row-who { flex: 0 6 auto; min-width: 0; max-width: 20%; overflow: hidden; text-overflow: ellipsis; }
+.graph-row-who { flex: 0 1 auto; min-width: 120px; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
 .graph-row-inferred { flex: 0 6 auto; min-width: 0; max-width: 12%; overflow: hidden; text-overflow: ellipsis; }
-.graph-row-end { flex: 0 3 auto; min-width: 0; max-width: 20%; overflow: hidden; text-overflow: ellipsis; margin-left: auto; }
+.graph-row-end { flex: none; min-width: 0; overflow: hidden; text-overflow: ellipsis; margin-left: auto; }
 .graph-row-end.state-waiting_approval, .graph-time-end.state-waiting_approval { color: var(--state-approval); }
 .graph-row-end.state-waiting_input, .graph-time-end.state-waiting_input { color: var(--state-reply); }
 .graph-row-end.state-failed, .graph-time-end.state-failed { color: var(--state-failed); }
@@ -80,3 +80,14 @@
 @media (max-width: 899px) {
   .graph-page { --graph-tree-width: 50%; }
 }
+
+.is-compact .graph-row-main { height: 48px; display: grid; grid-template-columns: auto 16px 16px minmax(0, 1fr) auto; grid-template-rows: 24px 20px; column-gap: var(--space-1); align-content: center; }
+.is-compact .graph-indent { grid-column: 1; grid-row: 1 / 3; }
+.is-compact .graph-row-main > .status, .is-compact .graph-row-main > .icon { grid-column: 2; grid-row: 1; }
+.is-compact .graph-role { grid-column: 3; grid-row: 1; }
+.is-compact .graph-row-title { grid-column: 4; grid-row: 1; min-width: 0; }
+.is-compact .graph-row-who { grid-column: 4 / 6; grid-row: 2; width: 100%; min-width: 0; max-width: none; font: var(--type-meta); color: var(--fg-3); }
+.is-compact .graph-row-end { grid-column: 5; grid-row: 1; max-width: none; }
+.is-compact .graph-current-work { height: 20px; }
+.is-compact .graph-time-end { visibility: hidden; }
+.is-compact .graph-time-header > div:first-child > span { display: none; }

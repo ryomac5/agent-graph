@@ -45,7 +45,7 @@ it.each([
 ])('sends %s/%s with its evidence and displays the input before acknowledgement', async (origin, state, evidence) => {
   const f = fixture(String(origin), String(state), evidence);
   render(<f.Wrapper/>);
-  await screen.findByRole('option', { name: 'Model A' });
+  await waitFor(() => expect(screen.getByRole('button', { name: /^(Model|モデル) · / }).textContent).toContain('Model A'));
   fireEvent.change(screen.getByRole('textbox', { name: '入力' }), { target: { value: '続けてください' } });
   fireEvent.click(screen.getByRole('button', { name: '送信' }));
   const observed = origin === 'observed';
@@ -71,7 +71,7 @@ it.each(['send', 'session.send', 'session.launch'])('shows a %s failure and pres
   const f = fixture(name === 'send' ? 'managed' : 'observed', name === 'session.launch' ? 'ended' : 'running', name === 'session.launch' ? { kind: 'session_end' } : undefined);
   if (name === 'session.launch') f.command.mockImplementation(async command => command === 'list_models' ? ack([{ model: 'model-a', displayName: 'Model A' }]) : command === 'session.hosts' ? ack({ hosts: [] }) : { type: 'ack', cmd_id: 'cmd', ok: false, error: 'Runner unavailable' });
   render(<f.Wrapper/>);
-  await screen.findByRole('option', { name: 'Model A' });
+  await waitFor(() => expect(screen.getByRole('button', { name: /^(Model|モデル) · / }).textContent).toContain('Model A'));
   const input = screen.getByRole('textbox', { name: '入力' });
   fireEvent.change(input, { target: { value: '再試行する発言' } });
   fireEvent.click(screen.getByRole('button', { name: '送信' }));
@@ -86,7 +86,7 @@ it.each(['send', 'session.send', 'session.launch'])('shows a %s failure and pres
 
 it('replaces optimistic input with the recorded message without duplicating it', async () => {
   const f = fixture(); render(<f.Wrapper/>);
-  await screen.findByRole('option', { name: 'Model A' });
+  await waitFor(() => expect(screen.getByRole('button', { name: /^(Model|モデル) · / }).textContent).toContain('Model A'));
   fireEvent.change(screen.getByRole('textbox', { name: '入力' }), { target: { value: 'Recorded input' } });
   fireEvent.click(screen.getByRole('button', { name: '送信' }));
   await act(async () => {
@@ -124,7 +124,7 @@ it.each(['claude', 'codex'])('creates a %s session from the project menu, opens 
     expect(listPanes(saved)[0].tabs.at(-1)).toMatchObject({ kind: 'conversation', conversationId });
     expect(listPanes(saved)[0].active).toBe(listPanes(saved)[0].tabs.at(-1)!.id);
   });
-  await screen.findByRole('option', { name: 'Model A' });
+  await waitFor(() => expect(screen.getByRole('button', { name: /^(Model|モデル) · / }).textContent).toContain('Model A'));
   fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'First message' } });
   fireEvent.click(screen.getByRole('button', { name: 'Send' }));
   await vi.waitFor(() => expect(f.command).toHaveBeenCalledWith('session.send', { conversationId, text: 'First message' }));
@@ -169,8 +169,8 @@ it('opens exactly one empty tab for a project without sessions and keeps it when
   });
   render(<MemoryRouter initialEntries={['/p/p?session=draft']}><App target={f.target} client={f.client}/></MemoryRouter>);
   expect(document.querySelectorAll('.workbench [role=tab]')).toHaveLength(1);
-  fireEvent.change(screen.getByRole('combobox', { name: 'Provider' }), { target: { value: 'codex' } });
-  await screen.findByRole('option', { name: 'Model A' });
+  fireEvent.click(screen.getByRole('button', { name: 'Codex' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: /^(Model|モデル) · / }).textContent).toContain('Model A'));
   fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Begin' } });
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Send' })); });
   await waitFor(() => expect(f.command).toHaveBeenCalledWith('session.send', { conversationId, text: 'Begin' }));
@@ -190,7 +190,7 @@ it('keeps the first input and shows the reason when starting fails', async () =>
   const f = fixture();
   f.command.mockImplementation(async (name: string) => name === 'list_models' ? ack([{ model: 'model-a', displayName: 'Model A' }]) : name === 'session.launch' ? { type: 'ack', cmd_id: 'cmd', ok: false, error: 'Host unavailable' } : ack([]));
   render(<MemoryRouter initialEntries={['/p/p?session=draft']}><App target={f.target} client={f.client}/></MemoryRouter>);
-  await screen.findByRole('option', { name: 'Model A' });
+  await waitFor(() => expect(screen.getByRole('button', { name: /^(Model|モデル) · / }).textContent).toContain('Model A'));
   fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'First input' } });
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Send' })); });
   expect(screen.getByRole('alert').textContent).toBe('Host unavailable');
@@ -200,7 +200,7 @@ it('keeps the first input and shows the reason when starting fails', async () =>
 
 it('keeps the conversation and run reachable when API identities change after launch', async () => {
   const f = fixture('observed', 'running', undefined, 'antigravity'); render(<f.Wrapper/>);
-  await screen.findByRole('option', { name: 'Model A' });
+  await waitFor(() => expect(screen.getByRole('button', { name: /^(Model|モデル) · / }).textContent).toContain('Model A'));
   fireEvent.change(screen.getByRole('textbox', { name: '入力' }), { target: { value: 'Continue with context' } });
   fireEvent.click(screen.getByRole('button', { name: '送信' }));
   await act(async () => f.finish(ack({ conversationId: 'runner-id', runId: 'runner-run' })));
@@ -223,7 +223,7 @@ it.each(['claude', 'codex'])('resumes observed %s using the ID provider before i
   const state = f.target.getSnapshot();
   f.target.setSnapshot({ seq: 2, generation: 0, projection: { ...state.projection, conversations: state.projection.conversations!.map(({ provider: _, ...row }) => row) } });
   render(<f.Wrapper/>);
-  await screen.findByRole('option', { name: 'Model A' });
+  await waitFor(() => expect(screen.getByRole('button', { name: /^(Model|モデル) · / }).textContent).toContain('Model A'));
   fireEvent.change(screen.getByRole('textbox', { name: '入力' }), { target: { value: 'Resume from ID' } });
   fireEvent.click(screen.getByRole('button', { name: '送信' }));
   await waitFor(() => expect(f.command).toHaveBeenCalledWith('session.launch', { projectId: 'p', provider, resume: 'native-id', model: 'model-a' }));
@@ -237,7 +237,7 @@ it.each(['claude', 'codex'])('sends observed %s to an existing terminal host wit
   const conversationId = JSON.stringify([provider, 'native-id']);
   f.command.mockImplementation(async name => name === 'list_models' ? ack([{ model: 'model-a', displayName: 'Model A' }]) : name === 'session.hosts' ? ack({ hosts: [{ terminalId: 'existing', conversationId, provider, projectId: 'p', cwd: '/repo' }] }) : ack());
   render(<f.Wrapper/>);
-  await screen.findByRole('option', { name: 'Model A' });
+  await waitFor(() => expect(screen.getByRole('button', { name: /^(Model|モデル) · / }).textContent).toContain('Model A'));
   fireEvent.change(screen.getByRole('textbox', { name: '入力' }), { target: { value: 'Existing host' } });
   fireEvent.click(screen.getByRole('button', { name: '送信' }));
   await waitFor(() => expect(f.command).toHaveBeenCalledWith('session.send', { conversationId, text: 'Existing host' }));

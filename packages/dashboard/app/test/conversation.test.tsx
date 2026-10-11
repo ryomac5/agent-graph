@@ -25,7 +25,7 @@ function setup({ provider = 'codex', origin = 'managed', status = 'idle', projec
   render(<MemoryRouter initialEntries={['/c/c']}><ConversationPage conversationId={conversationId} target={store} client={client}/></MemoryRouter>);
   return { store, command };
 }
-async function waitModels() { await screen.findByRole('option', { name: 'Model B' }); }
+async function waitModels() { fireEvent.click(screen.getByRole('button', { name: /^Model · / })); await screen.findByRole('menuitemradio', { name: 'Model B' }); fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' }); }
 
 it('bundles delta chunks per message, scopes them, and replaces streaming text with a completed fact', async () => {
   const { store } = setup();
@@ -119,20 +119,27 @@ it('loads models from runner and sends model and effort using set_model', async 
   const { command } = setup();
   await waitModels();
   expect(command).toHaveBeenCalledWith('list_models', { provider: 'codex' });
-  fireEvent.change(screen.getByRole('combobox', { name: 'Model' }), { target: { value: 'model-b' } });
-  fireEvent.change(screen.getByRole('combobox', { name: 'Effort' }), { target: { value: 'high' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Apply model and effort' }));
+  fireEvent.click(screen.getByRole('button', { name: /^Model · / }));
+  fireEvent.click(screen.getByRole('menuitemradio', { name: 'Model B' }));
+  fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+  fireEvent.click(screen.getByRole('button', { name: /^Effort · / }));
+  fireEvent.click(screen.getByRole('menuitemradio', { name: 'high' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
   await waitFor(() => expect(command).toHaveBeenCalledWith('set_model', { runId: 'r', model: { model: 'model-b', effort: 'high' } }));
   expect(screen.getByTitle('Codex model and effort changes apply from the next turn.')).toBeTruthy();
 });
 
-it('hides Codex model and effort changes and blocks sending during an active turn', async () => {
+it('disables Codex model and effort changes and blocks sending during an active turn', async () => {
   const { command } = setup({ status: 'running' });
   await waitFor(() => expect(command).toHaveBeenCalledWith('list_models', { provider: 'codex' }));
-  expect(screen.queryByRole('combobox', { name: 'Effort' })).toBeNull();
+  expect((screen.getByRole('button', { name: /^Effort · / }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: /^Model · / }));
+  expect(screen.getByText('Available after this turn ends')).toBeTruthy();
+  expect(screen.getAllByRole('menuitemradio').every(row => (row as HTMLButtonElement).disabled)).toBe(true);
+  fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
   expect(screen.queryByRole('button', { name: 'Apply model and effort' })).toBeNull();
   expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
-  expect(screen.getByTitle('Codex controls are available after the active turn ends.')).toBeTruthy();
+  expect(screen.getByTitle('Available after this turn ends')).toBeTruthy();
 });
 
 it('sends only on Cmd+Enter, preserves newlines on Enter and rejects composing input', async () => {
@@ -249,7 +256,7 @@ it('resumes observed Codex through the terminal without a dialog when runner has
 it('allows launch configuration for an external running Codex conversation without offering live mutation', async () => {
   setup({ origin: 'observed', status: 'running' });
   await waitModels();
-  expect(screen.getByRole('combobox', { name: 'Model' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: /^Model · / })).toBeTruthy();
   expect(screen.queryByRole('button', { name: 'Apply model and effort' })).toBeNull();
   fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Next step' } });
   expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(false);
@@ -427,9 +434,11 @@ it('記録のモデル名を一覧の同じモデルとして選び、内部名�
     result: name === 'list_models' ? [{ model: 'default', displayName: 'Default (recommended)' }, { model: 'opus', displayName: 'Opus 5.5' }] : {} }));
   setup({ provider: 'claude', client: { command }, projection: { runs: [{ id: 'r', conversation_id: 'c', generation: 1, state: 'idle', started_ts: '2026-10-07T00:00:00Z',
     launch: { cwd: '/workspace/demo', model: { model: 'claude-opus-5-5' } } }] } });
-  await screen.findByRole('option', { name: 'Opus 5.5' });
-  const select = screen.getByRole('combobox', { name: 'Model' }) as HTMLSelectElement;
-  expect(select.value).toBe('opus');
-  expect(screen.queryByRole('option', { name: 'claude-opus-5-5' })).toBeNull();
-  expect((screen.getByRole('button', { name: 'Apply model and effort' }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: /^Model · / }));
+  const selected = await screen.findByRole('menuitemradio', { name: /^Opus 5.5/ });
+  expect(selected.textContent).toContain('In use');
+  expect(selected.getAttribute('data-value')).toBe('opus');
+  expect(selected.getAttribute('aria-checked')).toBe('true');
+  expect(screen.queryByRole('menuitemradio', { name: 'claude-opus-5-5' })).toBeNull();
+  expect((screen.getByRole('button', { name: 'Apply' }) as HTMLButtonElement).disabled).toBe(true);
 });

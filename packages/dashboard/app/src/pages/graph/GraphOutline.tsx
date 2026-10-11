@@ -21,11 +21,10 @@ export function elapsed(row: GraphRow, now: number): string {
 export function rowEnd(row: GraphRow, language: Language, now: number): string {
   const ja = language === 'ja'; const node = row.node;
   if (!node) return '';
-  if (row.role === 'main' && row.runningBelow) return ja ? `サブエージェント ${row.runningBelow} 件が実行中` : `${row.runningBelow} running below`;
   const state = toDisplayState(node.state);
   if (['starting', 'running'].includes(state)) return elapsed(row, now);
   if (state === 'waiting_approval') return ja ? '承認待ち' : 'Approval';
-  if (state === 'waiting_input') return ja ? '返答待ち' : 'Your turn';
+  if (state === 'waiting_input') return ja ? 'あなたの番' : 'Your turn';
   if (state === 'failed') return ja ? '失敗' : 'Failed';
   const verdict = String(node.delegation?.verdict ?? (/^Approved/.test(node.report ?? '') ? 'approve' : /^Changes requested/.test(node.report ?? '') ? 'request_changes' : ''));
   if (row.role === 'review' && verdict) return verdict === 'approve' ? (ja ? '合格' : 'Pass') : (ja ? '修正が必要' : 'Changes');
@@ -84,10 +83,14 @@ export function GraphOutline(props: OutlineProps) {
     {model.rows.map(row => {
       const node = row.node; const state = toDisplayState(node?.state ?? 'idle');
       const running = ['starting', 'running'].includes(state);
-      const target = node?.provider === 'codex' ? 'Codex' : agentName(node?.provider ?? '', node?.model ?? '').replace(/^Claude\s+/, '') || 'Agent';
+      const agent = agentName(node?.provider ?? '', node?.model ?? '') || 'Agent';
+      const target = node?.provider === 'codex' && !agent.startsWith('Codex') ? 'Codex ' + agent : agent;
       const groupWords = row.group ? ROLES.filter(role => row.group!.roles[role]).map(role => `${roleWord(role, language)} ${row.group!.roles[role]}`).join(' · ') : '';
-      const who = row.group ? groupWords : `${roleWord(row.role!, language)}${row.role === 'main' ? '' : ` · ${target}`}`;
-      const title = row.group?.more ? t.showMore : row.group ? `${row.group.kind === 'today' ? t.today : t.earlier} ${row.group.count}` : node!.label;
+      const descendants = row.role === 'main' ? model.all.filter(item => item.ancestors.includes(row.id) && item.node).length : 0;
+      const subagents = language === 'ja' ? 'サブエージェント ' + descendants : descendants + ' sub-agents';
+      const who = row.group ? groupWords : [roleWord(row.role!, language), row.role === 'main' ? target.replace(/^Claude\s+/, '') : target,
+        row.role === 'main' && descendants ? subagents : '', node?.inferred ? t.inferred : '', (node?.attempts.length ?? 0) > 1 ? '×' + node!.attempts.length : ''].filter(Boolean).join(' · ');
+      const title = row.group?.more ? t.showMore : row.group ? `${row.group.kind === 'today' ? t.today : t.earlier} ${row.group.count}${language === 'ja' ? ' 件' : ''}` : node!.label;
       const kit = readObject(node?.delegation?.kit ?? readObject(node?.delegation?.payload).kit);
       const task = readText(node?.delegation?.task_id ?? kit.node_id);
       const taskNumber = /^T?\d+$/.test(task) ? `T${task.replace(/^T/, '')}` : '';
@@ -97,18 +100,16 @@ export function GraphOutline(props: OutlineProps) {
         {!row.group && <span className="graph-role" data-role={row.role} data-icon={ROLE_ICONS[row.role!]}><Icon name={ROLE_ICONS[row.role!]}/></span>}
         <span className="graph-row-title" title={title}>{Boolean(taskNumber) && <span className="graph-task-number">{taskNumber} </span>}{title}</span>
         <span className="graph-row-who" title={who}>{who}</span>
-        {node?.inferred && <span className="graph-row-inferred" title={t.inferred}>{t.inferred}</span>}
-        {(node?.attempts.length ?? 0) > 1 && <span className="graph-rounds">×{node!.attempts.length}</span>}
-        {node && (!timeline || row.role === 'main' && row.runningBelow > 0) && <span className={`graph-row-end state-${state}`} title={rowEnd(row, language, now)}>{rowEnd(row, language, now)}</span>}
+        {node && <span className={`graph-row-end state-${state}`} title={rowEnd(row, language, now)}>{rowEnd(row, language, now)}</span>}
       </>;
       const ref = (element: HTMLElement | null) => { if (element) refs.current.set(row.id, element); else refs.current.delete(row.id); };
-      const shared = { className: 'graph-row-main', tabIndex: 0, onKeyDown: (event: KeyboardEvent) => move(event, row), ref, 'aria-level': row.depth + 1, role: 'treeitem', 'aria-selected': selected === row.id, 'aria-current': embedded && selected === row.id ? 'page' as const : undefined, 'aria-label': row.group ? `${title} · ${groupWords}` : `${title} · ${roleWord(row.role!, language)}${row.role === 'main' ? '' : ` · ${target}`} · ${row.role === 'main' && row.runningBelow ? rowEnd(row, language, now) : stateLabel(node!.state, language)}` };
+      const shared = { className: 'graph-row-main', tabIndex: 0, onKeyDown: (event: KeyboardEvent) => move(event, row), ref, 'aria-level': row.depth + 1, role: 'treeitem', 'aria-selected': selected === row.id, 'aria-current': embedded && selected === row.id ? 'page' as const : undefined, 'aria-label': row.group ? `${title} · ${groupWords}` : `${title} · ${roleWord(row.role!, language)}${row.role === 'main' ? '' : ` · ${target}`} · ${row.role === 'main' && row.runningBelow ? (language === 'ja' ? 'サブエージェント ' + row.runningBelow + ' 件が実行中' : row.runningBelow + ' running below') : stateLabel(node!.state, language)}` };
       return <div key={row.id} className={`graph-row${running ? ' is-running' : ''}${selected === row.id ? ' is-selected' : ''}${['ended', 'idle'].includes(state) ? ' is-quiet' : ''}${timeline ? ' has-timeline' : ''}`} data-node-id={row.id} style={{ minHeight: row.height }}>
         <div className="graph-tree-cell">
           {row.group ? <button {...shared} aria-expanded={row.group.more ? undefined : row.group.shown > 0} onClick={() => onGroup(row.group!.groupId ?? row.id, row.group!.more || !row.group!.shown ? 'more' : 'close')}>{content}</button>
             : embedded && node?.conversationId ? <Link {...shared} to={href(row)} onClick={() => onSelect(row)}>{content}</Link>
               : <button {...shared} onClick={() => onSelect(row)} onDoubleClick={() => { if (node?.conversationId) navigate(href(row)); }}>{content}</button>}
-          {running && <div className="graph-current-work" title={node?.currentWork} style={{ paddingLeft: `calc(${row.depth} * var(--space-4) + var(--space-12))` }}>{node?.currentWork}</div>}
+          {running && <div className="graph-current-work" title={node?.currentWork} style={{ paddingLeft: `calc(${row.depth} * var(--space-4) + var(--space-12))` }}>{node?.currentWork || (language === 'ja' ? '作業中' : 'Working')}</div>}
           {node?.approvals?.map(approval => <div key={String(approval.id)} className="graph-approval" style={{ paddingLeft: `calc(${row.depth} * var(--space-4) + var(--space-4))` }}>
             <code title={summarizeApproval(approval.request)}>{summarizeApproval(approval.request)}</code>
             {(['allow', 'deny'] as const).map(action => <button key={action} className="btn btn-ghost btn-sm" disabled={!connected || sent.has(String(approval.id)) || !getDecision(approval, action)} onClick={() => onAnswer(approval, action)}>{action === 'allow' ? t.allow : t.deny}</button>)}

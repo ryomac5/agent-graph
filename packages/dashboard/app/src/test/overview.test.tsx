@@ -147,8 +147,8 @@ it('switches the request flow between roots in the workspace', () => {
  vi.stubGlobal('innerWidth', 1440); render(<MemoryRouter><WorkspacePage project="agent-graph" target={target} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: true })) }}/></MemoryRouter>);
  const flow = screen.getByRole('complementary', { name: 'Panel' });
  fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getByRole('link', { name: /Terminal root/ }));
- expect(within(flow).getByText('Implementation · Codex')).toBeTruthy();
- fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getByRole('link', { name: /Second root/ })); expect(within(flow).queryByText('Implementation · Codex')).toBeNull(); fireEvent.click(within(flow).getByRole('treeitem', { name: /Earlier 1/ })); expect(within(flow).getByText('Second review')).toBeTruthy();
+ expect(within(flow).getByText(/^Implementation · Codex GPT/)).toBeTruthy();
+ fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getByRole('link', { name: /Second root/ })); expect(within(flow).queryByText(/^Implementation · Codex/)).toBeNull(); fireEvent.click(within(flow).getByRole('treeitem', { name: /Earlier 1/ })); expect(within(flow).getByText('Second review')).toBeTruthy();
 });
 it('lists projected roots with child counts and keeps unknown evidence out of a separate banner', () => {
  vi.stubGlobal('innerWidth', 1024); render(<MemoryRouter><WorkspacePage project="agent-graph" target={setup()} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: true })) }}/></MemoryRouter>);

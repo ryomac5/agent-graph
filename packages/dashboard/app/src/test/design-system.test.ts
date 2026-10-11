@@ -153,7 +153,7 @@ it('uses accessible input borders separately from decorative separators', () => 
   expect(session.split('\n').find(line => line.startsWith('.session-create input'))).toContain('border: var(--input-border)');
   expect(session.split('\n').find(line => line.startsWith('.session-target {'))).toContain('border: var(--input-border)');
   const conversation = readFileSync('app/src/pages/conversation/conversation.css', 'utf8');
-  expect(conversation.match(/\.composer-box\s*\{([^}]+)\}/)![1]).toContain('border: var(--input-border)');
+  expect(conversation.match(/\.composer-box\s*\{([^}]+)\}/)![1]).toContain('border: var(--border)');
   expect(conversation.match(/\.composer-box:focus-within\s*\{([^}]+)\}/)![1]).toContain('outline: 2px solid var(--focus)');
 });
 

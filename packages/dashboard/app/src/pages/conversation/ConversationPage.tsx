@@ -26,6 +26,8 @@ import { harnessKind, readBody } from '../../lib/message-body.ts';
 import { collectToolResults } from '../../components/conversation/ToolCall.tsx';
 import { resolveParticipants, senderOf, type Sender } from '../../components/conversation/participants.ts';
 import { ACTIVE_STATES, compareEntries, messageSignature, PENDING_APPROVALS, readObject, readText, selectTimeline, showValue, type TimelineEntry } from '../../components/conversation/model.ts';
+import { ChoiceMenu } from '../../components/ChoiceMenu.tsx';
+import { displayModel, findOlderModels, isRecommended, readRecommendedModel, readVisibleModels, type ComposerModel } from '../../components/conversation/models.ts';
 import { effortLabel, translate, type ConversationText } from '../../components/conversation/text.ts';
 import { collectConversationChanges } from '../../lib/conversation-changes.ts';
 import { resolveProjectId } from '../../lib/projects.ts';
@@ -39,7 +41,7 @@ import { useAttachments, MAX_ATTACHMENTS } from './useAttachments.ts';
 import './conversation.css';
 
 export type ConversationClient = Pick<ReturnType<typeof createClient>, 'command'> & Partial<Pick<ReturnType<typeof createClient>, 'watchConversation' | 'fetchConversation' | 'subscribeTerminal' | 'subscribeConnected'>>;
-interface Model { model: string; displayName: string; effort?: string }
+type Model = ComposerModel;
 export interface ConversationPageProps {
   client: ConversationClient;
   conversationId?: string;
@@ -212,11 +214,14 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const provider = readText(conversation?.provider) || providerFromId(conversationId);
   const launch = readObject(run?.launch);
   const saved = readModel(run);
-  const currentModel = saved.model || readText(run?.model);
+  const currentModel = readText(run?.model) || saved.model;
   const currentEffort = saved.effort || readText(run?.effort);
   const savedCwd = readText(launch.cwd ?? run?.cwd ?? run?.worktree_path ?? conversation?.cwd) || newSession?.cwd || readText(state.projection.projects?.find(row => row.id === conversation?.project)?.root_path);
   const [models, setModels] = useState<Model[]>([]);
   const [modelsError, setModelsError] = useState('');
+  const [recommendedModel, setRecommendedModel] = useState('');
+  const [visibleModels, setVisibleModels] = useState<string[]>([]);
+  const [edited, setEdited] = useState(false);
   const [model, setModel] = useState('');
   const [effort, setEffort] = useState('');
   const [cwd, setCwd] = useState('');
@@ -383,6 +388,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
 
   useEffect(() => {
     setModel(currentModel); setEffort(currentEffort); setCwd(savedCwd);
+    setEdited(false);
   }, [conversationId, currentModel, currentEffort, savedCwd]);
   useEffect(() => {
     setInput(''); setError(''); setDragging(false); dragDepth.current = 0;
@@ -439,6 +445,19 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     }).catch(reason => { if (!disposed) setModelsError(String(reason)); });
     return () => { disposed = true; };
   }, [client, provider, connected, language, conversationId]);
+
+  useEffect(() => {
+    let disposed = false;
+    setRecommendedModel(''); setVisibleModels([]);
+    if (!provider || !connected) return;
+    void client.command('settings.read', {}).then(ack => {
+      if (!disposed && ack.ok) {
+        const recommended = readRecommendedModel(ack.result, provider);
+        setRecommendedModel(recommended); setVisibleModels(readVisibleModels(ack.result));
+      }
+    }).catch(() => {});
+    return () => { disposed = true; };
+  }, [client, provider, connected, conversationId]);
 
   async function execute(command: string, payload: unknown): Promise<Ack | undefined> {
     if (pending || !connected) return;
@@ -547,14 +566,24 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const elapsed = !seriesIds && isWorkingTurn(workingTurn) ? turnElapsed : '';
   const worktree = worktreeLabel(run);
   const shownModel = appliedModel?.model || currentModel;
-  const shownEffort = appliedModel?.effort || currentEffort;
+  const shownEffort = appliedModel?.effort ?? currentEffort;
   const nameRoot = root?.conversation_ids.includes(conversationId) ? root : undefined;
   const title = displayName || conversationName(state, conversationId) || t('conversation');
   // 記録のモデル名「claude-opus-5-5」は、一覧の「Opus 5.5」と同じものとして選ぶ。内部名をそのまま出さない。
   const matchModel = (value: string) => models.find(item => item.model === value)?.model
     ?? models.find(item => modelName(value) !== '' && [item.displayName, `Claude ${item.displayName}`].includes(modelName(value)))?.model ?? value;
   const selectedModel = matchModel(model);
-  const dirty = Boolean(model) && (selectedModel !== matchModel(currentModel) || effort !== currentEffort);
+  const dirty = edited && Boolean(model) && (selectedModel !== matchModel(appliedModel?.model || currentModel) || effort !== (appliedModel?.effort ?? currentEffort));
+  const resolvedModel = appliedModel?.model || currentModel || model || recommendedModel;
+  const modelLabel = resolvedModel && !['default', 'Default'].includes(resolvedModel) ? displayModel(resolvedModel, models) : t('noModels');
+  const olderModels = findOlderModels(models, [selectedModel, matchModel(currentModel), recommendedModel, ...visibleModels.map(matchModel)]);
+  const recommended = matchModel(recommendedModel);
+  const providerDefault = models.find(isRecommended);
+  const modelChoices = [
+    ...(providerDefault ? [{ value: providerDefault.model, label: <>{t('recommended')} · {t('noModels')}</>, detail: shownModel === providerDefault.model ? t('inUse') : undefined, disabled: codexActive }] : []),
+    ...(!providerDefault && recommended ? [{ value: recommended, label: <>{t('recommended')} · {displayModel(recommended, models)}</>, detail: matchModel(shownModel) === recommended ? t('inUse') : undefined, disabled: codexActive }] : []),
+    ...models.filter(item => !isRecommended(item) && (providerDefault || item.model !== recommended)).map(item => ({ value: item.model, label: item.displayName, title: item.displayName, older: olderModels.has(item.model), detail: matchModel(shownModel) === item.model ? t('inUse') : undefined, disabled: codexActive })),
+  ];
   const hint = provider === 'codex' ? codexActive ? 'activeCodex' : 'nextTurn' : 'claudeEffort';
   const participants = resolveParticipants(state, conversationId, { user: t('user'), assistant: t('assistant'), parent: t('parentAgent') });
   const agentSender = senderOf({ role: 'assistant' }, participants);
@@ -690,21 +719,13 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
           }}/>
         <div className="composer-toolbar">
           <div className="composer-controls">
-            {starting && <select className="select-sm" aria-label={language === 'ja' ? '提供元' : 'Provider'} value={sessionProvider} disabled={pending} onChange={event => { setSessionProvider(event.target.value); setModel(''); setEffort(''); }}><option value="claude">Claude</option><option value="codex">Codex</option></select>}
-            {!codexActive && <>
-              <span className="composer-select"><select className="select-sm" aria-label={t('model')} title={t('model')} disabled={!connected || pending} value={selectedModel} onChange={event => {
-                setModel(event.target.value);
-                if (provider === 'codex') setEffort(models.find(item => item.model === event.target.value)?.effort ?? '');
-              }}><option value="">{models.length ? t('chooseModel') : t('noModels')}</option>
-                {model && !models.some(item => item.model === selectedModel) && <option value={model} disabled>{modelName(model) || model}</option>}
-                {models.map(item => <option key={item.model} value={item.model}>{language === 'ja' && item.displayName === 'Default (recommended)' ? t('defaultModel') : item.displayName}</option>)}</select><Icon name="chevronDown" size={16}/></span>
-              <span className="composer-select"><select className="select-sm" aria-label={t('effort')} title={provider === 'codex' ? t('effort') : t('claudeEffort')} value={effort}
-                disabled={!connected || pending || provider !== 'codex'} onChange={event => setEffort(event.target.value)}>
-                <option value="">{t('defaultEffort')}</option>{[...new Set([...CODEX_EFFORTS, ...(effort ? [effort] : [])])].map(value => <option key={value} value={value}>{effortLabel(value, language)}</option>)}
-              </select><Icon name="chevronDown" size={16}/></span>
-              {!external && <button className="btn btn-ghost btn-sm" aria-label={t('apply')} title={t('apply')} disabled={!writable || !models.some(item => item.model === selectedModel) || !dirty}
-                onClick={() => void applyModel()}>{t('applyShort')}</button>}
-            </>}
+            {starting && <div className="composer-provider" role="group" aria-label={language === 'ja' ? '提供元' : 'Provider'}>{['claude', 'codex'].map(value => <button type="button" key={value} aria-pressed={sessionProvider === value} disabled={pending} onClick={() => { setSessionProvider(value); setModel(''); setEffort(''); }}>{value === 'claude' ? 'Claude' : 'Codex'}</button>)}</div>}
+            <ChoiceMenu name={t('model') + ' · ' + modelLabel} label={<><span className={"composer-provider-mark provider-" + provider} aria-hidden="true"><Icon name={provider === "claude" ? "sparkle" : "terminal"} size={16}/></span><span className="truncate">{modelLabel}</span></>} width={320} value={selectedModel} choices={modelChoices} disabled={!connected || pending} olderLabel={language === 'ja' ? '古いバージョン ' + olderModels.size + ' 件' : olderModels.size + ' older versions'}
+              note={codexActive ? t('activeCodex') : models.length ? undefined : t('noModels')} onChange={value => { setEdited(true); setModel(value); if (provider === 'codex') setEffort(models.find(item => item.model === value)?.effort ?? ''); }}
+              footer={<button className="btn btn-primary btn-sm" disabled={codexActive || !dirty || (!external && !writable)} onClick={() => { if (!external) void applyModel(); }}>{t('applyShort')}</button>}/>
+            {provider === 'codex' && <ChoiceMenu name={t('effort') + ' · ' + (effort || t('defaultEffort'))} label={<>{t('effort')} <span className="mono">{effort || t('defaultEffort')}</span></>} value={effort} disabled={!connected || pending || codexActive}
+              choices={[{ value: '', label: t('defaultEffort') }, ...[...new Set([...CODEX_EFFORTS, ...(effort ? [effort] : [])])].map(value => ({ value, label: <span className="mono">{value}</span> }))]} onChange={value => { setEdited(true); setEffort(value); }}
+              footer={!external ? <button className="btn btn-primary btn-sm" disabled={!writable || !dirty} onClick={() => void applyModel()}>{t('applyShort')}</button> : undefined}/>}
             {!savedCwd && <input className="input-sm" aria-label={t('cwd')} placeholder={t('cwd')} value={cwd} disabled={pending} onChange={event => setCwd(event.target.value)}/>}
           </div>
           <div className="composer-actions">

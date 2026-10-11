@@ -18,7 +18,7 @@
 .timeline-empty { display: flex; align-items: center; justify-content: center; gap: var(--space-2); padding: var(--space-12) 0; color: var(--fg-3); }
 .conv-timeline-inner > .message-first:first-child { margin-top: 0; }
 .message-user { align-items: flex-end; }
-.message-user .message-header { flex-direction: row-reverse; }
+.message-user .message-header { justify-content: flex-end; }
 .provenance { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--fg-3); font: var(--type-ui); opacity: 0; transition: opacity var(--duration) var(--ease); }
 .message:hover .provenance { opacity: 1; }
 .message:focus-within .provenance { opacity: 1; }
@@ -31,7 +31,7 @@
 .confidence-unknown { border-style: solid; border-color: var(--line); }
 .message-main { display: grid; gap: var(--space-2); min-width: 0; width: 100%; }
 .message-expand { justify-self: start; margin-top: var(--space-1); }
-.message.streaming .markdown-body { color: var(--fg-2); }
+.message.streaming .markdown-body { color: var(--fg-1); }
 .message-gap { padding: var(--space-2) var(--space-3); border: var(--border); border-radius: var(--radius-1); color: var(--fg-2); font: var(--type-ui); }
 .tool-calls { display: grid; gap: var(--space-1); min-width: 0; }
 .tool-call > summary::-webkit-details-marker { display: none; }
@@ -49,7 +49,7 @@
 .approval-body { display: grid; gap: var(--space-2); padding: var(--space-3); border-top: var(--border); }
 .timeline-approval.is-settled { border-color: var(--line); box-shadow: none; }
 .timeline-approval.outcome-denied { border-color: var(--line); box-shadow: none; }
-.timeline-approval.is-settled .approval-request { opacity: .75; }
+.timeline-approval.is-settled .approval-request { opacity: 1; }
 .timeline-boundary { display: flex; align-items: center; gap: var(--space-3); margin: var(--space-3) 0; color: var(--fg-3); font: var(--type-meta); }
 .timeline-boundary::before { content: ''; flex: 1; border-top: var(--border); }
 .timeline-boundary::after { content: ''; flex: 1; border-top: var(--border); }
@@ -69,7 +69,6 @@
 @media (max-width: 760px) {
   .conv-header { padding-left: var(--space-4); padding-right: var(--space-4); }
   .composer { padding-left: var(--space-4); padding-right: var(--space-4); }
-  .message-user .message-main { max-width: 88%; }
   .conv-agent .conv-model { display: none; }
 }
 .conv-timeline:focus-visible { outline-offset: 1px; border-radius: 0; }
@@ -122,14 +121,12 @@
 .message { min-width: 0; flex-direction: column; display: flex; position: relative; gap: var(--space-1); }
 .message-first { margin-top: var(--space-4); }
 .message-header { gap: var(--space-2); flex-wrap: wrap; align-items: baseline; display: flex; font: var(--type-meta); min-height: 16px; color: var(--fg-3); }
-.message-sender { font-weight: 600; font: var(--type-meta); color: var(--fg-2); }
-.message-agent .message-main { width: 100%; max-width: none; }
-.message-user .message-main { justify-items: end; width: auto; max-width: 80%; }
-.message-user .message-bubble { padding: var(--space-2) var(--space-3); background: var(--bg-2); border: 0; border-radius: var(--radius-2); }
-.message-user > .message-header { position: absolute; right: 100%; top: var(--space-2); margin-right: var(--space-2); opacity: 0; white-space: nowrap; }
-.message-user:hover > .message-header { opacity: 1; }
-.message-user:focus-within > .message-header { opacity: 1; }
-.message-agent:not(.message-first) > .message-header { display: none; }
+.message-sender, .message-requester { font: var(--type-meta); font-weight: 600; color: var(--fg-2); }
+.message-agent { align-items: flex-start; }
+.message-agent .message-main { width: fit-content; max-width: 88%; }
+.message-user .message-main { justify-items: end; width: fit-content; max-width: 80%; }
+.message-user .message-bubble { padding: var(--space-2) var(--space-3); background: var(--bg-3); border: 0; border-radius: var(--radius-2) var(--radius-1) var(--radius-2) var(--radius-2); }
+.message-user > .message-header { max-width: 80%; }
 .tool-call { overflow: hidden; min-width: 0; background: transparent; border: 0; border-radius: var(--radius-1); }
 .tool-call > summary { user-select: none; list-style: none; cursor: pointer; gap: var(--space-2); align-items: center; display: flex; height: var(--control); padding: 0 var(--space-2); font: var(--type-meta); color: var(--fg-3); }
 .tool-body { border-top: var(--border); gap: var(--space-3); display: grid; background: var(--bg-1); border: 0; padding: var(--space-3); font: var(--type-mono); }
@@ -142,10 +139,10 @@
 .tool-run-body .message-header { display: none; }
 .tool-failed { color: var(--state-failed); }
 .timeline-approval { overflow: hidden; background: var(--bg-0); min-width: 0; border: var(--border); border-radius: var(--radius-1); box-shadow: none; }
-.delegation-card { cursor: pointer; text-align: left; width: 100%; align-items: center; display: flex; height: 40px; padding: 0 var(--space-3); gap: var(--space-2); border: var(--border); border-radius: var(--radius-1); background: var(--bg-0); font: var(--type-ui); color: var(--fg-1); }
+.delegation-card { cursor: pointer; text-align: left; width: 100%; align-items: center; display: flex; height: 40px; padding: 0 var(--space-3); gap: var(--space-2); border: var(--border); border-radius: var(--radius-1); background: transparent; font: var(--type-ui); color: var(--fg-2); }
 .delegation-title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .message-report[open] .message-bubble { padding: var(--space-3) 0; }
-.composer-box:focus-within { border-color: var(--accent); box-shadow: none; }
+.composer-box:focus-within { border-color: var(--focus); outline: 2px solid var(--focus); outline-offset: 1px; box-shadow: none; }
 /* 本文8行（22px × 8）と上下の内側（12px × 2）で200pxを上限にする。 */
 .composer-box textarea { background: transparent; border-radius: var(--radius-1); width: 100%; display: block; font: var(--type-body); padding: var(--space-3); min-height: 48px; max-height: 200px; outline: none; border: 0; resize: none; overflow-y: auto; }
 .composer-box textarea:focus { outline: none; box-shadow: none; }
@@ -163,9 +160,9 @@
 .conv-title { flex: 0 1 auto; min-width: 0; font: var(--type-title); }
 .embedded .conv-title { font: var(--type-title); }
 .message-report { max-width: 100%; background: var(--bg-0); margin: var(--space-2) 0; padding: 0 var(--space-3); border: var(--border); border-radius: var(--radius-2); }
-.composer-box { background: var(--bg-0); border-radius: var(--radius-1); transition: border-color var(--duration) var(--ease), box-shadow var(--duration) var(--ease); border: var(--border); box-shadow: none; }
-.message-bubble { font: var(--type-body); }
-.message-agent .message-bubble { border-radius: 0; border: 0; background: transparent; padding: 0; box-shadow: none; }
+.composer-box { background: var(--bg-0); border-radius: var(--radius-1); transition: border-color var(--duration) var(--ease), box-shadow var(--duration) var(--ease); border: var(--input-border); box-shadow: none; }
+.message-bubble { min-width: 0; max-width: 100%; color: var(--fg-1); font: var(--type-body); }
+.message-agent .message-bubble { border-radius: var(--radius-1) var(--radius-2) var(--radius-2) var(--radius-2); border: 0; background: var(--bg-1); padding: var(--space-2) var(--space-3); box-shadow: none; }
 .message-header time { color: var(--fg-3); font-variant-numeric: tabular-nums; font: var(--type-meta); }
 .message-time-unknown { color: var(--fg-3); font-variant-numeric: tabular-nums; font: var(--type-meta); }
 .message-report .message-report-lead { color: var(--fg-2); white-space: nowrap; text-overflow: ellipsis; overflow: hidden; min-width: 0; flex: 1; font: var(--type-ui); }
@@ -207,3 +204,7 @@
 .conv-files-action { width: auto; gap: var(--space-1); padding: 0 var(--space-1); }
 .conv-file-count { font: var(--type-meta); color: var(--fg-3); }
 .history-loading { position: absolute; top: 0; left: 0; right: 0; height: 1px; background: var(--fg-3); }
+
+@media (max-width: 760px) {
+  .message-user .message-main, .message-user > .message-header, .message-agent .message-main { max-width: 92%; }
+}

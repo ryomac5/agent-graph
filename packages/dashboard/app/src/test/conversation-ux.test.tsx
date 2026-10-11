@@ -12,6 +12,7 @@ import { groupToolRuns } from '../components/conversation/timeline.ts';
 import { selectTimeline, type TimelineEntry } from '../components/conversation/model.ts';
 import { resolveParticipants } from '../components/conversation/participants.ts';
 import { effortLabel, toolsLabel } from '../components/conversation/text.ts';
+import { Message } from '../components/conversation/Message.tsx';
 
 beforeEach(() => { localStorage.clear(); vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ generation: 0, projection: { messages: [], message_memberships: [] }, next: null }) }))); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -40,6 +41,7 @@ it.each(['Agent', 'Task', 'mcp__agent-graph__delegate', 'runner.delegate', 'plan
   render(<MemoryRouter initialEntries={['/p/p?root=root']}><WorkspacePage project="p" target={target} client={client} language="ja"/><Location/></MemoryRouter>);
   const card = await screen.findByRole('button', { name: /Build parser.*完了/ });
   expect(card.closest('.tool-run')).toBeNull();
+  expect(card.closest('.message-bubble')).toBeNull();
   expect(card.querySelector('[title="Claude"]')).toBeTruthy();
   const unmatched = screen.getByRole('button', { name: 'Unlinked request' }) as HTMLButtonElement;
   expect(unmatched.disabled).toBe(true);
@@ -48,6 +50,18 @@ it.each(['Agent', 'Task', 'mcp__agent-graph__delegate', 'runner.delegate', 'plan
   fireEvent.click(card);
   expect(screen.getByTestId('url').textContent).toContain('child=child');
   await act(async () => {});
+});
+
+it('keeps tool and delegation cards separate from the surrounding reply bubbles', () => {
+  const { container } = render(<Message sender={{ key: 'start', name: 'Claude', side: 'start' }} row={{ id: 'reply', role: 'assistant', body: [
+    { type: 'text', text: 'Before the calls' },
+    { type: 'tool_use', id: 'tool', name: 'Bash', input: { command: 'pwd' } },
+    { type: 'tool_use', id: 'delegate', name: 'Agent', input: { description: 'Build parser' } },
+    { type: 'text', text: 'After the calls' },
+  ] }}/>);
+  const main = container.querySelector('.message-main')!;
+  expect([...main.children].map(child => child.className)).toEqual(['message-bubble', 'tool-call', 'delegation-card', 'message-bubble']);
+  expect(main.querySelector('.message-bubble .tool-call, .message-bubble .delegation-card')).toBeNull();
 });
 
 it('translates effort labels without changing option values and translates the default Claude model', async () => {
@@ -266,4 +280,29 @@ it('opens a conversation card in the focused empty pane and keeps the original c
   const saved = JSON.parse(localStorage.getItem('agent-graph-workspace:["p","root"]')!);
   expect(saved.first.tabs[0].conversationId).toBe('c');
   expect(saved.second.tabs[0].conversationId).toBe('child');
+});
+
+it.each(['en', 'ja'] as const)('shows each sender above the bubble once per consecutive group in %s', async language => {
+  const target = setup([
+    { id: 'u1', role: 'user', body: 'First request' },
+    { id: 'u2', role: 'user', body: 'Second request' },
+    { id: 'a1', role: 'assistant', body: 'First reply' },
+    { id: 'a2', role: 'assistant', body: 'Second reply' },
+    { id: 'u3', role: 'user', body: 'Follow up' },
+  ].map((row, index) => ({ ...row, source_ts: `2026-10-08T00:00:0${index}Z` })));
+  render(<MemoryRouter><ConversationPage conversationId="c" target={target} client={client} language={language}/></MemoryRouter>);
+  const articles = screen.getAllByRole('article', { name: /message$/ });
+  expect(articles.map(article => article.getAttribute('data-side'))).toEqual(['end', 'end', 'start', 'start', 'end']);
+  const labels = articles.map(article => article.querySelector('.message-header strong'));
+  expect(labels.map(label => Boolean(label))).toEqual([true, false, true, false, true]);
+  expect(labels[0]!.textContent).toBe(labels[4]!.textContent);
+  expect(labels[2]!.textContent).toBe('Claude');
+  for (const article of articles) {
+    const header = article.querySelector('.message-header')!;
+    const bubble = article.querySelector('.message-bubble')!;
+    expect(header.compareDocumentPosition(bubble) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(bubble.querySelector('strong.message-sender, strong.message-requester')).toBeNull();
+    expect(header.querySelector('time')).toBeTruthy();
+  }
+  await act(async () => {});
 });

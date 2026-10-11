@@ -21,7 +21,7 @@ it.each(['en', 'ja'] as const)('restores key storage and last-valid-value inform
   const ja = language === 'ja';
   expect(await screen.findByText(ja ? '個人設定: 設定の反映に失敗しました' : 'config: Settings application failed')).toBeTruthy();
   expect(screen.getByText(ja ? '前の有効な値で動き続けます。' : 'Previous valid settings remain active.').tagName).toBe('SMALL');
-  expect(screen.getByText(ja ? 'api の再起動で反映します。旧 daemon のポートは使えません。' : 'Applies after API restart. The legacy daemon port is not allowed.').className).toBe('settings-note');
+  expect(screen.getByText(ja ? 'API の再起動で反映します。旧 daemon のポートは使えません。' : 'Applies after API restart. The legacy daemon port is not allowed.').className).toBe('settings-note');
   expect(screen.getByText(ja ? 'Keychain に保存して再表示せず、次の起動から反映します。' : 'Stored in Keychain without redisplay and applied on the next launch.')).toBeTruthy();
 });
 it.each(['en', 'ja'] as const)('shows translated policy labels and named constraints with full accessible names in %s', async language => {
@@ -30,9 +30,9 @@ it.each(['en', 'ja'] as const)('shows translated policy labels and named constra
   const ja = language === 'ja';
   await screen.findByRole('button', { name: ja ? '割り当てを保存' : 'Save policy' });
   for (const heading of ja ? ['利用枠', '実績', 'モデル選びで重視すること', '制約'] : ['Quota', 'Performance', 'What to favor when choosing a model', 'Constraints']) expect(screen.getByText(heading, { selector: 'legend' }).tagName).toBe('LEGEND');
-  const hardLimit = screen.getByLabelText(ja ? '利用枠 · 使用を停止する使用率' : 'quota · Stop using at usage');
+  const hardLimit = screen.getByLabelText(ja ? '利用枠 · 候補から外す使用率' : 'quota · Stop using at usage');
   const acceptance = screen.getByLabelText(ja ? '合格率' : 'Pass rate');
-  expect(hardLimit.closest('label')?.querySelector('strong')?.textContent).toBe(ja ? '使用を停止する使用率' : 'Stop using at usage');
+  expect(hardLimit.closest('label')?.querySelector('strong')?.textContent).toBe(ja ? '候補から外す使用率' : 'Stop using at usage');
   expect(acceptance.closest('label')?.querySelector('strong')?.textContent).toBe(ja ? '合格率' : 'Pass rate');
   expect(screen.getByRole('button', { name: ja ? '制約を追加' : 'Add constraint' })).toBeTruthy();
   const rows = [...container.querySelectorAll('.settings-array-row')];
@@ -265,16 +265,16 @@ it('supports drag reordering and standard inheritance with Japanese labels and p
   const f = createFixture(); const original = f.command.getMockImplementation()!;
   f.command.mockImplementation(async (name, payload) => name === 'settings.models' ? { type: 'ack', cmd_id: name, ok: true, result: { state: 'known', models: [{ model: `${(payload as { provider: string }).provider}-listed`, displayName: 'Listed model' }] } } : original(name, payload));
   render(<SettingsPage client={f.client} language="ja"/>); await screen.findByRole('region', { name: '役割別のモデル' });
-  fireEvent.click(screen.getByRole('button', { name: '実装 高負荷 割り当てを編集' }));
-  const model = screen.getByLabelText('実装 高負荷 1 モデル') as HTMLInputElement;
-  await screen.findByRole('list', { name: '実装 高負荷 1 モデルの一覧' });
+  fireEvent.click(screen.getByRole('button', { name: '実装 重い作業 割り当てを編集' }));
+  const model = screen.getByLabelText('実装 重い作業 1 モデル') as HTMLInputElement;
+  await screen.findByRole('list', { name: '実装 重い作業 1 モデルの一覧' });
   expect(screen.getAllByRole('button', { name: 'Listed model' })).toHaveLength(3);
   const [first, second] = document.querySelectorAll('.assignment-candidates > li');
   fireEvent.dragStart(first); fireEvent.dragOver(second); fireEvent.drop(second);
-  expect(screen.getByLabelText('実装 高負荷 1 モデル')).toHaveProperty('value', 'opus');
-  fireEvent.click(screen.getByLabelText('実装 高負荷 標準モデルを使用'));
+  expect(screen.getByLabelText('実装 重い作業 1 モデル')).toHaveProperty('value', 'opus');
+  fireEvent.click(screen.getByLabelText('実装 重い作業 標準モデルを使用'));
   expect(screen.queryByRole('dialog')).toBeNull();
-  expect(screen.getByRole('button', { name: '実装 高負荷 割り当てを編集' }).textContent).toBe('標準モデルを使用');
+  expect(screen.getByRole('button', { name: '実装 重い作業 割り当てを編集' }).textContent).toBe('標準モデルを使用');
   fireEvent.click(screen.getByRole('button', { name: '割り当てをプレビュー' })); await screen.findByText('claude · after-model');
   fireEvent.click(screen.getByRole('button', { name: '割り当てを保存' })); await screen.findByText('保存しました');
   const save = f.command.mock.calls.find(([name]) => name === 'settings.write')![1] as { patch: SettingsSnapshot['policy'] };
@@ -380,12 +380,12 @@ it('omits weight criteria summaries and keeps each band editable', async () => {
   const edit = screen.getByRole('button', { name: '実装 基準を編集' });
   expect(edit.closest('th')!.querySelector('.assignment-criteria-summary')).toBeNull();
   fireEvent.click(edit);
-  fireEvent.change(screen.getByLabelText('実装 軽量 重さの基準'), { target: { value: '小さな変更' } });
-  fireEvent.change(screen.getByLabelText('実装 標準 重さの基準'), { target: { value: '機能の追加' } });
-  fireEvent.change(screen.getByLabelText('実装 高負荷 重さの基準'), { target: { value: '設計の変更' } });
+  fireEvent.change(screen.getByLabelText('実装 軽い作業 重さの基準'), { target: { value: '小さな変更' } });
+  fireEvent.change(screen.getByLabelText('実装 ふつうの作業 重さの基準'), { target: { value: '機能の追加' } });
+  fireEvent.change(screen.getByLabelText('実装 重い作業 重さの基準'), { target: { value: '設計の変更' } });
   expect(edit.closest('th')!.querySelector('.assignment-criteria-summary')).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: '完了' }));
-  expect(screen.queryByLabelText('実装 軽量 重さの基準')).toBeNull();
+  expect(screen.queryByLabelText('実装 軽い作業 重さの基準')).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: '割り当てをプレビュー' }));
   await screen.findByRole('region', { name: '割り当てのプレビュー' });
   fireEvent.click(screen.getByRole('button', { name: '割り当てを保存' }));
@@ -508,9 +508,9 @@ it.each(['en', 'ja'] as const)('shows usage and result units and four percentage
   const f = createFixture();
   const { container } = render(<SettingsPage client={f.client} language={language} policyOnly/>);
   const ja = language === 'ja';
-  const soft = await screen.findByLabelText(ja ? '利用枠 · 優先度を下げる使用率' : 'quota · Deprioritize at usage');
-  const hard = screen.getByLabelText(ja ? '利用枠 · 使用を停止する使用率' : 'quota · Stop using at usage');
-  const samples = screen.getByLabelText(ja ? '実績 · 順位付けに必要な実績数' : 'performance · Results needed to rank');
+  const soft = await screen.findByLabelText(ja ? '利用枠 · 後回しにする使用率' : 'quota · Deprioritize at usage');
+  const hard = screen.getByLabelText(ja ? '利用枠 · 候補から外す使用率' : 'quota · Stop using at usage');
+  const samples = screen.getByLabelText(ja ? '実績 · 実績で選ぶ最低件数' : 'performance · Results needed to rank');
   for (const input of [soft, hard]) expect(input.nextElementSibling?.textContent).toBe('%');
   expect(samples.nextElementSibling?.textContent).toBe(ja ? '件' : 'runs');
   expect(samples.getAttribute('title')).toContain(ja ? 'すべての候補' : 'every candidate');
@@ -555,8 +555,8 @@ it.each(['en', 'ja'] as const)('redistributes slider and number changes and save
 it.each(['en', 'ja'] as const)('blocks reversed quota limits and marks both fields invalid in %s', async language => {
   const f = createFixture(); render(<SettingsPage client={f.client} language={language} policyOnly/>);
   const ja = language === 'ja';
-  const soft = await screen.findByLabelText(ja ? '利用枠 · 優先度を下げる使用率' : 'quota · Deprioritize at usage');
-  const hard = screen.getByLabelText(ja ? '利用枠 · 使用を停止する使用率' : 'quota · Stop using at usage');
+  const soft = await screen.findByLabelText(ja ? '利用枠 · 後回しにする使用率' : 'quota · Deprioritize at usage');
+  const hard = screen.getByLabelText(ja ? '利用枠 · 候補から外す使用率' : 'quota · Stop using at usage');
   const preview = screen.getByRole('button', { name: ja ? '割り当てをプレビュー' : 'Preview policy' });
   const save = screen.getByRole('button', { name: ja ? '割り当てを保存' : 'Save policy' });
   fireEvent.click(preview);

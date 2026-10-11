@@ -30,7 +30,7 @@ export function ModelAssignments({ policy, onChange, language, models, onRefresh
   const headingId = useId();
   const text = (en: string, jp: string) => ja ? jp : en;
   const displayText = (value: string) => ja ? value : BUILTIN_TEXT[value] ?? value;
-  const weightName = (weight: Weight) => ({ light: text('Light', '軽量'), standard: text('Standard', '標準'), heavy: text('Heavy', '高負荷') })[weight];
+  const weightName = (weight: Weight) => ({ light: text('Light', '軽い作業'), standard: text('Standard', 'ふつうの作業'), heavy: text('Heavy', '重い作業') })[weight];
   const [open, setOpen] = useState<{ role: Role; weight: Weight }>();
   const [selecting, setSelecting] = useState(0);
   const [preset, setPreset] = useState<Preset>();
@@ -97,7 +97,7 @@ export function ModelAssignments({ policy, onChange, language, models, onRefresh
               trigger.current = event.currentTarget;
               setSelecting(0);
               setOpen({ role, weight });
-            }}>{inherited ? text('Use standard model', '標準モデルを使用') : candidate ? <><ProviderMark provider={candidate.executor}/><span className="assignment-model-name" title={name}>{name}</span><span className="assignment-effort">· {candidate.effort ?? text('Default', 'おまかせ')}</span><span aria-hidden="true">▾</span></> : text('Choose model', 'モデルを選ぶ')}</button>
+            }}>{inherited ? text('Use standard model', '標準モデルを使用') : candidate ? <><ProviderMark provider={candidate.executor}/><span className="assignment-model-name" title={name}>{name}</span><span className="assignment-effort">· {candidate.effort ?? text('Default', 'デフォルト')}</span><span aria-hidden="true">▾</span></> : text('Choose model', 'モデルを選ぶ')}</button>
             {!inherited && candidates.length > 1 && <small className="assignment-count">{text('On limits or errors: ', '上限時やエラー時: ')}{candidates.slice(1).map(displayName).join(' → ')}</small>}
             {expanded && <div ref={popup} role="dialog" aria-label={prefix + ' ' + text('Assignment', '割り当て')} className="assignment-popover">
               <header><span>{prefix}</span><button className="btn btn-ghost assignment-icon" aria-label={text('Close assignment', '割り当てを閉じる')} onClick={close}>×</button></header>
@@ -106,7 +106,7 @@ export function ModelAssignments({ policy, onChange, language, models, onRefresh
                 const depths = [...new Set([...DEPTHS[entry.executor], ...models[entry.executor]?.models.flatMap(model => model.effort ? [model.effort] : []) ?? []])];
                 return <li key={index} draggable onDragStart={() => { drag.current = index; }} onDragEnd={() => { drag.current = undefined; }} onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); if (drag.current !== undefined) reorder(role, weight, drag.current, index); drag.current = undefined; setSelecting(0); }}>
                   <button className="btn btn-ghost" aria-pressed={selecting === index} onClick={() => setSelecting(index)}><span aria-hidden="true">⠿</span><ProviderMark provider={entry.executor}/>{displayName(entry)}</button>
-                  <div role="group" aria-label={label + text('Effort', '思考量')} className="assignment-depths">{['', ...depths].map(effort => <button key={effort} className="btn btn-ghost" aria-pressed={(entry.effort ?? '') === effort} onClick={() => { const next = { ...entry }; if (effort) next.effort = effort; else delete next.effort; update(role, weight, candidates.map((candidate, at) => at === index ? next : candidate)); }}>{effort || text('Default', 'おまかせ')}</button>)}</div>
+                  <div role="group" aria-label={label + text('Effort', '思考量')} className="assignment-depths">{['', ...depths].map(effort => <button key={effort} className="btn btn-ghost" aria-pressed={(entry.effort ?? '') === effort} onClick={() => { const next = { ...entry }; if (effort) next.effort = effort; else delete next.effort; update(role, weight, candidates.map((candidate, at) => at === index ? next : candidate)); }}>{effort || text('Default', 'デフォルト')}</button>)}</div>
                   <div className="button-row"><button className="btn btn-ghost" disabled={index === 0} aria-label={label + text('Move up', '上へ')} onClick={() => { reorder(role, weight, index, index - 1); setSelecting(index - 1); }}>↑</button><button className="btn btn-ghost" disabled={index === candidates.length - 1} aria-label={label + text('Move down', '下へ')} onClick={() => { reorder(role, weight, index, index + 1); setSelecting(index + 1); }}>↓</button><button className="btn btn-ghost" aria-label={label + text('Remove', '削除')} onClick={() => { update(role, weight, candidates.filter((_, at) => at !== index)); setSelecting(0); }}>{text('Remove', '削除')}</button></div>
                 </li>;
               })}</ol>

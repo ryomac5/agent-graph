@@ -46,7 +46,7 @@ export const graphText = {
     inferred: 'Inferred', allow: 'Allow', deny: 'Deny', requests: 'Request graph', request: 'Request', who: 'Who',
     now: 'Now', range: 'Time range', report: 'Report', elapsed: 'Elapsed', rounds: 'Rounds', close: 'Close details', open: 'Open conversation' },
   ja: { running: '実行中', needsYou: 'あなたの番', today: '今日', earlier: '以前', showMore: 'さらに20件表示',
-    inferred: '推定', allow: '許可', deny: '拒否', requests: '依頼のグラフ', request: '依頼', who: '相手',
+    inferred: '推定', allow: '許可', deny: '拒否', requests: 'サブエージェントのグラフ', request: '依頼', who: '相手',
     now: '現在', range: '期間', report: '報告', elapsed: '経過', rounds: 'やりとり', close: '詳細を閉じる', open: '会話を開く' },
 } as const;
 
@@ -63,14 +63,14 @@ export const assignmentSettingText = {
     quotaError: 'Deprioritize usage must not exceed stop-using usage.',
   },
   ja: {
-    weights: 'モデル選びで重視すること', softLimitPercent: '優先度を下げる使用率', hardLimitPercent: '使用を停止する使用率',
-    minSamples: '順位付けに必要な実績数', acceptRate: '合格率', reviewApprove: 'レビューの承認率', roundTrips: 'やりとりの少なさ', tokens: 'トークンの少なさ',
+    weights: 'モデル選びで重視すること', softLimitPercent: '後回しにする使用率', hardLimitPercent: '候補から外す使用率',
+    minSamples: '実績で選ぶ最低件数', acceptRate: '合格率', reviewApprove: 'レビューの承認率', roundTrips: 'やりとりの少なさ', tokens: 'トークンの少なさ',
     runs: '件', distribution: 'モデル選びの割合',
     softTitle: 'この使用率以上になると、モデルの優先度を下げて他の候補を優先します。',
     hardTitle: 'この使用率以上になると、そのモデルを候補から除外します。',
     samplesTitle: 'すべての候補にこの件数以上の実績があるときだけ順位付けを行い、満たない場合は設定順を使用します。',
     weightsTitle: '実績で順位付けする際の重み付けです。1つを変更すると残りが自動で比例配分されます。',
     passTitle: '受け入れ条件の合格率です。',
-    quotaError: '優先度を下げる使用率は、使用を停止する使用率以下にしてください。',
+    quotaError: '後回しにする使用率は、候補から外す使用率以下にしてください。',
   },
 } as const;

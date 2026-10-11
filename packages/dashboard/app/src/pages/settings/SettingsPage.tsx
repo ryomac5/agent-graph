@@ -73,12 +73,14 @@ export function SettingsPage({ client, language, onAppearance, policyOnly = fals
     const revision = edits.current[store];
     const patch = settings![store];
     await perform(async () => {
-      await requestSettings<{ saved: boolean }>(client, 'settings.write', {
+      const result = await requestSettings<{ saved: boolean; existingPayloadDeletion?: string }>(client, 'settings.write', {
         store, patch, ...(store === 'policy' ? { previewToken: preview?.token } : {}), confirmation,
       });
       if (edits.current[store] === revision) dirty.current.delete(store);
       if (store === 'policy') setPreview(undefined);
-      setNotice(text('Saved', '保存しました'));
+      setNotice(result.existingPayloadDeletion === 'requires_confirmation'
+        ? text('Saved. Existing payloads have not been deleted; separate confirmation is required.', '保存しました。既存の本文は未削除。別の確認が必要です。')
+        : text('Saved', '保存しました'));
     });
   }
   async function previewPolicy() {

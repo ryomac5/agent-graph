@@ -56,14 +56,14 @@ async function send(text = '続けてください') {
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: '送信' })); });
 }
 it.each([
-  { hosted: true, state: 'running', evidence: undefined },
+  { hosted: true, state: 'running', evidence: undefined, warning: false },
   { hosted: false, state: 'idle', evidence: { kind: 'process_absent' }, warning: false },
-  { hosted: false, state: 'running', evidence: { kind: 'message' } },
+  { hosted: false, state: 'running', evidence: { kind: 'message' }, warning: true },
   { hosted: false, state: 'idle', evidence: { kind: 'turn_completed' }, warning: true },
-])('sends the observed Claude conversation through its terminal: %j', async options => {
+])('sends the observed Claude conversation through its terminal: %j', async ({ warning, ...options }) => {
   const f = fixture(options); render(<f.Wrapper/>);
   await vi.waitFor(() => expect((screen.getByRole('button', { name: 'ターミナル' }) as HTMLButtonElement).disabled).toBe(!options.hosted));
-  expect(screen.queryByText('この会話は別の場所で動いています。ここで送ると、別の続きになります。')).toBeNull();
+  expect(Boolean(screen.queryByText('この会話は別の場所で動いています。ここで送ると、別の続きになります。'))).toBe(warning);
   await send();
   expect(f.command).toHaveBeenCalledWith('session.send', { conversationId, text: '続けてください' });
   const launches = f.command.mock.calls.filter(([name]) => name === 'session.launch');

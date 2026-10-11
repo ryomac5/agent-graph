@@ -638,6 +638,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     {/* 外の会話には、runner が応答できる続きを用意する。 */}
     <footer className="composer" onFocusCapture={() => setEngaged(true)} onPointerDownCapture={() => setEngaged(true)}>
       {(host?.disconnected || run?.reason === 'disconnected') && <p role="status" className="status-line">{language === 'ja' ? '接続が切れました' : 'Connection lost'}</p>}
+      {terminalConversation && !starting && !host && !stopped && <p className="status-line">{language === 'ja' ? 'この会話は別の場所で動いています。ここで送ると、別の続きになります。' : 'This conversation is running elsewhere. Sending here will start a separate continuation.'}</p>}
       {(error || pending || continued || modelsError && engaged || handoffBlocked) && <div className="composer-status">
         {error && <p role="alert" className="status-line danger" title={error}><Icon name="alert" size={14}/>{error}</p>}
         {pending && <p role="status" className="status-line">{t('pending')}</p>}

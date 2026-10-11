@@ -70,6 +70,25 @@ it('saves personal and project settings through cmd without browser preferences'
   await waitFor(() => expect(f.command).toHaveBeenCalledWith('settings.write', expect.objectContaining({ store: 'project', patch: { isolation: { policy: 'read-only' }, acceptance: { commands: ['node --run test', 'node --run build'] }, scope: { exclude: ['private', '.env'] } } })));
   expect(JSON.stringify(f.command.mock.calls.filter(([name]) => name === 'settings.write'))).not.toContain('density');
 });
+it.each(['en', 'ja'] as const)('warns that existing payload deletion needs separate confirmation in %s', async language => {
+  const f = createFixture();
+  const original = f.command.getMockImplementation()!;
+  f.command.mockImplementation(async (name, payload) => name === 'settings.write'
+    ? { type: 'ack', cmd_id: name, ok: true, result: { saved: true, existingPayloadDeletion: 'requires_confirmation' } }
+    : original(name, payload));
+  render(<SettingsPage client={f.client} language={language}/>);
+  const ja = language === 'ja';
+  const retention = await screen.findByLabelText(ja ? 'storage · 本文の保持日数' : 'storage · Body retention days');
+  fireEvent.change(retention, { target: { value: '30' } });
+  fireEvent.click(screen.getByRole('button', { name: ja ? '個人の設定を保存' : 'Save personal settings' }));
+  const warning = await screen.findByText(ja
+    ? '保存しました。既存の本文は未削除。別の確認が必要です。'
+    : 'Saved. Existing payloads have not been deleted; separate confirmation is required.');
+  expect(warning.getAttribute('role')).toBe('status');
+  expect(f.command).toHaveBeenCalledWith('settings.write', expect.objectContaining({
+    store: 'config', patch: expect.objectContaining({ storage: expect.objectContaining({ bodyRetentionDays: 30 }) }),
+  }));
+});
 it('requires policy preview, shows historical outcomes and invalidates preview after edits', async () => {
   const f = createFixture(); render(<SettingsPage client={f.client}/>); await screen.findByRole('button', { name: 'Save policy' });
   expect(screen.getByRole('button', { name: 'Save policy' })).toHaveProperty('disabled', true);

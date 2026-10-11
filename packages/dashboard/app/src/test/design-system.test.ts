@@ -45,6 +45,13 @@ it('matches the design document with explicit contrast overrides pending documen
     const token = line.match(/^\| `(--[\w-]+)`/);
     const colours = [...line.matchAll(/`(#[\da-f]{6}|rgb\([^`]+\))`/g)].map(match => match[1]);
     if (!token || colours.length !== 2) continue;
+    // 重みの色は settings-redesign.md 第7節の削除指定を優先する。
+    if (/^--weight-[1-4]$/.test(token[1])) {
+      expect(light.has(token[1]), token[1] + ' light removed').toBe(false);
+      expect(dark.has(token[1]), token[1] + ' dark removed').toBe(false);
+      checked++;
+      continue;
+    }
     const expected = overrides[token[1]] ?? colours;
     expect(light.get(token[1]), token[1] + ' light').toBe(expected[0]);
     expect(dark.get(token[1]), token[1] + ' dark').toBe(expected[1]);
@@ -239,4 +246,35 @@ it('keeps settings size and segment tokens aligned with the redesign', () => {
   expect(light.get('--control-lg')).toBe('32px');
   expect(light.get('--segment-shadow')).toBe('0 1px 2px rgb(15 17 26 / 0.08)');
   expect(dark.get('--segment-shadow')).toBe('0 1px 2px rgb(0 0 0 / 0.4)');
+});
+
+it.each([['light', light, '#e8e8eb', '#63656e'], ['dark', dark, '#27282e', '#979ba7']] as const)('uses neutral weight slider tokens in %s', (_theme, tokens, track, fill) => {
+  expect(tokens.get('--slider-track')).toBe('var(--bg-3)');
+  expect(tokens.get('--slider-fill')).toBe('var(--fg-4)');
+  expect(readColour(tokens, '--slider-track')).toBe(track);
+  expect(readColour(tokens, '--slider-fill')).toBe(fill);
+  expect(shared).not.toMatch(/--weight-[1-4]/);
+});
+
+it('draws weight tracks and thumbs for WebKit, Chromium and Firefox with interaction colour and thumb focus', () => {
+  const css = readFileSync('app/src/pages/settings/settings.css', 'utf8');
+  expect(css).not.toMatch(/settings-weight-(?:bar|color)|--weight-[1-4]|accent-color/);
+  expect(css).toContain('grid-template-columns: 200px minmax(0, 1fr)');
+  expect(css.match(/\.settings-weight-row\s*\{([^}]+)\}/)![1]).toContain('height: 40px');
+  expect(css).toContain('appearance: none');
+  expect(css).toContain("input[type='range']:is(:hover, :focus, :active) { color: var(--accent); }");
+  expect(css).toContain('transition: color var(--duration)');
+  for (const engine of ['webkit-slider', 'moz-range']) {
+    const track = css.match(new RegExp(`::-${engine}-${engine === 'webkit-slider' ? 'runnable-track' : 'track'}\\s*\\{([^}]+)\\}`))![1];
+    expect(track).toContain('height: 4px');
+    expect(track).toContain('border-radius: 2px');
+    expect(track).toContain('var(--slider-track)');
+    const thumb = css.match(new RegExp(`::-${engine}-thumb\\s*\\{([^}]+)\\}`))![1];
+    for (const rule of ['width: 12px', 'height: 12px', 'border: 1px solid currentColor', 'background: var(--bg-0)']) expect(thumb).toContain(rule);
+    const focus = css.match(new RegExp(`:focus::-${engine}-thumb\\s*\\{([^}]+)\\}`))![1];
+    expect(focus).toContain('outline: 2px solid var(--focus)');
+    expect(focus).toContain('outline-offset: 1px');
+  }
+  expect(css).toContain('currentColor calc(6px + (100% - 12px) * var(--slider-value))');
+  expect(css).toContain("::-moz-range-progress { height: 4px; border-radius: 2px; background: currentColor; }");
 });

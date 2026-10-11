@@ -94,21 +94,19 @@
 .settings-number-unit { display: flex; align-items: center; gap: var(--space-2); }
 .settings-page .settings-card .settings-number-unit input { width: 64px; height: 28px; text-align: right; }
 .settings-page input[aria-invalid='true'] { border-color: var(--state-failed); }
-.settings-weights { --weight-label-width: 200px; --weight-value-width: 84px; display: flex; flex-direction: column; gap: var(--space-3); }
-.settings-weight-row { display: flex; align-items: center; gap: var(--space-3); }
-.settings-page .settings-weight-row label { flex: 1; display: grid; grid-template-columns: var(--weight-label-width) minmax(0, 1fr); gap: var(--space-3); }
-.settings-page .settings-card .settings-weight-row label > span { display: flex; align-items: center; gap: var(--space-2); }
-.settings-weight-color { background: var(--weight-color); }
-.settings-weight-row i { flex: none; width: 12px; height: 12px; border-radius: 50%; }
-.weight-acceptRate { --weight-color: var(--weight-1); }
-.weight-reviewApprove { --weight-color: var(--weight-2); }
-.weight-roundTrips { --weight-color: var(--weight-3); }
-.weight-tokens { --weight-color: var(--weight-4); }
-.settings-page .settings-weight-row input[type='range'] { appearance: none; width: 100%; min-width: 0; height: 4px; background: var(--weight-color); border: 0; border-radius: var(--radius-1); }
-.settings-weight-row input[type='range']::-webkit-slider-thumb { appearance: none; width: 12px; height: 12px; border-radius: 50%; background: var(--weight-color); cursor: pointer; }
-.settings-weight-row input[type='range']::-moz-range-thumb { width: 12px; height: 12px; border: 0; border-radius: 50%; background: var(--weight-color); cursor: pointer; }
-.settings-weight-row .settings-number-unit { flex: 0 0 var(--weight-value-width); }
-.settings-weight-bar { display: flex; height: 4px; margin-left: calc(var(--weight-label-width) + var(--space-3)); width: calc(100% - var(--weight-label-width) - var(--weight-value-width) - 2 * var(--space-3)); overflow: hidden; border-radius: var(--radius-1); }
+.settings-weights { display: flex; flex-direction: column; max-width: 640px; }
+.settings-weight-row { display: flex; align-items: center; gap: var(--space-3); height: 40px; border-bottom: var(--border); }
+.settings-page .settings-weight-row label { flex: 1; min-width: 0; display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: var(--space-3); height: 40px; border: 0; }
+.settings-page .settings-weight-row input[type='range'] { --slider-value: 0; appearance: none; -webkit-appearance: none; width: 100%; min-width: 0; height: 28px; margin: 0; padding: 0; background: transparent; border: 0; border-radius: 0; color: var(--slider-fill); outline: none; box-shadow: none; cursor: pointer; transition: color var(--duration); }
+.settings-page .settings-weight-row input[type='range']:is(:hover, :focus, :active) { color: var(--accent); }
+.settings-weight-row input[type='range']::-webkit-slider-runnable-track { height: 4px; border: 0; border-radius: 2px; background: linear-gradient(to right, currentColor calc(6px + (100% - 12px) * var(--slider-value)), var(--slider-track) 0); }
+.settings-weight-row input[type='range']::-webkit-slider-thumb { appearance: none; -webkit-appearance: none; box-sizing: border-box; width: 12px; height: 12px; margin-top: -4px; border: 1px solid currentColor; border-radius: 50%; background: var(--bg-0); color: inherit; cursor: pointer; }
+.settings-weight-row input[type='range']::-moz-range-track { height: 4px; border: 0; border-radius: 2px; background: var(--slider-track); }
+.settings-weight-row input[type='range']::-moz-range-progress { height: 4px; border-radius: 2px; background: currentColor; }
+.settings-weight-row input[type='range']::-moz-range-thumb { box-sizing: border-box; width: 12px; height: 12px; border: 1px solid currentColor; border-radius: 50%; background: var(--bg-0); color: inherit; cursor: pointer; }
+.settings-weight-row input[type='range']:focus::-webkit-slider-thumb { outline: 2px solid var(--focus); outline-offset: 1px; }
+.settings-weight-row input[type='range']:focus::-moz-range-thumb { outline: 2px solid var(--focus); outline-offset: 1px; }
+.settings-weight-row .settings-number-unit { flex: none; }
 .ssh-project-path { display: flex; align-items: center; gap: var(--space-2); }
 @media (max-width: 760px) {
   .assignment-scroll { overflow-x: auto; }
@@ -129,7 +127,6 @@
 .assignment-candidates .assignment-depths { grid-column: 1 / -1; min-width: 0; flex-wrap: nowrap; justify-content: flex-start; }
 .assignment-depths button { flex: none; }
 @media (max-width: 760px) {
-  .settings-weights { --weight-label-width: 160px; }
   .settings-fold > summary { flex-wrap: wrap; }
   .settings-fold > summary .settings-summary { flex-basis: 100%; margin-left: 28px; text-align: left; }
 }

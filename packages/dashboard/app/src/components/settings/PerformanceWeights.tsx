@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react';
 import { assignmentSettingText } from '../../lib/i18n.ts';
 
 const TOTAL_PERCENT = 100;
@@ -31,14 +32,11 @@ export function PerformanceWeights({ value, language, onChange }: {
     <div className="settings-weight-controls">{WEIGHT_KEYS.map((key, index) => {
       const name = text[key];
       return <div className="settings-weight-row" key={key}>
-        <label><span><i className={`settings-weight-color weight-${key}`} aria-hidden="true"/><strong>{name}</strong></span>
+        <label><strong>{name}</strong>
           <input type="range" aria-label={name} aria-valuetext={`${percentages[index]}%`} title={key === 'acceptRate' ? text.passTitle : undefined}
-            className={`weight-${key}`} min={0} max={TOTAL_PERCENT} step={1} value={percentages[index]} onChange={event => update(key, Number(event.target.value))}/></label>
+            style={{ '--slider-value': percentages[index] / TOTAL_PERCENT } as CSSProperties} min={0} max={TOTAL_PERCENT} step={1} value={percentages[index]} onChange={event => update(key, Number(event.target.value))}/></label>
         <div className="settings-number-unit"><input type="number" aria-label={`${name} (%)`} min={0} max={TOTAL_PERCENT} step={1} value={percentages[index]} onChange={event => update(key, Number(event.target.value))}/><span>%</span></div>
       </div>;
     })}</div>
-    <div className="settings-weight-bar" role="img" aria-label={`${text.distribution}: ${WEIGHT_KEYS.map((key, index) => `${text[key]} ${percentages[index]}%`).join(', ')}`}>
-      {WEIGHT_KEYS.map((key, index) => <span key={key} className={`settings-weight-color weight-${key}`} style={{ width: `${percentages[index]}%` }} title={`${text[key]} ${percentages[index]}%`}/>)}
-    </div>
   </div>;
 }

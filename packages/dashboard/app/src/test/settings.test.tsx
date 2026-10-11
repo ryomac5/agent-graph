@@ -565,9 +565,10 @@ it.each(['en', 'ja'] as const)('shows usage and result units and four percentage
   });
   expect(shares).toEqual([40, 30, 20, 10]);
   expect(shares.reduce((sum, value) => sum + value, 0)).toBe(100);
-  const bar = screen.getByRole('img', { name: new RegExp(ja ? 'モデル選びの割合' : 'Model preference shares') });
-  expect([...bar.children].map(child => (child as HTMLElement).style.width)).toEqual(['40%', '30%', '20%', '10%']);
-  expect(new Set([...bar.children].map(child => child.className)).size).toBe(4);
+  expect(container.querySelectorAll('.settings-weight-row')).toHaveLength(4);
+  expect(container.querySelectorAll('.settings-weight-row i, .settings-weight-color, .settings-weight-bar')).toHaveLength(0);
+  expect(screen.queryByRole('img', { name: new RegExp(ja ? 'モデル選びの割合' : 'Model preference shares') })).toBeNull();
+  expect(screen.getAllByRole('slider').map(slider => (slider as HTMLElement).style.getPropertyValue('--slider-value'))).toEqual(['0.4', '0.3', '0.2', '0.1']);
   expect(container.querySelector('.settings-weights p')).toBeNull();
 });
 

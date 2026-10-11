@@ -39,6 +39,55 @@ it('publishes paginated graph tables together after the last response and retain
   expect(target.getSnapshot().pages?.runs.next).toBeNull();
   expect(document.querySelector('.graph-page')?.getAttribute('aria-busy')).toBe('false');
 });
+it.each(['request', 'advance', 'first request'])('renders the collected graph and an error after a pagination %s failure', async failure => {
+  const target = createStore();
+  const snapshot = { seq: 1, generation: 1, pages: {
+    conversations: { total: 3, next: 'c1' }, runs: { total: 1, next: 'r1' },
+  }, projection: {
+    projects: [{ id: 'repo', display_name: 'Repo', state: 'registered' }],
+    roots: [{ id: 'root', name: 'Partial root', project: 'repo', state: 'idle', conversation_ids: ['root'] }],
+    conversations: [{ id: 'root', provider: 'claude' }],
+    relations: [{ id: 'rel', from_id: 'root', to_id: 'child', type: 'delegated', active: 1 }],
+  } };
+  target.setSnapshot(snapshot);
+  let finishPage!: (response: Response) => void;
+  const pendingPage = new Promise<Response>(resolve => { finishPage = resolve; });
+  let finishRuns!: (response: Response) => void;
+  const pendingRuns = new Promise<Response>(resolve => { finishRuns = resolve; });
+  const fetch = vi.fn(async (url: URL | string) => {
+    if (typeof url === 'string') return new Response('', { status: 404 });
+    if (url.searchParams.get('table') === 'runs') return pendingRuns;
+    if (url.searchParams.get('after') === 'c2' || failure === 'first request') return pendingPage;
+    return new Response(JSON.stringify({ generation: 1, rows: [{ id: 'child', provider: 'codex', name: 'Fetched child' }], next: 'c2' }));
+  });
+  vi.stubGlobal('fetch', fetch);
+  render(<MemoryRouter initialEntries={['/p/repo/graph?root=root']}><App target={target}/></MemoryRouter>);
+  await waitFor(() => expect(fetch.mock.calls.flatMap(([url]) => url instanceof URL
+    ? [`${url.searchParams.get('table')}:${url.searchParams.get('after')}`] : [])).toEqual(failure === 'first request'
+    ? ['conversations:c1'] : ['conversations:c1', 'conversations:c2']));
+  expect(document.querySelector('.graph-page')?.getAttribute('aria-busy')).toBe('true');
+  expect(screen.queryByRole('tree')).toBeNull();
+  await act(async () => finishPage(failure === 'advance'
+    ? new Response(JSON.stringify({ generation: 1, rows: [{ id: 'second-child', provider: 'codex' }], next: 'c2' }))
+    : new Response('Page unavailable', { status: 500 })));
+  const error = failure === 'advance' ? 'Unable to advance activity list' : '500';
+  await waitFor(() => expect(screen.getByRole('alert').textContent).toContain(error));
+  expect(document.querySelector('.graph-page')?.getAttribute('aria-busy')).toBe('false');
+  expect(screen.queryByText('Loading…')).toBeNull();
+  expect(screen.getByRole('tree')).toBeTruthy();
+  expect(target.getSnapshot().pages?.conversations.next).toBeNull();
+  expect(target.getSnapshot().pages?.runs.next).toBe('r1');
+  expect(target.getSnapshot().projectionError).toContain(error);
+  expect(target.getSnapshot().projection.conversations).toHaveLength(failure === 'advance' ? 3 : failure === 'request' ? 2 : 1);
+  if (failure !== 'first request') expect(screen.getByRole('tree').textContent).toContain('Fetched child');
+  await act(async () => finishRuns(new Response(JSON.stringify({ generation: 1, rows: [{ id: 'run', conversation_id: 'root', state: 'idle' }], next: null }))));
+  await waitFor(() => expect(target.getSnapshot().pages?.runs.next).toBeNull());
+  expect(document.querySelector('.graph-page')?.getAttribute('aria-busy')).toBe('false');
+  expect(screen.getByRole('alert').textContent).toContain(error);
+  act(() => target.setSnapshot({ ...snapshot, pages: undefined }));
+  expect(target.getSnapshot().projectionError).toBeUndefined();
+  expect(screen.queryByRole('alert')).toBeNull();
+});
 it('renders navigation, projects, pending approvals, connection state and bell', () => {
   const store = createStore();
   store.setSnapshot({ seq: 1, generation: 0, projection: { projects: [{ id: 'demo', display_name: 'demo', state: 'registered' }], tasks: [{ id: 't', project: 'demo' }], approvals: [{ id: 'a', state: 'pending' }, { id: 'b', state: 'expired' }] } });

@@ -24,7 +24,7 @@ export function GraphPage({ project: suppliedProject, target = store, client, la
   const roots = useMemo(() => selectRoots(state, project), [state, project]);
   const root = roots.find(item => item.id === (rootId ?? search.get('root'))) ?? roots[0];
   const index = useRootIndex(state);
-  const loading = ['roots', 'conversations', 'runs', 'relations', 'delegations', 'approvals'].some(table => state.pages?.[table]?.next);
+  const loading = !state.projectionError && ['roots', 'conversations', 'runs', 'relations', 'delegations', 'approvals'].some(table => state.pages?.[table]?.next);
   const tree = useMemo<GraphTree>(() => {
     if (!root) return { nodes: [], edges: [], roots: [], unresolved: [] };
     const built = buildRootTree(root, index);

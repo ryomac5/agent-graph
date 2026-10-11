@@ -672,7 +672,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
         }} title={[provider === 'codex' ? t(hint) : '', engaged && (!model || !cwd.trim()) ? t('launchReady') : ''].filter(Boolean).join(' ')}>
         {attachments.items.length > 0 && <div className="composer-attachments">
           {attachments.items.map(item => <div className="composer-attachment" key={item.key}>
-            <img src={item.url} alt={item.file.name}/>
+            <img src={item.url || undefined} alt={item.file.name}/>
             <button className="btn btn-ghost" aria-label={`${attachments.text.remove}: ${item.file.name}`} disabled={pending} onClick={() => attachments.remove(item.key)}>×</button>
           </div>)}
         </div>}

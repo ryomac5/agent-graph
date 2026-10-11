@@ -31,24 +31,24 @@ function image(name = 'image.png', type = 'image/png') { return new File([new Ui
 function drop(box: Element, files: File[]) { fireEvent.drop(box, { dataTransfer: { files, types: ['Files'] } }); }
 function paste(input: Element, files: File[]) { fireEvent.paste(input, { clipboardData: { items: files.map(file => ({ kind: 'file', getAsFile: () => file })) } }); }
 
-it('highlights a drop, previews dropped and pasted images, removes them and revokes previews', async () => {
+it('highlights a drop, previews dropped and pasted images as data URLs and removes them', async () => {
   const f = renderConversation();
   fireEvent.dragEnter(f.box, { dataTransfer: { types: ['Files'] } });
   expect(f.box.classList.contains('composer-drop-active')).toBe(true);
   drop(f.box, [image()]);
   expect(f.box.classList.contains('composer-drop-active')).toBe(false);
-  expect(screen.getByRole('img', { name: 'image.png' })).toBeTruthy();
+  // 縮小は CSP の許す data: の URL で描く。blob: は使わない。
+  const preview = await screen.findByRole('img', { name: 'image.png' });
+  await waitFor(() => expect(preview.getAttribute('src') ?? '').toMatch(/^data:image\/png;base64,/));
   paste(f.input, [image('clipboard.webp', 'image/webp')]);
-  expect(screen.getAllByRole('img')).toHaveLength(2);
+  await waitFor(() => expect(screen.getAllByRole('img')).toHaveLength(2));
   fireEvent.click(screen.getByRole('button', { name: 'Remove image: image.png' }));
   expect(screen.getAllByRole('img')).toHaveLength(1);
-  expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:preview');
-  f.view.unmount();
-  expect(URL.revokeObjectURL).toHaveBeenCalledTimes(2);
+  expect(URL.createObjectURL).not.toHaveBeenCalled();
 });
 
 it('uploads image bytes then sends IDs and text, and clears attachments on success', async () => {
-  const f = renderConversation(); drop(f.box, [image()]);
+  const f = renderConversation(); drop(f.box, [image()]); await waitFor(() => expect(screen.getByRole('img', { name: 'image.png' }).getAttribute('src') ?? '').toMatch(/^data:/));
   fireEvent.change(f.input, { target: { value: 'Look here' } });
   fireEvent.click(screen.getByRole('button', { name: 'Send' }));
   await waitFor(() => expect(f.command).toHaveBeenCalledWith('session.send', { conversationId: id, text: 'Look here', attachments: ['image-id'] }));
@@ -60,7 +60,7 @@ it('uploads image bytes then sends IDs and text, and clears attachments on succe
 it('sends an image without text and retains it after a failed send for retry', async () => {
   const f = renderConversation();
   f.command.mockImplementation(async (name: string) => name === 'session.hosts' ? ack({ hosts: [{ conversationId: id, terminalId: 't' }] }) : name === 'attachment.put' ? ack({ attachmentId: 'image-id' }) : name === 'session.send' ? { type: 'ack', cmd_id: 'cmd', ok: false, error: 'no_host' } : ack());
-  drop(f.box, [image()]); fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+  drop(f.box, [image()]); await waitFor(() => expect(screen.getByRole('img', { name: 'image.png' }).getAttribute('src') ?? '').toMatch(/^data:/)); fireEvent.click(screen.getByRole('button', { name: 'Send' }));
   await screen.findByRole('alert');
   expect(screen.getByRole('img')).toBeTruthy();
   expect(f.command).toHaveBeenCalledWith('session.send', { conversationId: id, text: '', attachments: ['image-id'] });

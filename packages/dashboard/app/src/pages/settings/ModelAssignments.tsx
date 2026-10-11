@@ -69,7 +69,7 @@ export function ModelAssignments({ policy, onChange, language, models, onRefresh
   const presetPolicy = preset && createPreset(policy, preset);
   const presetChanges = presetPolicy ? listPresetChanges(policy, presetPolicy) : [];
   return <section className="model-assignments" aria-label={text('Model assignment settings', 'モデル割り当て設定')}>
-    <h3>{text('Model assignment settings', 'モデル割り当て設定')}</h3>
+    <h3>{text('Models by role', '役割別のモデル')}</h3>
     <div className="button-row assignment-actions">{(['performance', 'balanced', 'economy'] as const).map(value => <button key={value} className="btn btn-secondary" onClick={() => { close(); setPreset(value); }}>{({ performance: text('Performance', '性能重視'), balanced: text('Balanced', 'バランス'), economy: text('Economy', '節約') })[value]}</button>)}{onApply && <button className="btn btn-secondary assignment-apply-button" disabled={applyDisabled} onClick={onApply}>{text('Apply to configuration files', '設定ファイルに反映')}</button>}</div>
     {preset && <div role="dialog" aria-label={text('Preset changes', 'まとめて変更する内容')} className="assignment-preset">
       <table><thead><tr><th>{text('Assignment', '割り当て')}</th><th>{text('Before', '変更前')}</th><th>{text('After', '変更後')}</th></tr></thead><tbody>{presetChanges.map(change => <tr key={change.role + change.weight}><th>{NAMES[change.role][ja ? 1 : 0]} {weightName(change.weight)}</th>{(['before', 'after'] as const).map(side => <td key={side}>{change[side].map(candidate => displayName(candidate) + (candidate.effort ? ' · ' + candidate.effort : '')).join(' → ')}{change[side === 'before' ? 'inheritedBefore' : 'inheritedAfter'] && ' · ' + text('Use standard model', '標準モデルを使用')}</td>)}</tr>)}</tbody></table>

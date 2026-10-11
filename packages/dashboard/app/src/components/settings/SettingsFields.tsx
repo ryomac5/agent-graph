@@ -7,7 +7,7 @@ const choices: Record<string, string[]> = {
   kind: ['reviewerDifferentFamily', 'implementerNotOrchestrator', 'minTierForRole'], role: ['implement', 'review', 'research', 'document', 'orchestrate', 'advisor', 'plan', 'proofread'],
 };
 const labels: Record<string, [string, string]> = {
-  quota: ['quota', '利用枠'], performance: ['performance', '実績'], weights: ['weights', '重み'], constraints: ['constraints', '制約'],
+  quota: ['Quota', '利用枠'], performance: ['Performance', '実績'], weights: ['Score weights', '評価の重み'], constraints: ['Constraints', '制約'],
   model: ['Default model', '既定のモデル'], effort: ['Default effort', '既定の深さ'], authentication: ['Claude authentication', 'Claude の認証'], integrations: ['Claude integrations', 'Claude の外部連携'],
   mode: ['Approval mode', '承認の方式'], policy: ['Isolation policy', '隔離の方針'], repositories: ['Observed repositories', '観測するリポジトリ'],
   claude: ['Observe Claude', 'Claude を観測'], codex: ['Observe Codex', 'Codex を観測'], kit: ['Observe legacy kit', '旧キットを観測'],
@@ -21,6 +21,14 @@ const labels: Record<string, [string, string]> = {
   executor: ['Agent', 'エージェント'], family: ['Model family', 'モデルの系列'], tier: ['Model tier', 'モデルの水準'], kind: ['Constraint', '制約'], role: ['Role', '役割'],
 };
 export function labelSetting(key: string, language: 'en' | 'ja') { return labels[key]?.[language === 'ja' ? 1 : 0] ?? key.replace(/([a-z])([A-Z])/g, '$1 $2'); }
+const constraintLabels: Record<string, [string, string]> = {
+  reviewerDifferentFamily: ['Reviewer from a different model family', '異なるモデル系列のレビュアー'],
+  implementerNotOrchestrator: ['Implementer separate from orchestrator', '進行役とは別の実装担当'],
+  minTierForRole: ['Minimum model tier for a role', '役割ごとのモデル水準の下限'],
+};
+export function labelConstraint(kind: string, language: 'en' | 'ja') {
+  return constraintLabels[kind]?.[language === 'ja' ? 1 : 0] ?? labelSetting(kind, language);
+}
 const nestedLabels: Record<string, [string, string]> = {
   softLimitPercent: ['Soft limit (%)', '優先度を下げる上限'], hardLimitPercent: ['Hard limit (%)', '使用を止める上限'],
   minSamples: ['Minimum samples', '最小標本数'],
@@ -40,21 +48,21 @@ export function SettingsFields({ value, onChange, language, prefix = '', inherit
     if (entry !== null && typeof entry === 'object' && !Array.isArray(entry)) return <fieldset key={key}><legend>{prefix === 'agents' ? key : labelSetting(key, language)}</legend><SettingsFields value={entry as Record<string, unknown>} onChange={update} language={language} prefix={path} inheritIsolation={inheritIsolation}/></fieldset>;
     if (Array.isArray(entry) && (key === 'constraints' || path.startsWith('roles.'))) {
       const template = key === 'constraints' ? { kind: 'reviewerDifferentFamily' } : { executor: 'codex', model: 'gpt-6-astra', family: 'openai', tier: 'high' };
-      return <fieldset key={key}><legend>{labelSetting(key, language)}</legend>{entry.map((item, index) => <fieldset key={index} className="settings-array-row"><legend>{index + 1}</legend>
+      return <fieldset key={key}><legend>{labelSetting(key, language)}</legend>{entry.map((item, index) => <fieldset key={index} className="settings-array-row"><legend>{key === 'constraints' ? labelConstraint(String((item as Record<string, unknown>).kind), language) : index + 1}</legend>
         <SettingsFields value={item as Record<string, unknown>} onChange={next => {
           if (key === 'constraints') next = next.kind === 'minTierForRole' ? { kind: next.kind, role: next.role ?? 'implement', tier: next.tier ?? 'high' } : { kind: next.kind };
           update(entry.map((old, at) => at === index ? next : old));
         }} language={language} prefix={`${path}.${index + 1}`}/>
         <div className="button-row"><button type="button" className="btn btn-secondary btn-sm" disabled={index === 0} aria-label={`${name} ${index + 1} ${ja ? '上へ' : 'Move up'}`} onClick={() => { const next = [...entry]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; update(next); }}>{ja ? '上へ' : 'Move up'}</button>
         <button type="button" className="btn btn-ghost btn-sm" onClick={() => update(entry.filter((_, at) => at !== index))}>{ja ? '削除' : 'Remove'}</button></div></fieldset>)}
-        <button type="button" className="btn btn-secondary btn-sm" onClick={() => update([...entry, template])}>{ja ? labelSetting(key, language) + 'を追加' : 'Add ' + labelSetting(key, language)}</button></fieldset>;
+        <button type="button" className="btn btn-secondary btn-sm" onClick={() => update([...entry, template])}>{ja ? labelSetting(key, language) + 'を追加' : key === 'constraints' ? 'Add constraint' : 'Add ' + labelSetting(key, language)}</button></fieldset>;
     }
     const options = choices[path] ?? choices[key];
     const displayName = prefix && nestedLabels[key] ? nestedLabels[key][ja ? 1 : 0] : labelSetting(key, language);
     return <label key={key}><span><strong>{displayName}</strong></span>
       {options ? <select aria-label={name} value={entry === null ? '' : String(entry)} onChange={event => update(event.target.value || null)}>
         {inheritIsolation && path === 'isolation.policy' ? <option value="">{ja ? '個人の既定を継ぐ' : 'Inherit default'}</option> : null}
-        {options.map(option => <option key={option} value={option}>{option}</option>)}</select>
+        {options.map(option => <option key={option} value={option}>{key === 'kind' ? labelConstraint(option, language) : option}</option>)}</select>
       : Array.isArray(entry) ? <textarea aria-label={name} value={entry.join('\n')} rows={3} onChange={event => update(event.target.value.split('\n').filter(Boolean))}/>
       : typeof entry === 'boolean' ? <input aria-label={name} type="checkbox" checked={entry} onChange={event => update(event.target.checked)}/>
       : <input aria-label={name} type={typeof entry === 'number' || entry === null ? 'number' : key.startsWith('quiet') ? 'time' : 'text'} min={typeof entry === 'number' || entry === null ? 0 : undefined} step={prefix.startsWith('performance.weights') ? 'any' : undefined}

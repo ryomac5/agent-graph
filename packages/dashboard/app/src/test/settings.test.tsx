@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { defaultConfig, defaultProject } from '../../../../core/src/settings/index.ts';
 import { defaultPolicy } from '../../../../core/src/assign/policy.ts';
+import { labelSetting, labelConstraint } from '../components/settings/SettingsFields.tsx';
 import { SettingsPage } from '../pages/settings/SettingsPage.tsx';
 import { loadAppearance, type SettingsSnapshot, type SettingsStatus } from '../lib/settings.ts';
 import { PREFERENCES_KEY } from '../components/notifications/model.ts';
@@ -23,23 +24,27 @@ it.each(['en', 'ja'] as const)('restores key storage and last-valid-value inform
   expect(screen.getByText(ja ? 'api の再起動で反映します。旧 daemon のポートは使えません。' : 'Applies after API restart. The legacy daemon port is not allowed.').className).toBe('settings-note');
   expect(screen.getByText(ja ? 'Keychain に保存して再表示せず、次の起動から反映します。' : 'Stored in Keychain without redisplay and applied on the next launch.')).toBeTruthy();
 });
-it.each(['en', 'ja'] as const)('shows short policy labels and numbered constraints with full accessible names in %s', async language => {
+it.each(['en', 'ja'] as const)('shows translated policy labels and named constraints with full accessible names in %s', async language => {
   const f = createFixture();
   const { container } = render(<SettingsPage client={f.client} language={language}/>);
   const ja = language === 'ja';
   await screen.findByRole('button', { name: ja ? '割り当てを保存' : 'Save policy' });
-  for (const heading of ja ? ['利用枠', '実績', '重み', '制約'] : ['quota', 'performance', 'weights', 'constraints']) expect(screen.getByText(heading, { selector: 'legend' }).tagName).toBe('LEGEND');
+  for (const heading of ja ? ['利用枠', '実績', '評価の重み', '制約'] : ['Quota', 'Performance', 'Score weights', 'Constraints']) expect(screen.getByText(heading, { selector: 'legend' }).tagName).toBe('LEGEND');
   const hardLimit = screen.getByLabelText(ja ? '利用枠 · 利用枠の使用を止める上限' : 'quota · Quota hard limit (%)');
-  const acceptance = screen.getByLabelText(ja ? '実績 · 重み · 受け入れ率の重み' : 'performance · weights · Acceptance weight');
+  const acceptance = screen.getByLabelText(ja ? '実績 · 評価の重み · 受け入れ率の重み' : 'performance · weights · Acceptance weight');
   expect(hardLimit.closest('label')?.querySelector('strong')?.textContent).toBe(ja ? '使用を止める上限' : 'Hard limit (%)');
   expect(acceptance.closest('label')?.querySelector('strong')?.textContent).toBe(ja ? '受け入れ率' : 'Acceptance rate');
-  expect(screen.getByRole('button', { name: ja ? '制約を追加' : 'Add constraints' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: ja ? '制約を追加' : 'Add constraint' })).toBeTruthy();
   const rows = [...container.querySelectorAll('.settings-array-row')];
   expect(rows).toHaveLength(f.value.policy.constraints.length);
   expect(rows.length).toBeGreaterThan(0);
   rows.forEach((row, index) => {
-    expect(row.querySelector('legend')?.textContent).toBe(String(index + 1));
+    expect(row.querySelector('legend')?.textContent).toBe(labelConstraint(f.value.policy.constraints[index].kind, language));
     const constraint = within(row as HTMLElement).getByLabelText(ja ? `制約 · ${index + 1} · 制約` : `constraints · ${index + 1} · Constraint`);
+    for (const option of constraint.querySelectorAll('option')) {
+      expect(option.textContent).toBe(labelConstraint(option.value, language));
+      expect(option.textContent).not.toBe(option.value);
+    }
     expect(constraint.closest('label')?.querySelector('strong')?.textContent).toBe(ja ? '制約' : 'Constraint');
   });
 });
@@ -477,4 +482,20 @@ it.each(['en', 'ja'] as const)('keeps removed descriptions absent while restorin
   expect(container.textContent).not.toContain(language === 'ja' ? 'このブラウザで即座に反映します。' : 'Applies immediately to this browser.');
   fireEvent.click(screen.getByRole('button', { name: language === 'ja' ? '性能重視' : 'Performance' }));
   expect(screen.getByRole('dialog').querySelectorAll('.assignment-note')).toHaveLength(2);
+});
+
+it.each(['en', 'ja'] as const)('never displays internal policy section keys in %s', async language => {
+  const f = createFixture();
+  const { container } = render(<SettingsPage client={f.client} language={language} policyOnly/>);
+  await screen.findByRole('button', { name: language === 'ja' ? '割り当てを保存' : 'Save policy' });
+  for (const key of ['quota', 'performance', 'weights', 'constraints']) {
+    expect(labelSetting(key, language)).not.toBe(key);
+    expect([...container.querySelectorAll('legend')].some(legend => legend.textContent === key)).toBe(false);
+  }
+  expect(screen.queryByRole('heading', { name: 'Model assignment settings' })).toBeNull();
+  expect(screen.getByRole('heading', { name: language === 'ja' ? '役割別のモデル' : 'Models by role' })).toBeTruthy();
+  const select = screen.getByLabelText(language === 'ja' ? '制約 · 1 · 制約' : 'constraints · 1 · Constraint');
+  fireEvent.change(select, { target: { value: 'minTierForRole' } });
+  expect(select.closest('fieldset')?.querySelector('legend')?.textContent).toBe(labelConstraint('minTierForRole', language));
+  expect(screen.getByLabelText(language === 'ja' ? '制約 · 1 · モデルの水準' : 'constraints · 1 · Model tier')).toBeTruthy();
 });

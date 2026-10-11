@@ -108,3 +108,16 @@ it('uses known review targets as parents and marks reviews without targets as in
   expect(row.querySelector('[data-role="review"]')).toBeTruthy();
   expect(document.querySelector('[data-child="recent-a"][data-parent="recent-b"]')).toBeTruthy();
 });
+
+it.each([true, false])('opens task details on a single click (embedded=%s)', embedded => {
+  render(<MemoryRouter><GraphPage project="repo" target={createProjectionFixture()} client={{ command: vi.fn() }} embedded={embedded}/></MemoryRouter>);
+  fireEvent.click(screen.getByRole('treeitem', { name: /^Earlier 4/ }));
+  const row = screen.getByRole('treeitem', { name: /Finished task A/ });
+  expect(row.tagName).toBe('BUTTON');
+  fireEvent.click(row);
+  const detail = screen.getByRole('complementary', { name: 'Request' });
+  expect(detail.textContent).toContain('Finished task A');
+  expect(detail.querySelector('a')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Close details' }));
+  expect(screen.queryByRole('complementary', { name: 'Request' })).toBeNull();
+});

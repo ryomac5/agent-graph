@@ -60,7 +60,7 @@ export function GraphPage({ project: suppliedProject, target = store, client, la
   const [role, setRole] = useState<ChildRole>(); const [range, setRange] = useState<TimeRange>('6h');
   const requested = tree.nodes.find(node => node.conversationId === search.get('child'))?.id;
   const [detail, setDetail] = useState<string>();
-  const selected = requested ?? detail ?? root?.id ?? '';
+  const selected = detail ?? requested ?? root?.id ?? '';
   const expanded = readExpanded(search.getAll('expanded'));
   const model = buildRows(tree, { now, expanded, selected, role, state });
   const surface = useRef<HTMLDivElement>(null);
@@ -93,7 +93,7 @@ export function GraphPage({ project: suppliedProject, target = store, client, la
     return `/p/${encodeURIComponent(route)}?${query}`;
   }
   const props: OutlineProps = { model, language, selected, now, embedded, href, onSelect: row => {
-    setDetail(row.id);
+    setDetail(embedded && row.node?.conversationId ? undefined : row.id);
     if (!embedded) setSearch(current => { const query = new URLSearchParams(current); query.set('root', root!.id); query.delete('child'); if (row.role !== 'main' && row.node?.conversationId) query.set('child', row.node.conversationId); return query; });
   }, onGroup: group, onAnswer: answer, sent, connected: state.connection === 'connected' };
   const selectedRow = model.all.find(row => row.id === (detail ?? requested));
@@ -104,7 +104,7 @@ export function GraphPage({ project: suppliedProject, target = store, client, la
       <GraphSummary model={model} role={role} onRole={setRole} language={language} embedded={embedded}/>
       {error && <p className="banner banner-danger" role="alert">{error}</p>}
       {embedded ? <div className="graph-scroll"><GraphOutline {...props}/></div> : <GraphTimeline {...props} range={range} onRange={setRange}/>}
-      {!embedded && selectedRow?.node && <GraphDetail row={selectedRow} language={language} now={now} href={href(selectedRow)} onClose={() => { setDetail(undefined); setSearch(current => { const query = new URLSearchParams(current); query.delete('child'); return query; }); }}/>}
+      {(!embedded || detail) && selectedRow?.node && <GraphDetail row={selectedRow} language={language} now={now} href={href(selectedRow)} onClose={() => { setDetail(undefined); if (!embedded) setSearch(current => { const query = new URLSearchParams(current); query.delete('child'); return query; }); }}/>}
     </> : <div className="graph-empty">{language === 'ja' ? '会話がありません' : 'No conversations yet'}</div>}
   </div>;
 }

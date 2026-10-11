@@ -2,7 +2,8 @@
 .bulk-bar { padding: var(--space-2) var(--space-3); background: var(--bg-0); border: var(--border); border-radius: var(--radius-1); }
 .approval-row { display: grid; grid-template-columns: 16px minmax(0, 1fr) 210px; gap: var(--space-4); align-items: start; padding: var(--space-4); border-bottom: var(--border); }
 .approval-row:last-child { border-bottom: 0; }
-.approval-row.sent { opacity: .7; }
+.approval-row.sent { color: var(--fg-3); }
+.approval-row.sent :is(.approval-summary, .approval-context, .approval-file, .command-block, .fields dd) { color: var(--fg-3); }
 .approval-row.expired { grid-template-columns: 64px minmax(0, 1fr) 210px; }
 .row-check { margin-top: var(--space-1); }
 .approval-main { min-width: 0; }

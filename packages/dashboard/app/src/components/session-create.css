@@ -1,7 +1,7 @@
 .session-create { display: grid; gap: var(--space-4); padding-top: var(--space-4); }
 .session-create label { display: grid; gap: var(--space-2); color: var(--fg-2); font: var(--type-ui); }
-.session-create input, .session-create select, .ssh-settings input, .ssh-settings select { height: 32px; min-width: 0; border: var(--border); border-radius: var(--radius-1); background: var(--bg-2); color: var(--fg-1); padding: 0 var(--space-2); }
-.session-target { display: flex; align-items: center; gap: var(--space-3); background: var(--bg-2); border: var(--border); border-radius: var(--radius-1); }
+.session-create input, .session-create select, .ssh-settings input, .ssh-settings select { height: 32px; min-width: 0; border: var(--input-border); border-radius: var(--radius-1); background: var(--bg-2); color: var(--fg-1); padding: 0 var(--space-2); }
+.session-target { display: flex; align-items: center; gap: var(--space-3); background: var(--bg-2); border: var(--input-border); border-radius: var(--radius-1); }
 .session-target select { flex: 1; border: 0; }
 .session-target span { max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: var(--space-2); font: var(--type-meta); color: var(--fg-3); }
 .session-create small { color: var(--fg-3); font: var(--type-meta); }

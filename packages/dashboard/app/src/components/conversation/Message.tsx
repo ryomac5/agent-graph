@@ -97,7 +97,7 @@ export function Message({ row, sender, showName = true, language = 'en', streami
   return <article className={`message ${end ? 'message-user' : 'message-agent'}${showName ? ' message-first' : ''}${streaming ? ' streaming' : ''}`}
     id={`message-${encodeURIComponent(String(row.id))}`} aria-label={`${sender.name} message`} data-side={sender.side}>
     <header className="message-header">
-      {showName && !end && <strong className="message-sender">{sender.name}</strong>}
+      {showName && <strong className={end ? 'message-requester' : 'message-sender'}>{sender.name}</strong>}
       {time ? <time dateTime={time} title={time}>{formatClock(time, language)}</time> : !streaming && <span className="message-time-unknown">{t('timeUnknown')}</span>}
       {streaming && <span className="chip chip-accent"><span className="pulse" aria-hidden="true"/>{t('streaming')}</span>}
     </header>

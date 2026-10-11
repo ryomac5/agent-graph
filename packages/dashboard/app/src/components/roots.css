@@ -50,7 +50,7 @@
 .request-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--fg-1); font-weight: 400; overflow-wrap: anywhere; font: var(--type-ui); }
 .request-apex .request-title { font-weight: 400; font: var(--type-ui); }
 .request-avatar { background: transparent; font-weight: 400; place-items: center; display: inline-grid; flex: none; width: 16px; height: 16px; font: var(--type-meta); border-radius: 50%; color: var(--fg-1); margin: var(--space-2) var(--space-1) 0; }
-.request-avatar.provider-claude { color: #D97757; }
+.request-avatar.provider-claude { color: var(--provider-claude); }
 .request-avatar.provider-codex { color: var(--fg-1); }
 .request-approval { background: var(--bg-0); margin: 0 var(--space-2) var(--space-1) var(--space-8); display: grid; border: var(--border); border-radius: var(--radius-1); padding: var(--space-2); gap: var(--space-1); }
 .root-turn-dot { border-radius: 50%; align-self: center; flex: none; background: var(--state-reply); width: 6px; height: 6px; }

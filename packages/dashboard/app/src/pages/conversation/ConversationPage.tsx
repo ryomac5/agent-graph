@@ -34,7 +34,7 @@ import { groupToolRuns, instructionKind } from '../../components/conversation/ti
 import { isDelegationTool, resolveDelegationNode } from '../../components/conversation/DelegationCard.tsx';
 import { selectRoots, useRootIndex } from '../../lib/roots.ts';
 import { resolveActivity } from '../../lib/activity.ts';
-import { isWorkingTurn, useWorkingTurn, workingElapsed } from '../../lib/turns.ts';
+import { isWorkingTurn, useTurnConversations, useWorkingTurn, workingElapsed } from '../../lib/turns.ts';
 import { useAttachments, MAX_ATTACHMENTS } from './useAttachments.ts';
 import './conversation.css';
 
@@ -250,7 +250,8 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   // 未対応の形式でも押せるようにし、押したときに理由を出す。
   const canLaunch = connected && !pending && !host?.disconnected && (terminalConversation ? Boolean(host || cwd.trim()) : Boolean(model && cwd.trim()));
   const activityIds = seriesIds?.map(resolveConversation) ?? (root?.conversation_ids.includes(conversationId) ? root.conversation_ids : [conversationId]);
-  const activity = resolveActivity(state, activityIds, readText(run?.state) || seriesState);
+  const turns = useTurnConversations();
+  const activity = resolveActivity(state, activityIds, readText(run?.state) || seriesState, turns);
   const rawStatus = activity.state;
   const status = executionStates.find(value => value === rawStatus) ?? 'unknown';
   const local = detail?.id === conversationId ? detail.projection : {};
@@ -327,7 +328,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   // 系列の古い会話が動いている場合も、その会話の時計と道具を使う。子の実行は親の終了を上書きしない。
   const activityRun = activity.run ?? run;
   const activityMessages = messageEntries.filter(entry => owner.get(entry.key) === activityRun?.conversation_id);
-  const workingTurn = useWorkingTurn(activityRun);
+  const workingTurn = useWorkingTurn(activityRun && { ...activityRun, state: rawStatus });
   const lastToolBlock = [...activityMessages].reverse().filter(entry => workingTurn && Date.parse(entry.time) >= workingTurn.started)
     .flatMap(entry => Array.isArray(entry.row.body) ? entry.row.body.map(readObject).filter(block => block.type === 'tool_use').reverse() : [])[0];
   const lastToolInput = readObject(lastToolBlock?.input);

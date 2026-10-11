@@ -74,9 +74,14 @@ export function projectRuns(facts: readonly Fact[]): RunProjection[] {
     const previous = runs.get(key);
     const turnEvidence = readObject(payload.last_evidence);
     const hookTurn = fact.source === "hook" && (turnEvidence?.hook_event_name === "UserPromptSubmit" || turnEvidence?.hook_event_name === "Stop");
-    if (hookTurn && payload.state && fact.confidence === "confirmed") hookStates.add(key);
+    if (hookTurn && payload.state && fact.confidence === "confirmed") {
+      if (payload.state === "running") hookStates.add(key);
+      else hookStates.delete(key);
+    }
     // 外の実行では hook のターン通知を履歴の補助的な終了で上書きしない。
-    const auxiliaryState = fact.source === "transcript-claude" && hookStates.has(key);
+    const auxiliaryState = fact.source === "transcript-claude" && hookStates.has(key)
+      && payload.state === "idle" && turnEvidence?.kind === "turn_completed";
+    if (fact.source === "transcript-claude" && payload.state === "idle" && turnEvidence?.kind === "process_absent") hookStates.delete(key);
     const conversationId = payload.conversation_id ?? previous?.conversation_id;
     if (!conversationId) continue;
     const run: RunProjection = previous ? { ...previous } : {

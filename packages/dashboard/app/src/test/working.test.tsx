@@ -7,7 +7,7 @@ import { RootList } from '../components/RootViews.tsx';
 import { Workbench } from '../pages/workspace/Workbench.tsx';
 import { createStore, type Row, type ScreenState } from '../lib/store.ts';
 import { selectRoots } from '../lib/roots.ts';
-import { isWorkingTurn, resolveWorkingTurn, workingElapsed } from '../lib/turns.ts';
+import { isWorkingTurn, publishTurns, resolveWorkingTurn, workingElapsed } from '../lib/turns.ts';
 
 const START = '2026-10-11T00:00:00Z';
 const NOW = Date.parse(START) + 192_000;
@@ -18,7 +18,7 @@ beforeEach(() => {
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ generation: 0, projection: { messages: [], message_memberships: [] }, next: null }) })));
 });
-afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); publishTurns(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 const client: ConversationClient = { command: async name => ({ type: 'ack', cmd_id: 'cmd', ok: true,
   result: name === 'session.hosts' ? { hosts: [] } : name === 'list_models' ? [] : {} }) };
 function setup(state = 'idle') {
@@ -166,4 +166,52 @@ it('does not infer a clock from a tool timestamp when projected start evidence i
   expect(isWorkingTurn(turn)).toBe(true);
   expect(workingElapsed(turn, NOW)).toBe('');
   expect(workingElapsed(resolveWorkingTurn({ ...tool, turn_started_ts: START }), NOW)).toBe('3m 12s');
+});
+
+it.each(['idle', 'running', 'waiting_approval'])('gives your turn the same priority and color on the list, tab and conversation for %s', async state => {
+  const target = setup(state);
+  const snapshot = target.getSnapshot();
+  target.setSnapshot({ ...snapshot, projection: { ...snapshot.projection,
+    roots: [...snapshot.projection.roots, { id: 'busy', name: 'Busy agent', state: 'running', conversation_ids: ['busy'], project: 'p' }],
+    runs: [...snapshot.projection.runs, { id: 'busy-run', conversation_id: 'busy', generation: 1, state: 'running' }],
+  } });
+  publishTurns({ history: { read: {}, ready: {}, recent: [] }, turns: [
+    { id: 'ready', kind: 'idle', conversationId: 'c', time: START, to: '/c/c' },
+  ] });
+  render(<MemoryRouter><RootList grouped roots={selectRoots(target.getSnapshot())} state={target.getSnapshot()}/>
+    <Workbench project="p" session="root" conversationId="c" client={client} language="en"
+      renderConversation={id => <ConversationPage conversationId={id} target={target} client={client} embedded/>}/></MemoryRouter>);
+  await act(async () => {});
+  const expected = state === 'waiting_approval' ? 'waiting_approval' : 'waiting_input';
+  const row = screen.getByRole('link', { name: 'Main agent' });
+  expect(row.closest('section')?.getAttribute('aria-label')).toBe('Your turn');
+  expect(document.querySelectorAll('.session-group')[0]?.getAttribute('aria-label')).toBe('Your turn');
+  expect(row.querySelector('.activity-mark')?.getAttribute('data-state')).toBe(expected);
+  expect(row.querySelector('.root-elapsed')).toBeNull();
+  expect(screen.getByRole('tab', { name: 'Main agent' }).querySelector('.activity-mark')?.getAttribute('data-state')).toBe(expected);
+  expect(screen.queryByRole('status', { name: 'Working' })).toBeNull();
+  render(<MemoryRouter><ConversationPage conversationId="c" target={target} client={client}/></MemoryRouter>);
+  await act(async () => {});
+  expect(document.querySelector('.conversation-page .state-badge')?.classList.contains(`status-${expected}`)).toBe(true);
+});
+
+it('places your turn and approval waits before running in an ungrouped list', () => {
+  const snapshot = setup('idle').getSnapshot();
+  const roots = [
+    { id: 'busy', name: 'Busy', state: 'running', conversation_ids: ['busy'] },
+    { id: 'approval', name: 'Approval', state: 'waiting_approval', conversation_ids: ['approval'] },
+    ...snapshot.projection.roots,
+  ];
+  const state = { ...snapshot, projection: { ...snapshot.projection, roots,
+    runs: [...snapshot.projection.runs,
+      { id: 'busy', conversation_id: 'busy', generation: 1, state: 'running' },
+      { id: 'approval', conversation_id: 'approval', generation: 1, state: 'waiting_approval' }],
+  } };
+  publishTurns({ history: { read: {}, ready: {}, recent: [] }, turns: [
+    { id: 'ready', kind: 'idle', conversationId: 'c', time: START, to: '/c/c' },
+  ] });
+  render(<MemoryRouter><RootList roots={selectRoots(state)} state={state}/></MemoryRouter>);
+  const rows = screen.getAllByRole('link');
+  expect(rows.map(row => row.getAttribute('aria-label'))).toEqual(['Approval', 'Main agent', 'Busy']);
+  expect(rows[1].querySelector('.activity-mark')?.getAttribute('data-state')).toBe('waiting_input');
 });

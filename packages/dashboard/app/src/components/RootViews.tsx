@@ -70,8 +70,9 @@ export function RootList({ roots, selected, onSelect, project, language = 'en', 
   const turns = useTurnConversations();
   const [now, setNow] = useState(Date.now);
   useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 1_000); return () => clearInterval(timer); }, []);
-  const yourTurn = (root: Root) => root.conversation_ids.some(id => turns.has(id)) || WAITING.includes(root.state);
-  const group = (root: Root) => yourTurn(root) ? 0 : isRunning(root.state) ? 1 : !root.last_activity_ts || Date.parse(root.last_activity_ts) >= now - EARLIER_MS ? 2 : 3;
+  const activity = (root: Root) => resolveActivity(state, root.conversation_ids, root.state, turns).state;
+  const yourTurn = (root: Root) => WAITING.includes(activity(root));
+  const group = (root: Root) => yourTurn(root) ? 0 : isRunning(activity(root)) ? 1 : !root.last_activity_ts || Date.parse(root.last_activity_ts) >= now - EARLIER_MS ? 2 : 3;
   const groups = [0, 1, 2, 3].map(value => roots.filter(root => group(root) === value).toSorted((a, b) => (b.last_activity_ts ?? '').localeCompare(a.last_activity_ts ?? '')));
   const labels = language === 'ja' ? ['あなたの番', '実行中', '最近', '以前'] : ['Your turn', 'Running', 'Recent', 'Earlier'];
   const namePrefixes = new Map<string, number>();
@@ -82,16 +83,16 @@ export function RootList({ roots, selected, onSelect, project, language = 'en', 
   const row = (root: Root) => {
     const datedName = /^(.*-)(\d{8}(?:-\d+)?)$/.exec(root.name);
     const name = datedName && (namePrefixes.get(datedName[1]) ?? 0) > 1 ? datedName[2] : root.name;
-    const shownState = state ? resolveActivity(state, root.conversation_ids, root.state).state : root.state;
+    const shownState = activity(root);
     const content = <><StatusDot className="root-state" dotOnly activity dotLabel={root.conversation_ids.some(id => turns.has(id)) ? language === 'ja' ? '自分の番' : 'Your turn' : stateLabel(shownState, language)} state={shownState} language={language}/>
       <span className="root-row-line"><span className="root-name" title={root.name}>{name}</span></span>
       <span className="root-row-meta"><StatusDot state={shownState} language={language} activity/>
-        {isRunning(root.state) && <RootElapsed state={state} root={root} now={now} language={language}/>}
-        {!isRunning(root.state) && !yourTurn(root) && root.state !== 'failed' && root.last_activity_ts && <time className="root-time" dateTime={root.last_activity_ts} title={formatWhen(root.last_activity_ts, language)}>{formatWhen(root.last_activity_ts, language)}</time>}</span></>;
+        {isRunning(shownState) && <RootElapsed state={state} root={root} now={now} language={language}/>}
+        {!isRunning(shownState) && !yourTurn(root) && shownState !== 'failed' && root.last_activity_ts && <time className="root-time" dateTime={root.last_activity_ts} title={formatWhen(root.last_activity_ts, language)}>{formatWhen(root.last_activity_ts, language)}</time>}</span></>;
     if (editing === root.id && client) return <div key={root.id} className="root-row"><SessionName key={root.id} root={root} client={client} language={language} editing onFinish={() => setEditing(undefined)}/></div>;
     return <div key={root.id} className="root-list-item" onKeyDown={event => { if (event.key === 'Escape') setMenu(undefined); }}><Link
       onDoubleClick={client ? event => { event.preventDefault(); setEditing(root.id); setMenu(undefined); } : undefined}
-      onContextMenu={client ? event => { event.preventDefault(); setMenu(root.id); } : undefined} className="root-row activity-name" title={[root.name, root.user_name ? root.auto_name : root.kit_name, stateLabel(root.state, language), runningText(root.running_children, language)].filter(Boolean).join(' · ')} aria-label={root.name} aria-current={selected === root.id ? 'page' : undefined}
+      onContextMenu={client ? event => { event.preventDefault(); setMenu(root.id); } : undefined} className="root-row activity-name" title={[root.name, root.user_name ? root.auto_name : root.kit_name, stateLabel(shownState, language), runningText(root.running_children, language)].filter(Boolean).join(' · ')} aria-label={root.name} aria-current={selected === root.id ? 'page' : undefined}
       to={rootHref({ ...root, project: project ?? root.project })} onClick={event => {
         if (onSelect && event.button === 0 && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
           event.preventDefault(); onSelect(root);
@@ -101,9 +102,9 @@ export function RootList({ roots, selected, onSelect, project, language = 'en', 
   if (!grouped) {
     const newest = Math.max(...roots.map(root => Date.parse(root.last_activity_ts ?? '')).filter(Number.isFinite));
     const cutoff = Number.isFinite(newest) ? newest - EARLIER_MS : Number.NEGATIVE_INFINITY;
-    const recent = (root: Root) => ACTIVE.includes(root.state) || WAITING.includes(root.state) || root.id === selected || !Number.isFinite(Date.parse(root.last_activity_ts ?? '')) || Date.parse(root.last_activity_ts ?? '') >= cutoff;
+    const recent = (root: Root) => ACTIVE.includes(activity(root)) || yourTurn(root) || root.id === selected || !Number.isFinite(Date.parse(root.last_activity_ts ?? '')) || Date.parse(root.last_activity_ts ?? '') >= cutoff;
     const older = roots.filter(root => !recent(root));
-    return <div className="root-list">{roots.filter(recent).map(row)}{older.length > 0 && <><button className="btn btn-ghost btn-sm root-earlier" aria-expanded={showEarlier} onClick={() => setShowEarlier(value => !value)}>{labels[3]} <span className="numeric">{older.length}</span></button>{showEarlier && older.map(row)}</>}{!roots.length && <p className="empty-row">{t.noConversations}</p>}</div>;
+    return <div className="root-list">{roots.filter(recent).toSorted((a, b) => Number(yourTurn(b)) - Number(yourTurn(a))).map(row)}{older.length > 0 && <><button className="btn btn-ghost btn-sm root-earlier" aria-expanded={showEarlier} onClick={() => setShowEarlier(value => !value)}>{labels[3]} <span className="numeric">{older.length}</span></button>{showEarlier && older.map(row)}</>}{!roots.length && <p className="empty-row">{t.noConversations}</p>}</div>;
   }
   return <div className="root-list">{groups.map((items, index) => items.length > 0 && <section key={index} className="session-group" aria-label={labels[index]}>
     {index === 3 ? <><button className="btn btn-ghost btn-sm root-earlier" aria-expanded={showEarlier} onClick={() => setShowEarlier(value => !value)}>{labels[index]} <span className="numeric">{items.length}</span></button>{(showEarlier ? items : items.filter(root => root.id === selected)).map(row)}</> : <><p className="root-earlier-label">{labels[index]}</p>{items.map(row)}</>}

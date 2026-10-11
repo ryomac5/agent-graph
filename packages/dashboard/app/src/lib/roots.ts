@@ -162,8 +162,8 @@ export function resolveChildRole(evidence: Row = {}, delegation?: Row): ChildRol
   }
 }
 const ROLE_NAMES: Record<ChildRole, [string, string]> = {
-  orchestrate: ['Orchestrate', '根'], advisor: ['Advisor', '助言'], research: ['Research', '調査'], implement: ['Implement', '実装'],
-  document: ['Document', '文書'], review: ['Review', 'レビュー'], verify: ['Verify', '検証'], proofread: ['Proofread', '校正'],
+  orchestrate: ['Main agent', 'メインエージェント'], advisor: ['Advisor', 'アドバイザー'], research: ['Research', 'リサーチ'], implement: ['Implementation', '実装'],
+  document: ['Documentation', 'ドキュメント'], review: ['Code review', 'コードレビュー'], verify: ['Verification', '動作検証'], proofread: ['Proofreading', '校正'],
 };
 export function shownRole(role: string, language = typeof document !== 'undefined' ? document.documentElement.lang : 'en'): string {
   return ROLE_NAMES[role as ChildRole]?.[language === 'ja' ? 1 : 0] ?? (['general-purpose', 'subagent'].includes(role) ? '' : role);

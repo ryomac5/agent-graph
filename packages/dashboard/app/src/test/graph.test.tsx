@@ -38,14 +38,14 @@ it.each(['en', 'ja'] as const)('shows all role shapes and words, running work an
   expect(document.querySelector('[data-child=work]')?.classList.contains('is-running')).toBe(true);
   expect(screen.getByText(language === 'ja' ? '下で 2 件が実行中' : '2 running below')).toBeTruthy();
   expect(screen.queryByText('待機中')).toBeNull();
-  expect(screen.getByText(language === 'ja' ? '文書 · Opus 5.5' : 'Document · Opus 5.5')).toBeTruthy();
+  expect(screen.getByText(language === 'ja' ? 'ドキュメント · Opus 5.5' : 'Documentation · Opus 5.5')).toBeTruthy();
 });
 it('counts hidden roles, filters without losing ancestors, and toggles back', () => {
   renderGraph();
-  expect(screen.getByRole('button', { name: 'Implement 48' })).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: 'Review 1' }));
+  expect(screen.getByRole('button', { name: 'Implementation 48' })).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Code review 1' }));
   expect([...document.querySelectorAll('[data-node-id]')].map(row => row.getAttribute('data-node-id'))).toEqual(['root', 'work', 'review']);
-  fireEvent.click(screen.getByRole('button', { name: 'Review 1' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Code review 1' }));
   expect(document.querySelector('[data-node-id="earlier:root"]')).toBeTruthy();
 });
 it('pages folded children and retains expansion in the URL through remounting', () => {

@@ -54,7 +54,7 @@ it('selects the running root, joins its continuation and switches to child conve
   const tree = screen.getByRole('complementary', { name: 'Panel' });
   fireEvent.click(within(tree).getByRole('treeitem', { name: /Earlier 1/ }));
   expect(within(tree).getByText('Check the screen').closest('[role=treeitem]')?.getAttribute('aria-level')).toBe('4');
-  fireEvent.click(within(tree).getByRole('treeitem', { name: /Build the screen · Implement · Codex/ }));
+  fireEvent.click(within(tree).getByRole('treeitem', { name: /Build the screen · Implementation · Codex/ }));
   expect(await screen.findByText('Child response')).toBeTruthy(); expect(screen.queryByText('Original request')).toBeNull();
   expect(screen.getByText('Parent request').closest('article')?.getAttribute('data-side')).toBe('end');
   fireEvent.click(screen.getByRole('button', { name: 'Back to Repo-20261008' }));
@@ -65,7 +65,7 @@ it('lists only roots with running children and leaves orphan unattended runs out
   render(<MemoryRouter><HomePage target={fixture()}/></MemoryRouter>);
   expect(screen.getAllByRole('link', { name: /Repo-20261008|agent-graph-002/ })).toHaveLength(2);
   expect(screen.getByRole('heading', { name: /Screen graph/ })).toBeTruthy();
-  expect(screen.getByRole('button', { name: 'Build the screen · GPT-6.1 Sol · Implement · Running' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Build the screen · GPT-6.1 Sol · Implementation · Running' })).toBeTruthy();
   expect(screen.queryByText('Check the screen')).toBeNull();
   // 根でない会話は一覧に出さない。
   expect(screen.queryByText('Orphan run')).toBeNull();

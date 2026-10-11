@@ -113,3 +113,10 @@ it('記録の画像を縮小で描き、[Image #1] の印と画像の元の行�
   expect(view.container.textContent).not.toContain('[Image #1]');
   expect(view.container.textContent).toContain('色は');
 });
+
+it('会話の id から提供元を読む', async () => {
+  const { providerFromId } = await import('../pages/conversation/ConversationPage.tsx');
+  expect(providerFromId('["codex","019a"]')).toBe('codex');
+  expect(providerFromId('["claude","a305"]')).toBe('claude');
+  expect(providerFromId('not-json')).toBe('');
+});

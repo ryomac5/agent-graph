@@ -119,6 +119,10 @@ function ApprovalCard({ entry, t, disabled, answered, onAnswer, screen }: {
 }
 
 /** 送った発言と記録の発言が同じかを見る。画像を付けると、記録の本文は画像のパスと空白のあとに送った本文が続く。 */
+/** 会話の id は ["claude", "<id>"] の形で、先頭が提供元である。 */
+export function providerFromId(conversationId: string | undefined): string {
+  try { const parsed: unknown = JSON.parse(conversationId ?? ''); return Array.isArray(parsed) && typeof parsed[0] === 'string' ? parsed[0] : ''; } catch { return ''; }
+}
 export function sameSent(recorded: string, sent: string): boolean {
   // Claude Code は貼った画像を「[Image #1]」の印に置き換えて記録するので、その印も外して比べる。
   const a = recorded.trim().replace(/^(?:\[Image #\d+\]\s*)+/, ''); const b = sent.trim();
@@ -202,7 +206,8 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   useEffect(() => {
     if (receipt && projectedRun?.id === receiptRunId && projectedConversation?.origin === 'managed') setReceipt(undefined);
   }, [receipt, receiptRunId, projectedRun?.id, projectedConversation?.origin]);
-  const provider = readText(conversation?.provider);
+  // 会話の行がまだ届いていなくても、会話の id の先頭から提供元を読む。読めないと古い経路に落ちて送れなくなるからである。
+  const provider = readText(conversation?.provider) || providerFromId(conversationId);
   const launch = readObject(run?.launch);
   const saved = readModel(run);
   const currentModel = saved.model || readText(run?.model);
@@ -230,7 +235,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const [engaged, setEngaged] = useState(false);
   const [handoffBlocked, setHandoffBlocked] = useState(false);
   const external = conversation?.origin !== 'managed';
-  const terminalConversation = external && (provider === 'claude' || Boolean(creatingHost));
+  const terminalConversation = external && (provider === 'claude' || provider === 'codex' || Boolean(creatingHost));
   const host = hosts.find(host => host.conversationId === conversationId) ?? (pendingHost?.conversationId === conversationId ? pendingHost : undefined);
   const stopped = ['ended', 'failed', 'idle'].includes(readText(run?.state)) && isStoppedEvidence(run?.last_evidence);
   const active = ACTIVE_STATES.includes(readText(run?.state));

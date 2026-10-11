@@ -11,17 +11,18 @@ function setup({ provider = 'codex', origin = 'managed', status = 'idle', projec
   provider?: string; origin?: string; status?: string; projection?: Record<string, Row[]>; client?: ConversationClient;
 } = {}) {
   const store = createStore();
+  const conversationId = origin === 'observed' ? JSON.stringify([provider, 'native-id']) : 'c';
   store.setSnapshot({ seq: 1, generation: 0, projection: {
-    conversations: [{ id: 'c', name: 'Build console', provider, origin, history_format: provider === 'codex' ? 'legacy' : 'jsonl' }],
-    runs: [{ id: 'r', conversation_id: 'c', generation: 1, state: status, started_ts: '2026-10-07T00:00:00Z',
+    conversations: [{ id: conversationId, name: 'Build console', provider, origin, history_format: provider === 'codex' ? 'legacy' : 'jsonl' }],
+    runs: [{ id: 'r', conversation_id: conversationId, generation: 1, state: status, started_ts: '2026-10-07T00:00:00Z',
       launch: { cwd: '/workspace/demo', model: { model: 'model-a', effort: 'medium' } } }],
-    messages: [], message_memberships: [], ...projection,
+    messages: [], message_memberships: [], ...Object.fromEntries(Object.entries(projection).map(([table, rows]) => [table, rows.map(row => ({ ...row, ...(table === 'conversations' && row.id === 'c' ? { id: conversationId } : {}), ...(row.conversation_id === 'c' ? { conversation_id: conversationId } : {}) }))])),
   } });
   store.setConnection('connected');
   const command = vi.fn(async (command: string): Promise<Ack> => ({ type: 'ack', cmd_id: 'cmd', ok: true,
     result: command === 'list_models' ? [{ model: 'model-a', displayName: 'Model A', effort: 'medium' }, { model: 'model-b', displayName: 'Model B', effort: 'low' }] : {} }));
   const client = supplied ?? { command };
-  render(<MemoryRouter initialEntries={['/c/c']}><ConversationPage conversationId="c" target={store} client={client}/></MemoryRouter>);
+  render(<MemoryRouter initialEntries={['/c/c']}><ConversationPage conversationId={conversationId} target={store} client={client}/></MemoryRouter>);
   return { store, command };
 }
 async function waitModels() { await screen.findByRole('option', { name: 'Model B' }); }
@@ -150,14 +151,15 @@ it('sends only on Cmd+Enter, preserves newlines on Enter and rejects composing i
 
 it('uses one send button and immediately continues an external conversation without a dialog', async () => {
   const command = vi.fn(async (name: string): Promise<Ack> => ({ type: 'ack', cmd_id: 'cmd', ok: true,
-    result: name === 'list_models' ? [{ model: 'model-a', displayName: 'Model A' }, { model: 'model-b', displayName: 'Model B' }] : { conversationId: 'continued', runId: 'new-run' } }));
+    result: name === 'list_models' ? [{ model: 'model-a', displayName: 'Model A' }, { model: 'model-b', displayName: 'Model B' }] : name === 'session.launch' ? { terminalId: 'terminal' } : { hosts: [] } }));
   setup({ origin: 'observed', status: 'running', client: { command } });
   await waitModels();
   fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Continue please' } });
   fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-  await waitFor(() => expect(command).toHaveBeenCalledWith('fork', { conversationId: 'c', cwd: '/workspace/demo',
-    model: { model: 'model-a', effort: 'medium' }, input: { text: 'Continue please' } }));
+  await waitFor(() => expect(command).toHaveBeenCalledWith('session.send', { conversationId: '["codex","native-id"]', text: 'Continue please' }));
   expect(screen.queryByRole('dialog')).toBeNull();
+  expect(command).toHaveBeenCalledWith('session.launch', { projectId: '', provider: 'codex', resume: 'native-id', model: 'model-a' });
+  expect(command.mock.calls.some(call => ['fork', 'adopt'].includes(call[0]))).toBe(false);
   expect(screen.queryByRole('button', { name: 'Branch conversation' })).toBeNull();
 });
 
@@ -195,7 +197,7 @@ it('preserves input on failed acknowledgements and disables commands while disco
   expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
 });
 
-it('blocks handoff for unsupported formats only when asked and marks absent message bodies as unavailable', async () => {
+it('resumes observed Codex through the terminal even with an unsupported observed history format', async () => {
   const { command } = setup({ origin: 'observed', projection: {
     conversations: [{ id: 'c', provider: 'codex', origin: 'observed', history_format: 'future-format' }],
     messages: [{ id: 'missing', role: 'assistant', body_state: 'unavailable' }],
@@ -209,8 +211,9 @@ it('blocks handoff for unsupported formats only when asked and marks absent mess
   expect(screen.queryByRole('article', { name: 'Codex message' })).toBeNull();
   fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Hello' } });
   fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-  expect((await screen.findByRole('alert')).textContent).toBe('Unable to continue from this conversation history.');
-  expect(command.mock.calls.some(call => call[0] === 'adopt')).toBe(false);
+  await waitFor(() => expect(command).toHaveBeenCalledWith('session.send', { conversationId: '["codex","native-id"]', text: 'Hello' }));
+  expect(command).toHaveBeenCalledWith('session.launch', { projectId: '', provider: 'codex', resume: 'native-id', model: 'model-a' });
+  expect(command.mock.calls.some(call => ['fork', 'adopt'].includes(call[0]))).toBe(false);
 });
 
 it('decodes SQLite JSON columns from real snapshot rows for tool content and approval decisions', async () => {
@@ -230,14 +233,16 @@ it('decodes SQLite JSON columns from real snapshot rows for tool content and app
   await waitFor(() => expect((screen.getByRole('button', { name: 'Allow' }) as HTMLButtonElement).disabled).toBe(true));
 });
 
-it('takes over an external conversation without a confirmation dialog when runner has stop evidence', async () => {
+it('resumes observed Codex through the terminal without a dialog when runner has stop evidence', async () => {
   const command = vi.fn(async (name: string): Promise<Ack> => ({ type: 'ack', cmd_id: 'cmd', ok: true,
-    result: name === 'list_models' ? [{ model: 'model-b', displayName: 'Model B' }] : { conversationId: 'c', runId: 'new-run', operation: 'resume' } }));
+    result: name === 'list_models' ? [{ model: 'model-b', displayName: 'Model B' }] : name === 'session.launch' ? { terminalId: 'terminal' } : { hosts: [] } }));
   setup({ origin: 'observed', status: 'ended', client: { command }, projection: { runs: [{ id: 'r', conversation_id: 'c', generation: 1, state: 'ended', last_evidence: { kind: 'process_absent' }, launch: { cwd: '/workspace/demo', model: { model: 'model-a', effort: 'medium' } } }] } });
   await waitModels();
   fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Next step' } });
   fireEvent.keyDown(screen.getByRole('textbox', { name: 'Message' }), { key: 'Enter', metaKey: true });
-  await waitFor(() => expect(command).toHaveBeenCalledWith('adopt', { conversationId: 'c', cwd: '/workspace/demo', model: { model: 'model-a', effort: 'medium' }, input: { text: 'Next step' }, confirmStopped: true }));
+  await waitFor(() => expect(command).toHaveBeenCalledWith('session.send', { conversationId: '["codex","native-id"]', text: 'Next step' }));
+  expect(command).toHaveBeenCalledWith('session.launch', { projectId: '', provider: 'codex', resume: 'native-id', model: 'model-a' });
+  expect(command.mock.calls.some(call => ['fork', 'adopt'].includes(call[0]))).toBe(false);
   expect(screen.queryByRole('dialog')).toBeNull();
 });
 

@@ -19,7 +19,7 @@ export function SettingsPage({ client, language, onAppearance, policyOnly = fals
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<PolicyPreview>();
-  const [providerPreview, setProviderPreview] = useState<{ token: string; provider: string; files: { path: string; diff: string }[]; mcpCommand?: string }>();
+  const [providerPreview, setProviderPreview] = useState<{ token: string; provider: string; files: { path: string; diff: string }[]; mcpCommand?: string }[]>();
   const [providerConfirmed, setProviderConfirmed] = useState(false);
   const [apiKey, setApiKey] = useState('');
   const [confirmation, setConfirmation] = useState(false);
@@ -110,15 +110,15 @@ export function SettingsPage({ client, language, onAppearance, policyOnly = fals
 
     </SettingsSection>}
     <SettingsSection title={text('Assignment policy', '割り当ての決まり')} store="policy.toml" hint={nextDelegation}>
-      <ModelAssignments policy={settings.policy} models={models} language={lang} applyDisabled={busy || dirty.current.has('policy')} onApply={provider => void perform(async () => { setProviderConfirmed(false); setProviderPreview(await requestSettings(client, 'settings.previewProvider', { provider })); })} onChange={next => edit('policy', next)} onRefresh={provider => void perform(async () => { const result = await requestSettings<ModelCatalog[string]>(client, 'settings.models', { provider }); setModels(previous => ({ ...previous, [provider]: result })); })}/>
+      <ModelAssignments policy={settings.policy} models={models} language={lang} applyDisabled={busy || dirty.current.has('policy')} onApply={() => void perform(async () => { const revision = edits.current.policy; setProviderConfirmed(false); const previews = await Promise.all(['claude', 'codex', 'antigravity'].map(provider => requestSettings<NonNullable<typeof providerPreview>[number]>(client, 'settings.previewProvider', { provider }))); if (revision === edits.current.policy && !dirty.current.has('policy')) setProviderPreview(previews); })} onChange={next => edit('policy', next)} onRefresh={provider => void perform(async () => { const result = await requestSettings<ModelCatalog[string]>(client, 'settings.models', { provider }); setModels(previous => ({ ...previous, [provider]: result })); })}/>
 
       <p className="muted-text">{text('Save the assignment policy before applying it to provider files.', '提供元に反映する前に割り当てを保存してください。')}</p>
       {providerPreview && <div role="region" aria-label={text('Provider changes', '提供元への変更')}>
-        {providerPreview.files.map(file => <div key={file.path}><p><code>{file.path}</code></p><pre className="provider-diff">{file.diff}</pre></div>)}
-        {!providerPreview.files.length && <p>{text('No changes', '変更はありません')}</p>}
-        {providerPreview.mcpCommand && <p>{text('Register agent-graph MCP:', 'agent-graph の MCP を登録:')} <code>{providerPreview.mcpCommand}</code></p>}
-        <label><input type="checkbox" checked={providerConfirmed} onChange={event => setProviderConfirmed(event.target.checked)}/>{text('I confirm these file changes', 'ファイルの変更を確認しました')}</label>
-        <div className="button-row"><button className="btn btn-secondary" disabled={busy || !providerConfirmed} onClick={() => void perform(async () => { await requestSettings(client, 'settings.applyProvider', { provider: providerPreview.provider, token: providerPreview.token, confirmation: true }); setProviderPreview(undefined); setProviderConfirmed(false); setNotice(text('Applied', '反映しました')); })}>{text('Confirm and apply', '確認して反映')}</button><button className="btn btn-ghost" onClick={() => { setProviderPreview(undefined); setProviderConfirmed(false); }}>{text('Cancel', '取り消す')}</button></div>
+        {providerPreview.flatMap(preview => preview.files).map(file => <div key={file.path}><p><code>{file.path}</code></p><pre className="provider-diff">{file.diff}</pre></div>)}
+        {!providerPreview.some(preview => preview.files.length) && <p>{text('No changes', '変更はありません')}</p>}
+        {providerPreview.filter(preview => preview.mcpCommand).map(preview => <p key={preview.provider}>{text('Register agent-graph MCP:', 'agent-graph の MCP を登録:')} <code>{preview.mcpCommand}</code></p>)}
+        <label><input type="checkbox" checked={providerConfirmed} onChange={event => setProviderConfirmed(event.target.checked)}/>{text('Update the Claude Code, Codex and Antigravity configuration files. Continue?', 'Claude Code、Codex、Antigravity の設定ファイルを更新します。よろしいですか？')}</label>
+        <div className="button-row"><button className="btn btn-secondary" disabled={busy || !providerConfirmed} onClick={() => void perform(async () => { for (const preview of providerPreview) { await requestSettings(client, 'settings.applyProvider', { provider: preview.provider, token: preview.token, confirmation: true }); setProviderPreview(previous => { const remaining = previous?.filter(entry => entry.provider !== preview.provider); return remaining?.length ? remaining : undefined; }); } setProviderPreview(undefined); setProviderConfirmed(false); setNotice(text('Applied', '反映しました')); })}>{text('Confirm and apply', '確認して反映')}</button><button className="btn btn-ghost" onClick={() => { setProviderPreview(undefined); setProviderConfirmed(false); }}>{text('Cancel', '取り消す')}</button></div>
       </div>}
       <SettingsFields value={{ maxRoundTrips: settings.policy.maxRoundTrips, quota: settings.policy.quota, performance: settings.policy.performance, constraints: settings.policy.constraints }} language={lang} hint={nextDelegation} onChange={next => edit('policy', { ...settings.policy, ...next })}/>
       <p className="muted-text">{text('Preview past delegations before saving. Missing historical quota or performance data uses the static candidate order.', '保存前に過去の委譲で試算します。過去の利用枠や実績が記録されていない場合は静的な候補順を使います。')}</p>

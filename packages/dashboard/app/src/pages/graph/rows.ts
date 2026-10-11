@@ -16,7 +16,7 @@ export const APPROVAL_ROW_HEIGHT = 28;
 export type GraphRole = ChildRole | 'main';
 export const ROLES: ChildRole[] = ['orchestrate', 'advisor', 'research', 'implement', 'document', 'review', 'verify', 'proofread'];
 export const ROLE_ICONS: Record<GraphRole, IconName> = { main: 'message', orchestrate: 'message', advisor: 'plan', research: 'search', implement: 'tool', document: 'file', review: 'check', verify: 'check', proofread: 'file' };
-const ROLE_WORDS: Record<GraphRole, [string, string]> = { main: ['Orchestrate', '根'], orchestrate: ['Orchestrate', '根'], advisor: ['Advisor', '助言'], research: ['Research', '調査'], implement: ['Implement', '実装'], document: ['Document', '文書'], review: ['Review', 'レビュー'], verify: ['Verify', '検証'], proofread: ['Proofread', '校正'] };
+const ROLE_WORDS: Record<GraphRole, [string, string]> = { main: ['Main agent', 'メインエージェント'], orchestrate: ['Main agent', 'メインエージェント'], advisor: ['Advisor', 'アドバイザー'], research: ['Research', 'リサーチ'], implement: ['Implementation', '実装'], document: ['Documentation', 'ドキュメント'], review: ['Code review', 'コードレビュー'], verify: ['Verification', '動作検証'], proofread: ['Proofreading', '校正'] };
 export function roleWord(role: GraphRole, language: Language) { return ROLE_WORDS[role][language === 'ja' ? 1 : 0]; }
 export interface GraphNode extends TreeNode { activity?: string; currentWork?: string; report?: string; approvals?: Row[]; inferred?: boolean }
 export interface GraphTree extends Omit<DelegationTree, 'nodes'> { nodes: GraphNode[] }

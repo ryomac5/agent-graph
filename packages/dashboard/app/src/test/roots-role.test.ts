@@ -13,7 +13,7 @@ it('maps every observed and requested child role to one vocabulary', () => {
   expect(resolveChildRole({}, { role: 'implement' })).toBe('implement');
 });
 it('names all eight roles in English and Japanese', () => {
-  const names = { orchestrate: ['Orchestrate', '根'], advisor: ['Advisor', '助言'], research: ['Research', '調査'], implement: ['Implement', '実装'], document: ['Document', '文書'], review: ['Review', 'レビュー'], verify: ['Verify', '検証'], proofread: ['Proofread', '校正'] };
+  const names = { orchestrate: ['Main agent', 'メインエージェント'], advisor: ['Advisor', 'アドバイザー'], research: ['Research', 'リサーチ'], implement: ['Implementation', '実装'], document: ['Documentation', 'ドキュメント'], review: ['Code review', 'コードレビュー'], verify: ['Verification', '動作検証'], proofread: ['Proofreading', '校正'] };
   for (const [role, [en, ja]] of Object.entries(names)) {
     expect(shownRole(role, 'en')).toBe(en); expect(shownRole(role, 'ja')).toBe(ja);
   }

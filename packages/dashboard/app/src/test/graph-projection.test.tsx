@@ -103,7 +103,7 @@ it('uses known review targets as parents and marks reviews without targets as in
   const target = createProjectionFixture(); const state = target.getSnapshot();
   state.projection.relations!.push({ id: 'review', type: 'review_of', from_id: 'recent-a', to_id: 'recent-b', active: 1 });
   render(<MemoryRouter><GraphPage embedded project="repo" target={target} client={{ command: vi.fn() }}/></MemoryRouter>);
-  fireEvent.click(screen.getByRole('button', { name: 'Review 1' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Code review 1' }));
   const row = document.querySelector('[data-node-id="recent-a"]')!;
   expect(row.querySelector('[data-role="review"]')).toBeTruthy();
   expect(document.querySelector('[data-child="recent-a"][data-parent="recent-b"]')).toBeTruthy();

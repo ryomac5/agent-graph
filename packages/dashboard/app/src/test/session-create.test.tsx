@@ -19,6 +19,8 @@ it.each(['en', 'ja'] as const)('shows creation fields and creates a worktree on 
   render(<SessionCreate {...f} projects={projects} language={language}/>);
   expect(screen.getByRole('dialog', { name: ja ? 'セッションを作成' : 'Create session' })).toBeTruthy();
   await screen.findByRole('option', { name: 'Server' });
+  expect(screen.getByRole('dialog').querySelector('small')).toBeNull();
+  expect(screen.queryByText(ja ? '空ならプロジェクトの場所で起動します' : 'Leave empty to use the project directory')).toBeNull();
   fireEvent.change(screen.getByLabelText(ja ? '実行先' : 'Run on'), { target: { value: 'server' } });
   expect(screen.getByText('/remote/demo')).toBeTruthy();
   await waitFor(() => expect(f.command).toHaveBeenCalledWith('git.branches', { projectId: 'demo', target: { kind: 'ssh', id: 'server' } }));

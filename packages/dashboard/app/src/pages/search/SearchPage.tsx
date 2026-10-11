@@ -14,12 +14,12 @@ const TEXT = {
     message: 'Messages', tool_output: 'Tool output', diff: 'Diffs', finding: 'Findings', task: 'Task names', alias: 'Aliases',
     loading: 'Searching…', empty: 'No results', conversation: 'Conversation', run: 'Run', unknown: 'Unknown', confidence: 'Confidence',
     retention: 'Body removed by retention policy.', missing: 'Message unavailable.',
-    unsupported: 'Unsupported history formats cannot be searched.', fallback: 'Showing substring matches', more: 'Load more', failed: 'Search unavailable' },
+    unsupported: 'Unsupported history formats cannot be searched.', more: 'Load more', failed: 'Search unavailable' },
   ja: { title: '検索', query: '会話を検索', project: 'プロジェクト', provider: 'プロバイダー', from: '開始日時', to: '終了日時', kind: '種別', all: 'すべて',
     message: 'メッセージ', tool_output: 'ツールの出力', diff: '差分', finding: '指摘', task: 'タスク', alias: '別名',
     loading: '検索中…', empty: '結果なし', conversation: '会話', run: '実行', unknown: '不明', confidence: '確度',
     retention: '保持期間により本文が削除されました。', missing: 'メッセージを取得できません。',
-    unsupported: '形式未対応の会話は検索できません。', fallback: '部分一致で表示しています', more: 'さらに表示', failed: '検索できません' },
+    unsupported: '形式未対応の会話は検索できません。', more: 'さらに表示', failed: '検索できません' },
 };
 function formatTimestamp(value: string, language: Language): string {
   const time = Date.parse(value);
@@ -63,7 +63,6 @@ export function SearchPage({ client, target = store, language = 'en', backAction
     </form>
     {loading && <p role="status">{t.loading}</p>}{error && <p role="alert">{error}</p>}
     {result && <div aria-live="polite">
-      {result.mode === 'substring' && <p>{t.fallback}</p>}
       {result.unsupported.length > 0 && <aside aria-label={t.unsupported} className="muted-text" title={result.unsupported.map(row => row.reason).join('\n')}><span>{t.unsupported}</span> <span className="numeric">({result.unsupported.length})</span></aside>}
       <p role="status">{result.total === 0 ? t.empty : `${result.total} ${language === 'ja' ? '件' : 'results'}`}</p>
       {SEARCH_KINDS.map(kind => {

@@ -20,31 +20,31 @@ const labels: Record<string, [string, string]> = {
   executor: ['Agent', 'エージェント'], family: ['Model family', 'モデルの系列'], tier: ['Model tier', 'モデルの水準'], kind: ['Constraint', '制約'], role: ['Role', '役割'],
 };
 export function labelSetting(key: string, language: 'en' | 'ja') { return labels[key]?.[language === 'ja' ? 1 : 0] ?? key.replace(/([a-z])([A-Z])/g, '$1 $2'); }
-export function SettingsSection({ title, store, hint, children }: { title: string; store: string; hint: string; children: ReactNode }) {
-  return <section className="settings-section" aria-label={title}><header><h2>{title}</h2><code>{store}</code><p className="muted-text">{hint}</p></header><div className="settings-card">{children}</div></section>;
+export function SettingsSection({ title, children }: { title: string; children: ReactNode }) {
+  return <section className="settings-section" aria-label={title}><header><h2>{title}</h2></header><div className="settings-card">{children}</div></section>;
 }
-export function SettingsFields({ value, onChange, language, prefix = '', hint, inheritIsolation = false }: {
-  value: Record<string, unknown>; onChange(value: Record<string, unknown>): void; language: 'en' | 'ja'; prefix?: string; hint: string; inheritIsolation?: boolean;
+export function SettingsFields({ value, onChange, language, prefix = '', inheritIsolation = false }: {
+  value: Record<string, unknown>; onChange(value: Record<string, unknown>): void; language: 'en' | 'ja'; prefix?: string; inheritIsolation?: boolean;
 }) {
   const ja = language === 'ja';
   return <>{Object.entries(value).map(([key, entry]) => {
     const path = prefix ? `${prefix}.${key}` : key;
     const name = `${prefix ? prefix.replaceAll('.', ' · ') + ' · ' : ''}${labelSetting(key, language)}`;
     const update = (next: unknown) => onChange({ ...value, [key]: next });
-    if (entry !== null && typeof entry === 'object' && !Array.isArray(entry)) return <fieldset key={key}><legend>{prefix === 'agents' ? key : labelSetting(key, language)}</legend><SettingsFields value={entry as Record<string, unknown>} onChange={update} language={language} prefix={path} hint={hint} inheritIsolation={inheritIsolation}/></fieldset>;
+    if (entry !== null && typeof entry === 'object' && !Array.isArray(entry)) return <fieldset key={key}><legend>{prefix === 'agents' ? key : labelSetting(key, language)}</legend><SettingsFields value={entry as Record<string, unknown>} onChange={update} language={language} prefix={path} inheritIsolation={inheritIsolation}/></fieldset>;
     if (Array.isArray(entry) && (key === 'constraints' || path.startsWith('roles.'))) {
       const template = key === 'constraints' ? { kind: 'reviewerDifferentFamily' } : { executor: 'codex', model: 'gpt-6-astra', family: 'openai', tier: 'high' };
       return <fieldset key={key}><legend>{labelSetting(key, language)}</legend>{entry.map((item, index) => <div key={index} className="settings-array-row">
         <SettingsFields value={item as Record<string, unknown>} onChange={next => {
           if (key === 'constraints') next = next.kind === 'minTierForRole' ? { kind: next.kind, role: next.role ?? 'implement', tier: next.tier ?? 'high' } : { kind: next.kind };
           update(entry.map((old, at) => at === index ? next : old));
-        }} language={language} prefix={`${path}.${index + 1}`} hint={hint}/>
+        }} language={language} prefix={`${path}.${index + 1}`}/>
         <div className="button-row"><button type="button" className="btn btn-secondary btn-sm" disabled={index === 0} aria-label={`${name} ${index + 1} ${ja ? '上へ' : 'Move up'}`} onClick={() => { const next = [...entry]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; update(next); }}>{ja ? '上へ' : 'Move up'}</button>
         <button type="button" className="btn btn-ghost btn-sm" onClick={() => update(entry.filter((_, at) => at !== index))}>{ja ? '削除' : 'Remove'}</button></div></div>)}
         <button type="button" className="btn btn-secondary btn-sm" onClick={() => update([...entry, template])}>{ja ? '追加' : 'Add'} {labelSetting(key, language)}</button></fieldset>;
     }
     const options = choices[path] ?? choices[key];
-    return <label key={key}><span><strong>{name}</strong><small>{hint}</small></span>
+    return <label key={key}><span><strong>{name}</strong></span>
       {options ? <select aria-label={name} value={entry === null ? '' : String(entry)} onChange={event => update(event.target.value || null)}>
         {inheritIsolation && path === 'isolation.policy' ? <option value="">{ja ? '個人の既定を継ぐ' : 'Inherit default'}</option> : null}
         {options.map(option => <option key={option} value={option}>{option}</option>)}</select>

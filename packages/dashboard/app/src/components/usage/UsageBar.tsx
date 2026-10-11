@@ -115,6 +115,6 @@ export function UsageBar({ client, language, visible = true, connected = true }:
     </section>, document.body)}
     <div className="usage-bar"><button ref={toggle} className="usage-summary" aria-label={ja ? '使用量の詳細' : 'Usage details'} aria-expanded={open} aria-controls={panelId} onClick={() => setOpen(value => !value)}>
       {shown.map(provider => { const most = getMostUsed(provider.windows); return <span className={`usage-summary-item usage-${getUsageColor(most?.usedPercent ?? 0)}`} key={provider.id} title={`${NAMES[provider.id]}: ${provider.state === 'unavailable' ? formatReason(provider.reason, language) : `${used(most?.usedPercent ?? 0)}${provider.state === 'stale' ? ja ? ' · 古い値' : ' · Stale value' : ''}`}`}><ProviderMark provider={provider.id}/><span className="numeric">{most ? `${most.usedPercent}%` : '—'}{provider.state === 'stale' && <span className="usage-stale-dot" aria-label={ja ? '古い値' : 'Stale value'}> ·</span>}</span></span>; })}
-    </button><button className="icon-button usage-refresh" aria-label={ja ? '使用量を再取得' : 'Refresh usage'} title={ja ? '再取得は 5 分ごとにできます' : 'Refresh is available every 5 minutes'} disabled={busy || now < manualAfter || !connected} onClick={() => refresh.current(true)}><Icon name="refresh"/></button></div>
+    </button><button className="icon-button usage-refresh" aria-label={ja ? '使用量を再取得' : 'Refresh usage'} disabled={busy || now < manualAfter || !connected} onClick={() => refresh.current(true)}><Icon name="refresh"/></button></div>
   </div>;
 }

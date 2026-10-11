@@ -16,12 +16,12 @@ export interface InboxProps { client: CommandClient; target?: ScreenStore; langu
 const WORDS = {
   en: { allow: 'Allow', deny: 'Deny', session: 'Always allow', notOffered: 'Not offered by this provider', sent: 'Sent', recent: 'Recent messages',
     noContent: 'No conversation content available.', user: 'User', agent: 'Agent', streaming: 'Streaming', title: 'Approvals', waiting: 'waiting', expired: 'expired',
-    hint: ['allow', 'deny', 'allow for this conversation'], selectAll: 'Select all pending', selected: 'selected', selectedSuffix: ' selected', wait: 'Waiting',
-    empty: 'Nothing to approve', emptyBody: 'When an agent asks for permission, it shows up here.', expiredTitle: 'Expired', resume: 'Resume' },
+    selectAll: 'Select all pending', selected: 'selected', selectedSuffix: ' selected', wait: 'Waiting',
+    empty: 'Nothing to approve', expiredTitle: 'Expired', resume: 'Resume' },
   ja: { allow: '許可', deny: '拒否', session: 'この会話では常に許可', notOffered: 'このエージェントでは選べません', sent: '送信しました', recent: '直近の発言',
     noContent: '会話の内容はありません。', user: 'ユーザー', agent: 'エージェント', streaming: '出力中', title: '承認待ち', waiting: '件の承認待ち', expired: '件の期限切れ',
-    hint: ['許可', '拒否', 'この会話では常に許可'], selectAll: '承認待ちを全て選ぶ', selected: '件を選択', selectedSuffix: 'をまとめて', wait: '待ち時間',
-    empty: '承認待ちはありません', emptyBody: 'エージェントが許可を求めると、ここに出ます。', expiredTitle: '期限切れ', resume: '再開' },
+    selectAll: '承認待ちを全て選ぶ', selected: '件を選択', selectedSuffix: 'をまとめて', wait: '待ち時間',
+    empty: '承認待ちはありません', expiredTitle: '期限切れ', resume: '再開' },
 };
 type Words = typeof WORDS.en;
 const TAIL_LIMIT = 5;
@@ -137,8 +137,8 @@ export function Inbox({ client, target = store, language = 'en', backAction }: I
     if (rows.length) { event.preventDefault(); void answer(rows, action); }
   }}>
     <header className="page-header">{backAction}<div className="page-title"><h1>{w.title}</h1>
-      <p role="status" className="page-subtitle">{pending.length > 0 && <span><strong className="numeric">{pending.length}</strong> {w.waiting}</span>}{expired.length > 0 && <span><strong className="numeric">{expired.length}</strong> {w.expired}</span>}</p></div>
-      {pending.length > 0 && <p className="shortcut-hint"><kbd>A</kbd> {w.hint[0]} <kbd>D</kbd> {w.hint[1]} <kbd>S</kbd> {w.hint[2]}</p>}</header>
+      {(pending.length > 0 || expired.length > 0) && <p role="status" className="page-subtitle">{pending.length > 0 && <span><strong className="numeric">{pending.length}</strong> {w.waiting}</span>}{expired.length > 0 && <span><strong className="numeric">{expired.length}</strong> {w.expired}</span>}</p>}</div>
+    </header>
     {pending.length > 0 && <div className="toolbar bulk-bar">
       <label className="checkbox"><input type="checkbox" disabled={busy || pending.length === 0}
         checked={open.length > 0 && open.every(row => selected.includes(String(row.id)))}
@@ -166,7 +166,7 @@ export function Inbox({ client, target = store, language = 'en', backAction }: I
         </div>
       </li>;
     })}</ol>
-    {pending.length === 0 && <div className="empty-state"><Icon name="check" size={22}/><h2>{w.empty}</h2><p>{w.emptyBody}</p></div>}
+    {pending.length === 0 && <div className="empty-state"><Icon name="check" size={22}/><h2>{w.empty}</h2></div>}
     {expired.length > 0 && <section className="expired-section" aria-label="Expired"><h2>{w.expiredTitle}</h2><ol aria-label="Expired approvals" className="approval-list">{expired.map(row => <li key={String(row.id)} className="approval-row expired">
       <OutcomeChip row={row}/>
       <div className="approval-main"><ApprovalDetails row={row} state={state}/>{approvalReasonText(readText(row.reason)) && <p className="muted-text">{approvalReasonText(readText(row.reason))}</p>}</div>

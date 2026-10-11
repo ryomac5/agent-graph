@@ -42,7 +42,7 @@ function EmptyView({ title, future, t }: { title: TextKey; future?: boolean; t: 
   return <div className="page"><header className="page-header"><h1>{t(title)}</h1></header>
     {params.project && <nav className="tabs" aria-label={t('project')}><NavLink end to={`/p/${encodeURIComponent(params.project)}`}>{t('conversations')}</NavLink><NavLink to={`/p/${encodeURIComponent(params.project)}/changes`}>{t('changes')}</NavLink></nav>}
     <div className="empty-state"><Icon name={future ? 'sparkle' : 'search'} size={22}/>
-    <h2>{t(future ? 'futureTitle' : 'emptyTitle')}</h2><p>{t(future ? 'futureBody' : 'emptyBody')}</p></div></div>;
+    <h2>{t(future ? 'futureTitle' : 'emptyTitle')}</h2></div></div>;
 }
 /** 旧い図の経路でも根の選択を保つ。 */
 function RequestsRedirect() {
@@ -251,15 +251,15 @@ export function App({ target = store, client = unavailableClient, searchClient =
       <Route path="/p/:project/files" element={<div className="files-page"><FileTreePanel explorer={explorer} language={language}/><FileNotices explorer={explorer}/><FileViewerPanel explorer={explorer} actions={<button className="btn btn-ghost btn-xs" onClick={explorer.closeFile}><Icon name="chevronLeft" size={12}/>Back</button>}/></div>}/>
       <Route path="/search" element={<SearchPage target={target} client={searchClient} language={language} backAction={backAction}/>}/>
       <Route path="/settings" element={<div className="page settings-page"><header className="page-header">{backAction}<h1>{t('settings')}</h1></header><div className="settings-card">
-        <label><span><strong>{t('theme')}</strong><small>{t('themeHint')}</small></span><select aria-label={t('theme')} value={theme} onChange={event => setTheme(event.target.value as Theme)}>{(['system', 'light', 'dark'] as const).map(value => <option key={value} value={value}>{t(value)}</option>)}</select></label>
-        <label><span><strong>{t('language')}</strong><small>{t('languageHint')}</small></span><select aria-label={t('language')} value={language} onChange={event => setLanguage(event.target.value as Language)}><option value="en" lang="en">{t('english')}</option><option value="ja" lang="ja">{t('japanese')}</option></select></label>
+        <label><span><strong>{t('theme')}</strong></span><select aria-label={t('theme')} value={theme} onChange={event => setTheme(event.target.value as Theme)}>{(['system', 'light', 'dark'] as const).map(value => <option key={value} value={value}>{t(value)}</option>)}</select></label>
+        <label><span><strong>{t('language')}</strong></span><select aria-label={t('language')} value={language} onChange={event => setLanguage(event.target.value as Language)}><option value="en" lang="en">{t('english')}</option><option value="ja" lang="ja">{t('japanese')}</option></select></label>
       </div><SettingsPage client={client} language={language} policyOnly/><SshSettings client={client} projects={getRegisteredProjects(state)} language={language}/><KeyboardSettings language={language} bindings={bindings} client={client} onSave={setBindings}/></div>}/>
       <Route path="*" element={<EmptyView title="notFound" t={t}/>}/>
     </Routes>{commandError && <p role="alert" className="banner banner-danger">{commandError}</p>}</main></div>
     {creatingSession && <SessionCreate client={client} projects={getRegisteredProjects(state)} initialProject={creatingSession} language={language} onClose={() => setCreatingSession(undefined)} onCreated={(project, conversation) => { setCreatingSession(undefined); navigate(`/p/${encodeURIComponent(project)}?conversation=${encodeURIComponent(conversation)}`); setMobileView('conversation'); }}/>}
     {overlay === 'commands' && <CommandPalette language={language} commands={commands} onClose={() => setOverlay(undefined)}/>}
     {overlay === 'help' && <CommandDialog language={language} title={language === 'ja' ? 'キー操作' : 'Shortcuts'} onClose={() => setOverlay(undefined)}><dl>{Object.entries(bindings).map(([key, value]) => <div key={key}><dt>{keyLabel(key as KeyAction, language)}</dt><dd><kbd>{value}</kbd></dd></div>)}</dl></CommandDialog>}
-    {overlay === 'interrupt' && <CommandDialog language={language} title={language === 'ja' ? '実行を中断しますか' : 'Interrupt run?'} onClose={() => setOverlay(undefined)}><p>{language === 'ja' ? '現在の実行を中断しますか' : 'Interrupt the current run?'}</p><button className="btn btn-primary" onClick={() => { if (stopButton?.isConnected && !stopButton.disabled) stopButton.click(); setOverlay(undefined); }}>{language === 'ja' ? '中断' : 'Confirm interrupt'}</button><button className="btn btn-secondary" onClick={() => setOverlay(undefined)}>{language === 'ja' ? 'キャンセル' : 'Cancel'}</button></CommandDialog>}
+    {overlay === 'interrupt' && <CommandDialog language={language} title={language === 'ja' ? '実行を中断しますか' : 'Interrupt run?'} onClose={() => setOverlay(undefined)}><button className="btn btn-primary" onClick={() => { if (stopButton?.isConnected && !stopButton.disabled) stopButton.click(); setOverlay(undefined); }}>{language === 'ja' ? '中断' : 'Confirm interrupt'}</button><button className="btn btn-secondary" onClick={() => setOverlay(undefined)}>{language === 'ja' ? 'キャンセル' : 'Cancel'}</button></CommandDialog>}
     {overlay === 'create' && <CommandDialog language={language} title={t('newTask')} onClose={() => setOverlay(undefined)}><CreateTaskForm project={project ?? ''} root={projectRoot} client={client} disabled={state.connection !== 'connected'} language={language} onCancel={() => setOverlay(undefined)}/></CommandDialog>}
     </div>;
 }

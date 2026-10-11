@@ -19,12 +19,12 @@ interface Commit { conversation_ids?: string[]; parents: string[]; branches: str
 interface Patch { additions?: number; deletions?: number; previousPath?: string; binary?: boolean; path: string; state: 'text' | 'too_large' | 'binary'; diff?: string }
 const WORDS = {
   en: { filter: 'Filter by conversation', clearFilter: 'Clear conversation filter', noMatches: 'No commits for this conversation.', history: 'Git history', refresh: 'Refresh', working: 'Working tree', changed: 'changed files', files: 'files', loadingHistory: 'Loading history…',
-    register: 'Register a project to view its Git changes.', noCommits: 'No commits yet.', loadingFiles: 'Loading files…', noFiles: 'No changed files.',
-    clean: 'Working tree is clean.', difference: 'Difference', loadingDiff: 'Loading diff…', choose: 'Choose a file to view its diff.',
+    noCommits: 'No commits yet.', loadingFiles: 'Loading files…', noFiles: 'No changed files.',
+    clean: 'Working tree is clean.', difference: 'Difference', loadingDiff: 'Loading diff…',
     staged: 'Staged', unstaged: 'Unstaged', untracked: 'Untracked', unified: 'Unified', split: 'Side by side' },
   ja: { filter: '会話で絞り込む', clearFilter: '会話の絞り込みを解除', noMatches: 'この会話のコミットはありません。', history: 'Git の履歴', refresh: '更新', working: '作業中の変更', changed: '件の変更', files: 'ファイル', loadingHistory: '履歴を読み込み中…',
-    register: 'プロジェクトを登録すると、Git の変更を見られます。', noCommits: 'まだコミットはありません。', loadingFiles: 'ファイルを読み込み中…', noFiles: '変更したファイルはありません。',
-    clean: '作業中の変更はありません。', difference: '差分', loadingDiff: '差分を読み込み中…', choose: 'ファイルを選ぶと差分を表示します。',
+    noCommits: 'まだコミットはありません。', loadingFiles: 'ファイルを読み込み中…', noFiles: '変更したファイルはありません。',
+    clean: '作業中の変更はありません。', difference: '差分', loadingDiff: '差分を読み込み中…',
     staged: 'ステージ済み', unstaged: '未ステージ', untracked: '未追跡', unified: '1 列', split: '左右' },
 } as const;
 type Words = typeof WORDS.en | typeof WORDS.ja;
@@ -236,7 +236,7 @@ export function GitChanges({ client, projectId, worktree, enabled, language = 'e
       {agent && <button className="btn btn-secondary btn-sm" onClick={() => toggleAgent(agent)}>{w.clearFilter}: {nameConversation(agent)}</button>}
       <section aria-label="Commits">
         {historyError && <p role="alert">{historyError}</p>}
-        {loading ? <p>{w.loadingHistory}</p> : !enabled ? <p>{w.register}</p> : !visibleCommits.length && !historyError ? <p className="muted-text">{agent ? w.noMatches : w.noCommits}</p> : null}
+        {loading ? <p>{w.loadingHistory}</p> : !enabled ? null : !visibleCommits.length && !historyError ? <p className="muted-text">{agent ? w.noMatches : w.noCommits}</p> : null}
         <ul className="git-commit-list">{visibleCommits.map((value, index) => <li key={value.hash}>
           <button data-git-source className="git-commit-choice" aria-pressed={hash === value.hash} onClick={() => selectSource(value.hash)} title={value.subject}>
             <CommitLines row={graph.rows[index]} columns={graph.columns}/>
@@ -255,7 +255,7 @@ export function GitChanges({ client, projectId, worktree, enabled, language = 'e
     <section key="diff" className="git-diff-pane" aria-label="Difference" ref={diffRef} tabIndex={-1}>
       <header className="git-pane-header"><h2 title={selected} onDoubleClick={() => selected && openFile?.(selected, worktree)}>{selected || w.difference}</h2></header>
       {change ? <FileGitDiff key={`${projectId}:${worktree}:${revision}:${selected}`} client={client} request={{ ...request, path: selected }} change={change} w={w}/>
-        : patch ? <><Layout value={layout} onChange={setLayout} w={w}/><GitPatch patch={patch} layout={layout} worktree={worktree}/></> : <p className="muted-text">{commitLoading ? w.loadingDiff : w.choose}</p>}
+        : patch ? <><Layout value={layout} onChange={setLayout} w={w}/><GitPatch patch={patch} layout={layout} worktree={worktree}/></> : commitLoading ? <p className="muted-text">{w.loadingDiff}</p> : null}
     </section>];
   return <div id="git-changes" className="git-changes">{embedded ? <ResizableStack storageKey={CHANGES_SPLIT_KEY} defaults={[0.35, 0.25, 0.4]} labels={language === 'ja' ? ['コミットの一覧の高さ', '変更したファイルの高さ'] : ['Commit list height', 'Changed files height']} children={sections}/> : sections}</div>;
 }

@@ -43,7 +43,7 @@ it('sends project, provider, period and kind filters and explains removed bodies
   }
   fireEvent.click(screen.getByRole('button', { name: 'Search' }));
   await screen.findByText('Body removed by retention policy.');
-  expect(screen.getByText('Showing substring matches')).toBeTruthy();
+  expect(screen.queryByText('Showing substring matches')).toBeNull();
   expect(screen.queryByText('needle message')).toBeNull();
   expect(search.mock.calls[0][0]).toMatchObject({ project: 'repo', provider: 'codex', kind: 'message', from: '2026-01-01T00:00', to: '2026-02-01T00:00', offset: 0 });
 });

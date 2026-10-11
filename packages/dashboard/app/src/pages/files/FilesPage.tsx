@@ -51,7 +51,6 @@ function CodeView({ path, content, displayLanguage = 'en' }: { path: string; con
   const colored = content.length <= HIGHLIGHT_LIMIT ? language : undefined;
   const lines = useMemo(() => highlightLines(content, colored), [content, colored]);
   return <>
-    {language && !colored && <p className="muted-text explorer-note">Syntax colors are off for files over {formatSize(HIGHLIGHT_LIMIT)}.</p>}
     <div className="code-view" role="region" aria-label={displayLanguage === 'ja' ? `${path} の中身` : `Contents of ${path}`} tabIndex={0} data-language={colored ?? 'plain'}>
       <div className="code-lines">{lines.map((tokens, index) => <div className="code-row" key={index}>
         <span className="code-line-number" aria-hidden="true">{index + 1}</span>
@@ -288,10 +287,9 @@ export function useFileExplorer({ client, target = store, project, enabled = tru
   const selectedEntry = rows.find(row => row.entry.path === selectedPath)?.entry
     ?? (dirs[parentPath(selectedPath)]?.status === 'loaded' ? (dirs[parentPath(selectedPath)] as { entries: FileEntry[] }).entries.find(entry => entry.path === selectedPath) : undefined);
   const worktreeValue = worktree ?? (worktrees.status === 'loaded' ? worktrees.result.worktree : '');
-  const offline = state.connection === 'connecting' || state.connection === 'reconnecting';
   const activePaths = (state.projection.runs ?? []).filter(run => isRunning(String(run.state)) || ['waiting_approval', 'waiting_input'].includes(String(run.state))).map(run => worktreeLabel(run)?.full).filter((path): path is string => Boolean(path));
   return { client, revision, worktree, project, projectId, activePaths, dirs, rows, current, needle, query, setQuery, selectedPath, selectedEntry, shown, root, worktrees, worktreeValue,
-    wantedWorktree, unknownWorktree, offline, items, onKeyDown, activate, move, setParams,
+    wantedWorktree, unknownWorktree, items, onKeyDown, activate, move, setParams,
     selectWorktree: (value: string) => setParams(next => next.set('worktree', value)),
     closeFile: () => { if (location.key !== 'default') navigate(-1); else navigate(`/p/${encodeURIComponent(project)}`); },
     refresh: () => { cache.current.clear(); setRevision(value => value + 1); } };
@@ -365,7 +363,6 @@ export function FileTreePanel({ explorer, actions, language = 'en', compact = fa
           if (event.key === 'Escape') setQuery('');
           else if (event.key === 'ArrowDown' && rows.length) { event.preventDefault(); move(rows.find(row => row.entry.path === current) ?? rows[0]); }
         }}/></div>
-    {needle && <p className="explorer-hint muted-text">{text('Matches in opened folders', '開いたフォルダーを検索')}</p>}
     <div className="explorer-scroll-space" ref={scroll}><div className="explorer-scroll" style={treeHeight === undefined ? undefined : { height: treeHeight }}>
       {root?.status === 'error' ? <p role="alert" className="banner banner-danger explorer-inline"><Icon name="alert" size={14}/>{root.error}</p>
         : !root || root.status === 'loading' ? <p className="tree-status" role="status">{text('Loading files…', 'ファイルを読み込み中')}</p>
@@ -375,12 +372,11 @@ export function FileTreePanel({ explorer, actions, language = 'en', compact = fa
   </section>;
 }
 
-/** 作業ツリーの欠落と接続待ちを知らせる。 */
+/** 作業ツリーの欠落と取得エラーを知らせる。 */
 export function FileNotices({ explorer }: { explorer: FileExplorer }) {
-  const { offline, unknownWorktree, wantedWorktree, worktrees } = explorer;
-  if (!offline && !unknownWorktree && worktrees.status !== 'error') return null;
+  const { unknownWorktree, wantedWorktree, worktrees } = explorer;
+  if (!unknownWorktree && worktrees.status !== 'error') return null;
   return <div className="workspace-notices">
-    {offline && <p role="status" className="banner banner-unknown"><Icon name="unknown" size={14}/>Waiting for the connection. File requests are sent once connected.</p>}
     {unknownWorktree && <p role="alert" className="banner banner-warning"><Icon name="alert" size={14}/>Worktree {wantedWorktree} is not part of this project. Showing the project root.</p>}
     {worktrees.status === 'error' && <p role="alert" className="banner banner-danger"><Icon name="alert" size={14}/>Worktrees unavailable: {worktrees.error}</p>}
   </div>;
@@ -405,7 +401,7 @@ export function FileViewerPanel({ explorer, actions, language: displayLanguage =
   const language: Language | undefined = detectLanguage(selectedPath);
   const lineCount = shown?.status === 'loaded' && shown.result.state === 'text' ? highlightLineCount(shown.result.content) : undefined;
   return <section className="explorer-viewer" aria-label={text('File viewer', 'ファイルの表示')}>
-    {!selectedPath ? <div className="empty-state"><Icon name="file" size={22}/><h2>{text('No file selected', 'ファイルが選ばれていません')}</h2><p>{text('Choose a file in the tree to view its contents.', '木からファイルを選ぶと中身を表示します。')}</p>{actions}</div> : <>
+    {!selectedPath ? <div className="empty-state"><Icon name="file" size={22}/><h2>{text('No file selected', 'ファイルが選ばれていません')}</h2>{actions}</div> : <>
       <header className="viewer-header">
         <nav className="viewer-path" aria-label={text('File path', 'ファイルの場所')}>{selectedPath.split('/').map((part, index, parts) => <span key={index} className={index === parts.length - 1 ? 'viewer-path-current' : undefined}>{part}</span>)}</nav>
         <div className="viewer-meta">
@@ -421,12 +417,12 @@ export function FileViewerPanel({ explorer, actions, language: displayLanguage =
       {changed && view === 'diff' ? diffError ? <p role="alert">{diffError}</p> : change ? <FileGitDiff key={`${explorer.worktree}:${explorer.revision}:${selectedPath}`} language={displayLanguage} client={explorer.client} request={{ projectId: explorer.projectId, path: selectedPath, ...(explorer.worktree ? { worktree: explorer.worktree } : {}) }} change={change}/> : <p>{text('Loading diff…', '差分を読み込み中')}</p>
         : !shown || shown.status === 'loading' ? <p className="tree-status viewer-status" role="status">{text('Loading', '読み込み中:')} {selectedPath}</p>
         : shown.status === 'error' ? <p role="alert" className="banner banner-danger explorer-inline"><Icon name="alert" size={14}/>{text('Could not open', '開けません:')} {selectedPath}: {shown.error}</p>
-          : shown.status === 'directory' ? <div className="empty-state"><Icon name="folder" size={22}/><h2>{text('Folder', 'フォルダー')}</h2><p>{text('Choose a file inside', 'ファイルを選んでください:')} {selectedPath}</p></div>
-            : shown.status === 'deleted' ? <div className="empty-state"><Icon name="x" size={22}/><h2>{text('Deleted file', '削除されたファイル')}</h2><p>{text('This file was deleted in the working tree.', 'このファイルは作業ツリーで削除されました。')}</p>
+          : shown.status === 'directory' ? <div className="empty-state"><Icon name="folder" size={22}/><h2>{text('Folder', 'フォルダー')}</h2></div>
+            : shown.status === 'deleted' ? <div className="empty-state"><Icon name="x" size={22}/><h2>{text('Deleted file', '削除されたファイル')}</h2>
               <AppLink className="btn btn-secondary btn-sm" to={`${prefix}/changes`}><Icon name="diff" size={14}/>{text('View changes', '変更を見る')}</AppLink></div>
-              : shown.result.state === 'binary' ? <div className="empty-state" role="status"><Icon name="file" size={22}/><h2>{text('Binary file', 'バイナリファイル')}</h2><p>{text('Binary content is not shown.', 'バイナリの中身は表示できません。')}</p>
+              : shown.result.state === 'binary' ? <div className="empty-state" role="status"><Icon name="file" size={22}/><h2>{text('Binary file', 'バイナリファイル')}</h2>
                 <p className="numeric">Size: {formatSize(shown.result.size)} ({shown.result.size.toLocaleString('en-US')} bytes)</p></div>
-                : shown.result.state === 'too_large' ? <div className="empty-state" role="status"><Icon name="alert" size={22}/><h2>{text('File too large to display', 'ファイルが大きすぎます')}</h2><p>{text('Files over 1.0 MiB are not shown.', '1.0 MiB を超えるファイルは表示できません。')}</p>
+                : shown.result.state === 'too_large' ? <div className="empty-state" role="status"><Icon name="alert" size={22}/><h2>{text('File too large to display', 'ファイルが大きすぎます')}</h2>
                   <p className="numeric">Size: {formatSize(shown.result.size)} ({shown.result.size.toLocaleString('en-US')} bytes)</p></div>
                     : <FileContent key={JSON.stringify([explorer.projectId, explorer.worktree, selectedPath])} path={selectedPath} document={getFileDocument(explorer.client, { projectId: explorer.projectId, worktree: explorer.worktree, path: selectedPath })} displayLanguage={displayLanguage}/>}
     </>}

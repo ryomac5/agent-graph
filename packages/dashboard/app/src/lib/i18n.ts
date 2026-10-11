@@ -52,7 +52,7 @@ export const graphText = {
 
 export const assignmentSettingText = {
   en: {
-    weights: 'What to favor when choosing a model', softLimitPercent: 'Deprioritize at usage', hardLimitPercent: 'Stop using at usage',
+    weights: 'Result weights', softLimitPercent: 'Deprioritize at usage', hardLimitPercent: 'Stop using at usage',
     minSamples: 'Results needed to rank', acceptRate: 'Pass rate', reviewApprove: 'Review approval', roundTrips: 'Fewer round trips', tokens: 'Fewer tokens',
     runs: 'runs', distribution: 'Model preference shares',
     softTitle: 'At or above this usage percentage, move the model behind other candidates.',
@@ -60,10 +60,10 @@ export const assignmentSettingText = {
     samplesTitle: 'Rank by performance only when every candidate has this many past results; otherwise keep the configured order.',
     weightsTitle: 'Shares of preference when ranking by past results; changing one redistributes the others proportionally.',
     passTitle: 'Rate of passing the acceptance criteria.',
-    quotaError: 'Deprioritize usage must not exceed stop-using usage.',
+    quotaError: 'Deprioritize must be lower than stop using',
   },
   ja: {
-    weights: 'モデル選びで重視すること', softLimitPercent: '後回しにする使用率', hardLimitPercent: '候補から外す使用率',
+    weights: '実績の重み', softLimitPercent: '後回しにする使用率', hardLimitPercent: '候補から外す使用率',
     minSamples: '実績で選ぶ最低件数', acceptRate: '合格率', reviewApprove: 'レビューの承認率', roundTrips: 'やりとりの少なさ', tokens: 'トークンの少なさ',
     runs: '件', distribution: 'モデル選びの割合',
     softTitle: 'この使用率以上になると、モデルの優先度を下げて他の候補を優先します。',
@@ -71,6 +71,6 @@ export const assignmentSettingText = {
     samplesTitle: 'すべての候補にこの件数以上の実績があるときだけ順位付けを行い、満たない場合は設定順を使用します。',
     weightsTitle: '実績で順位付けする際の重み付けです。1つを変更すると残りが自動で比例配分されます。',
     passTitle: '受け入れ条件の合格率です。',
-    quotaError: '後回しにする使用率は、候補から外す使用率以下にしてください。',
+    quotaError: '後回しの値は除外の値より小さくする',
   },
 } as const;

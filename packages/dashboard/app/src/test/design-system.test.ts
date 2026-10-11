@@ -50,7 +50,7 @@ it('matches the design document with explicit contrast overrides pending documen
     expect(dark.get(token[1]), token[1] + ' dark').toBe(expected[1]);
     checked++;
   }
-  expect(checked).toBe(23);
+  expect(checked).toBe(28);
 });
 
 function readColour(tokens: Map<string, string>, token: string): string {
@@ -232,4 +232,11 @@ it.each([['light', light], ['dark', dark]] as const)('distinguishes disabled inp
       }
     }
   });
+});
+
+it('keeps settings size and segment tokens aligned with the redesign', () => {
+  expect(light.get('--type-ui-strong')).toBe('600 13px/20px var(--font)');
+  expect(light.get('--control-lg')).toBe('32px');
+  expect(light.get('--segment-shadow')).toBe('0 1px 2px rgb(15 17 26 / 0.08)');
+  expect(dark.get('--segment-shadow')).toBe('0 1px 2px rgb(0 0 0 / 0.4)');
 });

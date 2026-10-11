@@ -1,3 +1,4 @@
+import { PolicyEditor } from './PolicyEditor.tsx';
 import { useEffect, useRef, useState } from 'react';
 import { labelSetting, SettingsFields, SettingsSection } from '../../components/settings/SettingsFields.tsx';
 import { APPEARANCE_CHOICES, loadAppearance, saveAppearance, requestSettings, describeDecision,
@@ -36,6 +37,7 @@ export function SettingsPage({ client, language, onAppearance, policyOnly = fals
   const [preferences, setPreferences] = useState<NotificationPreferences>(() => loadPreferences(localStorage));
   const [permission, setPermission] = useState(() => typeof Notification === 'undefined' ? 'unavailable' : Notification.permission);
   const [models, setModels] = useState<ModelCatalog>({});
+  const latestPolicy = useRef(settings?.policy); latestPolicy.current = settings?.policy;
   const dirty = useRef(new Set<FileStore>());
   const edits = useRef({ config: 0, policy: 0, project: 0 });
   const mounted = useRef(true);
@@ -107,6 +109,7 @@ export function SettingsPage({ client, language, onAppearance, policyOnly = fals
   function fields(store: FileStore, value: Record<string, unknown>, section?: string) {
     return <SettingsFields value={value} language={lang} prefix={section ?? ''} inheritIsolation={store === 'project'} onChange={next => edit(store, section ? { ...settings![store], [section]: next } : next)}/>;
   }
+  if (policyOnly) return <div className="assignment-settings settings-page">{error && <p role="alert">{displayError(error)}</p>}{settings ? <PolicyEditor client={client} policy={settings.policy} models={models} language={lang} dirty={dirty.current.has('policy')} onChange={next => edit('policy', next)} onSaved={revision => { if (latestPolicy.current === revision) dirty.current.delete('policy'); setNotice(text('Saved', '保存しました')); }} onRefresh={provider => void perform(async () => { const result = await requestSettings<ModelCatalog[string]>(client, 'settings.models', { provider }); setModels(previous => ({ ...previous, [provider]: result })); })}/> : <p>{text('Loading settings…', '設定を読み込み中…')}</p>}{notice && <p role="status">{notice}</p>}</div>;
   return <div className={policyOnly ? "assignment-settings settings-page" : "page settings-page"}>{!policyOnly && <header className="page-header"><div className="page-title"><p className="eyebrow">agent-graph</p><h1>{text('Settings', '設定')}</h1></div>
     <button className="btn btn-secondary" disabled={busy} onClick={() => void perform(async () => { dirty.current.clear(); setPreview(undefined); setSettings(await requestSettings(client, 'settings.read')); })}>{text('Reload settings', '設定を読み直す')}</button></header>}
     {error && <p role="alert" className="banner banner-danger">{displayError(error)}</p>}{notice && <p role="status" className="banner">{notice}</p>}

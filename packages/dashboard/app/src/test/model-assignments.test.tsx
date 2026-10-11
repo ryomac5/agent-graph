@@ -36,15 +36,15 @@ it.each(['ja', 'en'] as const)('explains each preset and the required save witho
     fireEvent.click(screen.getByRole('button', { name }));
     const dialog = screen.getByRole('dialog');
     expect(within(dialog).getByText(description).className).toBe('assignment-note');
-    expect(within(dialog).getByText(ja ? '確認して表に反映した後、プレビューして「割り当てを保存」で保存します。' : 'Confirm to update the table, then preview and save the policy.')).toBeTruthy();
+    expect(within(dialog).getByText(ja ? '表に反映したら、節の「保存」で保存する' : 'After applying, use Save in this section')).toBeTruthy();
     expect(change).not.toHaveBeenCalled();
-    fireEvent.click(within(dialog).getByRole('button', { name: ja ? '取り消す' : 'Cancel' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: ja ? 'やめる' : 'Cancel' }));
   }
 });
 
 it('omits Japanese descriptions and the same role names in assignments and graphs', () => {
   setup();
-  expect(screen.getByRole('heading', { name: '役割別のモデル' })).toBeTruthy();
+  expect(screen.getByRole('region', { name: '役割別のモデル' })).toBeTruthy();
   expect(screen.queryByText('エージェントの役割とタスクの負荷に応じて、使用するAIモデルを設定します。')).toBeNull();
   const roles = {
     orchestrate: ['Main agent', 'メインエージェント', '直接の対話とタスクの進行を担当'],
@@ -65,7 +65,7 @@ it('omits Japanese descriptions and the same role names in assignments and graph
     expect(roleWord(role as keyof typeof roles, 'en')).toBe(en);
   }
   for (const name of ['軽い作業', 'ふつうの作業', '重い作業']) expect(screen.getByRole('columnheader', { name })).toBeTruthy();
-  expect(screen.getAllByText('標準モデルを使用').length).toBeGreaterThan(0);
+  expect(screen.getAllByText('ふつうと同じ').length).toBeGreaterThan(0);
 });
 
 it.each(['ja', 'en'] as const)('shows ordered fallback models with catalog names in %s', language => {
@@ -73,7 +73,7 @@ it.each(['ja', 'en'] as const)('shows ordered fallback models with catalog names
   const standard = readCandidates(policy, 'implement', 'standard');
   policy.roles.implement = { standard: [...standard, { executor: 'antigravity', model: 'gemini-3.8-flash-high', family: 'google', tier: 'high' }] };
   setup(policy, language);
-  expect(screen.getByText(language === 'ja' ? '上限時やエラー時: Claude Opus → Gemini Flash' : 'On limits or errors: Claude Opus → Gemini Flash')).toBeTruthy();
+  expect(screen.getByText(language === 'ja' ? '予備 Claude Opus → Gemini Flash' : 'Backup Claude Opus → Gemini Flash')).toBeTruthy();
   expect(screen.queryByText(/\+\d+ 候補|\+\d+ candidates/)).toBeNull();
 });
 
@@ -89,7 +89,7 @@ it('selects grouped catalog rows, preserves family and shows official provider m
   expect(screen.getByLabelText('実装 ふつうの作業 1 モデル').closest('details')).toHaveProperty('open', false);
   fireEvent.click(row);
   expect(readCandidates(change.mock.lastCall![0], 'implement', 'standard')[0]).toEqual({ executor: 'claude', model: 'sonnet', family: 'anthropic', tier: 'mid' });
-  fireEvent.click(screen.getByText('その他のモデル'));
+  fireEvent.click(screen.getByText('名前を直接入力'));
   fireEvent.change(screen.getByRole('textbox', { name: '実装 ふつうの作業 1 モデル' }), { target: { value: 'custom-model' } });
   expect(readCandidates(change.mock.lastCall![0], 'implement', 'standard')[0].model).toBe('custom-model');
 });
@@ -105,12 +105,12 @@ it('switches effort using provider-specific buttons and clears incompatible effo
   fireEvent.click(within(group).getByRole('button', { name: 'max' }));
   fireEvent.click(within(screen.getByRole('list', { name: '実装 ふつうの作業 1 モデルの一覧' })).getByRole('button', { name: 'Gemini Flash' }));
   expect(readCandidates(change.mock.lastCall![0], 'implement', 'standard')[0]).not.toHaveProperty('effort');
-  expect(within(group).getAllByRole('button').map(button => button.textContent)).toEqual(['デフォルト']);
+  expect(screen.queryByRole('group', { name: '実装 ふつうの作業 1 思考量' })).toBeNull();
 });
 
 it('adds fallbacks from the same list and supports drag ordering', () => {
   const change = setup(); edit();
-  fireEvent.click(screen.getByRole('button', { name: '実装 ふつうの作業 フォールバックモデルを追加' }));
+  fireEvent.click(screen.getByRole('button', { name: '実装 ふつうの作業 予備を追加' }));
   expect(change).not.toHaveBeenCalled();
   fireEvent.click(within(screen.getByRole('list', { name: '実装 ふつうの作業 3 モデルの一覧' })).getByRole('button', { name: 'Gemini Flash' }));
   expect(readCandidates(change.mock.lastCall![0], 'implement', 'standard')).toHaveLength(3);
@@ -125,7 +125,8 @@ it('opening an inherited assignment leaves the policy untouched until a model is
   fireEvent.click(screen.getByRole('button', { name: 'アドバイザー 軽い作業 割り当てを編集' }));
   expect(change).not.toHaveBeenCalled();
   fireEvent.keyDown(document, { key: 'Escape' });
-  expect(screen.getByRole('button', { name: 'アドバイザー 軽い作業 割り当てを編集' }).textContent).toBe('標準モデルを使用');
+  expect(screen.getByRole('button', { name: 'アドバイザー 軽い作業 割り当てを編集' }).textContent).toBe('fable');
+  expect(screen.getAllByText('ふつうと同じ').length).toBeGreaterThan(0);
 });
 
 it.each(['性能重視', 'バランス', '節約'])('previews changed cells, allows cancellation and only updates the table after confirming %s', name => {
@@ -134,15 +135,15 @@ it.each(['性能重視', 'バランス', '節約'])('previews changed cells, all
   const original = structuredClone(policy);
   const change = setup(policy);
   fireEvent.click(screen.getByRole('button', { name }));
-  const dialog = screen.getByRole('dialog', { name: 'まとめて変更する内容' });
+  const dialog = screen.getByRole('dialog', { name: '変更の内容' });
   expect(within(dialog).getByRole('columnheader', { name: '変更前' })).toBeTruthy();
   expect(within(dialog).getByRole('columnheader', { name: '変更後' })).toBeTruthy();
   expect(within(dialog).getAllByRole('row').length).toBeGreaterThan(1);
   expect(change).not.toHaveBeenCalled();
-  fireEvent.click(within(dialog).getByRole('button', { name: '取り消す' }));
+  fireEvent.click(within(dialog).getByRole('button', { name: 'やめる' }));
   expect(screen.queryByRole('dialog')).toBeNull(); expect(change).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name }));
-  fireEvent.click(screen.getByRole('button', { name: '確認して表に反映' }));
+  fireEvent.click(screen.getByRole('button', { name: '表に反映' }));
   const next = change.mock.lastCall![0] as Policy;
   expect(next.quota).toEqual(original.quota); expect(next.modelNotes).toEqual(original.modelNotes);
   if (name === '節約') expect(readCandidates(next, 'implement', 'standard')).toEqual(readCandidates(original, 'implement', 'light'));

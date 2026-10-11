@@ -1,4 +1,13 @@
 :root {
+  --type-ui-strong: 600 13px/20px var(--font);
+  --control-lg: 32px;
+  --segment-shadow: 0 1px 2px rgb(15 17 26 / 0.08);
+  --weight-1: #5e6ad2;
+  --weight-2: #2f7fd8;
+  --weight-3: #8b8d96;
+  --weight-4: #d2d3d8;
+  --provider-antigravity: #3b82f6;
+
   color-scheme: light;
   --font: Inter,"Hiragino Sans","Noto Sans JP",ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
   --mono: ui-monospace,"SF Mono",Menlo,Consolas,monospace;
@@ -58,6 +67,13 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
     color-scheme: dark;
+  --segment-shadow: 0 1px 2px rgb(0 0 0 / 0.4);
+  --weight-1: #7b84e6;
+  --weight-2: #5aa2f0;
+  --weight-3: #6f717a;
+  --weight-4: #3a3b42;
+  --provider-antigravity: #7cb1ff;
+
     --provider-claude: #e89a7f;
     --provider-codex: #6bd5b4;
     --bg-0: #16171b;
@@ -91,6 +107,12 @@
 }
 :root[data-theme='dark'] {
   color-scheme: dark;
+  --segment-shadow: 0 1px 2px rgb(0 0 0 / 0.4);
+  --weight-1: #7b84e6;
+  --weight-2: #5aa2f0;
+  --weight-3: #6f717a;
+  --weight-4: #3a3b42;
+  --provider-antigravity: #7cb1ff;
   --provider-claude: #e89a7f;
   --provider-codex: #6bd5b4;
   --bg-0: #16171b;

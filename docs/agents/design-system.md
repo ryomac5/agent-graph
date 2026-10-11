@@ -397,3 +397,18 @@
 
 - 段 5 の最後に旧い別名の変数を消し、`grep -n 'accent-soft\|--text-xs\|radius-lg'` を 0 件にする
 - 画面の文言は英語を既定に保つ。この文書の日本語の語は翻訳の側の例である
+
+## 設定の画面の追加トークン
+
+設定の構成と寸法は `settings-redesign.md` の第 1、2、3、7 節に従う。頁は 960px、表以外は 640px、割り当て行は 52px、設定の行は 40px、選択窓は 440px とする。
+
+| 変数 | 明るい表示 | 暗い表示 |
+| --- | --- | --- |
+| `--type-ui-strong` | `600 13px/20px var(--font)` | 同じ |
+| `--control-lg` | `32px` | 同じ |
+| `--segment-shadow` | `0 1px 2px rgb(15 17 26 / 0.08)` | `0 1px 2px rgb(0 0 0 / 0.4)` |
+| `--weight-1` | `#5e6ad2` | `#7b84e6` |
+| `--weight-2` | `#2f7fd8` | `#5aa2f0` |
+| `--weight-3` | `#8b8d96` | `#6f717a` |
+| `--weight-4` | `#d2d3d8` | `#3a3b42` |
+| `--provider-antigravity` | `#3b82f6` | `#7cb1ff` |

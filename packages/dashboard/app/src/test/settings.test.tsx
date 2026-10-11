@@ -37,6 +37,7 @@ it('edits and saves model assignments from the production settings route', async
   render(<MemoryRouter initialEntries={['/settings']}><App client={f.client}/></MemoryRouter>);
   await screen.findByRole('region', { name: 'Model assignments' });
   expect(screen.getByLabelText('Theme')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Implement Heavy Edit assignment' }));
   fireEvent.change(screen.getByLabelText('Implement Heavy 1 Model'), { target: { value: 'custom-astra' } });
   fireEvent.click(screen.getByRole('button', { name: 'Preview policy' }));
   await screen.findByRole('region', { name: 'Policy preview' });
@@ -117,7 +118,8 @@ it('saves notification routes locally and falls back when browser permission is 
   expect(JSON.parse(localStorage.getItem(PREFERENCES_KEY)!)).toHaveProperty('completed', 'in_app');
 });
 it('refreshes models and starts a rebuild with visible progress', async () => {
-  const f = createFixture(); render(<SettingsPage client={f.client}/>); await screen.findByRole('button', { name: 'Implement Standard 1 Refresh codex models' });
+  const f = createFixture(); render(<SettingsPage client={f.client}/>); await screen.findByRole('button', { name: 'Implement Standard Edit assignment' });
+  fireEvent.click(screen.getByRole('button', { name: 'Implement Standard Edit assignment' }));
   fireEvent.click(screen.getByRole('button', { name: 'Implement Standard 1 Refresh codex models' })); await waitFor(() => expect(f.command).toHaveBeenCalledWith('settings.models', { provider: 'codex' }));
   fireEvent.click(screen.getByRole('button', { name: 'Rebuild ledger projection' })); await waitFor(() => expect(screen.getByRole('button', { name: 'Rebuild ledger projection' })).toHaveProperty('disabled', true));
   await waitFor(() => expect(screen.getByLabelText('Rebuild progress')).toHaveProperty('value', 2), { timeout: 3000 });
@@ -178,7 +180,10 @@ it('discards a policy preview if the policy changes before its response', async 
 it('edits weighted assignments, candidate order, criteria and model notes then saves the previewed policy', async () => {
   const f = createFixture(); render(<SettingsPage client={f.client}/>);
   const assignments = await screen.findByRole('region', { name: 'Model assignments' });
-  expect(within(assignments).getAllByText('Top performance on SWE-bench.').length).toBeGreaterThan(0);
+  expect(within(assignments).getAllByText('+1 candidates')).toHaveLength(6);
+  fireEvent.click(screen.getByRole('button', { name: 'Implement Heavy Edit assignment' }));
+  expect(within(assignments).getByText('Top performance on SWE-bench.')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Implement Edit criteria' }));
   fireEvent.change(screen.getByLabelText('Implement Heavy 1 Effort'), { target: { value: 'max' } });
   fireEvent.change(screen.getByLabelText('Implement Heavy Weight criteria'), { target: { value: 'Changes across packages' } });
   fireEvent.click(screen.getByLabelText('Implement Heavy 2 Move up'));
@@ -187,10 +192,10 @@ it('edits weighted assignments, candidate order, criteria and model notes then s
   fireEvent.change(screen.getByLabelText('Implement Heavy 3 Provider'), { target: { value: 'antigravity' } });
   fireEvent.change(screen.getByLabelText('Implement Heavy 3 Model'), { target: { value: 'manual-gemini' } });
   fireEvent.click(screen.getByLabelText('Implement Heavy 2 Remove'));
-  fireEvent.click(screen.getByLabelText('Advisor Light Use standard'));
-  fireEvent.change(screen.getByLabelText('Advisor Light 1 Model'), { target: { value: 'sonnet' } });
   fireEvent.change(screen.getByLabelText('Model note 1 strength'), { target: { value: 'Strong implementation' } });
   fireEvent.click(screen.getByLabelText('Model note 1 latest'));
+  fireEvent.click(screen.getByRole('button', { name: 'Advisor Light Edit assignment' }));
+  fireEvent.change(screen.getByLabelText('Advisor Light 1 Model'), { target: { value: 'sonnet' } });
   fireEvent.click(screen.getByRole('button', { name: 'Preview policy' })); await screen.findByText('claude · after-model');
   fireEvent.click(screen.getByRole('button', { name: 'Save policy' })); await screen.findByText('Saved');
   const save = f.command.mock.calls.find(([name]) => name === 'settings.write')![1] as { patch: SettingsSnapshot['policy'] };
@@ -204,13 +209,15 @@ it('supports drag reordering and standard inheritance with Japanese labels and p
   const f = createFixture(); const original = f.command.getMockImplementation()!;
   f.command.mockImplementation(async (name, payload) => name === 'settings.models' ? { type: 'ack', cmd_id: name, ok: true, result: { state: 'known', models: [{ model: `${(payload as { provider: string }).provider}-listed`, displayName: 'Listed model' }] } } : original(name, payload));
   render(<SettingsPage client={f.client} language="ja"/>); await screen.findByRole('region', { name: 'モデルの割り当て' });
+  fireEvent.click(screen.getByRole('button', { name: '実装 重い 割り当てを編集' }));
   const model = screen.getByLabelText('実装 重い 1 モデル') as HTMLInputElement;
-  await waitFor(() => expect(document.getElementById(model.getAttribute('list')!)?.textContent).toContain('Listed model'));
+  await waitFor(() => expect(document.getElementById(model.getAttribute('aria-controls')!)?.textContent).toContain('Listed model'));
   const first = model.closest('li')!; const second = screen.getByLabelText('実装 重い 2 モデル').closest('li')!;
   fireEvent.dragStart(first); fireEvent.dragOver(second); fireEvent.drop(second);
   expect(screen.getByLabelText('実装 重い 1 モデル')).toHaveProperty('value', 'opus');
-  fireEvent.click(screen.getByLabelText('実装 重い 標準を使う'));
-  expect(screen.getByLabelText('実装 重い 1 モデル')).toHaveProperty('disabled', true);
+  fireEvent.click(screen.getByLabelText('実装 重い 標準と同じにする'));
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(screen.getByRole('button', { name: '実装 重い 割り当てを編集' }).textContent).toBe('標準と同じ');
   fireEvent.click(screen.getByRole('button', { name: '割り当てを試算' })); await screen.findByText('claude · after-model');
   fireEvent.click(screen.getByRole('button', { name: '割り当てを保存' })); await screen.findByText('保存しました');
   const save = f.command.mock.calls.find(([name]) => name === 'settings.write')![1] as { patch: SettingsSnapshot['policy'] };
@@ -222,16 +229,16 @@ it('shows eight roles, lets the root select every provider, and folds fallback c
   const region = await screen.findByRole('region', { name: 'Model assignments' });
   const table = region.querySelector('.assignment-table')!;
   expect(table.querySelectorAll('tbody > tr')).toHaveLength(8);
-  expect([...table.querySelectorAll('tbody > tr > th')].map(cell => cell.textContent)).toEqual(['Orchestrate', 'Advisor', 'Research', 'Implement', 'Document', 'Review', 'Verify', 'Proofread']);
+  expect([...table.querySelectorAll('tbody > tr > th')].map(cell => cell.querySelector('.assignment-role > span')?.textContent)).toEqual(['Orchestrate', 'Advisor', 'Research', 'Implement', 'Document', 'Review', 'Verify', 'Proofread']);
   expect(screen.queryByText('Planning')).toBeNull();
+  expect(screen.queryByLabelText('Implement Standard 2 Model')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Orchestrate Standard Edit assignment' }));
   const root = screen.getByLabelText('Orchestrate Standard 1 Provider');
   fireEvent.change(root, { target: { value: 'antigravity' } });
   expect(root).toHaveProperty('value', 'antigravity');
   fireEvent.change(root, { target: { value: 'codex' } });
   expect(root).toHaveProperty('value', 'codex');
-  expect(screen.getByLabelText('Implement Standard 2 Model').closest('details')).toHaveProperty('open', false);
-  fireEvent.click(screen.getByLabelText('Implement Standard 2 Model').closest('details')!.querySelector('summary')!);
-  // details の開閉はブラウザの標準操作に任せる。
+  fireEvent.click(screen.getByRole('button', { name: 'Implement Standard Edit assignment' }));
   expect(screen.queryByText('Available models: Unknown')).toBeNull();
   expect(screen.getByLabelText('Implement Standard 1 Refresh codex models').textContent).toBe('↻');
 });
@@ -259,4 +266,92 @@ it('previews provider file diffs and requires confirmation before applying each 
     await waitFor(() => expect(f.command).toHaveBeenCalledWith('settings.applyProvider', { token: `token-${provider}`, provider, confirmation: true }));
     await waitFor(() => expect(screen.queryByRole('region', { name: 'Provider changes' })).toBeNull());
   }
+});
+
+it('shows catalog display names and efforts in assignment buttons even before or without a catalog match', async () => {
+  const f = createFixture();
+  const original = f.command.getMockImplementation()!;
+  let deliver!: () => void;
+  f.command.mockImplementation(async (name, payload) => {
+    if (name !== 'settings.models' || (payload as { provider: string }).provider !== 'codex') return original(name, payload);
+    await new Promise<void>(resolve => { deliver = resolve; });
+    return { type: 'ack', cmd_id: name, ok: true, result: { state: 'known', models: [{ model: 'gpt-6-astra', displayName: 'GPT-6 Astra' }] } };
+  });
+  // 遅い一覧でも保存済みの識別子を表示する。
+  render(<SettingsPage client={f.client} policyOnly/>);
+  const button = await screen.findByRole('button', { name: 'Implement Standard Edit assignment' });
+  expect(button.textContent).toContain('gpt-6-astra');
+  expect(button.textContent).toContain('high');
+  expect(screen.queryByLabelText('Implement Standard 1 Model')).toBeNull();
+  deliver();
+  await waitFor(() => expect(button.textContent).toContain('GPT-6 Astra'));
+  expect(screen.getByRole('button', { name: 'Orchestrate Standard Edit assignment' }).textContent).toContain('opus');
+  expect(screen.getByRole('button', { name: 'Orchestrate Standard Edit assignment' }).textContent).toContain('Default');
+  expect(document.querySelector('.assignment-settings.settings-page')).toBeTruthy();
+});
+
+it('closes the editor with Escape or outside presses and counts only explicit fallback candidates', async () => {
+  const f = createFixture(); render(<SettingsPage client={f.client}/>);
+  const assignments = await screen.findByRole('region', { name: 'Model assignments' });
+  const advisor = screen.getByRole('button', { name: 'Advisor Light Edit assignment' });
+  expect(advisor.textContent).toBe('Same as standard');
+  expect(advisor.closest('td')?.querySelector('.assignment-count')).toBeNull();
+  fireEvent.click(advisor);
+  expect(screen.getByRole('dialog', { name: 'Advisor Light Assignment' })).toBeTruthy();
+  fireEvent.change(screen.getByLabelText('Advisor Light 1 Model'), { target: { value: 'custom-model' } });
+  fireEvent.keyDown(document, { key: 'Escape' });
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(document.activeElement).toBe(advisor);
+  expect(advisor.textContent).toContain('custom-model');
+  fireEvent.click(advisor);
+  fireEvent.click(screen.getByLabelText('Advisor Light Add candidate'));
+  expect(advisor.closest('td')?.querySelector('.assignment-count')?.textContent).toBe('+1 candidates');
+  fireEvent.click(screen.getByLabelText('Advisor Light 2 Remove'));
+  expect(advisor.closest('td')?.querySelector('.assignment-count')).toBeNull();
+  fireEvent.pointerDown(within(assignments).getByRole('heading'));
+  expect(screen.queryByRole('dialog')).toBeNull();
+  fireEvent.click(advisor);
+  fireEvent.click(screen.getByLabelText('Advisor Light Use standard'));
+  expect(advisor.textContent).toBe('Same as standard');
+  fireEvent.click(screen.getByRole('button', { name: 'Advisor Standard Edit assignment' }));
+  expect(screen.queryByRole('button', { name: 'Advisor Standard Use standard' })).toBeNull();
+});
+
+it('keeps weight criteria in one role summary, edits each band inline and leaves unweighted roles clear', async () => {
+  const f = createFixture(); render(<SettingsPage client={f.client} language="ja"/>);
+  await screen.findByRole('region', { name: 'モデルの割り当て' });
+  expect(screen.queryByRole('button', { name: '根 基準を編集' })).toBeNull();
+  const edit = screen.getByRole('button', { name: '実装 基準を編集' });
+  const summary = edit.closest('th')!.querySelector('.assignment-criteria-summary')!;
+  expect(summary.textContent).toContain('1 ファイルの小さな直し');
+  fireEvent.click(edit);
+  fireEvent.change(screen.getByLabelText('実装 軽い 重さの基準'), { target: { value: '小さな変更' } });
+  fireEvent.change(screen.getByLabelText('実装 標準 重さの基準'), { target: { value: '機能の追加' } });
+  fireEvent.change(screen.getByLabelText('実装 重い 重さの基準'), { target: { value: '設計の変更' } });
+  expect(summary.textContent).toBe('小さな変更 · 機能の追加 · 設計の変更');
+  fireEvent.click(screen.getByRole('button', { name: '完了' }));
+  expect(screen.queryByLabelText('実装 軽い 重さの基準')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: '割り当てを試算' }));
+  await screen.findByRole('region', { name: '割り当ての試算' });
+  fireEvent.click(screen.getByRole('button', { name: '割り当てを保存' }));
+  await screen.findByText('保存しました');
+  const save = f.command.mock.calls.find(([name]) => name === 'settings.write')![1] as { patch: SettingsSnapshot['policy'] };
+  expect(save.patch.criteria.implement).toEqual({ light: '小さな変更', standard: '機能の追加', heavy: '設計の変更' });
+});
+
+it('selects catalog models with latest and strength notes next to their display names', async () => {
+  const f = createFixture();
+  const original = f.command.getMockImplementation()!;
+  f.value.policy.modelNotes[0].latest = true;
+  f.command.mockImplementation(async (name, payload) => name === 'settings.models' ? { type: 'ack', cmd_id: name, ok: true, result: { state: 'known', models: [{ model: 'gpt-6-astra', displayName: 'GPT-6 Astra' }, { model: 'gpt-6.1-sol', displayName: 'GPT-6.1 Sol' }] } } : original(name, payload));
+  render(<SettingsPage client={f.client}/>);
+  await screen.findByRole('button', { name: 'Implement Standard Edit assignment' });
+  fireEvent.click(screen.getByRole('button', { name: 'Implement Standard Edit assignment' }));
+  const choices = await screen.findByRole('list', { name: 'Implement Standard 1 Available models' });
+  const astra = within(choices).getByRole('button', { name: 'GPT-6 Astra Latest · Top performance on SWE-bench.' });
+  expect(astra.querySelector('small')?.textContent).toBe('Latest · Top performance on SWE-bench.');
+  fireEvent.click(within(choices).getByRole('button', { name: 'GPT-6.1 Sol' }));
+  expect(screen.getByLabelText('Implement Standard 1 Model')).toHaveProperty('value', 'gpt-6.1-sol');
+  fireEvent.keyDown(document, { key: 'Escape' });
+  expect(screen.getByRole('button', { name: 'Implement Standard Edit assignment' }).textContent).toContain('GPT-6.1 Sol');
 });

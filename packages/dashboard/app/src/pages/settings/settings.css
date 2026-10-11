@@ -1,7 +1,7 @@
-.settings-page { max-width: 1060px; }
+.settings-page { max-width: 1100px; }
 .settings-section { margin: 0 0 var(--space-6); }
 .settings-section header { display: grid; gap: var(--space-2); margin-bottom: var(--space-3); }
-.settings-page .settings-card { max-width: none; overflow: hidden; }
+.settings-page .settings-card { max-width: none; overflow: visible; }
 .settings-page .settings-card > p { margin: var(--space-4) var(--space-6); }
 .settings-page .settings-card > .fields { margin: var(--space-4) var(--space-6); }
 .settings-page .settings-card > .button-row { margin: var(--space-4) var(--space-6); }
@@ -29,35 +29,47 @@
 .settings-card { border: 0; border-radius: 0; box-shadow: none; }
 .settings-card label { min-height: 48px; padding: var(--space-3) 0; }
 .settings-card label:last-child { border-bottom: var(--border); }
-.model-assignments { margin: var(--space-4) 0; }
+.model-assignments { margin: var(--space-4) 0; width: 100%; max-width: 1100px; }
+.model-assignments h3 { font: var(--type-title); margin: var(--space-4) 0; }
 .assignment-scroll { width: 100%; min-width: 0; }
 .assignment-table { table-layout: fixed; width: 100%; }
-.assignment-table th:first-child { width: 72px; }
-.assignment-table td { vertical-align: top; }
-.assignment-candidates { margin: 0; padding: 0; list-style: none; }
+.assignment-table th:first-child { width: 25%; }
+.assignment-table th, .assignment-table td { vertical-align: top; font: var(--type-ui); }
+.assignment-role { display: flex; align-items: center; gap: var(--space-1); height: 32px; }
+.assignment-criteria-summary { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font: var(--type-meta); color: var(--fg-3); }
+.assignment-cell { position: relative; }
+.assignment-model { display: flex; gap: var(--space-1); width: 100%; height: 32px; min-width: 0; justify-content: flex-start; padding: 0 var(--space-2); }
+.assignment-model-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.assignment-effort { white-space: nowrap; color: var(--fg-2); }
+.assignment-model .request-avatar { flex: 0 0 16px; }
+.assignment-inherited { height: 32px; color: var(--fg-3); }
+.assignment-count { display: block; margin-top: var(--space-1); font: var(--type-meta); color: var(--fg-3); }
+.assignment-popover { position: absolute; top: 36px; left: 0; width: 360px; max-width: calc(100vw - 48px); max-height: 480px; overflow: auto; z-index: 20; padding: var(--space-3); background: var(--bg-0); border: var(--border); border-radius: var(--radius-2); box-shadow: var(--shadow); }
+.assignment-table td:last-child .assignment-popover { left: auto; right: 0; }
+.assignment-popover header { display: flex; align-items: center; justify-content: space-between; }
+.assignment-candidates { margin: 0 0 var(--space-3); padding: 0; list-style: none; }
 .assignment-candidates > li { border-bottom: var(--border); padding: var(--space-2) 0; display: grid; gap: var(--space-2); }
-.assignment-line { display: grid; grid-template-columns: 28px minmax(0, 1fr) 64px 28px; gap: var(--space-1); align-items: center; }
-.assignment-choice { position: relative; width: 28px; height: 32px; display: grid; place-items: center; }
-.assignment-choice select { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
-.assignment-choice:focus-within { outline: 2px solid var(--focus); outline-offset: 1px; }
-.assignment-refresh { width: 28px; padding: 0; }
-.settings-page .assignment-candidates input, .settings-page .assignment-candidates select { width: 100%; min-width: 0; height: 32px; padding-left: var(--space-1); padding-right: var(--space-1); }
-.assignment-note { font: var(--type-meta); color: var(--fg-3); }
-.settings-page .assignment-inherit { min-height: 32px; display: flex; justify-content: flex-start; gap: var(--space-2); }
-.settings-page .assignment-criteria { display: grid; gap: var(--space-2); }
-.settings-page .assignment-criteria textarea { min-width: 0; width: 100%; max-width: none; min-height: 80px; }
-.model-assignments h3 { font: var(--type-title); margin: var(--space-4) 0; }
-.model-assignments td input { max-width: 100%; }
-.settings-page .model-assignments input[type='checkbox'] { width: 16px; height: 16px; flex: 0 0 16px; }
-
-.assignment-options summary, .assignment-fallback summary { cursor: pointer; font: var(--type-meta); color: var(--fg-3); padding: var(--space-1) 0; }
-.assignment-options { min-width: 0; }
-.assignment-options .button-row { flex-wrap: wrap; gap: var(--space-1); }
-.settings-page .assignment-options select { width: 100%; min-width: 0; }
+.assignment-provider { display: flex; align-items: center; gap: var(--space-2); }
+.assignment-provider select { flex: 1; }
+.settings-page .assignment-icon { width: 28px; height: 28px; padding: 0; }
+.settings-page .assignment-popover label, .settings-page .assignment-criteria-editor label { display: grid; gap: var(--space-1); padding: 0; min-height: 0; border: 0; font: var(--type-meta); }
+.settings-page .assignment-popover input, .settings-page .assignment-popover select { width: 100%; min-width: 0; height: 32px; }
+.settings-page .assignment-note { font: var(--type-meta); color: var(--fg-3); }
+.assignment-popover summary, .assignment-apply summary { cursor: pointer; font: var(--type-meta); color: var(--fg-3); }
+.assignment-apply { text-align: right; margin-top: var(--space-1); }
+.assignment-apply button { display: block; margin-left: auto; }
+.assignment-criteria-editor { display: grid; gap: var(--space-2); margin-top: var(--space-2); }
+.settings-page .assignment-criteria-editor textarea { width: 100%; min-width: 0; max-width: none; font: var(--type-ui); }
 .provider-diff { overflow: auto; max-height: 320px; background: var(--bg-1); border: var(--border); border-radius: var(--radius-1); padding: var(--space-3); font: var(--type-mono); }
 @media (max-width: 760px) {
-  .assignment-table th:first-child { width: 48px; }
-  .assignment-line { grid-template-columns: 24px minmax(0, 1fr) 40px 24px; gap: 0; }
-  .assignment-choice, .assignment-refresh { width: 24px; }
-  .assignment-table td, .assignment-table th { padding: var(--space-1); }
+  .assignment-scroll { overflow-x: auto; }
+  .assignment-table { min-width: 720px; }
+  .assignment-popover { position: fixed; left: var(--space-6); right: var(--space-6); top: 25%; width: auto; }
+  .assignment-table td:last-child .assignment-popover { left: var(--space-6); right: var(--space-6); }
 }
+.assignment-model-options { list-style: none; padding: 0; margin: 0; max-height: 128px; overflow: auto; }
+.assignment-model-options .btn { width: 100%; height: auto; min-height: 32px; display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); text-align: left; }
+.assignment-model-options [aria-pressed='true'] { background: var(--bg-3); }
+.settings-page .assignment-model-options small { font: var(--type-meta); color: var(--fg-3); }
+.assignment-notes-editor fieldset { display: grid; gap: var(--space-2); }
+.settings-page .assignment-notes-editor input[type='checkbox'] { width: 16px; height: 16px; }

@@ -94,7 +94,7 @@ export function SettingsPage({ client, language, onAppearance, policyOnly = fals
   }
   const nextConversation = text('Applies to new conversations. Authentication and API keys apply on the next launch.', '新しい会話から反映します。認証と API キーは次の起動から反映します。');
   const nextDelegation = text('Applies to future delegations and decisions. Existing delegations keep their assignment.', '次の委譲と判断から反映します。進行中の割り当ては変えません。');
-  return <div className={policyOnly ? "assignment-settings" : "page settings-page"}>{!policyOnly && <header className="page-header"><div className="page-title"><p className="eyebrow">agent-graph</p><h1>{text('Settings', '設定')}</h1><p className="page-subtitle">{text('Personal settings, assignment policy, project settings and browser preferences.', '個人の設定、割り当ての決まり、プロジェクトの設定、ブラウザの見た目。')}</p></div>
+  return <div className={policyOnly ? "assignment-settings settings-page" : "page settings-page"}>{!policyOnly && <header className="page-header"><div className="page-title"><p className="eyebrow">agent-graph</p><h1>{text('Settings', '設定')}</h1><p className="page-subtitle">{text('Personal settings, assignment policy, project settings and browser preferences.', '個人の設定、割り当ての決まり、プロジェクトの設定、ブラウザの見た目。')}</p></div>
     <button className="btn btn-secondary" disabled={busy} onClick={() => void perform(async () => { dirty.current.clear(); setPreview(undefined); setSettings(await requestSettings(client, 'settings.read')); })}>{text('Reload settings', '設定を読み直す')}</button></header>}
     {error && <p role="alert" className="banner banner-danger">{error}</p>}{notice && <p role="status" className="banner">{notice}</p>}
     {Object.entries(settings?.errors ?? {}).map(([store, reason]) => <p key={store} role="alert" className="banner banner-warning">{store}: {reason} · {text('Previous valid settings remain active.', '前の有効な値で動き続けます。')}</p>)}
@@ -110,8 +110,8 @@ export function SettingsPage({ client, language, onAppearance, policyOnly = fals
 
     </SettingsSection>}
     <SettingsSection title={text('Assignment policy', '割り当ての決まり')} store="policy.toml" hint={nextDelegation}>
-      <ModelAssignments policy={settings.policy} models={models} language={lang} onChange={next => edit('policy', next)} onRefresh={provider => void perform(async () => { const result = await requestSettings<ModelCatalog[string]>(client, 'settings.models', { provider }); setModels(previous => ({ ...previous, [provider]: result })); })}/>
-      <div className="button-row">{(['claude', 'codex', 'antigravity'] as const).map(provider => <button key={provider} className="btn btn-secondary" disabled={busy || dirty.current.has('policy')} onClick={() => void perform(async () => { setProviderConfirmed(false); setProviderPreview(await requestSettings(client, 'settings.previewProvider', { provider })); })}>{text('Apply to', '反映')} {({ claude: 'Claude', codex: 'Codex', antigravity: 'Antigravity' })[provider]}</button>)}</div>
+      <ModelAssignments policy={settings.policy} models={models} language={lang} applyDisabled={busy || dirty.current.has('policy')} onApply={provider => void perform(async () => { setProviderConfirmed(false); setProviderPreview(await requestSettings(client, 'settings.previewProvider', { provider })); })} onChange={next => edit('policy', next)} onRefresh={provider => void perform(async () => { const result = await requestSettings<ModelCatalog[string]>(client, 'settings.models', { provider }); setModels(previous => ({ ...previous, [provider]: result })); })}/>
+
       <p className="muted-text">{text('Save the assignment policy before applying it to provider files.', '提供元に反映する前に割り当てを保存してください。')}</p>
       {providerPreview && <div role="region" aria-label={text('Provider changes', '提供元への変更')}>
         {providerPreview.files.map(file => <div key={file.path}><p><code>{file.path}</code></p><pre className="provider-diff">{file.diff}</pre></div>)}

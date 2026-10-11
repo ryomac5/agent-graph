@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { ConversationPage, type ConversationClient } from '../pages/conversation/ConversationPage.tsx';
 import { Workbench } from '../pages/workspace/Workbench.tsx';
@@ -39,6 +39,7 @@ function fixture({ hosted = false, state = 'running', evidence }: { hosted?: boo
   let launched = hosted;
   let discover = true;
   const command = vi.fn(async (name: string, _payload?: unknown): Promise<Ack> => {
+    if (name === 'settings.models') return ack({ defaults: { model: 'opus', displayName: 'Opus', modelSource: { kind: 'file', path: '/home/.claude/settings.json', key: 'model' } } });
     if (name === 'list_models') return ack([{ model: 'opus', displayName: 'Opus' }]);
     if (name === 'session.launch') { launched = true; return ack({ terminalId: 'terminal', pid: 123 }); }
     if (name === 'session.hosts') return ack({ hosts: launched && discover ? [{ conversationId, terminalId: 'terminal', pid: 123, startedAt: 'now' }] : [] });
@@ -51,7 +52,7 @@ function fixture({ hosted = false, state = 'running', evidence }: { hosted?: boo
   return { target, command, client, Wrapper, reconnect: () => connected.forEach(listener => listener()), setDiscover: (value: boolean) => { discover = value; }, setHosted: (value: boolean) => { launched = value; }, emit: (notice: TerminalNotice) => subscribers.forEach(listener => listener(notice)) };
 }
 async function send(text = '続けてください') {
-  await screen.findByRole('option', { name: 'Opus' });
+  await waitFor(() => expect(screen.getByRole('button', { name: /^(Model|モデル) · / }).textContent).toContain('Opus'));
   fireEvent.change(screen.getByRole('textbox', { name: '入力' }), { target: { value: text } });
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: '送信' })); });
 }
@@ -97,7 +98,7 @@ it('interrupts and opens the hosted terminal in a neighboring pane, restores out
 it('waits for the new conversation before sending its first message', async () => {
   const f = fixture(); f.setDiscover(false); render(<f.Wrapper newSession/>);
   await send('最初の発言');
-  expect(f.command).toHaveBeenCalledWith('session.launch', { projectId: 'p', provider: 'claude', model: 'opus' });
+  expect(f.command).toHaveBeenCalledWith('session.launch', { projectId: 'p', provider: 'claude' });
   expect(f.command.mock.calls.some(([name]) => name === 'session.send')).toBe(false);
   expect(screen.getByRole('textbox', { name: '入力' })).toHaveProperty('value', '最初の発言');
   fireEvent.click(screen.getByRole('button', { name: 'ターミナル' }));

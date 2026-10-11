@@ -35,7 +35,8 @@ export async function readAvailableModels(provider: "claude" | "codex" | "antigr
     try { models = parseModelList(await list(provider)); } catch { /* ホストが不在ならキャッシュを試す。 */ }
     if (provider === "codex") {
       try {
-        const cached = parseModelList(JSON.parse(await readFile(join(options.home ?? homedir(), ".codex/models_cache.json"), "utf8")));
+        const directory = options.home ? join(options.home, ".codex") : process.env.CODEX_HOME || join(homedir(), ".codex");
+        const cached = parseModelList(JSON.parse(await readFile(join(directory, "models_cache.json"), "utf8")));
         models = [...new Map([...cached, ...models].map(model => [model.model, model])).values()];
       } catch { /* キャッシュは任意であり、モデル名の手入力を妨げない。 */ }
     }

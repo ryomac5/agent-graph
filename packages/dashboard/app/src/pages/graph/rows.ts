@@ -10,6 +10,8 @@ export const RECENT_MS = 2 * 60 * 60 * 1000;
 export const FAILURE_MS = 24 * 60 * 60 * 1000;
 export const RECENT_LIMIT = 5;
 export const PAGE_SIZE = 20;
+export const GRAPH_COMPACT_WIDTH = 560;
+export const COMPACT_ROW_EXTRA = 16;
 export const GRAPH_ROW_HEIGHT = 32;
 export const RUNNING_ROW_HEIGHT = 52;
 export const APPROVAL_ROW_HEIGHT = 28;
@@ -72,7 +74,7 @@ export function readExpanded(values: string[]): Map<string, number> {
   return new Map(values.map(value => { const match = /^(.*)@(\d+)$/.exec(value); return match ? [match[1], Math.max(PAGE_SIZE, Number(match[2]))] : [value.replace(/^completed:/, 'today:'), PAGE_SIZE]; }));
 }
 /** 木の順序、畳み、役の絞り込みを両方の画面で共有する。 */
-export function buildRows(tree: GraphTree, options: { now: number; expanded?: ReadonlyMap<string, number>; selected?: string; role?: ChildRole; state?: ScreenState }): GraphRows {
+export function buildRows(tree: GraphTree, options: { now: number; expanded?: ReadonlyMap<string, number>; selected?: string; role?: ChildRole; state?: ScreenState; compact?: boolean }): GraphRows {
   const { now, selected, role, state } = options;
   const byId = new Map(tree.nodes.map(node => [node.id, { ...node, children: [...node.children], activity: readGraphActivity(node) }]));
   const all: GraphRow[] = [];
@@ -140,5 +142,8 @@ export function buildRows(tree: GraphTree, options: { now: number; expanded?: Re
     }
   }
   all.filter(row => !row.parent).forEach(emit);
+  if (options.compact) {
+    for (const row of new Set([...rows, ...all])) row.height += COMPACT_ROW_EXTRA;
+  }
   return { rows, all, running, needsYou, roles };
 }

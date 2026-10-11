@@ -16,7 +16,7 @@ import { Message } from '../components/conversation/Message.tsx';
 
 beforeEach(() => { localStorage.clear(); vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ generation: 0, projection: { messages: [], message_memberships: [] }, next: null }) }))); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
-const client = { command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'cmd', ok: true, result: [{ model: 'default', displayName: 'Default (recommended)' }] })) };
+const client = { command: vi.fn(async (name: string) => ({ type: 'ack' as const, cmd_id: 'cmd', ok: true, result: name === 'settings.read' ? { config: { agents: { claude: { model: 'opus' }, codex: { model: 'opus' } } } } : [{ model: 'default', displayName: 'Default (recommended)' }, { model: 'opus', displayName: 'Opus 5.5' }] })) };
 function setup(messages: Row[] = [], extra: Record<string, Row[]> = {}) {
   const target = createStore();
   target.setSnapshot({ seq: 1, generation: 0, projection: {
@@ -64,32 +64,39 @@ it('keeps tool and delegation cards separate from the surrounding reply bubbles'
   expect(main.querySelector('.message-bubble .tool-call, .message-bubble .delegation-card')).toBeNull();
 });
 
-it('translates effort labels without changing option values and translates the default Claude model', async () => {
-  render(<MemoryRouter><ConversationPage conversationId="c" target={setup()} client={client} language="ja"/></MemoryRouter>);
-  expect(await screen.findByRole('option', { name: 'デフォルト' })).toHaveProperty('value', 'default');
-  const select = screen.getByRole('combobox', { name: '思考量' });
-  expect(within(select).getAllByRole('option').map(option => [option.textContent, (option as HTMLOptionElement).value])).toEqual([
-    ['デフォルトの思考量', ''], ['なし', 'none'], ['最小', 'minimal'], ['低', 'low'], ['中', 'medium'], ['高', 'high'], ['最高', 'xhigh'],
+it('keeps effort values in English and names the recommended Claude model', async () => {
+  render(<MemoryRouter><ConversationPage conversationId="c" target={setup([], { conversations: [{ id: 'c', provider: 'codex', origin: 'managed' }] })} client={client} language="ja"/></MemoryRouter>);
+  fireEvent.click(screen.getByRole('button', { name: /^思考量 · / }));
+  const menu = screen.getByRole('menu', { name: /^思考量 · / });
+  expect(within(menu).getAllByRole('menuitemradio').map(option => [option.textContent, option.getAttribute('data-value')])).toEqual([
+    ['自動', ''], ['none', 'none'], ['minimal', 'minimal'], ['low', 'low'], ['medium', 'medium'], ['high', 'high'], ['xhigh', 'xhigh'],
   ]);
+  expect(effortLabel('high', 'ja')).toBe('high');
   expect(effortLabel('high', 'en')).toBe('high');
   expect(toolsLabel(2, 'ja')).toBe('ツール 2 件');
   expect(toolsLabel(1, 'en')).toBe('1 tool');
+  fireEvent.keyDown(menu, { key: 'Escape' });
+  await act(async () => {});
+  fireEvent.click(screen.getByRole('button', { name: /^モデル · / }));
+  expect(screen.getByRole('menuitemradio', { name: 'おすすめ · モデルを取得できない' }).getAttribute('data-value')).toBe('default');
+  expect(document.querySelector('.composer')!.textContent).not.toContain('デフォルト');
 });
 
-it('styles model and effort selectors as ghost controls with matching noninteractive chevrons', async () => {
-  render(<MemoryRouter><ConversationPage conversationId="c" target={setup()} client={client} language="ja"/></MemoryRouter>);
-  await screen.findByRole('option', { name: 'デフォルト' });
+it('styles model and effort menus as ghost controls with matching noninteractive chevrons', async () => {
+  render(<MemoryRouter><ConversationPage conversationId="c" target={setup([], { conversations: [{ id: 'c', provider: 'codex', origin: 'managed' }] })} client={client} language="ja"/></MemoryRouter>);
+  await act(async () => {});
   for (const name of ['モデル', '思考量']) {
-    expect(screen.getByRole('combobox', { name }).getAttribute('title')).toBe(name === '思考量' ? '思考量の変更は次の会話から反映されます。' : name);
-    const select = screen.getByRole('combobox', { name });
-    const wrapper = select.closest('.composer-select')!;
-    expect(wrapper.querySelector('svg')?.getAttribute('width')).toBe('16');
-    expect(wrapper.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
+    const button = screen.getByRole('button', { name: new RegExp('^' + name + ' · ') });
+    expect(button.getAttribute('title')).toMatch(new RegExp('^' + name + ' · '));
+    expect(button.className).toContain('btn-ghost');
+    expect(button.querySelector(':scope > svg')?.getAttribute('width')).toBe('12');
+    expect(button.querySelector(':scope > svg')?.getAttribute('aria-hidden')).toBe('true');
+    expect(button.getAttribute('aria-haspopup')).toBe('menu');
   }
   const css = readFileSync('app/src/pages/conversation/conversation.css', 'utf8');
-  const rule = css.match(/\.composer-controls select \{([^}]+)\}/)![1];
-  for (const declaration of ['appearance: none', 'height: var(--control)', 'border: 0', 'border-radius: var(--radius-1)', 'font: var(--type-ui)', 'color: var(--fg-2)', 'background: transparent']) expect(rule).toContain(declaration);
-  expect(css.match(/\.composer-select > \.icon \{([^}]+)\}/)![1]).toContain('pointer-events: none');
+  expect(css).toContain('.choice-trigger > .icon { pointer-events: none; }');
+  expect(css).toContain('background: var(--bg-0); border: var(--border); border-radius: var(--radius-2); box-shadow: var(--shadow)');
+  expect(document.querySelector('.composer select')).toBeNull();
 });
 
 it('grows the composer for wrapped input, caps it at eight lines, and shrinks after clearing or resizing', async () => {
@@ -99,7 +106,7 @@ it('grows the composer for wrapped input, caps it at eight lines, and shrinks af
   vi.spyOn(window, 'getComputedStyle').mockImplementation((element, pseudo) => element instanceof HTMLTextAreaElement
     ? { minHeight: '48px', maxHeight: '200px' } as CSSStyleDeclaration : computed(element, pseudo));
   render(<MemoryRouter><ConversationPage conversationId="c" target={setup()} client={client}/></MemoryRouter>);
-  await screen.findByRole('option', { name: 'Default (recommended)' });
+  await act(async () => {});
   const input = document.querySelector('.composer-box textarea') as HTMLTextAreaElement;
   expect(input.style.height).toBe('48px');
   contentHeight = 112;

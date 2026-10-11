@@ -70,12 +70,13 @@ it.each(['en', 'ja'] as const)('shows all role shapes and words, running work an
   }
   const row = document.querySelector('[data-node-id="work"]')!;
   expect(row.classList.contains('is-running')).toBe(true);
-  expect(row.getAttribute('style')).toContain('52px');
+  expect(row.getAttribute('style')).toContain('68px');
   expect(row.querySelector('.graph-current-work')?.textContent).toBe(language === 'ja' ? 'roles.ts を編集中'.replace('ts ', 'ts') : 'Editing roles.ts');
   expect(document.querySelector('[data-child=work]')?.classList.contains('is-running')).toBe(true);
-  expect(screen.getByText(language === 'ja' ? 'サブエージェント 2 件が実行中' : '2 running below')).toBeTruthy();
+  expect(screen.getByRole('treeitem', { name: language === 'ja' ? /サブエージェント 2 件が実行中/ : /2 running below/ })).toBeTruthy();
+  expect(document.querySelector('[data-node-id=root] .graph-row-who')?.textContent).toContain(language === 'ja' ? 'サブエージェント 52' : '52 sub-agents');
   expect(screen.queryByText('待機中')).toBeNull();
-  expect(screen.getByText(language === 'ja' ? 'ドキュメント · Opus 5.5' : 'Documentation · Opus 5.5')).toBeTruthy();
+  expect(screen.getByText(language === 'ja' ? 'ドキュメント · Claude Opus 5.5' : 'Documentation · Claude Opus 5.5')).toBeTruthy();
 });
 it('counts hidden roles, filters without losing ancestors, and toggles back', () => {
   renderGraph();

@@ -66,7 +66,7 @@ it('selects the running root, joins its continuation and switches to child conve
   const tree = screen.getByRole('complementary', { name: 'Panel' });
   fireEvent.click(within(tree).getByRole('treeitem', { name: /Earlier 1/ }));
   expect(within(tree).getByText('Check the screen').closest('[role=treeitem]')?.getAttribute('aria-level')).toBe('4');
-  fireEvent.click(within(tree).getByRole('treeitem', { name: /Build the screen · Implementation · Codex/ }));
+  fireEvent.click(within(tree).getByRole('treeitem', { name: /Build the screen · Implementation · Codex GPT-6.1 Sol/ }));
   expect(await screen.findByText('Child response')).toBeTruthy(); expect(screen.queryByText('Original request')).toBeNull();
   expect(screen.getByText('Parent request').closest('article')?.getAttribute('data-side')).toBe('end');
   fireEvent.click(screen.getByRole('button', { name: 'Back to Repo-20261008' }));

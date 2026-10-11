@@ -6,7 +6,7 @@
  * Policy saves require a matching previewToken; confirmation allows authentication switching with active runs.
  * Narrowing storage returns existingPayloadDeletion:"requires_confirmation" and never removes old payloads.
  * settings.apiKey {value} or {remove:true} -> {configured:boolean}; KeychainPort is injected, no key getter.
- * settings.status {} -> SettingsStatus; settings.models {provider} -> {state,models} (unknown on failure).
+ * settings.status {} -> SettingsStatus; settings.models {provider,cwd?} -> {state,models,defaults?} (unknown on failure).
  * Reads, status, models and previews are recomputed on every request; writes/key changes/rebuild retries reuse their result.
  * settings.rebuild {} -> {started:true}; status carries progress and resync fires on completion.
  * startSettingsWebSocketServer(observation, settings, options) uses the existing authenticated WebSocket server.
@@ -21,7 +21,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, writeFile, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openLedger } from "../../core/src/ledger/ledger.ts";
@@ -36,6 +36,7 @@ async function createFixture() {
   let key: string | undefined;
   const applied: string[] = [];
   const options: SettingsOptions = {
+    providerHome: root, modelOptions: { home: root }, defaultOptions: { home: root, env: {}, managedClaudePath: join(root, "managed-settings.json") },
     paths, ledger, keychain: { async setClaudeApiKey(value) { key = value; }, async deleteClaudeApiKey() { key = undefined; }, async hasClaudeApiKey() { return key !== undefined; } },
     history: () => [{ id: "past", request: { role: "implement", title: "task", task: "task", accept: [] }, context: { quota: () => undefined, performance: () => undefined } }],
     async apply(store) { applied.push(store); },
@@ -212,6 +213,38 @@ test("read, host status and models are fetched again when a request ID is reused
     const modelRequest = { type: "cmd" as const, cmd_id: "refresh-models", command: "settings.models", payload: { provider: "claude" } };
     assert.notDeepEqual(await f.service.handle(modelRequest), await f.service.handle(modelRequest));
     assert.equal(modelCalls, 2);
+  } finally { await f.close(); }
+});
+test("settings.models adds cwd-specific defaults and provenance while preserving the catalog contract", async () => {
+  const f = await createFixture();
+  try {
+    const path = join(f.root, ".claude/settings.json");
+    await mkdir(join(f.root, ".claude"));
+    await writeFile(path, '{"model":"claude-opus-5-5"}');
+    f.options.listModels = async () => [{ model: "opus", displayName: "Opus 5.5" }];
+    const request = { type: "cmd" as const, cmd_id: "defaults", command: "settings.models", payload: { provider: "claude", cwd: f.root } };
+    const response = await f.service.handle(request);
+    assert.equal(response.ok, true);
+    const result = response.result as unknown as { models: unknown[]; defaults: import("../src/settings/defaults.ts").ProviderDefaults };
+    assert.equal(result.models.length, 1); assert.equal(result.defaults.model, "claude-opus-5-5");
+    assert.deepEqual(result.defaults.modelSource, { kind: "file", path, key: "model" });
+    await writeFile(path, '{"model":"claude-sonnet-5-5"}');
+    assert.notDeepEqual(await f.service.handle(request), response);
+    const legacy = await f.service.handle({ ...request, payload: { provider: "claude" } });
+    assert.equal(legacy.ok, true);
+    assert.ok(!Object.hasOwn(legacy.result as object, "defaults"));
+    const invalid = await f.service.handle({ ...request, payload: { provider: "claude", cwd: "relative" } });
+    assert.equal(invalid.ok, false);
+  } finally { await f.close(); }
+});
+test("a temporary Codex catalog cache is a valid fallback when the host is unavailable", async () => {
+  const f = await createFixture();
+  try {
+    await mkdir(join(f.root, ".codex"));
+    await writeFile(join(f.root, ".codex/models_cache.json"), '{"models":[{"slug":"cached-model","display_name":"Cached model"}]}');
+    const response = await f.service.handle({ type: "cmd", cmd_id: "cache", command: "settings.models", payload: { provider: "codex" } });
+    assert.equal(response.ok, true);
+    assert.deepEqual(response.result, { state: "known", models: [{ model: "cached-model", displayName: "Cached model" }] });
   } finally { await f.close(); }
 });
 

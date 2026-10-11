@@ -3,6 +3,7 @@ import type { PaneEdge } from '../../lib/panes.ts';
 
 export type TabDrop = { pane: string; edge?: PaneEdge; before?: string; tablist?: boolean; line?: number };
 const DRAG_THRESHOLD = 3;
+const CLICK_SUPPRESSION_MS = 250;
 const EDGE_FRACTION = 0.25;
 const SCROLL_EDGE = 32;
 const SCROLL_SPEED = 12;
@@ -40,6 +41,16 @@ export function useTabDrag(root: RefObject<HTMLDivElement | null>, drop: (tab: s
   const [point, setPoint] = useState<{ x: number; y: number }>();
   const stop = useRef<() => void>(() => {});
   const suppressClick = useRef(false);
+  const clickTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  function resetClick() { clearTimeout(clickTimer.current); suppressClick.current = false; }
+  function suppressNextClick() {
+    resetClick(); suppressClick.current = true;
+    clickTimer.current = setTimeout(resetClick, CLICK_SUPPRESSION_MS);
+  }
+  useEffect(() => {
+    window.addEventListener('pointerdown', resetClick, true);
+    return () => { window.removeEventListener('pointerdown', resetClick, true); resetClick(); };
+  }, []);
   const active = useRef(false);
   const apply = useRef(drop);
   apply.current = drop;
@@ -49,7 +60,6 @@ export function useTabDrag(root: RefObject<HTMLDivElement | null>, drop: (tab: s
     stop.current();
     const startX = event.clientX, startY = event.clientY, pointerId = event.pointerId;
     const capture = (event.target as Element).closest<HTMLElement>('button[role="tab"]') ?? event.currentTarget;
-    capture.setPointerCapture?.(pointerId);
     let moved = false, frame = 0, x = startX, y = startY;
     function update() {
       const target = root.current ? findTabDrop(root.current, x, y, tab) : undefined;
@@ -70,7 +80,7 @@ export function useTabDrag(root: RefObject<HTMLDivElement | null>, drop: (tab: s
       if (event.pointerId !== pointerId) return;
       if (!moved && Math.hypot(event.clientX - startX, event.clientY - startY) < DRAG_THRESHOLD) return;
       event.preventDefault(); x = event.clientX; y = event.clientY;
-      if (!moved) { moved = true; active.current = true; setDragging(tab); frame = requestAnimationFrame(scroll); }
+      if (!moved) { capture.setPointerCapture?.(pointerId); moved = true; active.current = true; setDragging(tab); frame = requestAnimationFrame(scroll); }
       update();
     }
     function finish(event: PointerEvent) {
@@ -78,15 +88,14 @@ export function useTabDrag(root: RefObject<HTMLDivElement | null>, drop: (tab: s
       const target = moved && event.type === 'pointerup' && root.current ? findTabDrop(root.current, event.clientX, event.clientY, tab) : undefined;
       cleanup();
       if (moved) {
-        suppressClick.current = true;
-        setTimeout(() => { suppressClick.current = false; }, 0);
+        suppressNextClick();
         if (target) apply.current(tab, target);
       }
     }
     function cancel(event: KeyboardEvent) {
       if (event.key !== 'Escape') return;
       event.preventDefault(); event.stopPropagation();
-      if (moved) suppressClick.current = true;
+      if (moved) suppressNextClick();
       cleanup();
     }
     function cleanup() {

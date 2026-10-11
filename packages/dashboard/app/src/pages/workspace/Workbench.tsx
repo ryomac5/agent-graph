@@ -14,6 +14,7 @@ import { CodeTab } from './CodeTab.tsx';
 import { TerminalTab, createTerminalSession, type TerminalSession } from './TerminalTab.tsx';
 import { FilePicker } from './FilePicker.tsx';
 import './workbench.css';
+const WHEEL_LINE_HEIGHT = 16;
 const id = () => crypto.randomUUID();
 function fileKey(tab: Extract<WorkspaceTab, { kind: 'code' }>) { return JSON.stringify([tab.worktree ?? '', tab.path]); }
 function CodeLabel({ document, name, language }: { document: CodeDocument; name: string; language: Language }) {
@@ -28,7 +29,7 @@ export function Workbench({ project, session, conversationId, client, language, 
   const reportConversation = useCallback((tabId: string, metadata: ConversationTabMetadata) => {
     setConversationTabs(previous => {
       const current = previous[tabId];
-      return current?.name === metadata.name && current.state === metadata.state && current.title === metadata.title ? previous : { ...previous, [tabId]: metadata };
+      return current?.name === metadata.name && current.state === metadata.state && current.title === metadata.title && current.autoName === metadata.autoName && current.startedAt === metadata.startedAt ? previous : { ...previous, [tabId]: metadata };
     });
   }, []);
   const key = workspaceKey(project, session);
@@ -107,17 +108,34 @@ export function Workbench({ project, session, conversationId, client, language, 
     if (tab.kind !== 'conversation') return name;
     const matches = panes.flatMap(pane => pane.tabs).filter(other => other.kind === 'conversation' && label(other) === name);
     if (matches.length < 2) return name;
-    const suffix = conversationTabs[tab.id]?.title.split(' · ')[0];
-    if (suffix && suffix !== name && !matches.some(other => other.id !== tab.id && conversationTabs[other.id]?.title.split(' · ')[0] === suffix)) return name + ' · ' + suffix;
-    const identity = (other: WorkspaceTab) => other.kind === 'conversation' && other.conversationId && !matches.some(item => item.id !== other.id && item.kind === 'conversation' && item.conversationId === other.conversationId) ? other.conversationId : other.id;
-    const value = identity(tab);
-    let length = 8;
-    while (length < value.length && matches.some(other => other.id !== tab.id && identity(other).slice(-length) === value.slice(-length))) length += 4;
-    return name + ' · ' + value.slice(-length);
+    const suffix = (other: WorkspaceTab) => {
+      const metadata = conversationTabs[other.id];
+      const title = metadata?.autoName || metadata?.title.split(' · ')[0] || '';
+      const date = title.match(/(?:^|-)(\d{8}(?:-\d+)?)$/)?.[1];
+      if (date) return date;
+      const started = metadata?.startedAt ? new Date(metadata.startedAt) : undefined;
+      return started && Number.isFinite(started.getTime()) ? started.toLocaleString(ja ? 'ja-JP' : 'en-GB') : title !== name ? title : '';
+    };
+    const value = suffix(tab);
+    const duplicates = matches.filter(other => suffix(other) === value);
+    const number = duplicates.length > 1 || !value ? String(duplicates.findIndex(other => other.id === tab.id) + 1) : '';
+    return name + ' · ' + [value, number].filter(Boolean).join(' · ');
   }
   useEffect(() => {
     for (const pane of panes) document.getElementById('workspace-tab-' + pane.active)?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
   }, [tree, conversationTabs]);
+  useEffect(() => {
+    const element = root.current;
+    function scrollTabs(event: WheelEvent) {
+      const list = (event.target as Element).closest<HTMLElement>('.workbench-tablist');
+      if (!list || event.ctrlKey || event.deltaX || !event.deltaY || list.scrollWidth <= list.clientWidth) return;
+      event.preventDefault();
+      const distance = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? WHEEL_LINE_HEIGHT : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? list.clientWidth : 1;
+      list.scrollLeft += event.deltaY * distance;
+    }
+    element?.addEventListener('wheel', scrollTabs, { passive: false });
+    return () => element?.removeEventListener('wheel', scrollTabs);
+  }, []);
   function beginRename(pane: string, tab: WorkspaceTab) { setRenaming({ pane, tab: tab.id, value: label(tab) }); setTabMenu(undefined); }
   function finishRename() {
     if (!renaming) return;

@@ -3,6 +3,7 @@ import { dictionaries, type Language } from '../lib/i18n.ts';
 import { loadProjectList, moveProject, PROJECT_LIST_KEY, reconcileProjectList } from '../lib/project-list.ts';
 
 const DRAG_THRESHOLD = 3;
+const CLICK_SUPPRESSION_MS = 250;
 export interface SidebarProject { id: string; name: string; full: string; detail: string }
 export function ProjectList({ projects, language, renderProject }: {
   projects: SidebarProject[]; language: Language;
@@ -35,6 +36,16 @@ export function ProjectList({ projects, language, renderProject }: {
   const move = (id: string, position: number) => { setSaved(moveProject(preferences, ids, id, position)); setMenu(undefined); focusRow(id); };
   const stop = useRef<() => void>(() => {});
   const suppressClick = useRef(false);
+  const clickTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  function resetClick() { clearTimeout(clickTimer.current); suppressClick.current = false; }
+  function suppressNextClick() {
+    resetClick(); suppressClick.current = true;
+    clickTimer.current = setTimeout(resetClick, CLICK_SUPPRESSION_MS);
+  }
+  useEffect(() => {
+    window.addEventListener('pointerdown', resetClick, true);
+    return () => { window.removeEventListener('pointerdown', resetClick, true); resetClick(); };
+  }, []);
   const pointerDragging = useRef(false);
   useEffect(() => () => stop.current(), []);
   function findDrop(x: number, y: number) {
@@ -47,10 +58,10 @@ export function ProjectList({ projects, language, renderProject }: {
     if (event.button !== 0 || (event.target as Element).closest('button, .project-actions-menu')) return;
     stop.current();
     const capture = event.currentTarget, pointer = event.pointerId, x = event.clientX, y = event.clientY;
-    capture.setPointerCapture?.(pointer);
     let moved = false;
     function update(event: PointerEvent) {
       if (event.pointerId !== pointer || !moved && Math.hypot(event.clientX - x, event.clientY - y) < DRAG_THRESHOLD) return;
+      if (!moved) capture.setPointerCapture?.(pointer);
       moved = true; pointerDragging.current = true; event.preventDefault(); setDragging(id); setMenu(undefined);
       const target = findDrop(event.clientX, event.clientY);
       setDrop(target); document.documentElement.dataset.pointerDrag = target ? 'grabbing' : 'not-allowed';
@@ -60,11 +71,11 @@ export function ProjectList({ projects, language, renderProject }: {
       const target = moved && event.type === 'pointerup' ? findDrop(event.clientX, event.clientY) : undefined;
       cleanup();
       if (moved) {
-        suppressClick.current = true; setTimeout(() => { suppressClick.current = false; }, 0);
+        suppressNextClick();
         if (target) { const index = ids.indexOf(target.id); move(id, index + Number(target.after) - Number(ids.indexOf(id) < index + Number(target.after))); }
       }
     }
-    function cancel(event: KeyboardEvent) { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); if (moved) suppressClick.current = true; cleanup(); } }
+    function cancel(event: KeyboardEvent) { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); if (moved) suppressNextClick(); cleanup(); } }
     function cleanup() {
       window.removeEventListener('pointermove', update); window.removeEventListener('pointerup', finish); window.removeEventListener('pointercancel', finish);
       window.removeEventListener('keydown', cancel, true); window.removeEventListener('blur', cleanup); capture.removeEventListener('lostpointercapture', cleanup);
@@ -80,6 +91,7 @@ export function ProjectList({ projects, language, renderProject }: {
     onClickCapture={event => { if (suppressClick.current) { event.preventDefault(); event.stopPropagation(); suppressClick.current = false; } }}
     onDragLeave={event => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setDrop(undefined); }}
     className={`sidebar-project${dragging === row.id ? ' project-dragging' : ''}${drop?.id === row.id ? drop.after ? ' project-drop-after' : ' project-drop-before' : ''}`}>
+    {drop?.id === row.id && <span className="project-insertion" aria-hidden="true"/>}
     {renderProject(row, {
       tabIndex: 0, draggable: false, onPointerDown: event => begin(event, row.id), 'aria-label': row.name, 'aria-keyshortcuts': 'Alt+ArrowUp Alt+ArrowDown',
       onKeyDown: event => {

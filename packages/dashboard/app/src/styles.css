@@ -565,10 +565,13 @@ textarea::placeholder { color: var(--fg-4); }
 .sidebar-project-row > .project-actions { visibility: hidden; width: var(--control); padding: 0; }
 .sidebar-project-row:hover > .project-actions, .sidebar-project-row:focus-within > .project-actions, .project-actions[aria-expanded='true'] { visibility: visible; }
 .project-dragging > .sidebar-project-row { opacity: .5; }
-.project-drop-before::before, .project-drop-after::after { content: ''; position: absolute; left: 0; right: 0; height: 2px; background: var(--accent); pointer-events: none; z-index: 2; }
+.project-insertion { position: absolute; left: 3px; right: 3px; height: 2px; background: var(--accent); pointer-events: none; z-index: 2; }
+.project-insertion::before, .project-insertion::after { content: ''; position: absolute; top: -2px; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.project-insertion::before { left: -3px; }
+.project-insertion::after { right: -3px; }
 .sidebar-project-row[draggable] { position: relative; }
-.project-drop-before::before { top: 0; }
-.project-drop-after::after { bottom: 0; }
+.project-drop-before > .project-insertion { top: 0; }
+.project-drop-after > .project-insertion { bottom: 0; }
 .project-actions-menu { position: absolute; right: 0; top: var(--row); z-index: 20; display: flex; flex-direction: column; background: var(--bg-0); border: var(--border); border-radius: var(--radius-2); padding: var(--space-1); box-shadow: var(--shadow); }
 .project-actions-menu .btn { justify-content: flex-start; }
 .hidden-projects { flex: none; font: var(--type-ui); color: var(--fg-3); }

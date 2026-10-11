@@ -46,3 +46,22 @@ it('activates the existing conversation from plus instead of adding a duplicate'
   expect(tree.tabs).toHaveLength(3); expect(tree.active).toBe('a');
   expect(new Set(screen.getAllByRole('tab').filter(tab => tab.id.startsWith('workspace-tab')).map(tab => tab.getAttribute('aria-label'))).size).toBe(3);
 });
+
+it('distinguishes restored duplicate conversations with their date and occurrence, without internal ids', () => {
+  const target = createInteractionFixture();
+  const state = target.getSnapshot();
+  target.setSnapshot({ ...state, projection: { ...state.projection, roots: [{ id: 'a', name: 'Repo-20261011-2', user_name: 'Same', project: 'p', state: 'idle', conversation_ids: ['a'] }] } });
+  localStorage.setItem(interactionKey, JSON.stringify({ kind: 'pane', id: 'pane', tabs: ['initial-tab', 'internal-tab-two'].map(id => ({ kind: 'conversation', id, conversationId: 'a' })), active: 'initial-tab' }));
+  render(<MemoryRouter initialEntries={['/p/p']}><App target={target}/></MemoryRouter>);
+  expect(document.getElementById('workspace-tab-initial-tab')!.getAttribute('aria-label')).toBe('Same · 20261011-2 · 1');
+  expect(document.getElementById('workspace-tab-internal-tab-two')!.getAttribute('aria-label')).toBe('Same · 20261011-2 · 2');
+  expect([...document.querySelectorAll('.workbench-tab-suffix')].map(row => row.textContent)).toEqual([' · 20261011-2 · 1', ' · 20261011-2 · 2']);
+});
+
+it('uses conversation start times when duplicate names have no date suffix', () => {
+  const target = createInteractionFixture(); const state = target.getSnapshot();
+  const starts = ['2026-10-11T01:02:03Z', '2026-10-11T04:05:06Z', '2026-10-11T07:08:09Z'];
+  target.setSnapshot({ ...state, projection: { ...state.projection, runs: ['a', 'b', 'c'].map((id, i) => ({ id: `run-${id}`, conversation_id: id, started_ts: starts[i], state: 'idle' })) } });
+  render(<MemoryRouter initialEntries={['/p/p']}><App target={target}/></MemoryRouter>);
+  ['a', 'b', 'c'].forEach((id, i) => expect(document.getElementById(`workspace-tab-${id}`)!.getAttribute('aria-label')).toBe(`Same · ${new Date(starts[i]).toLocaleString('en-GB')}`));
+});

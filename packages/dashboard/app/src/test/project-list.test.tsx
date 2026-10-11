@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
@@ -147,10 +148,67 @@ it('uses touch pointers to reorder complete expanded blocks and clears invalid d
   fireEvent.pointerDown(source, { button: 0, pointerId: 1, pointerType: 'touch', clientX: 50, clientY: 20 });
   fireEvent.pointerMove(window, { pointerId: 1, clientX: 50, clientY: 250 });
   expect(block.classList.contains('project-drop-after')).toBe(true);
+  expect(block.querySelector(':scope > .project-insertion')?.getAttribute('aria-hidden')).toBe('true');
   hit = document.body; fireEvent.pointerMove(window, { pointerId: 1, clientX: 500, clientY: 500 });
   expect(list().querySelector('.project-drop-before, .project-drop-after')).toBeNull();
   hit = conversation; fireEvent.pointerMove(window, { pointerId: 1, clientX: 50, clientY: 250 });
   fireEvent.pointerUp(window, { pointerId: 1, clientX: 50, clientY: 250 });
   expect(loadProjectList().order).toEqual(['bravo', 'alpha', 'charlie']);
   expect(list().querySelector('.project-drop-before, .project-drop-after, .project-dragging')).toBeNull();
+});
+
+it('captures only after 3px and lets a project link navigate below the threshold', () => {
+  mount();
+  const source = row('Bravo'), link = source.querySelector('a')!;
+  const capture = vi.fn(); Object.defineProperty(source, 'setPointerCapture', { configurable: true, value: capture });
+  fireEvent.pointerDown(link, { button: 0, pointerId: 1, clientX: 20, clientY: 20 });
+  expect(capture).not.toHaveBeenCalled();
+  fireEvent.pointerMove(window, { pointerId: 1, clientX: 22, clientY: 20 });
+  expect(capture).not.toHaveBeenCalled();
+  fireEvent.pointerUp(link, { pointerId: 1, clientX: 22, clientY: 20 });
+  fireEvent.click(link);
+  expect(link.classList.contains('active')).toBe(true);
+  Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => source });
+  fireEvent.pointerDown(link, { button: 0, pointerId: 1, clientX: 20, clientY: 20 });
+  fireEvent.pointerMove(window, { pointerId: 1, clientX: 23, clientY: 20 });
+  expect(capture).toHaveBeenCalledExactlyOnceWith(1);
+});
+it.each(['Escape', 'pointerup', 'pointercancel'])('suppresses only the immediate click after %s and lets the next pointer hide a project', ending => {
+  mount(); const source = row('Alpha').querySelector('a')!;
+  Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => row('Alpha') });
+  fireEvent.pointerDown(source, { button: 0, pointerId: 1, clientX: 20, clientY: 20 });
+  fireEvent.pointerMove(window, { pointerId: 1, clientX: 25, clientY: 20 });
+  if (ending === 'Escape') fireEvent.keyDown(window, { key: 'Escape' });
+  else fireEvent(window, new PointerEvent(ending, { pointerId: 1, clientX: 25, clientY: 20 }));
+  fireEvent.click(source);
+  expect(source.classList.contains('active')).toBe(false);
+  const button = screen.getByRole('button', { name: 'Project actions: Alpha' });
+  fireEvent.pointerDown(button, { button: 0, pointerId: 2 }); fireEvent.click(button);
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Hide from list' }));
+  expect(order()).toEqual(['Bravo', 'Charlie']);
+});
+it.each(['pointer', 'timeout'])('clears Esc click suppression without a synthetic click via %s', reset => {
+  vi.useFakeTimers();
+  try {
+    mount(); const source = row('Alpha').querySelector('a')!;
+    Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => row('Alpha') });
+    fireEvent.pointerDown(source, { button: 0, pointerId: 1, clientX: 20, clientY: 20 });
+    fireEvent.pointerMove(window, { pointerId: 1, clientX: 25, clientY: 20 });
+    fireEvent.keyDown(window, { key: 'Escape' });
+    const button = screen.getByRole('button', { name: 'Project actions: Alpha' });
+    if (reset === 'pointer') fireEvent.pointerDown(button, { button: 0, pointerId: 2 });
+    else act(() => vi.advanceTimersByTime(250));
+    fireEvent.click(button); fireEvent.click(screen.getByRole('menuitem', { name: 'Hide from list' }));
+    expect(order()).toEqual(['Bravo', 'Charlie']);
+  } finally { vi.useRealTimers(); }
+});
+
+it('styles project insertion as an accent line with round endpoints distinct from separators', () => {
+  const css = readFileSync('app/src/styles.css', 'utf8');
+  const line = css.match(/\.project-insertion \{([^}]+)\}/)![1];
+  expect(line).toContain('height: 2px'); expect(line).toContain('background: var(--accent)');
+  const dots = css.match(/\.project-insertion::before, \.project-insertion::after \{([^}]+)\}/)![1];
+  for (const property of ['width: 6px', 'height: 6px', 'border-radius: 50%', 'background: var(--accent)']) expect(dots).toContain(property);
+  expect(css).toContain('.project-drop-before > .project-insertion { top: 0; }');
+  expect(css).toContain('.project-drop-after > .project-insertion { bottom: 0; }');
 });

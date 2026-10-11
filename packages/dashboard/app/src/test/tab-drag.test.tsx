@@ -248,3 +248,41 @@ it('clamps the context menu to the viewport and ignores right clicks during a dr
   fireEvent.contextMenu(screen.getByRole('tab', { name: 'b' })); expect(screen.queryByRole('menu')).toBeNull();
   end(100, 20);
 });
+
+it('defers tab pointer capture until movement reaches 3px', () => {
+  fixture(); const source = screen.getByRole('tab', { name: 'b' });
+  const capture = vi.fn(); Object.defineProperty(source, 'setPointerCapture', { configurable: true, value: capture });
+  start('b'); expect(capture).not.toHaveBeenCalled();
+  move(52, 20); expect(capture).not.toHaveBeenCalled();
+  end(52, 20); fireEvent.click(source); expect(source.getAttribute('aria-selected')).toBe('true');
+  hit(panes()[0].querySelector('.workbench-tabs')!);
+  start('b'); move(53, 20); expect(capture).toHaveBeenCalledExactlyOnceWith(1);
+});
+it.each(['pointer', 'timeout'])('clears cancelled tab click suppression via %s', reset => {
+  vi.useFakeTimers();
+  try {
+    fixture(); hit(panes()[0].querySelector('.workbench-tabs')!);
+    start('b'); move(100, 20); fireEvent.keyDown(window, { key: 'Escape' });
+    if (reset === 'pointer') start('c'); else act(() => vi.advanceTimersByTime(250));
+    fireEvent.click(screen.getByRole('tab', { name: 'c' }));
+    expect(screen.getByRole('tab', { name: 'c' }).getAttribute('aria-selected')).toBe('true');
+  } finally { vi.useRealTimers(); }
+});
+it('converts vertical wheel motion only on overflowing tablists and preserves horizontal gestures', () => {
+  fixture(); const list = screen.getByRole('tablist');
+  Object.defineProperties(list, { scrollWidth: { configurable: true, value: 600 }, clientWidth: { configurable: true, value: 200 } });
+  const wheel = (deltaY: number, deltaX = 0, deltaMode = 0, ctrlKey = false) => {
+    const event = new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY, deltaX, deltaMode, ctrlKey });
+    fireEvent(screen.getByRole('tab', { name: 'a' }), event); return event;
+  };
+  expect(wheel(40).defaultPrevented).toBe(true); expect(list.scrollLeft).toBe(40);
+  expect(wheel(-10).defaultPrevented).toBe(true); expect(list.scrollLeft).toBe(30);
+  expect(wheel(1, 0, 1).defaultPrevented).toBe(true); expect(list.scrollLeft).toBe(46);
+  expect(wheel(1, 0, 2).defaultPrevented).toBe(true); expect(list.scrollLeft).toBe(246);
+  expect(wheel(20, 10).defaultPrevented).toBe(false); expect(list.scrollLeft).toBe(246);
+  expect(wheel(20, 0, 0, true).defaultPrevented).toBe(false);
+  Object.defineProperty(list, 'scrollWidth', { value: 200 });
+  expect(wheel(20).defaultPrevented).toBe(false);
+  const bodyWheel = new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: 20 });
+  fireEvent(panes()[0].querySelector('.workbench-body')!, bodyWheel); expect(bodyWheel.defaultPrevented).toBe(false);
+});

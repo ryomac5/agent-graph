@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import http, { request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -105,7 +105,9 @@ test('static handler serves real files and applies security without a socket', a
   const { EventEmitter } = await import('node:events');
   const { syncBuiltinESMExports } = await import('node:module');
   const directory = mkdtempSync(join(tmpdir(), 'ag-static-handler-'));
-  writeFileSync(join(directory, 'index.html'), '<html><head><meta content="__AGENT_GRAPH_TOKEN__"></head><body></body></html>');
+  writeFileSync(join(directory, 'index.html'), readFileSync(new URL('../../dashboard/app/index.html', import.meta.url)));
+  const favicon = readFileSync(new URL('../../dashboard/app/public/favicon.svg', import.meta.url), 'utf8');
+  writeFileSync(join(directory, 'favicon.svg'), favicon);
   writeFileSync(join(directory, 'app.css'), 'body{}');
   let handle!: (request: http.IncomingMessage, response: http.ServerResponse) => Promise<void>;
   const server = Object.assign(new EventEmitter(), {
@@ -158,8 +160,18 @@ test('static handler serves real files and applies security without a socket', a
   assert.equal(route.status, 200); assert.match(route.body, /injected-token/);
   assert.equal(route.headers['Cache-Control'], 'no-store');
   assert.match(route.headers['Content-Security-Policy'], /frame-ancestors/);
+  assert.match(route.body, /<link rel="icon" type="image\/svg\+xml" href="\/favicon.svg">/);
+  const icon = await get('/favicon.svg');
+  assert.equal(icon.status, 200);
+  assert.equal(icon.headers['Content-Type'], 'image/svg+xml');
+  assert.equal(icon.headers['X-Content-Type-Options'], 'nosniff');
+  assert.equal(icon.body, favicon);
+  // 同一オリジンの画像を許可し、SVG 内のテーマ切り替えにも制限を加えない。
+  assert.match(route.headers['Content-Security-Policy'], /(?:^|; )img-src 'self' data:;/);
+  assert.equal(icon.headers['Content-Security-Policy'], undefined);
   const nonces = new Set<string>();
   for (const response of [route, await get('/'), await get('/index.html')]) {
+    assert.match(response.body, /<link rel="icon" type="image\/svg\+xml" href="\/favicon.svg">/);
     const nonce = response.body.match(/<meta name="agent-graph-style-nonce" content="([^"]+)">/)?.[1];
     assert.ok(nonce);
     assert.equal(Buffer.from(nonce, 'base64').length, 32);

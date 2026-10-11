@@ -21,7 +21,7 @@ export function elapsed(row: GraphRow, now: number): string {
 export function rowEnd(row: GraphRow, language: Language, now: number): string {
   const ja = language === 'ja'; const node = row.node;
   if (!node) return '';
-  if (row.role === 'main' && row.runningBelow) return ja ? `下で ${row.runningBelow} 件が実行中` : `${row.runningBelow} running below`;
+  if (row.role === 'main' && row.runningBelow) return ja ? `サブエージェント ${row.runningBelow} 件が実行中` : `${row.runningBelow} running below`;
   const state = toDisplayState(node.state);
   if (['starting', 'running'].includes(state)) return elapsed(row, now);
   if (state === 'waiting_approval') return ja ? '承認待ち' : 'Approval';

@@ -39,13 +39,13 @@ export function CreateTaskForm({ project, root, client, disabled = false, langua
   return <form className="create-task" onSubmit={event => void submit(event)} aria-label={ja ? '新規タスク' : 'New task'}>
     <header className="form-header"><h2>{ja ? '新規タスク' : 'New task'}</h2></header>
     <div className="form-grid">
-      <label className="field span-2">{ja ? '名前' : 'Title'}<input required value={title} onChange={event => setTitle(event.target.value)} disabled={pending} placeholder={ja ? '例: API の遅延を調べる' : 'e.g. Investigate API latency'}/></label>
+      <label className="field span-2">{ja ? 'タイトル' : 'Title'}<input required value={title} onChange={event => setTitle(event.target.value)} disabled={pending} placeholder={ja ? '例: API の遅延を調べる' : 'e.g. Investigate API latency'}/></label>
       <label className="field span-2">{ja ? '作業ディレクトリ' : 'Working directory'}<input className="mono" required value={cwd} onChange={event => setCwd(event.target.value)} disabled={pending}/></label>
       <label className="field">Provider<select value={provider} onChange={event => { setProvider(event.target.value); setModel(''); }} disabled={pending}><option value="codex">Codex</option><option value="claude">Claude</option></select></label>
       <label className="field">{ja ? 'モデル' : 'Model'}<input className="mono" required value={model} onChange={event => setModel(event.target.value)} disabled={pending}/></label>
-      <label className="field">Effort<select value={effort} onChange={event => setEffort(event.target.value)} disabled={pending}>{['low', 'medium', 'high', 'xhigh', 'max'].map(value => <option key={value}>{value}</option>)}</select></label>
+      <label className="field">{ja ? '思考量' : 'Effort'}<select value={effort} onChange={event => setEffort(event.target.value)} disabled={pending}>{['low', 'medium', 'high', 'xhigh', 'max'].map(value => <option key={value}>{value}</option>)}</select></label>
       <label className="field">{ja ? 'エージェント数' : 'Agents'}<input type="number" min={1} required value={agents} onChange={event => setAgents(Number(event.target.value))} disabled={pending}/></label>
-      <label className="field span-4">{ja ? '依頼' : 'Task'}<textarea required rows={3} value={task} onChange={event => setTask(event.target.value)} disabled={pending}/></label>
+      <label className="field span-4">{ja ? 'タスク内容' : 'Task'}<textarea required rows={3} value={task} onChange={event => setTask(event.target.value)} disabled={pending}/></label>
     </div>
     <footer className="form-footer">{result && <p role="status" className="status-line">{result}</p>}<span className="spacer"/>
       {onCancel && <button type="button" className="btn btn-ghost btn-sm" onClick={onCancel}>{ja ? 'キャンセル' : 'Cancel'}</button>}

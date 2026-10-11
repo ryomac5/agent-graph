@@ -28,7 +28,7 @@ it('opens details upwards with provider windows, reset times and Antigravity gro
   render(<UsageBar client={createClient()} language="ja"/>); await settle();
   const toggle = screen.getByRole('button', { name: '使用量の詳細' }); fireEvent.click(toggle);
   const dialog = screen.getByRole('dialog', { name: '使用量の詳細' });
-  expect(within(dialog).getAllByText('4 時間 2 分で戻る').length).toBeGreaterThan(0);
+  expect(within(dialog).getAllByText('4 時間 2 分後にリセット').length).toBeGreaterThan(0);
   expect(within(dialog).getByText('Gemini モデル')).toBeTruthy(); expect(within(dialog).getByText('Claude と GPT モデル')).toBeTruthy();
   expect(within(dialog).getAllByRole('progressbar').map(row => row.getAttribute('aria-valuenow'))).toEqual(['3', '31', '80', '95', '25']);
   fireEvent.keyDown(document, { key: 'Escape' }); expect(screen.queryByRole('dialog')).toBeNull(); expect(document.activeElement).toBe(toggle);
@@ -66,18 +66,18 @@ it('backs off after failures and does not fetch when the sidebar is hidden', asy
 });
 it('formats elapsed and unknown reset times', () => {
   expect(formatReset(reset, START, 'en')).toBe('Resets in 4h 2m');
-  expect(formatReset(reset, START + POLL_MS * 30, 'ja')).toBe('0 分で戻る');
-  expect(formatReset(null, START, 'ja')).toBe('戻る時刻は不明');
+  expect(formatReset(reset, START + POLL_MS * 30, 'ja')).toBe('0 分後にリセット');
+  expect(formatReset(null, START, 'ja')).toBe('リセット時刻は不明');
 });
 
 it.each([
-  [4 * 24 * 60 + 5 * 60 + 39, '4 日 5 時間で戻る', 'Resets in 4d 5h'],
-  [24 * 60, '1 日 0 時間で戻る', 'Resets in 1d 0h'],
-  [24 * 60 - 1, '23 時間 59 分で戻る', 'Resets in 23h 59m'],
-  [4 * 60 + 2, '4 時間 2 分で戻る', 'Resets in 4h 2m'],
-  [60, '1 時間 0 分で戻る', 'Resets in 1h 0m'],
-  [59, '59 分で戻る', 'Resets in 59m'],
-  [12, '12 分で戻る', 'Resets in 12m'],
+  [4 * 24 * 60 + 5 * 60 + 39, '4 日 5 時間後にリセット', 'Resets in 4d 5h'],
+  [24 * 60, '1 日 0 時間後にリセット', 'Resets in 1d 0h'],
+  [24 * 60 - 1, '23 時間 59 分後にリセット', 'Resets in 23h 59m'],
+  [4 * 60 + 2, '4 時間 2 分後にリセット', 'Resets in 4h 2m'],
+  [60, '1 時間 0 分後にリセット', 'Resets in 1h 0m'],
+  [59, '59 分後にリセット', 'Resets in 59m'],
+  [12, '12 分後にリセット', 'Resets in 12m'],
 ])('formats a reset %i minutes away in both languages', (minutes, ja, en) => {
   const at = new Date(START + minutes * 60_000).toISOString();
   expect(formatReset(at, START, 'ja')).toBe(ja);
@@ -103,7 +103,7 @@ it('floats outside the sidebar, stays above the bar and clamps to the viewport o
   expect(dialog.style.maxHeight).toBe('484px');
   fireEvent.pointerDown(within(dialog).getByText('Claude')); expect(screen.getByRole('dialog')).toBe(dialog);
   const row = within(dialog).getAllByRole('progressbar')[0].parentElement!;
-  expect([...row.children].map(child => child.textContent)).toEqual(['5 時間', '', '3%', '4 時間 2 分で戻る']);
+  expect([...row.children].map(child => child.textContent)).toEqual(['5 時間', '', '3%', '4 時間 2 分後にリセット']);
   vi.stubGlobal('innerWidth', 320); vi.stubGlobal('innerHeight', 400); fireEvent(window, new Event('resize'));
   expect(dialog.style.width).toBe('304px'); expect(dialog.style.left).toBe('8px');
   expect(dialog.style.bottom).toBe('8px'); expect(dialog.style.maxHeight).toBe('384px');

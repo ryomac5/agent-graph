@@ -224,7 +224,7 @@ export function App({ target = store, client = unavailableClient, searchClient =
         void answerApproval(client, row, action).catch(error => { answered.current.delete(id); setCommandError(error instanceof Error ? error.message : String(error)); });
       },
     }))),
-    ...projects.map(row => ({ id: `workspace-${row.id}`, name: language === 'ja' ? `作業場を開く: ${row.full}` : `Open workspace: ${row.full}`, run: () => navigate(`/p/${encodeURIComponent(row.id)}`) })),
+    ...projects.map(row => ({ id: `workspace-${row.id}`, name: language === 'ja' ? `ワークスペースを開く: ${row.full}` : `Open workspace: ${row.full}`, run: () => navigate(`/p/${encodeURIComponent(row.id)}`) })),
   ];
   const fullHeight = /^\/(c|p)\/[^/]+(?:\/(files|graph|tree))?$/.test(location.pathname);
   const icons = { overview: 'overview', inbox: 'inbox', search: 'search' } as const;
@@ -270,8 +270,8 @@ export function App({ target = store, client = unavailableClient, searchClient =
     </Routes>{commandError && <p role="alert" className="banner banner-danger">{commandError}</p>}</main></div>
     {creatingSession && <SessionCreate client={client} projects={getRegisteredProjects(state)} initialProject={creatingSession} language={language} onClose={() => setCreatingSession(undefined)} onCreated={(project, conversation) => { setCreatingSession(undefined); navigate(`/p/${encodeURIComponent(project)}?conversation=${encodeURIComponent(conversation)}`); setMobileView('conversation'); }}/>}
     {overlay === 'commands' && <CommandPalette language={language} commands={commands} onClose={() => setOverlay(undefined)}/>}
-    {overlay === 'help' && <CommandDialog language={language} title={language === 'ja' ? 'キー操作' : 'Shortcuts'} onClose={() => setOverlay(undefined)}><dl>{Object.entries(bindings).map(([key, value]) => <div key={key}><dt>{keyLabel(key as KeyAction, language)}</dt><dd><kbd>{value}</kbd></dd></div>)}</dl></CommandDialog>}
-    {overlay === 'interrupt' && <CommandDialog language={language} title={language === 'ja' ? '実行を中断しますか' : 'Interrupt run?'} onClose={() => setOverlay(undefined)}><button className="btn btn-primary" onClick={() => { if (stopButton?.isConnected && !stopButton.disabled) stopButton.click(); setOverlay(undefined); }}>{language === 'ja' ? '中断' : 'Confirm interrupt'}</button><button className="btn btn-secondary" onClick={() => setOverlay(undefined)}>{language === 'ja' ? 'キャンセル' : 'Cancel'}</button></CommandDialog>}
+    {overlay === 'help' && <CommandDialog language={language} title={language === 'ja' ? 'キーボードショートカット' : 'Shortcuts'} onClose={() => setOverlay(undefined)}><dl>{Object.entries(bindings).map(([key, value]) => <div key={key}><dt>{keyLabel(key as KeyAction, language)}</dt><dd><kbd>{value}</kbd></dd></div>)}</dl></CommandDialog>}
+    {overlay === 'interrupt' && <CommandDialog language={language} title={language === 'ja' ? '実行を中断しますか？' : 'Interrupt run?'} onClose={() => setOverlay(undefined)}><button className="btn btn-primary" onClick={() => { if (stopButton?.isConnected && !stopButton.disabled) stopButton.click(); setOverlay(undefined); }}>{language === 'ja' ? '中断' : 'Confirm interrupt'}</button><button className="btn btn-secondary" onClick={() => setOverlay(undefined)}>{language === 'ja' ? 'キャンセル' : 'Cancel'}</button></CommandDialog>}
     {overlay === 'create' && <CommandDialog language={language} title={t('newTask')} onClose={() => setOverlay(undefined)}><CreateTaskForm project={project ?? ''} root={projectRoot} client={client} disabled={state.connection !== 'connected'} language={language} onCancel={() => setOverlay(undefined)}/></CommandDialog>}
     </div>;
 }

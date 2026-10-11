@@ -12,12 +12,12 @@ export function getMostUsed(windows: UsageWindow[]): UsageWindow | undefined {
 }
 export function getUsageColor(percent: number): string { return percent >= 95 ? 'danger' : percent >= 80 ? 'warning' : 'normal'; }
 export function formatReset(reset: string | null, now: number, language: Language): string {
-  if (!reset || !Number.isFinite(Date.parse(reset))) return language === 'ja' ? '戻る時刻は不明' : 'Reset time unknown';
+  if (!reset || !Number.isFinite(Date.parse(reset))) return language === 'ja' ? 'リセット時刻は不明' : 'Reset time unknown';
   const minutes = Math.max(0, Math.ceil((Date.parse(reset) - now) / 60_000));
   const hours = Math.floor(minutes / 60);
   const days = Math.floor(hours / 24);
-  if (days) return language === 'ja' ? `${days} 日 ${hours % 24} 時間で戻る` : `Resets in ${days}d ${hours % 24}h`;
-  return language === 'ja' ? `${hours ? `${hours} 時間 ` : ''}${minutes % 60} 分で戻る` : `Resets in ${hours ? `${hours}h ` : ''}${minutes % 60}m`;
+  if (days) return language === 'ja' ? `${days} 日 ${hours % 24} 時間後にリセット` : `Resets in ${days}d ${hours % 24}h`;
+  return language === 'ja' ? `${hours ? `${hours} 時間 ` : ''}${minutes % 60} 分後にリセット` : `Resets in ${hours ? `${hours}h ` : ''}${minutes % 60}m`;
 }
 const REASONS: Record<string, [string, string]> = {
   old_value: ['The value is over 30 minutes old', '30 分以上前の値です'],

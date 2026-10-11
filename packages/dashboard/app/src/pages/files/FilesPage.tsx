@@ -350,13 +350,13 @@ export function FileTreePanel({ explorer, actions, language = 'en', compact = fa
       <button className="icon-button" aria-label={text('Refresh', '更新')} title={text('Refresh', '更新')} onClick={explorer.refresh}><Icon name="clock" size={14}/></button>
       {actions}</header>}
     <div className="explorer-worktree-row"><Icon name="branch" size={14}/>
-      <select className="select-sm explorer-worktree" aria-label={text('Worktree', '作業ツリー')} value={worktreeValue} disabled={worktrees.status !== 'loaded'}
+      <select className="select-sm explorer-worktree" aria-label={text('Worktree', 'ワークツリー')} value={worktreeValue} disabled={worktrees.status !== 'loaded'}
         onChange={event => explorer.selectWorktree(event.target.value)}>
         {worktrees.status === 'loaded' ? [...primary, ...others.filter(tree => showOthers || tree.path === worktreeValue)].map(tree => <option key={tree.path} value={tree.path} title={tree.path}>{worktreeName(tree)}</option>)
-          : <option value={worktreeValue}>{worktrees.status === 'loading' ? text('Loading worktrees…', '作業ツリーを読み込み中') : text('Project root', 'プロジェクトの場所')}</option>}
+          : <option value={worktreeValue}>{worktrees.status === 'loading' ? text('Loading worktrees…', 'ワークツリーを読み込み中') : text('Project root', 'プロジェクトルート')}</option>}
       </select>
       {compact && <><button className="icon-button" aria-label={text('Refresh', '更新')} title={text('Refresh', '更新')} onClick={explorer.refresh}><Icon name="clock" size={14}/></button>{actions}</>}</div>
-    {others.length > 0 && <button className="btn btn-ghost btn-xs" aria-expanded={showOthers} onClick={() => setShowOthers(value => !value)}>{language === 'ja' ? 'ほかの作業ツリー ' + others.length + ' 件' : 'Other worktrees · ' + others.length}</button>}
+    {others.length > 0 && <button className="btn btn-ghost btn-xs" aria-expanded={showOthers} onClick={() => setShowOthers(value => !value)}>{language === 'ja' ? 'ほかのワークツリー ' + others.length + ' 件' : 'Other worktrees · ' + others.length}</button>}
     <div className="explorer-filter"><Icon name="filter" size={14}/>
       <input className="input-sm" type="search" placeholder={text('Filter by name', '名前で絞り込む')} aria-label={text('Filter files by name', 'ファイル名で絞り込む')} value={query}
         onChange={event => setQuery(event.target.value)}
@@ -405,7 +405,7 @@ export function FileViewerPanel({ explorer, actions, language: displayLanguage =
   return <section className="explorer-viewer" aria-label={text('File viewer', 'ファイルの表示')}>
     {!selectedPath ? <div className="empty-state"><Icon name="file" size={22}/><h2>{text('No file selected', 'ファイルが選ばれていません')}</h2>{actions}</div> : <>
       <header className="viewer-header">
-        <nav className="viewer-path" aria-label={text('File path', 'ファイルの場所')}>{selectedPath.split('/').map((part, index, parts) => <span key={index} className={index === parts.length - 1 ? 'viewer-path-current' : undefined}>{part}</span>)}</nav>
+        <nav className="viewer-path" aria-label={text('File path', 'ファイルパス')}>{selectedPath.split('/').map((part, index, parts) => <span key={index} className={index === parts.length - 1 ? 'viewer-path-current' : undefined}>{part}</span>)}</nav>
         <div className="viewer-meta">
           {selectedEntry && selectedEntry.git.map(mark => <span key={mark} className={`chip git-chip git-${mark}`}>{GIT_MARKS[mark].label}</span>)}
           {selectedEntry?.previousPath && <span className="chip" title={selectedEntry.previousPath}>From {selectedEntry.previousPath}</span>}

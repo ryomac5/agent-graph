@@ -35,14 +35,14 @@ export function CommandPalette({ commands, onClose, language = 'en' }: { command
   useEffect(() => {
     if (selected) document.getElementById(`command-${selected.id}`)?.scrollIntoView?.({ block: 'nearest' });
   }, [selected]);
-  return <CommandDialog language={language} title={language === 'ja' ? '検索と操作' : 'Search and commands'} onClose={onClose}>
-    <input aria-label={language === 'ja' ? '操作を検索' : 'Search commands'} role="combobox" aria-expanded="true" aria-controls="command-results" aria-activedescendant={selected ? `command-${selected.id}` : undefined} value={query}
+  return <CommandDialog language={language} title={language === 'ja' ? 'コマンドと検索' : 'Search and commands'} onClose={onClose}>
+    <input aria-label={language === 'ja' ? 'コマンドを検索' : 'Search commands'} role="combobox" aria-expanded="true" aria-controls="command-results" aria-activedescendant={selected ? `command-${selected.id}` : undefined} value={query}
       onChange={event => { setQuery(event.target.value); setIndex(0); }} onKeyDown={event => {
         if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setIndex(previous => enabled.length ? (previous + (event.key === 'ArrowDown' ? 1 : enabled.length - 1)) % enabled.length : 0); }
         if (event.key === 'Enter' && selected) { event.preventDefault(); execute(selected); }
       }}/>
-    <ul id="command-results" role="listbox" aria-label={language === 'ja' ? '操作' : 'Commands'}>{matches.map(command => <li key={command.id} id={`command-${command.id}`} role="option" aria-selected={selected === command} aria-disabled={command.disabled}><button className="btn btn-ghost" disabled={command.disabled} onClick={() => execute(command)}>{command.name}</button></li>)}</ul>
-    {!matches.length && <p role="status">{language === 'ja' ? '操作はありません' : 'No commands'}</p>}
+    <ul id="command-results" role="listbox" aria-label={language === 'ja' ? 'コマンド' : 'Commands'}>{matches.map(command => <li key={command.id} id={`command-${command.id}`} role="option" aria-selected={selected === command} aria-disabled={command.disabled}><button className="btn btn-ghost" disabled={command.disabled} onClick={() => execute(command)}>{command.name}</button></li>)}</ul>
+    {!matches.length && <p role="status">{language === 'ja' ? 'コマンドはありません' : 'No commands'}</p>}
   </CommandDialog>;
 }
 export function useKeySettings(client: SettingsClient) {
@@ -88,7 +88,7 @@ export function KeyboardSettings({ bindings, client, onSave, language = 'en' }: 
     } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); }
   }
-  return <section aria-label={language === 'ja' ? 'キー操作' : 'Keyboard shortcuts'} className="settings-section"><h2>{language === 'ja' ? 'キー操作' : 'Shortcuts'}</h2><div className="settings-card">
+  return <section aria-label={language === 'ja' ? 'キーボードショートカット' : 'Keyboard shortcuts'} className="settings-section"><h2>{language === 'ja' ? 'キーボードショートカット' : 'Shortcuts'}</h2><div className="settings-card">
     {Object.entries(draft).map(([key, value]) => <label key={key}><span>{keyLabel(key as keyof KeyBindings, language)}</span><input aria-label={`keys · ${key}`} value={value} disabled={busy} onChange={event => { setDirty(true); setDraft(previous => ({ ...previous, [key]: event.target.value })); }}/></label>)}
     <div className="settings-card-footer"><button className="btn btn-secondary btn-sm" disabled={busy} onClick={() => void save()}>{language === 'ja' ? '保存' : 'Save'}</button>{message && <p className="muted-text" role={['Saved', '保存しました'].includes(message) ? 'status' : 'alert'}>{message}</p>}</div>
   </div></section>;

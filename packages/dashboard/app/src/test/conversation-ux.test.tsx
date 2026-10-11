@@ -66,10 +66,10 @@ it('keeps tool and delegation cards separate from the surrounding reply bubbles'
 
 it('translates effort labels without changing option values and translates the default Claude model', async () => {
   render(<MemoryRouter><ConversationPage conversationId="c" target={setup()} client={client} language="ja"/></MemoryRouter>);
-  expect(await screen.findByRole('option', { name: '既定' })).toHaveProperty('value', 'default');
-  const select = screen.getByRole('combobox', { name: '思考の深さ' });
+  expect(await screen.findByRole('option', { name: 'デフォルト' })).toHaveProperty('value', 'default');
+  const select = screen.getByRole('combobox', { name: '思考量' });
   expect(within(select).getAllByRole('option').map(option => [option.textContent, (option as HTMLOptionElement).value])).toEqual([
-    ['既定の深さ', ''], ['なし', 'none'], ['最小', 'minimal'], ['低', 'low'], ['中', 'medium'], ['高', 'high'], ['最高', 'xhigh'],
+    ['デフォルトの思考量', ''], ['なし', 'none'], ['最小', 'minimal'], ['低', 'low'], ['中', 'medium'], ['高', 'high'], ['最高', 'xhigh'],
   ]);
   expect(effortLabel('high', 'en')).toBe('high');
   expect(toolsLabel(2, 'ja')).toBe('ツール 2 件');
@@ -78,9 +78,9 @@ it('translates effort labels without changing option values and translates the d
 
 it('styles model and effort selectors as ghost controls with matching noninteractive chevrons', async () => {
   render(<MemoryRouter><ConversationPage conversationId="c" target={setup()} client={client} language="ja"/></MemoryRouter>);
-  await screen.findByRole('option', { name: '既定' });
-  for (const name of ['モデル', '思考の深さ']) {
-    expect(screen.getByRole('combobox', { name }).getAttribute('title')).toBe(name === '思考の深さ' ? '思考の深さの変更は次の会話から効きます。' : name);
+  await screen.findByRole('option', { name: 'デフォルト' });
+  for (const name of ['モデル', '思考量']) {
+    expect(screen.getByRole('combobox', { name }).getAttribute('title')).toBe(name === '思考量' ? '思考量の変更は次の会話から反映されます。' : name);
     const select = screen.getByRole('combobox', { name });
     const wrapper = select.closest('.composer-select')!;
     expect(wrapper.querySelector('svg')?.getAttribute('width')).toBe('16');

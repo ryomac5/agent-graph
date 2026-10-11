@@ -102,18 +102,20 @@ it('renders navigation, projects, pending approvals, connection state and bell',
 });
 it('uses the OS theme, reacts to changes, allows explicit overrides and Japanese', () => {
   render(<MemoryRouter initialEntries={['/settings']}><App/></MemoryRouter>);
-  expect(screen.getByLabelText('Theme').closest('label')?.querySelector('small')).toBeNull();
-  expect(screen.getByLabelText('Language').closest('label')?.querySelector('small')).toBeNull();
+  expect(screen.getByLabelText('Theme').closest('.settings-row')?.querySelector('small')).toBeNull();
+  expect(screen.getByLabelText('Language').closest('.settings-row')?.querySelector('small')).toBeNull();
   expect(document.documentElement.dataset.theme).toBe('light');
   dark = true; change?.(); expect(document.documentElement.dataset.theme).toBe('dark');
-  fireEvent.change(screen.getByLabelText('Theme'), { target: { value: 'light' } });
+  fireEvent.click(within(screen.getByRole('group', { name: 'Theme' })).getByRole('button', { name: 'Light' }));
   expect(document.documentElement.dataset.theme).toBe('light');
   expect(localStorage.getItem('agent-graph-theme')).toBe('light');
-  fireEvent.change(screen.getByLabelText('Language'), { target: { value: 'ja' } });
+  expect(within(screen.getByRole('group', { name: 'Theme' })).getByRole('button', { name: 'Light' }).getAttribute('aria-pressed')).toBe('true');
+  fireEvent.click(within(screen.getByRole('group', { name: 'Language' })).getByRole('button', { name: '日本語' }));
   expect(screen.getByRole('heading', { name: '設定' })).toBeTruthy();
   expect(document.documentElement.lang).toBe('ja');
-  expect(screen.getByLabelText('テーマ').closest('label')?.querySelector('small')).toBeNull();
-  expect(screen.getByLabelText('言語').closest('label')?.querySelector('small')).toBeNull();
+  expect(localStorage.getItem('agent-graph-language')).toBe('ja');
+  expect(screen.getByLabelText('テーマ').closest('.settings-row')?.querySelector('small')).toBeNull();
+  expect(screen.getByLabelText('言語').closest('.settings-row')?.querySelector('small')).toBeNull();
 });
 it.each([['/p/demo', null], ['/c/demo', 'Conversation'], ['/inbox', 'Approvals'],
   ['/p/demo/tree', 'Other'], ['/p/demo/changes', 'Other'], ['/search', 'Search']])('renders route %s', (path, heading) => {

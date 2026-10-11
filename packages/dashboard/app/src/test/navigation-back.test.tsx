@@ -30,12 +30,10 @@ it.each([['Settings', 'Settings'], ['Overview', 'Overview'], ['Approvals', 'Appr
 it('supports Escape outside inputs and uses the last project for direct Settings visits', () => {
   localStorage.setItem('agent-graph-last-workspace', '/p/last?root=root');
   mount('/settings');
-  fireEvent.keyDown(screen.getByLabelText('Theme'), { key: 'Escape' });
-  expect(screen.getByTestId('location').textContent).toBe('/settings');
   const input = screen.getAllByRole('textbox')[0];
   fireEvent.keyDown(input, { key: 'Escape' });
   expect(screen.getByTestId('location').textContent).toBe('/settings');
-  fireEvent.keyDown(document.body, { key: 'Escape' });
+  fireEvent.keyDown(screen.getByRole('button', { name: 'Light' }), { key: 'Escape' });
   expect(screen.getByTestId('location').textContent).toBe('/p/last');
 });
 it('localizes the Back control', () => {

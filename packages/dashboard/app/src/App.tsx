@@ -1,11 +1,11 @@
 import { SessionCreate } from './components/SessionCreate.tsx';
 import { SettingsPage } from './pages/settings/SettingsPage.tsx';
-import { SshSettings } from './components/SshSettings.tsx';
+import { SettingsLayout } from './pages/settings/SettingsLayout.tsx';
 import { ResizeDivider } from './components/ResizeDivider.tsx';
 import { SIDEBAR_WIDTH_KEY, SIDEBAR_COLLAPSED_KEY, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_INITIAL_WIDTH, SIDEBAR_COMPACT_WIDTH, SIDEBAR_RESTORE_WIDTH, clampSidebar, useStoredToggle } from './lib/layout.ts';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createKeyHandler, isTextInput, keyLabel, type KeyAction } from './lib/keys.ts';
-import { CommandDialog, CommandPalette, KeyboardSettings, useKeySettings, type Command } from './components/command/Commands.tsx';
+import { CommandDialog, CommandPalette, useKeySettings, type Command } from './components/command/Commands.tsx';
 import { CreateTaskForm } from './components/CreateTaskForm.tsx';
 import './components/command/command.css';
 import { BrowserRouter, Link, Navigate, NavLink, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
@@ -262,10 +262,7 @@ export function App({ target = store, client = unavailableClient, searchClient =
       <Route path="/p/:project/changes" element={<ChangesPage target={target} client={client} language={language}/>}/>
       <Route path="/p/:project/files" element={<div className="files-page"><FileTreePanel explorer={explorer} language={language}/><FileNotices explorer={explorer}/><FileViewerPanel explorer={explorer} actions={<button className="btn btn-ghost btn-xs" onClick={explorer.closeFile}><Icon name="chevronLeft" size={12}/>Back</button>}/></div>}/>
       <Route path="/search" element={<SearchPage target={target} client={searchClient} language={language} backAction={backAction}/>}/>
-      <Route path="/settings" element={<div className="page settings-page"><header className="page-header">{backAction}<h1>{t('settings')}</h1></header><div className="settings-card">
-        <label><span><strong>{t('theme')}</strong></span><select aria-label={t('theme')} value={theme} onChange={event => setTheme(event.target.value as Theme)}>{(['system', 'light', 'dark'] as const).map(value => <option key={value} value={value}>{t(value)}</option>)}</select></label>
-        <label><span><strong>{t('language')}</strong></span><select aria-label={t('language')} value={language} onChange={event => setLanguage(event.target.value as Language)}><option value="en" lang="en">{t('english')}</option><option value="ja" lang="ja">{t('japanese')}</option></select></label>
-      </div><SettingsPage client={client} language={language} policyOnly/><SshSettings client={client} projects={getRegisteredProjects(state)} language={language}/><KeyboardSettings language={language} bindings={bindings} client={client} onSave={setBindings}/></div>}/>
+      <Route path="/settings" element={<div className="page settings-page"><header className="page-header">{backAction}<h1>{t('settings')}</h1></header><SettingsLayout client={client} projects={getRegisteredProjects(state)} language={language} theme={theme} onTheme={setTheme} onLanguage={setLanguage} bindings={bindings} onKeys={setBindings}><SettingsPage client={client} language={language} policyOnly/></SettingsLayout></div>}/>
       <Route path="*" element={<EmptyView title="notFound" t={t}/>}/>
     </Routes>{commandError && <p role="alert" className="banner banner-danger">{commandError}</p>}</main></div>
     {creatingSession && <SessionCreate client={client} projects={getRegisteredProjects(state)} initialProject={creatingSession} language={language} onClose={() => setCreatingSession(undefined)} onCreated={(project, conversation) => { setCreatingSession(undefined); navigate(`/p/${encodeURIComponent(project)}?conversation=${encodeURIComponent(conversation)}`); setMobileView('conversation'); }}/>}

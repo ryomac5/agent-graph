@@ -115,14 +115,16 @@ it('answers a named approval from the palette on any page', async () => {
 });
 it('saves remapped keys through config, applies immediately and rejects duplicates', async () => {
   const { client } = mount('/settings'); await act(async () => {});
+  const shortcuts = document.getElementById('settings-keys')!;
+  fireEvent.click(shortcuts.querySelector('summary')!);
   fireEvent.change(screen.getByLabelText('keys · command'), { target: { value: 'Cmd+O' } });
-  await act(async () => fireEvent.click(within(screen.getByRole('region', { name: 'Keyboard shortcuts' })).getByRole('button', { name: 'Save' })));
+  await act(async () => fireEvent.click(within(shortcuts).getByRole('button', { name: 'Save' })));
   expect(client.command).toHaveBeenCalledWith('settings.write', { store: 'config', patch: { keys: { ...DEFAULT_KEYS, command: 'Cmd+O' } } });
   press('k', document, { metaKey: true }); expect(screen.queryByRole('dialog')).toBeNull();
   press('o', document, { metaKey: true }); expect(screen.getByRole('dialog')).toBeTruthy();
   press('Escape', document.activeElement!);
   fireEvent.change(screen.getByLabelText('keys · command'), { target: { value: 'j' } });
-  await act(async () => fireEvent.click(within(screen.getByRole('region', { name: 'Keyboard shortcuts' })).getByRole('button', { name: 'Save' })));
+  await act(async () => fireEvent.click(within(shortcuts).getByRole('button', { name: 'Save' })));
   expect(screen.getByRole('alert').textContent).toBe('Duplicate key binding');
   expect(client.command.mock.calls.filter(([name]) => name === 'settings.write')).toHaveLength(1);
 });

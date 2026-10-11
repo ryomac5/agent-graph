@@ -8,6 +8,8 @@ import { loadAppearance, type SettingsSnapshot, type SettingsStatus } from '../l
 import { PREFERENCES_KEY } from '../components/notifications/model.ts';
 import { MemoryRouter } from 'react-router';
 import { App } from '../App.tsx';
+import { createStore } from '../lib/store.ts';
+import { readFileSync } from 'node:fs';
 
 beforeEach(() => {
   localStorage.clear();
@@ -85,6 +87,42 @@ it('edits and saves model assignments from the production settings route', async
       roles: expect.objectContaining({ implement: expect.objectContaining({ heavy: expect.arrayContaining([expect.objectContaining({ model: 'custom-astra' })]) }) }),
     }),
   })));
+});
+it.each(['en', 'ja'] as const)('opens /settings with five ordered sections and sticky navigation in %s', async language => {
+  localStorage.setItem('agent-graph-language', language);
+  const f = createFixture();
+  const { container } = render(<MemoryRouter initialEntries={['/settings']}><App target={createStore()} client={f.client}/></MemoryRouter>);
+  await screen.findByRole('region', { name: language === 'ja' ? 'モデル' : 'Models' });
+  const page = container.querySelector('main > .settings-page')!;
+  const ids = ['models', 'rules', 'appearance', 'ssh', 'keys'];
+  const labels = language === 'ja' ? ['モデル', '選び方のルール', '表示', 'SSH の接続先', 'キーボードショートカット'] : ['Models', 'Selection rules', 'Appearance', 'SSH connections', 'Keyboard shortcuts'];
+  const sections = [...page.querySelectorAll<HTMLElement>('[id^="settings-"]')];
+  expect(sections.map(section => section.id)).toEqual(ids.map(id => 'settings-' + id));
+  expect(sections.map(section => section.querySelector('h2')?.textContent)).toEqual(labels);
+  for (const id of ['rules', 'ssh', 'keys']) expect(page.querySelector('#settings-' + id)).toHaveProperty('open', false);
+  expect(page.querySelectorAll('select')).toHaveLength(0);
+  const nav = within(page as HTMLElement).getByRole('navigation', { name: language === 'ja' ? '設定の節' : 'Settings sections' });
+  expect(nav.className).toBe('settings-nav');
+  expect(nav.previousElementSibling?.querySelector('h1')?.textContent).toBe(language === 'ja' ? '設定' : 'Settings');
+  const css = readFileSync('app/src/pages/settings/settings.css', 'utf8');
+  const navRule = css.match(/\.settings-nav\s*\{([^}]+)\}/)![1];
+  expect(navRule).toMatch(/position:\s*sticky\s*;/);
+  expect(navRule).toMatch(/top:\s*0\s*;/);
+  const buttons = within(nav).getAllByRole('button');
+  expect(buttons.map(button => button.textContent)).toEqual(labels);
+  expect(buttons[0].getAttribute('aria-current')).toBe('location');
+  for (const [index, section] of sections.entries()) {
+    const scroll = vi.fn();
+    Object.defineProperty(section, 'scrollIntoView', { configurable: true, value: scroll });
+    fireEvent.click(buttons[index]);
+    expect(scroll).toHaveBeenCalledExactlyOnceWith({ behavior: 'smooth', block: 'start' });
+    if (section instanceof HTMLDetailsElement) expect(section.open).toBe(true);
+    expect(buttons[index].getAttribute('aria-current')).toBe('location');
+    expect(buttons.filter(button => button.hasAttribute('aria-current'))).toEqual([buttons[index]]);
+    expect(buttons[index].className).toBe('btn btn-ghost');
+  }
+  expect(page.querySelectorAll('h2')).toHaveLength(5);
+  expect(within(page as HTMLElement).queryByRole('button', { name: /Save personal settings|個人の設定を保存/ })).toBeNull();
 });
 it('renders all eight sections, file settings and live diagnostics with English defaults', async () => {
   const f = createFixture(); render(<SettingsPage client={f.client}/>);

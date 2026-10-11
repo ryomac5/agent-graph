@@ -36,3 +36,12 @@ export const dictionaries = {
 } as const;
 export type Language = keyof typeof dictionaries;
 export type TextKey = keyof typeof dictionaries.en;
+
+export const graphText = {
+  en: { running: 'running', needsYou: 'needs you', today: 'Today', earlier: 'Earlier', showMore: 'Show 20 more',
+    inferred: 'Inferred', allow: 'Allow', deny: 'Deny', requests: 'Request graph', request: 'Request', who: 'Who',
+    now: 'Now', range: 'Time range', report: 'Report', elapsed: 'Elapsed', rounds: 'Rounds', close: 'Close details', open: 'Open conversation' },
+  ja: { running: '実行中', needsYou: 'あなたの番', today: '今日', earlier: '以前', showMore: 'さらに20件表示',
+    inferred: '推定', allow: '許可', deny: '拒否', requests: '依頼のグラフ', request: '依頼', who: '相手',
+    now: '現在', range: '期間', report: '報告', elapsed: '経過', rounds: '往復', close: '詳細を閉じる', open: '会話を開く' },
+} as const;

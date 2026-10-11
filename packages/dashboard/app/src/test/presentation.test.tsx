@@ -46,8 +46,8 @@ it.each(['approve', 'request_changes', 'reject'])('formats %s review output cons
   expect(screen.getByRole('link', { name: /Browser fixture task/ })).toBeTruthy(); overview.unmount();
   const workspace = render(<MemoryRouter><WorkspacePage target={target} client={client} project={REPO}/></MemoryRouter>);
   expect(within(screen.getByRole('region', { name: 'Conversations' })).queryByText(name)).toBeNull();
-  fireEvent.click(within(screen.getByRole('complementary', { name: 'Panel' })).getByRole('button', { name: '1 earlier request' }));
-  fireEvent.click(within(screen.getByRole('complementary', { name: 'Panel' })).getByRole('link', { name: /Review the work · Codex · Review · Done$/ }));
+  fireEvent.click(within(screen.getByRole('complementary', { name: 'Panel' })).getByRole('treeitem', { name: /Earlier 1/ }));
+  fireEvent.click(within(screen.getByRole('complementary', { name: 'Panel' })).getByRole('treeitem', { name: /Review the work · Review · Codex · Done$/ }));
   expect(document.querySelector('.conversation-markdown')!.textContent).toBe(expected);
   workspace.unmount();
   render(<MemoryRouter><ConversationPage conversationId={review} target={target} client={client}/></MemoryRouter>);
@@ -232,7 +232,7 @@ it('keeps reviewers in the selected root tree and out of the root list', () => {
  expect(group.querySelectorAll('.root-row')).toHaveLength(1); expect(within(group).getByRole('button', { name: /Codex · Review · Running$/ })).toBeTruthy();
  expect(runLabel(target.getSnapshot(), 'review-run')).toBe('Review of Browser fixture task · Run 1'); view.unmount();
  render(<MemoryRouter><WorkspacePage target={target} client={client} project={REPO}/></MemoryRouter>);
- expect(within(screen.getByRole('region', { name: 'Conversations' })).getAllByRole('link')).toHaveLength(1); expect(screen.getByRole('link', { name: /Review of .* · Codex · Review · Running$/ })).toBeTruthy();
+ expect(within(screen.getByRole('region', { name: 'Conversations' })).getAllByRole('link')).toHaveLength(1); expect(screen.getByRole('treeitem', { name: /Review of .* · Review · Codex · Running$/ })).toBeTruthy();
 });
 it('shows the projected unknown state once when root execution evidence is absent', () => {
  const target = setup(); target.setSnapshot({ seq: 2, generation: 1, projection: projection({ roots: [{ id: 'external', name: 'External root', project: REPO, state: 'unknown', last_activity_ts: null, conversation_ids: ['external'], running_children: 0, total_children: 0 }], conversations: [{ id: 'external', origin: 'observed', provider: 'codex' }], runs: [], tasks: [], messages: [], message_memberships: [], approvals: [] }) });

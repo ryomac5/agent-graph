@@ -113,7 +113,7 @@ it('3: preserves recorded roles and makes retry available after opening the fail
     relations: [{ id: 'relation', type: 'delegated', from_id: 'c', to_id: 'child', evidence: { agentType: 'review' } }] });
   render(<MemoryRouter><WorkspacePage project="repo" target={store} client={client} language="ja" renderConversation={() => <p>Child details</p>}/></MemoryRouter>);
   const flow = screen.getByRole('complementary', { name: 'パネル' });
-  const row = within(flow).getByRole('link', { name: /Implement UI/ });
+  const row = within(flow).getByRole('treeitem', { name: /Implement UI/ });
   expect(row.textContent).not.toContain('review');
   expect(screen.queryByRole('button', { name: '再試行' })).toBeNull();
   fireEvent.click(row);

@@ -1,11 +1,10 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, renderHook, screen } from '@testing-library/react';
+import { cleanup, render, renderHook, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { createStore } from '../lib/store.ts';
 import { buildRootTree, selectRoots, useRootIndex } from '../lib/roots.ts';
 import { GraphPage } from '../pages/graph/GraphPage.tsx';
-import { calculateLayout, foldEarlier, prepareGraphTree } from '../pages/graph/layout.ts';
-
+import { buildRows, readCurrentWork, readReport, readSegments } from '../pages/graph/rows.ts';
 const NOW = Date.parse('2026-10-08T12:00:00Z');
 
 // 本文と識別子は架空にし、系列、状態、関係の向き、時刻の欠落を写す。
@@ -58,196 +57,54 @@ function createProjectionFixture() {
   return target;
 }
 
-function renderProjection(entry = '/p/repo/graph?root=root') {
-  const target = createProjectionFixture();
-  render(<MemoryRouter initialEntries={[entry]}><GraphPage project="repo" target={target} language="ja"
-    client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'test', ok: true })) }}/></MemoryRouter>);
-  return target;
-}
 
-beforeEach(() => { vi.spyOn(Date, 'now').mockReturnValue(NOW); vi.stubGlobal('innerWidth', 1200); });
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
-
-it('passes multiple conversations, idle children and undated planner tasks through the screen selectors', () => {
-  const state = createProjectionFixture().getSnapshot();
-  const root = selectRoots(state, 'repo')[0];
-  const { result } = renderHook(() => useRootIndex(state));
-  const built = buildRootTree(root, result.current);
-  expect(root.name).toBe('Repo-20260925');
-  expect(built.nodes).toHaveLength(16);
-  expect(built.nodes.find(node => node.id === 'old-a')!.state).toBe('ended');
-  expect(built.nodes.find(node => node.id === 'graph:batch')!.conversationId).toBeUndefined();
-  expect(built.edges.find(edge => edge.target === 'recent-f')!.source).toBe('root');
-  const visible = foldEarlier(built, new Set(), NOW);
-  expect(visible.nodes).toHaveLength(9);
-  expect(visible.edges).toHaveLength(8);
-  expect(visible.nodes.find(node => node.id === 'graph:batch')!.batchExpanded).toBe(false);
-  for (const edge of visible.edges) {
-    expect(visible.nodes.some(node => node.id === edge.source)).toBe(true);
-    expect(visible.nodes.some(node => node.id === edge.target)).toBe(true);
-  }
-});
-
-it('draws nine nodes and eight edges with one edge per folded group and aligned child tops', () => {
-  renderProjection();
-  const cards = [...document.querySelectorAll<HTMLElement>('.graph-card')];
-  expect(cards).toHaveLength(9);
-  expect(document.querySelectorAll('.graph-edge')).toHaveLength(8);
-  expect(screen.getByRole('button', { name: 'ほかの完了 2 件' }).getAttribute('aria-expanded')).toBe('false');
-  expect(screen.getByRole('button', { name: 'まとめて出した依頼' }).getAttribute('aria-expanded')).toBe('false');
-  expect(screen.queryByRole('link', { name: /old-a/ })).toBeNull();
-  expect(screen.queryByRole('button', { name: 'Failed task' })).toBeNull();
-  expect(screen.getByRole('button', { name: 'まとめて出した依頼' })).toBeTruthy();
-  const root = cards.find(card => card.dataset.nodeId === 'root')!;
-  const firstColumn = cards.filter(card => card.style.left === '340px');
-  expect(Math.min(...firstColumn.map(card => parseFloat(card.style.top)))).toBe(parseFloat(root.style.top));
-  expect(firstColumn[0].style.width).toBe('260px');
-  expect(firstColumn[0].style.height).toBe('76px');
-  const group = cards.find(card => card.dataset.nodeId === 'graph:batch')!;
-  const endpoint = ' ' + group.style.left.replace('px', '') + ' ' + (parseFloat(group.style.top) + parseFloat(group.style.height) / 2);
-  expect([...document.querySelectorAll('.graph-edge > path')].filter(path => path.getAttribute('d')!.endsWith(endpoint))).toHaveLength(1);
-});
-
-it('expands only the requested group and can reveal a child from an earlier conversation', () => {
-  renderProjection();
-  fireEvent.click(screen.getByRole('button', { name: 'まとめて出した依頼' }));
-  expect(screen.getByRole('button', { name: '以前の依頼 4 件' })).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: '以前の依頼 4 件' }));
-  expect(document.querySelectorAll('.graph-card')).toHaveLength(14);
-  expect(document.querySelectorAll('.graph-edge')).toHaveLength(13);
-  expect(screen.getByRole('button', { name: '以前の依頼 3 件' }).getAttribute('aria-expanded')).toBe('false');
-  cleanup(); renderProjection('/p/repo/graph?root=root&child=old-a');
-  expect(screen.getByRole('link', { name: /old-a/ })).toBeTruthy();
-  expect(screen.getByRole('button', { name: 'まとめて出した依頼' }).getAttribute('aria-expanded')).toBe('false');
-});
-
-it('reserves a second title line only for long titles and uses measured title height', () => {
-  const state = createProjectionFixture().getSnapshot();
-  const { result } = renderHook(() => useRootIndex(state));
-  const tree = buildRootTree(selectRoots(state, 'repo')[0], result.current);
-  tree.nodes[0].label = 'Short title';
-  tree.nodes[1].label = '長い題が二行になったときだけカードの高さを伸ばして表示する';
-  const layout = calculateLayout(tree, 1200);
-  expect(layout.nodes.find(node => node.id === 'root')!.height).toBe(76);
-  expect(layout.nodes.find(node => node.id === 'old-a')!.height).toBe(96);
-  const measured = calculateLayout(tree, 1200, undefined, new Map([[tree.nodes[1].label, 20]]));
-  expect(measured.nodes.find(node => node.id === 'old-a')!.height).toBe(76);
-});
-
-// キットのまとまりと、参照先の実行も時刻もない試行を実データの形から写す。
-function createBatchFixture(states = ['done', 'done', 'failed'], providers = ['codex', 'codex', 'codex']) {
-  const target = createStore();
-  target.setSnapshot({ seq: 1, generation: 1, projection: {
-    projects: [{ id: 'repo', display_name: 'Repo', root_path: '/repo', state: 'registered' }],
-    roots: [{ id: 'root', name: 'Repo', project: 'repo', state: 'running', conversation_ids: ['root'], running_children: 0, total_children: 3 }],
-    conversations: [{ id: 'root', provider: 'claude' }],
-    delegations: states.map((state, index) => ({ id: `request-${index}`, root_id: 'root', role: 'implement', state,
-      provider: providers[index], title: `Request ${index}`, kit: { session: 'agent-graph-001', node_id: `codex-${index}` },
-      attempts: JSON.stringify([{ attempt: 1, state, run_id: `missing-${index}`, assignment: { model: null, effort: null, executor: null, provider: null } }]) })),
-    runs: [], relations: [], approvals: [],
-  } });
-  return target;
-}
-
-it.each(['en', 'ja'] as const)('shows the batch name, count and Codex mark in %s without changing the shared tree', language => {
-  const target = createBatchFixture();
-  const state = target.getSnapshot();
+beforeEach(() => vi.spyOn(Date, 'now').mockReturnValue(NOW));
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+it('projects the complete root series without duplicate children and preserves named planner groups', () => {
+  const target = createProjectionFixture(); const state = target.getSnapshot();
   const { result } = renderHook(() => useRootIndex(state));
   const built = buildRootTree(selectRoots(state, 'repo')[0], result.current);
-  const original = structuredClone(built);
-  const prepared = prepareGraphTree(built, NOW, language);
-  expect(prepared.nodes.find(node => node.role === 'planner')).toMatchObject({ batchCount: 3, provider: 'codex', state: 'ended' });
-  expect(built).toEqual(original);
-  render(<MemoryRouter><GraphPage project="repo" target={target} language={language} client={{ command: vi.fn() }}/></MemoryRouter>);
-  const batch = screen.getByRole('button', { name: language === 'ja' ? 'まとめて出した依頼' : 'Batched requests' });
-  expect(batch.querySelector('.graph-card-model')!.textContent).toBe(language === 'ja' ? '3 件' : '3 requests');
-  expect(batch.querySelector('.provider-codex')).toBeTruthy();
-  expect(batch.querySelector('[data-state="ended"]')).toBeTruthy();
-  expect(screen.queryByRole('button', { name: 'Request 2' })).toBeNull();
-  expect(batch.getAttribute('aria-expanded')).toBe('false');
-  fireEvent.click(batch);
-  fireEvent.click(screen.getByRole('button', { name: language === 'ja' ? '以前の依頼 3 件' : '3 earlier requests' }));
-  expect(screen.getByRole('button', { name: 'Request 2' })).toBeTruthy();
+  expect(built.nodes.filter(node => node.id === 'old-a')).toHaveLength(1);
+  expect(built.nodes.find(node => node.role === 'planner')?.label).toBe('batch');
+  const rows = buildRows(built, { now: NOW });
+  expect(rows.all.filter(row => row.role === 'work')).toHaveLength(14);
+  expect(rows.rows.some(row => row.id === 'graph:batch')).toBe(true);
 });
-
-it.each(['running', 'waiting_approval', 'waiting_input', 'failed', 'done'])('derives batch state %s and latest child time', state => {
-  const target = createBatchFixture(['done', 'failed', state]);
-  const snapshot = target.getSnapshot();
-  snapshot.projection.delegations![1].updated_ts = '2026-10-06T10:00:00Z';
-  snapshot.projection.delegations![2].updated_ts = '2026-10-08T11:00:00Z';
-  const { result } = renderHook(() => useRootIndex(snapshot));
-  const built = buildRootTree(selectRoots(snapshot, 'repo')[0], result.current);
-  const batch = prepareGraphTree(built, NOW).nodes.find(node => node.role === 'planner')!;
-  expect(batch.state).toBe(state === 'done' ? 'ended' : state);
-  expect(batch.activity).toBe('2026-10-08T11:00:00Z');
+it('selects hidden old children from the URL and leaves undated planner times blank', () => {
+  render(<MemoryRouter initialEntries={['/p/repo/graph?root=root&child=old-a']}><GraphPage embedded project="repo" target={createProjectionFixture()} client={{ command: vi.fn() }}/></MemoryRouter>);
+  expect(screen.getByRole('treeitem', { name: /old-a/ }).getAttribute('aria-selected')).toBe('true');
+  const batch = screen.getByRole('treeitem', { name: /batch/ });
+  expect(batch.querySelector('.graph-row-end')?.textContent).toBe('');
+  expect(screen.queryByText('Unknown time')).toBeNull();
 });
-
-it('uses a neutral group mark for mixed providers and prioritizes active children over recent failures', () => {
-  const target = createBatchFixture(['failed', 'waiting_input', 'running'], ['codex', 'claude', 'codex']);
-  target.getSnapshot().projection.delegations![0].updated_ts = '2026-10-08T11:00:00Z';
-  render(<MemoryRouter><GraphPage project="repo" target={target} language="ja" client={{ command: vi.fn() }}/></MemoryRouter>);
-  const batch = screen.getByRole('button', { name: 'まとめて出した依頼' });
-  expect(batch.querySelector('.provider-unknown')!.getAttribute('title')).toBe('まとめて出した依頼');
-  expect(batch.querySelector('[data-state="running"]')).toBeTruthy();
+it('reads the final tool call only from its own active conversation membership', () => {
+  const state = createProjectionFixture().getSnapshot();
+  state.projection.messages = [
+    { id: 'first-call', source_ts: '2026-10-08T10:00:00Z', role: 'assistant', body: [{ type: 'tool_use', name: 'Read', input: { file_path: 'old.ts' } }] },
+    { id: 'last-call', source_ts: '2026-10-08T11:00:00Z', role: 'assistant', body: JSON.stringify([{ type: 'tool_use', name: 'Edit', input: { file_path: '/repo/roles.ts' } }]) },
+    { id: 'other-call', source_ts: '2026-10-08T11:30:00Z', role: 'assistant', body: [{ type: 'tool_use', name: 'Bash', input: { command: 'secret-other-command' } }] },
+    { id: 'report', source_ts: '2026-10-08T11:40:00Z', role: 'assistant', body: 'Finished the review.\nMore detail' },
+  ];
+  state.projection.message_memberships = [{ message_id: 'first-call', conversation_id: 'child', active: 1 }, { message_id: 'last-call', conversation_id: 'child', active: 1 }, { message_id: 'other-call', conversation_id: 'child', active: 0 }, { message_id: 'report', conversation_id: 'child', active: 1 }];
+  expect(readCurrentWork(state, 'child', 'en')).toBe('Editing roles.ts');
+  expect(readCurrentWork(state, 'child', 'ja')).toBe('roles.tsを編集中');
+  expect(readReport(state, 'child')).toBe('Finished the review.');
 });
-
-it('derives batch approval status from pending approvals and uses the latest attempt time', () => {
-  const target = createBatchFixture(['done', 'done', 'done']);
-  const snapshot = target.getSnapshot();
-  Object.assign(snapshot.projection.delegations![0], { conversation_id: 'child', created_ts: '2026-10-06T10:00:00Z',
-    updated_ts: '2026-10-07T10:00:00Z', attempts: '[{"attempt":1,"state":"done","run_id":null,"ended_ts":"2026-10-08T11:00:00Z"}]' });
-  snapshot.projection.conversations!.push({ id: 'child', provider: 'codex' });
-  snapshot.projection.approvals!.push({ id: 'approval', conversation_id: 'child', state: 'requested' });
-  render(<MemoryRouter><GraphPage project="repo" target={target} language="ja" client={{ command: vi.fn() }}/></MemoryRouter>);
-  const batch = screen.getByRole('button', { name: 'まとめて出した依頼' });
-  expect(batch.querySelector('[data-state="waiting_approval"]')).toBeTruthy();
-  expect(batch.querySelector('time')!.dateTime).toBe('2026-10-08T11:00:00Z');
+it('keeps successive attempts in one row with independent time segments ending at now', () => {
+  const state = createProjectionFixture().getSnapshot();
+  state.projection.runs = [{ id: 'one', started_ts: '2026-10-08T10:00:00Z', ended_ts: '2026-10-08T10:30:00Z', state: 'ended' }, { id: 'two', started_ts: '2026-10-08T11:00:00Z', state: 'running' }];
+  const { result } = renderHook(() => useRootIndex(state));
+  const node = buildRootTree(selectRoots(state, 'repo')[0], result.current).nodes[0];
+  node.attempts = [{ run_id: 'one' }, { run_id: 'two' }];
+  const segments = readSegments(node, NOW, state);
+  expect(segments).toHaveLength(2); expect(segments[1].end).toBe(NOW);
 });
-
-it.each([
-  { updated_ts: '2026-10-06T10:00:00Z' },
-  { created_ts: '2026-10-06T10:00:00Z' },
-  { attempts: '[{"attempt":1,"state":"failed","run_id":null,"updated_ts":"2026-10-06T10:00:00Z"}]' },
-  { attempts: '[{"attempt":1,"state":"failed","run_id":null,"created_ts":"2026-10-06T10:00:00Z"}]' },
-])('folds dated failures and displays their recorded time on expansion: %j', record => {
-  const target = createBatchFixture(['running', 'done', 'failed']);
-  Object.assign(target.getSnapshot().projection.delegations![2], record);
-  render(<MemoryRouter><GraphPage project="repo" target={target} language="ja" client={{ command: vi.fn() }}/></MemoryRouter>);
-  expect(screen.queryByRole('button', { name: 'Request 2' })).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: '以前の依頼 2 件' }));
-  const failure = screen.getByRole('button', { name: 'Request 2' });
-  expect(failure.querySelector('time')!.dateTime).toBe('2026-10-06T10:00:00Z');
-  expect(failure.querySelector('[data-state="failed"]')).toBeTruthy();
-});
-
-it('3: starts an embedded undated batch as one closed card and folds all its children together', () => {
-  const target = createBatchFixture(['done', 'done', 'done', 'failed']);
-  render(<MemoryRouter><GraphPage embedded project="repo" target={target} language="ja" client={{ command: vi.fn() }}/></MemoryRouter>);
-  const batch = screen.getByRole('button', { name: 'まとめて出した依頼' });
-  expect(batch.getAttribute('aria-expanded')).toBe('false');
-  expect(document.querySelectorAll('.graph-card')).toHaveLength(2);
-  expect(document.querySelector('.graph-toolbar')).toBeNull();
-  fireEvent.click(batch);
-  expect(screen.getByRole('button', { name: '以前の依頼 4 件' }).getAttribute('aria-expanded')).toBe('false');
-  expect(screen.queryByRole('button', { name: 'Request 3' })).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: '以前の依頼 4 件' }));
-  for (let index = 0; index < 4; index++) expect(screen.getByRole('button', { name: `Request ${index}` })).toBeTruthy();
-  fireEvent.click(batch);
-  expect(batch.getAttribute('aria-expanded')).toBe('false');
-  expect(document.querySelectorAll('.graph-card')).toHaveLength(2);
-});
-
-it('3: uses the same 24-hour boundary inside a batch and keeps active undated work visible', () => {
-  const target = createBatchFixture(['done', 'done', 'done', 'running', 'failed']);
-  const snapshot = target.getSnapshot();
-  snapshot.projection.delegations![0].updated_ts = '2026-10-07T11:59:59Z';
-  snapshot.projection.delegations![1].updated_ts = '2026-10-07T12:00:00Z';
-  const { result } = renderHook(() => useRootIndex(snapshot));
-  const built = buildRootTree(selectRoots(snapshot, 'repo')[0], result.current);
-  const original = structuredClone(built);
-  const folded = foldEarlier(built, new Set(), NOW);
-  expect(built).toEqual(original);
-  for (const id of ['request-1', 'request-3']) expect(folded.nodes.some(node => node.delegation?.id === id)).toBe(true);
-  for (const id of ['request-0', 'request-2', 'request-4']) expect(folded.nodes.some(node => node.delegation?.id === id)).toBe(false);
-  expect(folded.nodes.find(node => node.earlier?.kind === 'earlier')?.earlier?.count).toBe(3);
+it('uses known review targets as parents and marks reviews without targets as inferred', () => {
+  const target = createProjectionFixture(); const state = target.getSnapshot();
+  state.projection.relations!.push({ id: 'review', type: 'review_of', from_id: 'recent-a', to_id: 'recent-b', active: 1 });
+  render(<MemoryRouter><GraphPage embedded project="repo" target={target} client={{ command: vi.fn() }}/></MemoryRouter>);
+  fireEvent.click(screen.getByRole('button', { name: 'Review 1' }));
+  const row = document.querySelector('[data-node-id="recent-a"]')!;
+  expect(row.querySelector('[data-role="review"]')).toBeTruthy();
+  expect(document.querySelector('[data-child="recent-a"][data-parent="recent-b"]')).toBeTruthy();
 });

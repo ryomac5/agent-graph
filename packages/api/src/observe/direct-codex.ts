@@ -1,5 +1,7 @@
 import { closeSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
+import type { DatabaseSync } from 'node:sqlite';
+import { readLedgerDatabase } from '../../../core/src/ledger/repository.ts';
 import { createNativeId } from '../../../core/src/ledger/index.ts';
 import type { Fact, Ledger } from '../../../core/src/ledger/index.ts';
 import { readSessionMeta } from './codex/files.ts';
@@ -9,7 +11,7 @@ const PREFIX_LINES = 3;
 const READ_BYTES = 64 * 1024;
 export interface DirectLaunch { cwd?: string; promptPath?: string }
 export interface Launch extends DirectLaunch { parent: string; toolUseId: string; timestamp: string; key: string }
-export interface RolloutRequest { id: string; timestamp: string; cwd: string; prompt: string }
+export interface RolloutRequest { id: string; timestamp: string; cwd: string; prompt: string; heading?: string }
 function readObject(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
@@ -59,8 +61,7 @@ function readPrompt(path: string | undefined, cwd: string | undefined): string |
   }
 }
 /** 最初の依頼までを読み、長い rollout の残りは読まない。環境の注入文は依頼から除く。 */
-export function readRolloutRequest(path: string): RolloutRequest | undefined {
-  const meta = readSessionMeta(path);
+export function readRolloutRequest(path: string, meta = readSessionMeta(path)): RolloutRequest | undefined {
   if (!meta?.id || !meta.timestamp || !meta.cwd) return undefined;
   const fd = openSync(path, 'r');
   try {
@@ -90,73 +91,127 @@ export function readRolloutRequest(path: string): RolloutRequest | undefined {
   } finally { closeSync(fd); }
 }
 
-export function createDirectCodexObserver(ledger: Ledger) {
+export const DIRECT_REQUEST_CACHE_LIMIT = 16_384;
+
+/** 起動の本文と所属だけを逐次読み、無関係な会話と関係は取り出さない。 */
+export function prepareDirectFacts(db: DatabaseSync) {
+  return db.prepare(`SELECT * FROM facts f WHERE seq > ? AND seq <= ? AND source = 'transcript-claude' AND (
+    kind = 'message.created' AND instr(payload, 'codex exec') > 0
+    OR kind = 'message_membership.created' AND EXISTS (
+      SELECT 1 FROM facts m WHERE m.subject = 'message:' || json_extract(f.payload, '$.message_id')
+      AND m.kind = 'message.created' AND m.source = 'transcript-claude' AND instr(m.payload, 'codex exec') > 0
+    )) ORDER BY seq`);
+}
+
+interface DirectCodexReaders {
+  cacheLimit?: number;
+  readMeta?: typeof readSessionMeta;
+  readRequest?: typeof readRolloutRequest;
+}
+export function createDirectCodexObserver(ledger: Ledger, db: DatabaseSync = readLedgerDatabase(ledger), readers: DirectCodexReaders = {}) {
+  const cacheLimit = readers.cacheLimit ?? DIRECT_REQUEST_CACHE_LIMIT;
+  if (!Number.isSafeInteger(cacheLimit) || cacheLimit < 0) throw new RangeError('cacheLimit must be a nonnegative safe integer');
+  const readMeta = readers.readMeta ?? readSessionMeta;
+  const readRequest = readers.readRequest ?? readRolloutRequest;
   let through = 0;
-  const messages = new Map<string, Fact>();
-  const memberships = new Map<string, Set<string>>();
-  const locations = new Map<string, string>();
   const launches = new Map<string, Launch>();
-  const linked = new Set<string>();
-  const completed = new Set<string>();
-  const requests = new Map<string, { stamp: string; meta?: ReturnType<typeof readSessionMeta>; request?: RolloutRequest }>();
-  return function observe(facts: Fact[], paths: string[], observedTs = new Date().toISOString()) {
-    const changed = new Set<string>();
+  const requests = new Map<string, { stamp: string; meta?: ReturnType<typeof readSessionMeta>; started: number; cwd: string; requestRead: boolean; request?: RolloutRequest }>();
+  const readMessage = db.prepare("SELECT payload, source_ts FROM facts WHERE subject = ? AND kind = 'message.created' ORDER BY seq DESC LIMIT 1");
+  const readMemberships = db.prepare(`SELECT json_extract(payload, '$.conversation_id') AS parent FROM facts
+    WHERE seq IN (SELECT seq FROM fact_projection_dependencies WHERE projection = 'message_memberships'
+      AND direction = 'needs' AND key = 'message:' || ?) AND kind = 'message_membership.created'
+    AND json_extract(payload, '$.active') IS NOT 0`);
+  const readLocation = db.prepare(`SELECT json_extract(payload, '$.cwd') AS cwd FROM facts WHERE subject = ?
+    AND kind LIKE 'conversation.%' AND json_type(payload, '$.cwd') = 'text' ORDER BY seq DESC LIMIT 1`);
+  const readLinked = db.prepare(`SELECT 1 FROM facts WHERE seq IN (
+      SELECT seq FROM fact_projection_dependencies WHERE projection = 'relations' AND direction = 'needs' AND key = 'conversation:' || ?)
+    AND kind = 'relation.created' AND json_extract(payload, '$.type') = 'delegated'
+    AND json_extract(payload, '$.to_id') = ? LIMIT 1`);
+  const readCompleted = db.prepare(`SELECT 1 FROM facts WHERE seq IN (
+      SELECT seq FROM fact_projection_dependencies WHERE projection = 'relations' AND direction = 'needs' AND key = 'conversation:' || ?)
+    AND kind = 'relation.created' AND json_extract(payload, '$.type') = 'delegated'
+    AND json_extract(payload, '$.evidence.launchKey') = ? LIMIT 1`);
+  function addLaunches(id: string, payload: Record<string, unknown>, timestamp: string) {
+    const body = payload.body;
+    if (payload.provider !== 'claude' || payload.role !== 'assistant' || !Array.isArray(body)) return;
+    const parents = readMemberships.all(id).map(row => String(row.parent));
+    for (const block of body) {
+      const tool = readObject(block);
+      if (tool.type !== 'tool_use' || tool.name !== 'Bash') continue;
+      findCodexExecs(readText(readObject(tool.input).command)).forEach((command, index) => {
+        for (const parent of parents.length ? parents : ['']) {
+          const key = JSON.stringify([parent, tool.id, index]);
+          if (parent && readCompleted.get(parent, key)) { launches.delete(key); continue; }
+          launches.set(key, { ...command, parent, toolUseId: readText(tool.id), timestamp, key });
+        }
+        if (parents.length) launches.delete(JSON.stringify(['', tool.id, index]));
+      });
+    }
+  }
+  return function observe(facts: Iterable<Fact>, paths: string[], observedTs = new Date().toISOString()) {
     for (const fact of facts) {
       if (fact.seq <= through) continue;
       through = Math.max(through, fact.seq);
       const payload = readObject(fact.payload);
-      if (fact.kind.startsWith('conversation.') && typeof payload.cwd === 'string') locations.set(fact.subject.slice('conversation:'.length), payload.cwd);
-      if (fact.kind === 'relation.created' && payload.type === 'delegated') {
-        linked.add(readText(payload.to_id));
-        const key = readText(readObject(payload.evidence).launchKey);
-        if (key) { completed.add(key); launches.delete(key); }
-      }
-      if (fact.kind === 'message.created' && payload.provider === 'claude' && payload.role === 'assistant') {
-        const id = fact.subject.slice('message:'.length); messages.set(id, fact); changed.add(id);
-      }
-      if (fact.kind === 'message_membership.created' && payload.active !== false) {
+      if (fact.kind === 'message.created') addLaunches(fact.subject.slice('message:'.length), payload, fact.source_ts);
+      if (fact.kind === 'message_membership.created') {
         const id = readText(payload.message_id);
-        if (!memberships.has(id)) memberships.set(id, new Set());
-        memberships.get(id)!.add(readText(payload.conversation_id)); changed.add(id);
+        const message = readMessage.get('message:' + id);
+        if (message) addLaunches(id, readObject(JSON.parse(String(message.payload))), String(message.source_ts));
       }
     }
-    for (const id of changed) {
-      const fact = messages.get(id);
-      const body = readObject(fact?.payload).body;
-      if (!fact || !Array.isArray(body)) continue;
-      for (const block of body) {
-        const tool = readObject(block);
-        if (tool.type !== 'tool_use' || tool.name !== 'Bash') continue;
-        const commands = findCodexExecs(readText(readObject(tool.input).command));
-        for (const parent of memberships.get(id) ?? []) commands.forEach((command, index) => {
-          const key = JSON.stringify([parent, tool.id, index]);
-          if (completed.has(key)) return;
-          const parentCwd = locations.get(parent);
-          launches.set(key, { ...command, parent,
-            promptPath: command.promptPath ? resolve(parentCwd ?? '.', command.promptPath) : undefined,
-            cwd: command.cwd ? resolve(parentCwd ?? '.', command.cwd) : parentCwd,
-            toolUseId: readText(tool.id), timestamp: fact.source_ts, key });
-        });
-      }
+    // 場所は後着し得るため、未結合の起動にだけ SQL でその都度補う。
+    const pendingLaunches: Launch[] = [];
+    for (const [key, launch] of launches) {
+      if (!launch.parent) continue;
+      if (readCompleted.get(launch.parent, key)) { launches.delete(key); continue; }
+      const parentCwd = readLocation.get('conversation:' + launch.parent)?.cwd;
+      const cwd = typeof parentCwd === 'string' ? parentCwd : undefined;
+      pendingLaunches.push({ ...launch,
+        promptPath: launch.promptPath ? resolve(cwd ?? '.', launch.promptPath) : undefined,
+        cwd: launch.cwd ? resolve(cwd ?? '.', launch.cwd) : cwd });
     }
-    if (!launches.size) return { detected: 0, matched: 0, appended: 0 };
-    const pendingLaunches = [...launches.values()];
+    if (!pendingLaunches.length) return { detected: 0, matched: 0, appended: 0 };
+    const contexts = new Map<string, number[]>();
+    for (const launch of pendingLaunches) {
+      if (!launch.cwd) continue;
+      const cwd = resolve(launch.cwd);
+      if (!contexts.has(cwd)) contexts.set(cwd, []);
+      contexts.get(cwd)!.push(Date.parse(launch.timestamp));
+    }
     const rolloutIndex = new Map<string, RolloutRequest>();
+    const seen = new Set(paths);
+    for (const path of requests.keys()) if (!seen.has(path)) requests.delete(path);
+    // 周期中の eviction で先頭のファイルから読み直し続けることを避ける。
+    const cacheable = new Set(paths.slice(0, cacheLimit));
+    for (const path of requests.keys()) if (!cacheable.has(path)) requests.delete(path);
     for (const path of paths) {
       try {
         const stat = statSync(path);
-        const stamp = `${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+        const stamp = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
         let cached = requests.get(path);
         if (!cached || cached.stamp !== stamp) {
-          cached = { stamp, meta: readSessionMeta(path) }; requests.set(path, cached);
+          const meta = readMeta(path);
+          cached = { stamp, meta, started: Date.parse(meta?.timestamp ?? ''), cwd: meta?.cwd ? resolve(meta.cwd) : '', requestRead: false };
+          if (cacheable.has(path)) requests.set(path, cached);
         }
         const meta = cached.meta;
-        if (!cached.request && meta?.id && meta.timestamp && meta.cwd && !linked.has(createNativeId('codex', meta.id))
-          && pendingLaunches.some(launch => matchesLaunchContext(launch, { timestamp: meta.timestamp!, cwd: meta.cwd! }))) {
-          cached.request = readRolloutRequest(path);
+        if (!meta?.id || !meta.timestamp || !meta.cwd
+          || !contexts.get(cached.cwd)?.some(started => cached!.started >= started && cached!.started - started <= START_WINDOW_MS)) {
+          cached.request = undefined; cached.requestRead = false; continue;
         }
-        if (cached.request && !linked.has(createNativeId('codex', cached.request.id))) rolloutIndex.set(cached.request.id, cached.request);
-      } catch (error) { if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error; }
+        if (readLinked.get(createNativeId('codex', meta.id), createNativeId('codex', meta.id))) { cached.request = undefined; continue; }
+        if (!cached.requestRead) {
+          const request = readRequest(path, meta);
+          // 比較の先頭と表示の見出しだけを保持し、依頼の本文は持たない。
+          cached.request = request ? { ...request, prompt: readPrefix(request.prompt), heading: readRequestHeading(request.prompt) } : undefined;
+          cached.requestRead = true;
+        }
+        if (cached.request) rolloutIndex.set(cached.request.id, cached.request);
+      } catch (error) {
+        if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+        requests.delete(path);
+      }
     }
     const rollouts = [...rolloutIndex.values()];
     const candidates = pendingLaunches.map(launch => {
@@ -175,11 +230,12 @@ export function createDirectCodexObserver(ledger: Ledger) {
       const result = ledger.append({ source: 'transcript-claude', source_event_id: eventId, source_ts: launch.timestamp,
         observed_ts: observedTs, kind: 'relation.created', subject: `relation:${eventId}`, confidence: 'inferred',
         payload: { type: 'delegated', from_id: launch.parent, to_id: child, active: true, confidence: 'inferred',
-          evidence: { launchKey: launch.key, toolUseId: launch.toolUseId, agentType: 'codex-exec', description: readRequestHeading(prompt ?? rollout.prompt),
+          evidence: { launchKey: launch.key, toolUseId: launch.toolUseId, agentType: 'codex-exec', description: prompt === undefined ? rollout.heading ?? readRequestHeading(rollout.prompt) : readRequestHeading(prompt),
             promptPath: launch.promptPath ?? null, promptMatched: prompt !== undefined, cwd: rollout.cwd, started_ts: rollout.timestamp } } });
       if (result.status === 'conflict') throw new Error(`Conflicting direct Codex relation: ${eventId}`);
       matched++; if (result.status === 'appended') appended++;
-      linked.add(child); completed.add(launch.key); launches.delete(launch.key);
+      launches.delete(launch.key);
+      for (const cached of requests.values()) if (cached.request?.id === rollout.id) cached.request = undefined;
     }
     return { detected: candidates.length, matched, appended };
   };

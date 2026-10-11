@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { useState } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
@@ -9,6 +10,39 @@ import { PolicyEditor } from '../pages/settings/PolicyEditor.tsx';
 import { ModelAssignments, partitionModels } from '../pages/settings/ModelAssignments.tsx';
 
 afterEach(cleanup);
+it('fills the rules card with weight rows and separators while preserving the fixed columns', () => {
+  const css = readFileSync('app/src/pages/settings/settings.css', 'utf8');
+  const style = document.createElement('style');
+  style.textContent = css;
+  document.head.append(style);
+  try {
+    const { container } = render(<div className="settings-page"><PolicyEditor client={{ command: vi.fn() }} policy={defaultPolicy()} models={{}} language="ja" dirty={false} onChange={vi.fn()} onSaved={vi.fn()} onRefresh={vi.fn()}/></div>);
+    const card = container.querySelector('#settings-rules .settings-card')!;
+    expect(getComputedStyle(card).width).toBe('100%');
+    expect(getComputedStyle(card).maxWidth).toBe('none');
+    expect(card.querySelector('.settings-sentence')).toBeTruthy();
+    expect(card.querySelector('.settings-constraint-row')).toBeTruthy();
+    const weights = card.querySelector('.settings-weights')!;
+    expect(getComputedStyle(weights).width).toBe('100%');
+    expect(getComputedStyle(weights).maxWidth).toBe('none');
+    const rows = weights.querySelectorAll('.settings-weight-row');
+    expect(rows).toHaveLength(4);
+    // jsdom は実寸を計算しないため、全幅と残り幅を使う指定を確かめる。
+    for (const row of rows) {
+      expect(getComputedStyle(row).width).toBe('100%');
+      const label = getComputedStyle(row.querySelector('label')!);
+      expect(label.flexGrow).toBe('1');
+      expect(label.gridTemplateColumns).toBe('200px minmax(0, 1fr)');
+      expect(getComputedStyle(row.querySelector('input[type="range"]')!).width).toBe('100%');
+      expect(getComputedStyle(row.querySelector('.settings-number-unit')!).flexShrink).toBe('0');
+      expect(getComputedStyle(row.querySelector('input[type="number"]')!).width).toBe('64px');
+      expect(row.lastElementChild?.textContent).toBe('%');
+    }
+    expect(css.match(/\.settings-weight-row\s*\{([^}]+)\}/)![1]).toContain('border-bottom: var(--border)');
+  } finally {
+    style.remove();
+  }
+});
 it.each(['en', 'ja'] as const)('orders five sections, folds rules and keys, and avoids selects in %s', async language => {
   const client = { command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'test', ok: true, result: { connections: [] } })) };
   const policy = defaultPolicy();

@@ -46,11 +46,13 @@
 .assignment-table thead th { height: 32px; color: var(--fg-3); }
 .assignment-role { white-space: nowrap; display: flex; align-items: center; gap: var(--space-1); height: 32px; }
 .assignment-cell { min-width: 0; }
+.assignment-cell > .btn { justify-content: flex-start; }
 .assignment-model { display: flex; gap: var(--space-1); width: 100%; height: 32px; min-width: 0; justify-content: flex-start; padding: 0 var(--space-2); border: var(--border); border-radius: var(--radius-1); background: var(--bg-0); }
 .assignment-model:hover { background: var(--bg-2); }
 .assignment-model[aria-expanded='true'] { border-color: var(--accent); }
-.assignment-model-name { font: var(--type-ui-strong); white-space: nowrap; flex: none; }
-.assignment-effort { font: var(--type-mono); white-space: nowrap; color: var(--fg-3); }
+.assignment-model-name { font: var(--type-ui-strong); white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.assignment-effort { font: var(--type-mono); white-space: nowrap; color: var(--fg-3); flex: none; }
+.assignment-chevron { margin-left: auto; width: 12px; flex: none; }
 .assignment-model .request-avatar { flex: 0 0 16px; }
 .assignment-inherited { height: 32px; color: var(--fg-3); padding: 0; max-width: 100%; }
 .assignment-inherited span { white-space: nowrap; }
@@ -58,11 +60,11 @@
 .assignment-popover { position: fixed; width: 440px; max-width: calc(100vw - 16px); overflow: auto; z-index: 20; padding: var(--space-3); background: var(--bg-0); border: var(--border); border-radius: var(--radius-2); box-shadow: var(--shadow); }
 .assignment-popover header { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-3); }
 .assignment-candidates { margin: 0 0 var(--space-3); padding: 0; list-style: none; }
-.assignment-candidates > li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); min-height: 40px; border-bottom: var(--border); }
-.assignment-candidate-label { width: 100%; font: var(--type-meta); color: var(--fg-3); }
+.assignment-candidates > li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-1); min-height: 0; border-bottom: var(--border); }
+.assignment-candidate-label { grid-column: 1 / -1; font: var(--type-meta); color: var(--fg-3); }
 .assignment-candidates > li > button { display: flex; align-items: center; gap: var(--space-1); }
 .assignment-candidates > li:has([aria-pressed='true']) { background: var(--bg-2); }
-.assignment-candidates .button-row { margin-left: auto; opacity: 0; }
+.assignment-candidates .button-row { grid-column: 2; grid-row: 2; opacity: 0; }
 .assignment-candidates li:hover .button-row, .assignment-candidates li:focus-within .button-row { opacity: 1; }
 .assignment-depths { display: flex; flex-wrap: wrap; gap: 0; }
 .settings-page .assignment-depths button { height: 24px; font: var(--type-meta); padding-inline: var(--space-1); }
@@ -117,13 +119,14 @@
   .settings-page .settings-card label { flex-wrap: wrap; }
 }
 .assignment-criteria-row textarea { height: 60px; width: 100%; min-width: 0; max-width: none; font: var(--type-ui); }
-.settings-constraint-row, .settings-constraint-row .settings-sentence { display: flex; align-items: center; gap: var(--space-1); min-height: 40px; }
+.settings-page .settings-constraint-row { display: flex; align-items: center; gap: var(--space-1); height: 40px; margin: 0; border-bottom: var(--border); }
+.settings-page .settings-constraint-row .settings-sentence { width: auto; flex: 1; min-width: 0; min-height: 0; border-bottom: 0; }
 .settings-constraint-row > .btn { margin-left: auto; }
 .settings-page .command-dialog { background: var(--bg-0); padding: var(--space-3); border: var(--border); border-radius: var(--radius-2); box-shadow: var(--shadow); }
 .settings-page .command-dialog .btn { height: 28px; }
 .settings-page .command-dialog td, .settings-page .command-dialog th { padding-block: var(--space-2); }
 .assignment-candidates > li > .btn { max-width: 100%; justify-content: flex-start; white-space: nowrap; }
-.assignment-candidates .assignment-depths { flex: 0 0 100%; min-width: 0; flex-wrap: nowrap; justify-content: flex-start; }
+.assignment-candidates .assignment-depths { grid-column: 1 / -1; min-width: 0; flex-wrap: nowrap; justify-content: flex-start; }
 .assignment-depths button { flex: none; }
 @media (max-width: 760px) {
   .settings-weights { --weight-label-width: 160px; }

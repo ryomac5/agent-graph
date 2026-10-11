@@ -103,7 +103,7 @@ export function ModelAssignments({ policy, onChange, language, models, onRefresh
               setQuery('');
               setSelecting(0);
               setOpen({ role, weight });
-            }}>{inherited ? <span title={name}>{name}</span> : candidate ? <><ProviderMark provider={candidate.executor}/><span className="assignment-model-name" title={name}>{name}</span>{candidate.effort && <span className="assignment-effort">{candidate.effort}</span>}<span aria-hidden="true">▾</span></> : text('Choose model', 'モデルを選ぶ')}</button>
+            }}>{inherited ? <span title={name}>{name}</span> : candidate ? <><ProviderMark provider={candidate.executor}/><span className="assignment-model-name" title={name}>{name}</span>{candidate.effort && <span className="assignment-effort">{candidate.effort}</span>}<span className="assignment-chevron" aria-hidden="true">▾</span></> : text('Choose model', 'モデルを選ぶ')}</button>
             {inherited && <small className="assignment-count">{text('Same as standard', 'ふつうと同じ')}</small>}
             {!inherited && candidates.length > 1 && <small className="assignment-count" title={text('Used in order when the first model is over quota or blocked by a constraint', '利用枠の上限や制約で最初のモデルが使えないとき、順に使う')}>{text('Backup ', '予備 ')}{candidates.slice(1).map(displayName).join(' → ')}</small>}
             {expanded && <div ref={popup} role="dialog" aria-label={prefix + ' ' + text('Assignment', '割り当て')} className="assignment-popover" style={{ top: position.top, left: position.left, maxHeight: `calc(100dvh - ${position.top + 8}px)` }}>

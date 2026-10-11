@@ -11,7 +11,7 @@ export function SessionName({ root, client, language = 'en', editing = false, on
   const [name, setName] = useState(root.name);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
-  const label = language === 'ja' ? '名前を変える' : 'Rename';
+  const label = language === 'ja' ? '名前を変更' : 'Rename';
   function finish() { setActive(false); setError(''); onFinish?.(); }
   async function save() {
     if (pending) return;

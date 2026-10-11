@@ -7,7 +7,7 @@ export const MAX_ATTACHMENTS = 8;
 const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
 export const attachmentText = {
   en: { unsupported: 'Managed conversations do not support image attachments yet.', type: 'Use PNG, JPEG, GIF or WebP images.', size: 'Each image must be 10 MB or smaller.', count: 'Attach up to 8 images.', remove: 'Remove image', failed: 'Unable to upload the image.' },
-  ja: { unsupported: '管理された会話では、まだ画像を添付できません。', type: 'PNG、JPEG、GIF、WebP の画像を使ってください。', size: '画像は1枚10MBまでです。', count: '画像は8枚まで添付できます。', remove: '画像を外す', failed: '画像を送れませんでした。' },
+  ja: { unsupported: '管理された会話では、まだ画像を添付できません。', type: 'PNG、JPEG、GIF、WebP の画像を使ってください。', size: '画像は1枚10MBまでです。', count: '画像は8枚まで添付できます。', remove: '画像を削除', failed: '画像を送れませんでした。' },
 };
 interface Attachment { key: string; file: File; url: string; attachmentId?: string }
 // 縮小は data: の URL で描く。blob: の URL は画面の CSP の img-src が許しておらず、描かれないからである。

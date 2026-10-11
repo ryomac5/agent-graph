@@ -101,7 +101,7 @@ export function Message({ row, sender, showName = true, language = 'en', streami
       {time ? <time dateTime={time} title={time}>{formatClock(time, language)}</time> : !streaming && <span className="message-time-unknown">{t('timeUnknown')}</span>}
       {streaming && <span className="chip chip-accent"><span className="pulse" aria-hidden="true"/>{t('streaming')}</span>}
     </header>
-    {parentRequest && <span className="message-request-label">{language === 'ja' ? '根からの依頼' : 'Request from root'}</span>}
+    {parentRequest && <span className="message-request-label">{language === 'ja' ? 'メインエージェントからの依頼' : 'Request from root'}</span>}
     <div className="message-main">
       {images.length > 0 && <div className="message-images">{images.map((src, index) => <img key={index} src={src} alt={`${t('image')} ${index + 1}`} loading="lazy"/>)}</div>}
       {unavailable ? <p className="message-gap">{t(row.body_state === 'omitted' ? 'omitted' : 'unavailable')}</p>

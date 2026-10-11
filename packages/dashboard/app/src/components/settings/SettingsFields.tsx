@@ -10,21 +10,21 @@ const choices: Record<string, string[]> = {
 };
 const labels: Record<string, [string, string]> = {
   quota: ['Quota', '利用枠'], performance: ['Performance', '実績'], constraints: ['Constraints', '制約'],
-  model: ['Default model', '既定のモデル'], effort: ['Default effort', '既定の深さ'], authentication: ['Claude authentication', 'Claude の認証'], integrations: ['Claude integrations', 'Claude の外部連携'],
-  mode: ['Approval mode', '承認の方式'], policy: ['Isolation policy', '隔離の方針'], repositories: ['Observed repositories', '観測するリポジトリ'],
-  claude: ['Observe Claude', 'Claude を観測'], codex: ['Observe Codex', 'Codex を観測'], kit: ['Observe legacy kit', '旧キットを観測'],
+  model: ['Default model', '標準モデル'], effort: ['Default effort', '標準の思考量'], authentication: ['Claude authentication', 'Claude の認証'], integrations: ['Claude integrations', 'Claude の外部連携'],
+  mode: ['Approval mode', '承認の方式'], policy: ['Isolation policy', '隔離の方針'], repositories: ['Observed repositories', '監視対象リポジトリ'],
+  claude: ['Observe Claude', 'Claude を監視'], codex: ['Observe Codex', 'Codex を監視'], kit: ['Observe legacy kit', '旧キットを監視'],
   quietStart: ['Quiet hours start', '静かな時間の開始'], quietEnd: ['Quiet hours end', '静かな時間の終了'], timezone: ['Time zone', 'タイムゾーン'], approvalException: ['Approvals bypass quiet hours', '承認待ちは静かな時間の例外'],
   scope: ['Storage scope', '保存の範囲'], bodyRetentionDays: ['Body retention days', '本文の保持日数'], metadataRetentionDays: ['Metadata retention days (blank: forever)', 'メタ情報の保持日数'],
-  defaults: ['Default redaction rules', '既定の秘匿規則'], patterns: ['Additional redaction patterns', '追加の秘匿の正規表現'],
+  defaults: ['Default redaction rules', '標準のマスキング規則'], patterns: ['Additional redaction patterns', '追加のマスキングパターン'],
   port: ['API port', 'API のポート'], commands: ['Acceptance commands', '受け入れコマンド'], exclude: ['Scope exclusions', '範囲の除外'],
-  maxRoundTrips: ['Maximum review round trips', 'レビューの最大往復回数'],
-  executor: ['Agent', 'エージェント'], family: ['Model family', 'モデルの系列'], tier: ['Model tier', 'モデルの水準'], kind: ['Constraint', '制約'], role: ['Role', '役割'],
+  maxRoundTrips: ['Maximum review round trips', 'レビューの最大やりとり回数'],
+  executor: ['Agent', 'エージェント'], family: ['Model family', 'モデル系統'], tier: ['Model tier', 'モデルランク'], kind: ['Constraint', '制約'], role: ['Role', '役割'],
 };
 export function labelSetting(key: string, language: 'en' | 'ja') { return assignmentSettingText[language][key as keyof typeof assignmentSettingText.en] ?? labels[key]?.[language === 'ja' ? 1 : 0] ?? key.replace(/([a-z])([A-Z])/g, '$1 $2'); }
 const constraintLabels: Record<string, [string, string]> = {
-  reviewerDifferentFamily: ['Reviewer from a different model family', '異なるモデル系列のレビュアー'],
+  reviewerDifferentFamily: ['Reviewer from a different model family', '異なるモデル系統のレビュアー'],
   implementerNotOrchestrator: ['Implementer separate from orchestrator', '進行役とは別の実装担当'],
-  minTierForRole: ['Minimum model tier for a role', '役割ごとのモデル水準の下限'],
+  minTierForRole: ['Minimum model tier for a role', '役割ごとのモデルランクの下限'],
 };
 export function labelConstraint(kind: string, language: 'en' | 'ja') {
   return constraintLabels[kind]?.[language === 'ja' ? 1 : 0] ?? labelSetting(kind, language);
@@ -64,7 +64,7 @@ export function SettingsFields({ value, onChange, language, prefix = '', inherit
       value={entry === null ? '' : String(entry)} onChange={event => update(entry === null || typeof entry === 'number' ? event.target.value === '' && key === 'metadataRetentionDays' ? null : Number(event.target.value) : event.target.value)}/>;
     return <label key={key} title={quotaInvalid ? text.quotaError : title}><span><strong>{displayName}</strong></span>
       {options ? <select className={key === 'kind' ? 'settings-constraint' : undefined} aria-label={name} value={entry === null ? '' : String(entry)} onChange={event => update(event.target.value || null)}>
-        {inheritIsolation && path === 'isolation.policy' ? <option value="">{ja ? '個人の既定を継ぐ' : 'Inherit default'}</option> : null}
+        {inheritIsolation && path === 'isolation.policy' ? <option value="">{ja ? '標準設定に従う' : 'Inherit default'}</option> : null}
         {options.map(option => <option key={option} value={option}>{key === 'kind' ? labelConstraint(option, language) : option}</option>)}</select>
       : Array.isArray(entry) ? <textarea aria-label={name} value={entry.join('\n')} rows={3} onChange={event => update(event.target.value.split('\n').filter(Boolean))}/>
       : typeof entry === 'boolean' ? <input aria-label={name} type="checkbox" checked={entry} onChange={event => update(event.target.checked)}/>

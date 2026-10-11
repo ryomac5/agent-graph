@@ -22,7 +22,7 @@ export const dictionaries = {
     splitRight: '右に分割', splitDown: '下に分割', moveToOtherPane: '別のペインへ移動', close: '閉じる', closeOthers: 'ほかのタブを閉じる',
     working: '作業中',
     projectActions: 'プロジェクトの操作', moveUp: '上へ移動', moveDown: '下へ移動', hideFromList: '一覧から外す', showInList: '一覧に戻す', hiddenProjects: '非表示',
-    english: 'English', japanese: '日本語', brand: 'agent-graph', workspace: '作業場', overview: '一覧', projects: 'プロジェクト',
+    english: 'English', japanese: '日本語', brand: 'agent-graph', workspace: 'ワークスペース', overview: '一覧', projects: 'プロジェクト',
     inbox: '承認待ち', tree: 'サブエージェント', changes: '変更', search: '検索', settings: '設定',
     conversation: '会話', conversations: '会話', project: 'プロジェクト', notifications: '通知',
     noNotifications: '通知はまだありません', noProjects: 'プロジェクトはまだありません',
@@ -47,7 +47,7 @@ export const graphText = {
     now: 'Now', range: 'Time range', report: 'Report', elapsed: 'Elapsed', rounds: 'Rounds', close: 'Close details', open: 'Open conversation' },
   ja: { running: '実行中', needsYou: 'あなたの番', today: '今日', earlier: '以前', showMore: 'さらに20件表示',
     inferred: '推定', allow: '許可', deny: '拒否', requests: '依頼のグラフ', request: '依頼', who: '相手',
-    now: '現在', range: '期間', report: '報告', elapsed: '経過', rounds: '往復', close: '詳細を閉じる', open: '会話を開く' },
+    now: '現在', range: '期間', report: '報告', elapsed: '経過', rounds: 'やりとり', close: '詳細を閉じる', open: '会話を開く' },
 } as const;
 
 export const assignmentSettingText = {
@@ -63,14 +63,14 @@ export const assignmentSettingText = {
     quotaError: 'Deprioritize usage must not exceed stop-using usage.',
   },
   ja: {
-    weights: 'モデル選びで重視すること', softLimitPercent: '後回しにする使用率', hardLimitPercent: '使わない使用率',
-    minSamples: '実績で選ぶのに要る件数', acceptRate: '合格率', reviewApprove: 'レビューの承認率', roundTrips: '往復の少なさ', tokens: 'トークンの少なさ',
+    weights: 'モデル選びで重視すること', softLimitPercent: '優先度を下げる使用率', hardLimitPercent: '使用を停止する使用率',
+    minSamples: '順位付けに必要な実績数', acceptRate: '合格率', reviewApprove: 'レビューの承認率', roundTrips: 'やりとりの少なさ', tokens: 'トークンの少なさ',
     runs: '件', distribution: 'モデル選びの割合',
-    softTitle: 'この使用率以上になると、そのモデルを候補の後ろに回します。',
-    hardTitle: 'この使用率以上になると、そのモデルを候補から外します。',
-    samplesTitle: 'すべての候補にこの件数以上の過去の結果があるときだけ実績で並べ替え、足りなければ決めた順を使います。',
-    weightsTitle: '実績で並べ替えるときの重視の割合で、1つを変えると残りを比率で配り直します。',
+    softTitle: 'この使用率以上になると、モデルの優先度を下げて他の候補を優先します。',
+    hardTitle: 'この使用率以上になると、そのモデルを候補から除外します。',
+    samplesTitle: 'すべての候補にこの件数以上の実績があるときだけ順位付けを行い、満たない場合は設定順を使用します。',
+    weightsTitle: '実績で順位付けする際の重み付けです。1つを変更すると残りが自動で比例配分されます。',
     passTitle: '受け入れ条件の合格率です。',
-    quotaError: '後回しにする使用率は、使わない使用率以下にしてください。',
+    quotaError: '優先度を下げる使用率は、使用を停止する使用率以下にしてください。',
   },
 } as const;

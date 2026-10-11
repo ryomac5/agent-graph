@@ -10,7 +10,7 @@ export function summarizeDelegation(line: DelegationLine, language: Language = '
   const who = [node.provider && providerName(node.provider), node.model].filter(Boolean).join(' ') || (ja ? 'エージェント未記録' : 'Agent not recorded');
   const state = (node.state || 'unknown').replace(/_/g, ' ');
   const attempts = ja ? `試行 ${line.attempts} 回` : `${line.attempts} ${line.attempts === 1 ? 'attempt' : 'attempts'}`;
-  return [who, node.role || (ja ? '委譲' : 'delegation'), state, attempts].join(' · ');
+  return [who, node.role || (ja ? 'サブエージェント' : 'delegation'), state, attempts].join(' · ');
 }
 
 function Line({ line, language }: { line: DelegationLine; language: Language }) {
@@ -32,9 +32,9 @@ export function DelegationFold({ lines, language = 'en', label }: { lines: Deleg
   const ja = language === 'ja';
   const total = countAllDelegations(lines);
   const active = countActiveDelegations(lines);
-  const title = label ?? (ja ? '委譲' : total === 1 ? 'delegation' : 'delegations');
+  const title = label ?? (ja ? 'サブエージェント' : total === 1 ? 'delegation' : 'delegations');
   return <details className="delegation-fold" open={active > 0}>
     <summary><span className="numeric">{total}</span> {title}{active > 0 && <span className="delegation-fold-active"> · <span className="numeric">{active}</span> {ja ? '進行中' : 'active'}</span>}</summary>
-    <ul className="delegation-lines" aria-label={ja ? '委譲の木' : 'Delegations'}>{lines.map(line => <Line key={line.id} line={line} language={language}/>)}</ul>
+    <ul className="delegation-lines" aria-label={ja ? 'サブエージェント一覧' : 'Delegations'}>{lines.map(line => <Line key={line.id} line={line} language={language}/>)}</ul>
   </details>;
 }

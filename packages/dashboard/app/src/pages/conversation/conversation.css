@@ -49,7 +49,8 @@
 .approval-body { display: grid; gap: var(--space-2); padding: var(--space-3); border-top: var(--border); }
 .timeline-approval.is-settled { border-color: var(--line); box-shadow: none; }
 .timeline-approval.outcome-denied { border-color: var(--line); box-shadow: none; }
-.timeline-approval.is-settled .approval-request { opacity: 1; }
+.timeline-approval.is-settled .approval-request { color: var(--fg-3); }
+.timeline-approval.is-settled .approval-request :is(.approval-file, .command-block, .fields dd) { color: var(--fg-3); }
 .timeline-boundary { display: flex; align-items: center; gap: var(--space-3); margin: var(--space-3) 0; color: var(--fg-3); font: var(--type-meta); }
 .timeline-boundary::before { content: ''; flex: 1; border-top: var(--border); }
 .timeline-boundary::after { content: ''; flex: 1; border-top: var(--border); }
@@ -59,7 +60,7 @@
 .timeline-boundary.gap::after { border-top-style: solid; border-top-color: var(--line); }
 .timeline-boundary time { color: var(--fg-3); }
 .composer-status { display: grid; gap: var(--space-1); margin-bottom: var(--space-2); }
-.composer-box textarea:disabled { opacity: 1; color: var(--fg-3); }
+.composer-box textarea:disabled { color: var(--fg-3); }
 .composer-controls { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); min-width: 0; }
 .composer-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); min-width: 0; }
 .composer-controls input { width: 220px; }
@@ -152,7 +153,7 @@
 .composer-select:has(select:disabled) > .icon { color: var(--fg-4); }
 .composer-controls select { width: 100%; max-width: 180px; height: var(--control); border: 0; border-radius: var(--radius-1); background: transparent; color: var(--fg-2); font: var(--type-ui); appearance: none; padding: 0 var(--space-8) 0 var(--space-3); }
 .composer-controls select:hover:not(:disabled) { background: var(--bg-2); color: var(--fg-1); }
-.composer-controls select:disabled { opacity: 1; color: var(--fg-4); }
+.composer-controls select:disabled { color: var(--fg-4); }
 .pulse { background: currentColor; border-radius: 50%; height: 6px; width: 6px; animation: none; }
 .working-line .pulse { color: var(--state-running); animation: session-pulse 1600ms var(--ease) infinite; }
 .conv-changed-file { overflow: hidden; margin-bottom: var(--space-2); border: 0; border-radius: 0; }

@@ -20,6 +20,39 @@ const surfaces = ['--bg-0', '--bg-1', '--bg-2', '--bg-3'];
 const light = readTokens(/:root\s*\{([^}]+)\}/);
 const dark = new Map([...light, ...readTokens(/:root\[data-theme='dark'\]\s*\{([^}]+)\}/)]);
 
+it('matches the design document with explicit contrast overrides pending document updates', () => {
+  const document = readFileSync('../../docs/agents/design-system.md', 'utf8');
+  // D2の要件を優先する差分。scope外の設計書に反映後、この例外を外す。
+  const overrides: Record<string, [string, string]> = {
+    '--fg-2': ['#454750', '#c8cad2'],
+    '--fg-3': ['#545660', '#b1b4bf'],
+    '--fg-4': ['#63656e', '#979ba7'],
+    '--accent': ['#35418f', '#a6afff'],
+    '--accent-hover': ['#2b357a', '#bac1ff'],
+    '--on-accent': ['#ffffff', '#111215'],
+    '--focus': ['var(--accent)', 'var(--accent)'],
+    '--state-running': ['#17683d', '#3fbf7a'],
+    '--state-approval': ['#874600', '#f0a03c'],
+    '--state-reply': ['#225daa', '#5aa2f0'],
+    '--state-failed': ['#a52424', '#f06464'],
+    '--state-done': ['#4b5b7e', '#93a3c8'],
+    '--state-idle': ['#60626b', '#a1a3ab'],
+    '--diff-add-fg': ['#125832', '#86e3ad'],
+    '--diff-del-fg': ['#922026', '#ffa5a8'],
+  };
+  let checked = 0;
+  for (const line of document.split('\n')) {
+    const token = line.match(/^\| `(--[\w-]+)`/);
+    const colours = [...line.matchAll(/`(#[\da-f]{6}|rgb\([^`]+\))`/g)].map(match => match[1]);
+    if (!token || colours.length !== 2) continue;
+    const expected = overrides[token[1]] ?? colours;
+    expect(light.get(token[1]), token[1] + ' light').toBe(expected[0]);
+    expect(dark.get(token[1]), token[1] + ' dark').toBe(expected[1]);
+    checked++;
+  }
+  expect(checked).toBe(23);
+});
+
 function readColour(tokens: Map<string, string>, token: string): string {
   const value = tokens.get(token)!;
   const reference = value.match(/^var\((--[\w-]+)\)$/);
@@ -119,4 +152,36 @@ it('uses accessible input borders separately from decorative separators', () => 
   const conversation = readFileSync('app/src/pages/conversation/conversation.css', 'utf8');
   expect(conversation.match(/\.composer-box\s*\{([^}]+)\}/)![1]).toContain('border: var(--input-border)');
   expect(conversation.match(/\.composer-box:focus-within\s*\{([^}]+)\}/)![1]).toContain('outline: 2px solid var(--focus)');
+});
+
+it.each([['light', light], ['dark', dark]] as const)('keeps disabled send button contrast in %s', (theme, tokens) => {
+  const rule = shared.match(/\.btn-primary:disabled\s*\{([^}]+)\}/)![1];
+  const foreground = rule.match(/color:\s*var\((--[\w-]+)\)/)![1];
+  const background = rule.match(/background:\s*var\((--[\w-]+)\)/)![1];
+  expect(foreground).toBe('--fg-4');
+  expect(calculateContrast(tokens, foreground, background), theme).toBeGreaterThanOrEqual(SECONDARY_CONTRAST);
+});
+
+it('distinguishes disabled inputs and settled rows without dimming readable row text', () => {
+  for (const selector of ['input', 'select', 'textarea']) {
+    expect(shared.match(new RegExp(`${selector}:disabled\\s*\\{([^}]+)\\}`))![1]).toContain('opacity: .6');
+  }
+  const activity = readFileSync('app/src/components/activity.css', 'utf8');
+  const inbox = readFileSync('app/src/pages/inbox/inbox.css', 'utf8');
+  const conversation = readFileSync('app/src/pages/conversation/conversation.css', 'utf8');
+  for (const [css, selector] of [
+    [activity, '.activity-line.is-stopped > :not(.row-actions)'],
+    [activity, '.activity-row.is-stopped > .cell'],
+    [activity, '.activity-item.is-stopped > :not(.delegation-fold)'],
+    [activity, '.delegation-line.is-stopped > .delegation-line-row'],
+    [inbox, '.approval-row.sent'],
+    [conversation, '.timeline-approval.is-settled .approval-request'],
+  ]) {
+    const rule = css.split('\n').find(line => line.startsWith(selector + ' {'))!;
+    expect(rule).toContain('color: var(--fg-3)');
+    expect(rule).not.toContain('opacity:');
+  }
+  expect(activity).not.toContain('.activity-row.is-stopped:hover > .cell');
+  expect(activity).toContain('.is-stopped :is(.activity-name, .activity-excerpt, .agent-model, .cell-elapsed, .cell-changes) { color: var(--fg-3); }');
+  expect(conversation).not.toMatch(/\.composer-(?:box textarea|controls select):disabled\s*\{[^}]*opacity:/);
 });

@@ -10,8 +10,8 @@ import { senderOf } from '../components/conversation/participants.ts';
 import { WorkspacePage } from '../pages/workspace/WorkspacePage.tsx';
 
 // 本番の画面で見つかった崩れの試験。
-beforeEach(() => { localStorage.clear(); vi.stubGlobal('innerWidth', 1440); });
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+beforeEach(() => { vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-10-11T12:00:00Z')); localStorage.clear(); vi.stubGlobal('innerWidth', 1440); });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 const client = { command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: true, result: [] })) };
 function store() {
   const target = createStore();
@@ -94,13 +94,13 @@ function flowStore(childCount: number) {
   return target;
 }
 function Location() { return <output data-testid="location">{useLocation().search}</output>; }
-it('puts running children first, then the newest, and folds older children past twenty', () => {
+it('puts running children first and folds all but five recent completions', () => {
   render(<MemoryRouter><WorkspacePage project="repo" target={flowStore(25)} client={client}/></MemoryRouter>);
   const flow = screen.getByRole('complementary', { name: 'Panel' });
-  const titles = () => [...flow.querySelectorAll('.graph-card:not(.graph-root):not(.graph-earlier) .graph-card-title')].map(element => element.textContent);
+  const titles = () => [...flow.querySelectorAll('.graph-row [data-role]:not([data-role="main"]) + .graph-row-title')].map(element => element.textContent);
   expect(titles().slice(0, 3)).toEqual(['Task 0', 'Task 24', 'Task 23']);
-  expect(titles()).toHaveLength(21);
-  fireEvent.click(within(flow).getByRole('button', { name: /other completed requests|earlier/ }));
+  expect(titles()).toHaveLength(6);
+  fireEvent.click(within(flow).getByRole('treeitem', { name: /Today|Earlier/ }));
   expect(titles()).toHaveLength(25);
   expect(titles().at(-1)).toBe('Task 1');
 });
@@ -110,7 +110,8 @@ it('opens a child conversation from anywhere on its row, writes it to the URL an
   // 根の系列の見出しには経過の時間を出さない。
   expect(header().textContent).not.toMatch(/Elapsed/);
   const flow = screen.getByRole('complementary', { name: 'Panel' });
-  fireEvent.click(within(flow).getByText('Task 1').closest('.graph-card')!);
+  fireEvent.click(within(flow).getByRole('treeitem', { name: /Today|Earlier/ }));
+  fireEvent.click(within(flow).getByText('Task 1').closest('[role=treeitem]')!);
   expect(screen.getByTestId('location').textContent).toContain('child=child-1');
   expect(screen.getByRole('button', { name: 'Back to Repo-20260925' }).textContent).toBe('Repo-20260925');
   fireEvent.click(within(flow).getByText('Task 0'));
@@ -142,9 +143,9 @@ it('現在から 24 時間より前に止まった子は、Earlier に畳む', (
   for (const run of runs) if (run.id === 'child-1:1') { run.last_evidence_ts = '2026-08-01T00:00:00Z'; run.started_ts = '2026-08-01T00:00:00Z'; }
   render(<MemoryRouter><WorkspacePage project="repo" target={store} client={client}/></MemoryRouter>);
   const flow = screen.getByRole('complementary', { name: 'Panel' });
-  const titles = () => [...flow.querySelectorAll('.graph-card:not(.graph-root):not(.graph-earlier) .graph-card-title')].map(element => element.textContent);
+  const titles = () => [...flow.querySelectorAll('.graph-row [data-role]:not([data-role="main"]) + .graph-row-title')].map(element => element.textContent);
   expect(titles()).not.toContain('Task 1');
-  fireEvent.click(within(flow).getByRole('button', { name: /other completed requests|earlier/ }));
+  fireEvent.click(within(flow).getByRole('treeitem', { name: /^Earlier/ }));
   expect(titles()).toContain('Task 1');
 });
 
@@ -186,7 +187,8 @@ it('結果を返して待機に戻った Claude の子は完了と出し、gener
   for (const run of target.getSnapshot().projection.runs!) if (run.id === 'child-1:1') run.state = 'idle';
   render(<MemoryRouter><WorkspacePage project="repo" target={target} client={client}/></MemoryRouter>);
   const flow = screen.getByRole('complementary', { name: 'Panel' });
-  const row = [...flow.querySelectorAll<HTMLElement>('.graph-card-link')].find(element => element.textContent?.includes('Task 1'))!;
+  fireEvent.click(within(flow).getByRole('treeitem', { name: /Today|Earlier/ }));
+  const row = [...flow.querySelectorAll<HTMLElement>('.graph-row-main')].find(element => element.textContent?.includes('Task 1'))!;
   expect(row.getAttribute('aria-label')).toContain('Done');
   expect(row.textContent).not.toContain('general-purpose');
 });

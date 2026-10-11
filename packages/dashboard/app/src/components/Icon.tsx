@@ -17,6 +17,7 @@ const PATHS = {
   chevronDown: <path d="m6 9.5 6 6 6-6"/>,
   chevronLeft: <path d="m14.5 6-6 6 6 6"/>,
   terminal: <><path d="m5 7.5 4.5 4.5L5 16.5"/><path d="M12 17h7"/></>,
+  plan: <><path d="M8 6h12M8 12h12M8 18h12"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/></>,
   tool: <path d="M14.7 6.3a4 4 0 0 0-5.4 5.2l-5.6 5.6a1.5 1.5 0 0 0 2.1 2.1l5.6-5.6a4 4 0 0 0 5.2-5.4l-2.5 2.5-2.1-.4-.4-2.1Z"/>,
   file: <><path d="M14 3.5H7a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8.5Z"/><path d="M14 3.5v5h5"/></>,
   diff: <><path d="M14 3.5H7a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8.5Z"/><path d="M9.5 11h5M12 8.5v5M9.5 16.5h5"/></>,

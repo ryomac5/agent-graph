@@ -105,8 +105,8 @@ it('3: stores tabs in the URL, clamps and remembers width, and remembers collaps
 it('3: opens a child in the middle while keeping graph selection and can deny its approval', async () => {
   mount('/p/p?root=active&panel=graph');
   const panel = screen.getByRole('complementary', { name: 'Panel' });
-  expect(panel.querySelector('.graph-canvas')?.className).toContain('graph-tree');
-  fireEvent.click(within(panel).getByRole('link', { name: /Child work/ }));
+  expect(panel.querySelector('.graph-outline')).toBeTruthy();
+  fireEvent.click(within(panel).getByRole('treeitem', { name: /Child work/ }));
   expect(screen.getByTestId('route').textContent).toContain('child=child');
   expect(screen.getByTestId('route').textContent).toContain('panel=graph');
   expect(screen.getByText('Child response')).toBeTruthy();
@@ -206,7 +206,7 @@ it('2: hides zero counts and keeps closed projects to one row with earlier sessi
 it('3: removes the repeated graph band only in the panel', () => {
   const view = mount();
   expect(document.querySelector('.workspace-panel .graph-toolbar')).toBeNull();
-  expect(document.querySelector('.workspace-panel .graph-root')).toBeTruthy();
+  expect(document.querySelector('.workspace-panel [data-node-id="active"]')).toBeTruthy();
   view.unmount();
   mount('/p/p/graph?root=active');
   expect(document.querySelector('.graph-toolbar')).toBeTruthy();

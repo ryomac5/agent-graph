@@ -24,6 +24,7 @@ import { answerApproval, getDecision, getInbox } from './pages/inbox/model.ts';
 import { TurnSignals } from './components/TurnSignals.tsx';
 import { Notifications } from './components/notifications/Notifications.tsx';
 import { selectRoots, isRunning, rootProject, buildRootTree, useRootIndex } from './lib/roots.ts';
+import { ProjectList } from './components/ProjectList.tsx';
 import { RootList } from './components/RootViews.tsx';
 import { Icon } from './components/Icon.tsx';
 import { UsageBar } from './components/usage/UsageBar.tsx';
@@ -192,6 +193,12 @@ export function App({ target = store, client = unavailableClient, searchClient =
   const handleKey = useMemo(() => createKeyHandler(Object.fromEntries(Object.entries(bindings).filter(([action]) => !['splitHorizontal', 'splitVertical', 'openFile', 'saveFile', 'togglePanel'].includes(action))), action => executeRef.current(action)), [bindings, location.pathname, overlay]);
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
+      if (event.target instanceof Element) {
+        const projectRow = event.target.closest('.sidebar-project-row');
+        if (event.target.closest('.project-actions-menu')
+          || projectRow && event.altKey && ['ArrowUp', 'ArrowDown'].includes(event.key)
+          || projectRow && event.key === 'Escape' && projectRow.querySelector('.project-actions[aria-expanded="true"]')) return;
+      }
       if (overlay || creatingSession || (event.key === 'Escape' && event.target instanceof HTMLElement && event.target.matches('.explorer-filter input'))) return;
       if (auxiliaryPage && event.key === 'Escape' && !isTextInput(event.target)) { event.preventDefault(); event.stopPropagation(); goBack(); return; }
       contextFocus.current = event.target instanceof HTMLElement ? event.target : null;
@@ -229,19 +236,19 @@ export function App({ target = store, client = unavailableClient, searchClient =
         {key === 'inbox' && approvals > 0 && <span className="nav-count numeric" aria-hidden="true">{approvals}</span>}</NavLink>)}
     </nav><div className="projects"><p className="eyebrow">{t('projects')}<span className="numeric">{projects.length}</span></p>
       {projects.length === 0 && <p className="muted-text sidebar-empty">{t('noProjects')}</p>}
-      <nav aria-label={t('projects')} className="nav-group project-list">{[...projects, ...(hasOther ? [{ id: OTHER_PROJECT, name: t('other'), full: t('other'), detail: '' }] : [])].map(row => {
+      <ProjectList language={language} projects={[...projects, ...(hasOther ? [{ id: OTHER_PROJECT, name: t('other'), full: t('other'), detail: '' }] : [])]} renderProject={(row, attributes, actions) => {
         const items = roots.filter(root => rootProject(root, registeredIds) === row.id);
         const open = !(collapsedProjects[row.id] ?? row.id !== project);
         const runningCount = items.filter(root => isRunning(root.state)).length;
-        return <div key={row.id} className="sidebar-project">
-          <div className="sidebar-project-row"><button className="icon-button" aria-label={language === 'ja' ? row.name + ' のセッション' : 'Toggle sessions for ' + row.name} aria-expanded={open} onClick={() => setCollapsedProjects(value => ({ ...value, [row.id]: open }))}><Icon name={open ? 'chevronDown' : 'chevronRight'} size={16}/></button>
+        return <>
+          <div className="sidebar-project-row" {...attributes}><button className="icon-button" aria-label={language === 'ja' ? row.name + ' のセッション' : 'Toggle sessions for ' + row.name} aria-expanded={open} onClick={() => setCollapsedProjects(value => ({ ...value, [row.id]: open }))}><Icon name={open ? 'chevronDown' : 'chevronRight'} size={16}/></button>
             <NavLink to={`/p/${encodeURIComponent(row.id)}`} title={row.full}><Icon name="folder" size={16}/><span className="truncate">{row.name}</span></NavLink>
             {runningCount > 0 && <span className="numeric project-running" aria-label={language === 'ja' ? '実行中のセッション' : 'Running sessions'}>{runningCount}</span>}
-            <button className="icon-button project-create" aria-label={t('newTask') + ': ' + row.name} aria-expanded={projectMenu === row.id} onClick={() => setProjectMenu(projectMenu === row.id ? undefined : row.id)}><Icon name="plus" size={14}/></button></div>
+            <button className="icon-button project-create" aria-label={t('newTask') + ': ' + row.name} aria-expanded={projectMenu === row.id} onClick={() => setProjectMenu(projectMenu === row.id ? undefined : row.id)}><Icon name="plus" size={14}/></button>{actions}</div>
           {projectMenu === row.id && <div className="project-create-menu" role="menu">{['session', 'task'].map(kind => <button className="btn btn-ghost" role="menuitem" key={kind} onClick={() => { if (kind === 'session') setCreatingSession(row.id); else navigate(`/p/${encodeURIComponent(row.id)}?create=1`); setProjectMenu(undefined); setMobileView('conversation'); }}>{kind === 'session' ? language === 'ja' ? '新しいセッション' : 'New session' : language === 'ja' ? '新規タスク' : 'New task'}</button>)}</div>}
           {open && <section className="sidebar-roots" aria-label={language === 'ja' ? row.name + ' のセッション' : row.name + ' sessions'}><RootList client={client} grouped state={state} roots={items} selected={selectedRoot?.id} language={language} onSelect={root => { const next = new URLSearchParams(search); next.set('root', root.id); next.delete('child'); next.delete('path'); next.delete('create'); next.delete('session'); next.delete('conversation'); navigate(`/p/${encodeURIComponent(row.id)}?${next}`); setMobileView('conversation'); }}/></section>}
-        </div>;
-      })}</nav>
+        </>;
+      }}/>
     </div><UsageBar client={client} language={language} visible={!sidebarCollapsed && (!compactScreen || mobileView === 'sessions')} connected={state.connection === 'connected' || state.connection === 'runner_unavailable'}/><NavLink className="settings-link" to="/settings"><Icon name="settings" size={16}/>{t('settings')}</NavLink></div><ResizeDivider className="sidebar-resize" label={language === 'ja' ? 'サイドバーの幅' : 'Sidebar width'} orientation="vertical" value={sidebarWidth} min={SIDEBAR_MIN_WIDTH} max={SIDEBAR_MAX_WIDTH} step={20}
       onChange={value => setSidebarWidth(clampSidebar(value))} onDrag={delta => setSidebarWidth(clampSidebar(sidebarWidth + delta))} onReset={() => setSidebarWidth(sidebarDefault())}/></aside>
     <nav className="mobile-tabs" aria-label={language === 'ja' ? '画面' : 'Views'}>{(['sessions', 'conversation', 'panel'] as const).map(view => <button key={view} aria-pressed={mobileView === view} onClick={() => setMobileView(view)}>{language === 'ja' ? { sessions: 'セッション', conversation: '会話', panel: 'パネル' }[view] : { sessions: 'Sessions', conversation: 'Conversation', panel: 'Panel' }[view]}</button>)}</nav>

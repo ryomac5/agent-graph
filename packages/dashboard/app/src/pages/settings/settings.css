@@ -73,3 +73,5 @@
 .settings-page .assignment-model-options small { font: var(--type-meta); color: var(--fg-3); }
 .assignment-notes-editor fieldset { display: grid; gap: var(--space-2); }
 .settings-page .assignment-notes-editor input[type='checkbox'] { width: 16px; height: 16px; }
+/* 割り当ての表は列が多いので、設定の欄の 640px の上限を外し、設定の画面の幅いっぱいに広げる。 */
+.settings-page .settings-section:has(.model-assignments) { max-width: none; }

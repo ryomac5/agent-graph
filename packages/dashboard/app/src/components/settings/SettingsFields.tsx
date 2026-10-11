@@ -60,7 +60,7 @@ export function SettingsFields({ value, onChange, language, prefix = '', inherit
     const options = choices[path] ?? choices[key];
     const displayName = prefix && nestedLabels[key] ? nestedLabels[key][ja ? 1 : 0] : labelSetting(key, language);
     return <label key={key}><span><strong>{displayName}</strong></span>
-      {options ? <select aria-label={name} value={entry === null ? '' : String(entry)} onChange={event => update(event.target.value || null)}>
+      {options ? <select className={key === 'kind' ? 'settings-constraint' : undefined} aria-label={name} value={entry === null ? '' : String(entry)} onChange={event => update(event.target.value || null)}>
         {inheritIsolation && path === 'isolation.policy' ? <option value="">{ja ? '個人の既定を継ぐ' : 'Inherit default'}</option> : null}
         {options.map(option => <option key={option} value={option}>{key === 'kind' ? labelConstraint(option, language) : option}</option>)}</select>
       : Array.isArray(entry) ? <textarea aria-label={name} value={entry.join('\n')} rows={3} onChange={event => update(event.target.value.split('\n').filter(Boolean))}/>

@@ -86,17 +86,24 @@ export function RootList({ roots, selected, onSelect, project, language = 'en', 
   const group = (root: Root) => yourTurn(root) ? 0 : isRunning(root.state) ? 1 : !root.last_activity_ts || Date.parse(root.last_activity_ts) >= now - EARLIER_MS ? 2 : 3;
   const groups = [0, 1, 2, 3].map(value => roots.filter(root => group(root) === value).toSorted((a, b) => (b.last_activity_ts ?? '').localeCompare(a.last_activity_ts ?? '')));
   const labels = language === 'ja' ? ['あなたの番', '実行中', '最近', '以前'] : ['Your turn', 'Running', 'Recent', 'Earlier'];
+  const namePrefixes = new Map<string, number>();
+  for (const root of roots) {
+    const prefix = /^(.*-)(\d{8}(?:-\d+)?)$/.exec(root.name)?.[1];
+    if (prefix) namePrefixes.set(prefix, (namePrefixes.get(prefix) ?? 0) + 1);
+  }
   const row = (root: Root) => {
+    const datedName = /^(.*-)(\d{8}(?:-\d+)?)$/.exec(root.name);
+    const name = datedName && (namePrefixes.get(datedName[1]) ?? 0) > 1 ? datedName[2] : root.name;
     const shownState = yourTurn(root) && !WAITING.includes(root.state) ? 'waiting_input' : root.state;
     const content = <><StatusDot className="root-state" dotOnly activity dotLabel={root.conversation_ids.some(id => turns.has(id)) ? language === 'ja' ? '自分の番' : 'Your turn' : stateLabel(shownState, language)} state={shownState} language={language}/>
-      <span className="root-row-line"><span className="root-name">{root.name}</span></span>
+      <span className="root-row-line"><span className="root-name" title={root.name}>{name}</span></span>
       <span className="root-row-meta"><StatusDot state={shownState} language={language} activity/>
         {isRunning(root.state) && <RootElapsed state={state} root={root} now={now} language={language}/>}
         {!isRunning(root.state) && !yourTurn(root) && root.state !== 'failed' && root.last_activity_ts && <time className="root-time" dateTime={root.last_activity_ts} title={formatWhen(root.last_activity_ts, language)}>{formatWhen(root.last_activity_ts, language)}</time>}</span></>;
     if (editing === root.id && client) return <div key={root.id} className="root-row"><SessionName key={root.id} root={root} client={client} language={language} editing onFinish={() => setEditing(undefined)}/></div>;
     return <div key={root.id} className="root-list-item" onKeyDown={event => { if (event.key === 'Escape') setMenu(undefined); }}><Link
       onDoubleClick={client ? event => { event.preventDefault(); setEditing(root.id); setMenu(undefined); } : undefined}
-      onContextMenu={client ? event => { event.preventDefault(); setMenu(root.id); } : undefined} className="root-row activity-name" title={[root.user_name ? root.auto_name : root.kit_name, stateLabel(root.state, language), runningText(root.running_children, language)].filter(Boolean).join(' · ')} aria-label={root.name} aria-current={selected === root.id ? 'page' : undefined}
+      onContextMenu={client ? event => { event.preventDefault(); setMenu(root.id); } : undefined} className="root-row activity-name" title={[root.name, root.user_name ? root.auto_name : root.kit_name, stateLabel(root.state, language), runningText(root.running_children, language)].filter(Boolean).join(' · ')} aria-label={root.name} aria-current={selected === root.id ? 'page' : undefined}
       to={rootHref({ ...root, project: project ?? root.project })} onClick={event => {
         if (onSelect && event.button === 0 && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
           event.preventDefault(); onSelect(root);

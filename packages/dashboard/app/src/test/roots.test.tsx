@@ -4,8 +4,20 @@ import { MemoryRouter } from 'react-router';
 import { createStore } from '../lib/store.ts';
 import { WorkspacePage } from '../pages/workspace/WorkspacePage.tsx';
 import { HomePage } from '../pages/home/HomePage.tsx';
+import { RootList } from '../components/RootViews.tsx';
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+it('shows distinct date and number suffixes while preserving full names and destinations', () => {
+  const names = ['agent-graph-20261011', 'agent-graph-20261011-2', 'agent-graph-20261010-15', 'Custom conversation'];
+  render(<MemoryRouter><RootList roots={names.map((name, index) => ({ id: `root-${index}`, name, project: 'repo', state: 'idle', conversation_ids: [`conversation-${index}`], last_activity_ts: null, running_children: 0, total_children: 0 }))}/></MemoryRouter>);
+  expect([...document.querySelectorAll('.root-name')].map(row => row.textContent)).toEqual(['20261011', '20261011-2', '20261010-15', 'Custom conversation']);
+  names.forEach((name, index) => {
+    const link = screen.getByRole('link', { name });
+    expect(link.title).toContain(name);
+    expect(link.querySelector('.root-name')?.getAttribute('title')).toBe(name);
+    expect(link.getAttribute('href')).toContain(`root=root-${index}`);
+  });
+});
 function fixture() {
   const target = createStore();
   target.setSnapshot({ seq: 1, generation: 1, projection: {

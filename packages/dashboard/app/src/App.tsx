@@ -80,16 +80,20 @@ export function App({ target = store, client = unavailableClient, searchClient =
     const controller = new AbortController();
     setListError('');
     void (async () => {
+      const projection: Record<string, Row[]> = {};
+      const pages = { ...state.pages };
       for (const [table, page] of Object.entries(state.pages ?? {})) {
         let after = page.next;
         while (after) {
           const next = await fetchProjection<{ rows: Row[]; next: string | null; generation: number }>(`/projection?table=${encodeURIComponent(table)}&after=${encodeURIComponent(after)}`, controller.signal);
           if (controller.signal.aborted || next.generation !== target.getSnapshot().generation) return;
-          target.mergeProjection({ [table]: next.rows }, next.generation);
+          (projection[table] ??= []).push(...next.rows);
           if (next.next === after) throw new Error('Unable to advance activity list');
           after = next.next;
         }
+        pages[table] = { ...page, next: null };
       }
+      if (Object.keys(projection).length) target.mergeProjection(projection, state.generation, undefined, pages);
     })().catch(error => { if (!controller.signal.aborted) setListError(`Unable to load the full activity list. ${error instanceof Error ? error.message : ''}`.trim()); });
     return () => controller.abort();
   }, [state.pages, state.generation, target]);

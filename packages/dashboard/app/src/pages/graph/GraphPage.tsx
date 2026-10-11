@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router';
 import { store, useScreenStore, type Row, type ScreenStore } from '../../lib/store.ts';
 import type { Language } from '../../lib/i18n.ts';
-import { conversationName, readModel } from '../../lib/format.ts';
+import { agentName, conversationName, readModel } from '../../lib/format.ts';
 import { buildRootTree, orderSeries, selectRoots, useRootIndex, type ChildRole } from '../../lib/roots.ts';
 import { getProjectName, resolveProjectId } from '../../lib/projects.ts';
 import { ProjectHeader } from '../workspace/WorkspacePage.tsx';
@@ -24,6 +24,7 @@ export function GraphPage({ project: suppliedProject, target = store, client, la
   const roots = useMemo(() => selectRoots(state, project), [state, project]);
   const root = roots.find(item => item.id === (rootId ?? search.get('root'))) ?? roots[0];
   const index = useRootIndex(state);
+  const loading = ['roots', 'conversations', 'runs', 'relations', 'delegations', 'approvals'].some(table => state.pages?.[table]?.next);
   const tree = useMemo<GraphTree>(() => {
     if (!root) return { nodes: [], edges: [], roots: [], unresolved: [] };
     const built = buildRootTree(root, index);
@@ -37,7 +38,7 @@ export function GraphPage({ project: suppliedProject, target = store, client, la
       const review = (state.projection.relations ?? []).find(row => row.type === 'review_of' && row.from_id === conversationId && row.active !== 0 && row.active !== false);
       return { ...node, conversationId, run, role: review ? 'review' : node.role,
         provider: node.provider || String(conversation?.provider ?? ''), model: node.model || readModel(run).model || String(run?.model ?? conversation?.model ?? ''),
-        label: node.id === root.id ? root.name : readText(node.delegation?.description ?? readObject(node.delegation?.request).description) || edge?.title || conversationName(state, conversationId ?? '') || node.label,
+        label: node.id === root.id ? root.name : readText(node.delegation?.description ?? readObject(node.delegation?.request).description) || edge?.title || conversationName(state, conversationId ?? '') || (node.role === 'planner' ? node.label : agentName(node.provider, node.model) || 'Agent'),
         state: approvals.length ? 'waiting_approval' : node.state, approvals,
         currentWork: readCurrentWork(state, conversationId ?? '', language), report: readReport(state, conversationId ?? ''),
         inferred: edge?.confidence === 'inferred' || node.role === 'review' && !review,
@@ -98,9 +99,9 @@ export function GraphPage({ project: suppliedProject, target = store, client, la
     if (!embedded) setSearch(current => { const query = new URLSearchParams(current); query.set('root', root!.id); query.delete('child'); if (row.role !== 'main' && row.node?.conversationId) query.set('child', row.node.conversationId); return query; });
   }, onGroup: group, onAnswer: answer, sent, connected: state.connection === 'connected' };
   const selectedRow = model.all.find(row => row.id === (detail ?? requested));
-  return <div className="graph-page" ref={surface}>
+  return <div className="graph-page" ref={surface} aria-busy={loading}>
     {!embedded && <ProjectHeader route={route} name={getProjectName(state, project)} language={language}/>}
-    {root ? <>
+    {loading ? <div className="graph-empty" role="status">{language === 'ja' ? '読み込み中…' : 'Loading…'}</div> : root ? <>
       {!embedded && <div className="graph-toolbar"><span title={root.name}>{root.name}</span></div>}
       <GraphSummary model={model} role={role} onRole={setRole} language={language} embedded={embedded}/>
       {error && <p className="banner banner-danger" role="alert">{error}</p>}

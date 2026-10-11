@@ -97,3 +97,4 @@
 @media (max-width: 760px) {
   .settings-page .settings-card :is(input:not([type="checkbox"]), select, textarea) { flex: 0 1 240px; }
 }
+.settings-page .settings-card select.settings-constraint { width: max-content; flex: 0 1 auto; }

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { App } from '../App.tsx';
 import { dictionaries } from '../lib/i18n.ts';
@@ -12,6 +12,33 @@ beforeEach(() => {
     addEventListener: (_: string, listener: () => void) => { change = listener; }, removeEventListener: vi.fn() }));
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+it('publishes paginated graph tables together after the last response and retains live patches', async () => {
+  const target = createStore();
+  const children = Array.from({ length: 50 }, (_, index) => `child-${index}`);
+  const pages = { conversations: { total: 51, next: 'c1' }, runs: { total: 50, next: 'r1' } };
+  target.setSnapshot({ seq: 1, generation: 1, pages, projection: {
+    projects: [{ id: 'repo', display_name: 'Repo', state: 'registered' }],
+    roots: [{ id: 'root', name: 'Large root', project: 'repo', state: 'idle', conversation_ids: ['root'], total_children: 50 }],
+    conversations: [{ id: 'root', provider: 'claude' }],
+    relations: children.map(id => ({ id: `rel-${id}`, from_id: 'root', to_id: id, type: 'delegated', active: 1 })),
+  } });
+  let finishRuns!: (response: Response) => void;
+  const runsResponse = new Promise<Response>(resolve => { finishRuns = resolve; });
+  const fetch = vi.fn(async (url: URL) => url.searchParams.get('table') === 'runs' ? runsResponse : new Response(JSON.stringify({ generation: 1, rows: children.map(id => ({ id, provider: 'codex' })), next: null })));
+  vi.stubGlobal('fetch', fetch);
+  render(<MemoryRouter initialEntries={['/p/repo/graph?root=root']}><App target={target}/></MemoryRouter>);
+  await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+  expect(target.getSnapshot().projection.conversations).toHaveLength(1);
+  expect(screen.queryByRole('tree')).toBeNull();
+  expect(document.querySelector('.graph-page')?.getAttribute('aria-busy')).toBe('true');
+  act(() => target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 1, changes: { conversations: { upsert: [{ id: 'child-0', provider: 'codex', name: 'Live name' }], remove: [] } } }));
+  await act(async () => finishRuns(new Response(JSON.stringify({ generation: 1, rows: children.map(id => ({ id: `run-${id}`, conversation_id: id, state: 'ended', started_ts: '2026-09-01T10:00:00Z', ended_ts: '2026-09-01T11:00:00Z' })), next: null }))));
+  await waitFor(() => expect(screen.getByRole('treeitem', { name: /^Earlier 50/ })).toBeTruthy());
+  expect(target.getSnapshot().projection.conversations).toHaveLength(51);
+  expect(target.getSnapshot().projection.conversations?.find(row => row.id === 'child-0')?.name).toBe('Live name');
+  expect(target.getSnapshot().pages?.runs.next).toBeNull();
+  expect(document.querySelector('.graph-page')?.getAttribute('aria-busy')).toBe('false');
+});
 it('renders navigation, projects, pending approvals, connection state and bell', () => {
   const store = createStore();
   store.setSnapshot({ seq: 1, generation: 0, projection: { projects: [{ id: 'demo', display_name: 'demo', state: 'registered' }], tasks: [{ id: 't', project: 'demo' }], approvals: [{ id: 'a', state: 'pending' }, { id: 'b', state: 'expired' }] } });

@@ -21,7 +21,7 @@ export function createStore() {
     setConnection: (connection: ConnectionState) => update({ ...state, connection }),
     setSnapshot: (snapshot: Snapshot) => update({ ...state, ...snapshot, pages: snapshot.pages, projection: resolveProjection(snapshot.projection, snapshot.identities), deltas: {} }),
     clearDeltas: () => update({ ...state, deltas: {} }),
-    mergeProjection(projection: Record<string, Row[]>, generation: number, identities = state.identities) {
+    mergeProjection(projection: Record<string, Row[]>, generation: number, identities = state.identities, pages = state.pages) {
       if (generation !== state.generation) return;
       const next = { ...state.projection };
       for (const [table, incoming] of Object.entries(resolveProjection(projection, identities))) {
@@ -29,7 +29,7 @@ export function createStore() {
         for (const row of incoming) if (!rows.has(String(row.id))) rows.set(String(row.id), row);
         next[table] = [...rows.values()];
       }
-      update({ ...state, projection: next });
+      update({ ...state, projection: next, pages });
     },
     applyPatch(patch: Patch): boolean {
       if (patch.generation !== state.generation || patch.from_seq > state.seq) return false;

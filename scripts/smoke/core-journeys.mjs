@@ -312,11 +312,22 @@ async function main() {
     const parent = initial.projection.roots.filter(root => root.project === smoke.project && root.id !== smoke.id)
       .toSorted((a, b) => (b.total_children ?? 0) - (a.total_children ?? 0))[0];
     const tree = () => panel().getByRole('tree', { name: 'Request graph' });
+    async function waitForGraphRows() {
+      await panel().locator('.graph-page[aria-busy="false"]').waitFor({ timeout: UI_TIMEOUT_MS });
+      let previous = '';
+      await waitFor(async () => {
+        const signature = JSON.stringify(await tree().getByRole('treeitem').evaluateAll(rows => rows.map(row => [row.closest('[data-node-id]')?.getAttribute('data-node-id'), row.getAttribute('href'), row.getAttribute('aria-label')])));
+        const stable = signature === previous;
+        previous = signature;
+        return stable;
+      }, 'graph rows settled');
+    }
     async function openParent() {
       if (!parent || !parent.total_children) throw new Error('no root with children in the project');
       await page.goto(`${BASE}/p/${encodeURIComponent(smoke.project)}?root=${encodeURIComponent(parent.id)}`);
       await panel().getByRole('tab', { name: 'Graph', exact: true }).click();
       await tree().waitFor({ timeout: UI_TIMEOUT_MS });
+      await waitForGraphRows();
     }
     // 真ん中の選ばれたタブが子の会話に替わり、発言が出るまで待つ。
     // 行の aria-label の先頭は、実行中の行では題ではなく状態の語になることがある。題の文字では比べない。
@@ -328,6 +339,7 @@ async function main() {
     }
     // 会話へ移るリンクだけを選び、会話の無い課題の行を除く。
     async function childRow(provider) {
+      await waitForGraphRows();
       const pattern = new RegExp(` · (${provider}) · `);
       const rows = tree().getByRole('treeitem', { name: pattern }).and(tree().locator('a[href*="child="]'));
       for (const row of await rows.all()) {
@@ -335,6 +347,7 @@ async function main() {
       }
       for (const group of await tree().getByRole('treeitem', { name: /^(Today|Earlier|Yesterday)/ }).all()) {
         await group.click();
+        await waitForGraphRows();
         for (const row of await rows.all()) {
           if (new URL(await row.getAttribute('href'), BASE).searchParams.get('child')) return row;
         }

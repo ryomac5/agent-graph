@@ -162,3 +162,31 @@ it('keeps the balanced preset aligned with core defaults and compares explicit n
   const next = createPreset(policy, 'performance');
   expect(readCandidates(next, 'implement', 'standard')[0].model).toBe('opus');
 });
+
+it('hides raw primary, inherited and backup IDs until each provider catalog has arrived', () => {
+  const policy = defaultPolicy();
+  const view = (catalog: ModelCatalog) => <ModelAssignments policy={policy} models={catalog} language="en" onChange={vi.fn()}/>;
+  const { container, rerender } = render(view({}));
+  const table = container.querySelector('.assignment-table')!;
+  expect(table.querySelectorAll('.assignment-name-loading').length).toBeGreaterThanOrEqual(24);
+  expect(table.textContent).not.toContain('gpt-6.1-sol');
+  expect(table.textContent).not.toContain('opus');
+  expect(table.querySelector('[title="gpt-6.1-sol"]')).toBeNull();
+  rerender(view({ codex: { state: 'known', models: [{ model: 'gpt-6.1-sol', displayName: 'GPT-6.1-Sol' }] } }));
+  expect(table.textContent).toContain('GPT-6.1-Sol');
+  expect(table.textContent).not.toContain('gpt-6.1-sol');
+  expect(table.querySelector('.assignment-name-loading')).toBeTruthy();
+  rerender(view(models));
+  expect(table.querySelector('.assignment-name-loading')).toBeNull();
+});
+
+it('preserves the provider catalog name through settings, composer and graph formatting', async () => {
+  const { formatModelName, agentName } = await import('../lib/format.ts');
+  const { displayModel } = await import('../components/conversation/models.ts');
+  const catalog = [{ model: 'gpt-6.1-sol', displayName: 'GPT-6.1-Sol' }];
+  expect(formatModelName('gpt-6.1-sol', catalog)).toBe('GPT-6.1-Sol');
+  expect(displayModel('gpt-6.1-sol', catalog)).toBe('GPT-6.1-Sol');
+  expect(agentName('codex', 'gpt-6.1-sol', catalog)).toBe('GPT-6.1-Sol');
+  expect(agentName('codex', 'GPT-6.1-Sol', catalog)).toBe('GPT-6.1-Sol');
+  expect(formatModelName('gpt-6.1-sol')).toBe('GPT-6.1 Sol');
+});

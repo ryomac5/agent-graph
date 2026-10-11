@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useEscapeLayer } from '../../lib/escape-layers.ts';
 
 export function Segments({ label, value, options, onChange }: { label: string; value: string; options: { value: string; label: string }[]; onChange(value: string): void }) {
   return <div className="settings-segments" role="group" aria-label={label}>{options.map(option => <button type="button" key={option.value} aria-pressed={value === option.value} onClick={() => onChange(option.value)}>{option.label}</button>)}</div>;
@@ -7,6 +8,7 @@ export function SettingMenu({ label, value, options, onChange, displayLabel }: {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
+  useEscapeLayer(open, () => { setOpen(false); trigger.current?.focus(); });
   useEffect(() => {
     if (!open) return;
     ref.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.focus();

@@ -206,7 +206,7 @@ export function buildRootTree(root: Root, index: RootIndex): DelegationTree {
       const request = readText(evidence.request_id);
       const delegation = request ? index.requests.get(request) : undefined;
       const node: TreeNode = { id, kind: 'conversation', conversationId: id, run, label: '', attempts: [], children: [],
-        provider: readText(conversation?.provider), model: readModel(run).model || readText(run?.model ?? conversation?.model ?? evidence.model),
+        provider: readText(conversation?.provider), model: readText(run?.model) || readModel(run).model || readText(conversation?.model) || readText(evidence.model),
         role: resolveChildRole(evidence, delegation), state: readText(run?.state ?? conversation?.state) || 'unknown' };
       // Claude の子は、結果を返して止まると待機に戻る。頼まれた仕事は終えているので、完了として見せる。
       if (node.provider === 'claude' && evidence.agentType !== undefined && node.state === 'idle') node.state = 'ended';
@@ -240,7 +240,7 @@ export function buildRootTree(root: Root, index: RootIndex): DelegationTree {
     const existing = nodes.find(node => node.conversationId === conversationId && conversationId);
     const node: TreeNode = existing ?? { id: `delegation:${readText(delegation.id)}`, kind: 'delegation', conversationId: conversationId || undefined,
       run, delegation, label: '', role: resolveChildRole({}, delegation), provider: readText(index.conversations.get(conversationId)?.provider ?? delegation.provider ?? assignment.executor),
-      model: readModel(run).model || readText(delegation.model ?? assignment.model), state: readText(run?.state ?? delegation.state) || 'unknown', children: [], attempts };
+      model: readText(run?.model) || readModel(run).model || readText(delegation.model) || readText(assignment.model), state: readText(run?.state ?? delegation.state) || 'unknown', children: [], attempts };
     node.delegation = delegation; node.attempts = [...attempts];
     if (run && !node.attempts.some(attempt => attempt.run_id === run.id)) node.attempts.push({ attempt: node.attempts.length + 1, run_id: run.id, state: run.state });
     node.model ||= readText(delegation.model ?? assignment.model); node.role = readObject(delegation.request).role || delegation.role ? resolveChildRole({}, delegation) : node.role;

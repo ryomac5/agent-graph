@@ -95,9 +95,15 @@ export function modelName(model: string): string {
   if (family && MODEL_FAMILIES[family[1].toLowerCase()]) return `${MODEL_FAMILIES[family[1].toLowerCase()]} ${family[2]}`;
   return value;
 }
+export interface ModelDisplay { model: string; displayName: string }
+export function formatModelName(model: string, models: readonly ModelDisplay[] = []): string {
+  const entry = models.find(item => item.model === model || item.displayName === model);
+  return entry?.displayName && !/^(?:default|default \(recommended\))$/i.test(entry.displayName)
+    ? entry.displayName : modelName(model).replace(/^Claude\s+/, '');
+}
 /** 相手の名前。モデルが分かればモデルの名前を、分からなければ provider の名前を出す。 */
-export function agentName(provider: string, model?: string): string {
-  const name = modelName(model ?? '');
+export function agentName(provider: string, model?: string, models?: readonly ModelDisplay[]): string {
+  const name = formatModelName(model ?? '', models);
   if (name && (name.startsWith('Claude') || name.startsWith('GPT') || !provider)) return name;
   return [providerName(provider), name].filter(Boolean).join(' ');
 }

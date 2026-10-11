@@ -2,6 +2,9 @@ import { CommandDialog } from '../../components/command/Commands.tsx';
 import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { Segments } from '../../components/settings/Controls.tsx';
 import { ProviderMark } from '../../components/RootViews.tsx';
+import { Icon } from '../../components/Icon.tsx';
+import { formatModelName } from '../../lib/format.ts';
+import { useEscapeLayer } from '../../lib/escape-layers.ts';
 import type { Policy } from '../../lib/settings.ts';
 import type { Candidate, Role, Weight } from '../../../../../core/src/delegate/types.ts';
 
@@ -43,6 +46,7 @@ export function ModelAssignments({ policy, onChange, language, models, onRefresh
   const trigger = useRef<HTMLButtonElement | null>(null);
   const drag = useRef<number | undefined>(undefined);
   function close() { setOpen(undefined); trigger.current?.focus(); }
+  useEscapeLayer(Boolean(open), close);
   useEffect(() => {
     if (!open) return;
     popup.current?.querySelector<HTMLButtonElement>('.assignment-model-options li > button')?.focus();
@@ -57,7 +61,8 @@ export function ModelAssignments({ policy, onChange, language, models, onRefresh
     return () => { document.removeEventListener('pointerdown', outside); document.removeEventListener('keydown', escape, true); };
   }, [open]);
   function bands(role: Role) { return readBands(policy, role); }
-  function displayName(candidate: Candidate) { return models[candidate.executor]?.models.find(model => model.model === candidate.model)?.displayName || candidate.model; }
+  function displayName(candidate: Candidate) { return formatModelName(candidate.model, models[candidate.executor]?.models); }
+  function renderName(candidate: Candidate) { return models[candidate.executor] ? displayName(candidate) : <span className="assignment-name-loading" aria-hidden="true"/>; }
   function describeNote(model: string) {
     const note = findModelNote(policy, model);
     return note ? [note.latest ? text('Latest', '最新') : '', displayText(note.strength), displayText(note.specialties)].filter(Boolean).join(' · ') : '';
@@ -93,7 +98,7 @@ export function ModelAssignments({ policy, onChange, language, models, onRefresh
           const candidate = candidates[0];
           const prefix = NAMES[role][ja ? 1 : 0] + ' ' + weightName(weight);
           const expanded = open?.role === role && open.weight === weight;
-          const name = candidate ? displayName(candidate) : text('No models available', 'モデルを取得できない');
+          const name = candidate && models[candidate.executor] ? displayName(candidate) : '';
           return <td key={weight}><div className="assignment-cell">
             <button type="button" className={'btn ' + (inherited ? 'btn-ghost assignment-inherited' : 'btn-secondary assignment-model')} aria-label={prefix + ' ' + text('Edit assignment', '割り当てを編集')} aria-expanded={expanded} aria-haspopup="dialog" onClick={event => {
               if (expanded) { close(); return; }
@@ -103,9 +108,9 @@ export function ModelAssignments({ policy, onChange, language, models, onRefresh
               setQuery('');
               setSelecting(0);
               setOpen({ role, weight });
-            }}>{inherited ? <span title={name}>{name}</span> : candidate ? <><ProviderMark provider={candidate.executor}/><span className="assignment-model-name" title={name}>{name}</span>{candidate.effort && <span className="assignment-effort">{candidate.effort}</span>}<span className="assignment-chevron" aria-hidden="true">▾</span></> : text('Choose model', 'モデルを選ぶ')}</button>
+            }}>{inherited ? <span title={name}>{candidate ? renderName(candidate) : text('No models available', 'モデルを取得できない')}</span> : candidate ? <><ProviderMark provider={candidate.executor}/><span className="assignment-model-name" title={name}>{renderName(candidate)}</span>{candidate.effort && <span className="assignment-effort">{candidate.effort}</span>}<span className="assignment-chevron" aria-hidden="true"><Icon name="chevronDown" size={12}/></span></> : text('Choose model', 'モデルを選ぶ')}</button>
             {inherited && <small className="assignment-count">{text('Same as standard', 'ふつうと同じ')}</small>}
-            {!inherited && candidates.length > 1 && <small className="assignment-count" title={text('Used in order when the first model is over quota or blocked by a constraint', '利用枠の上限や制約で最初のモデルが使えないとき、順に使う')}>{text('Backup ', '予備 ')}{candidates.slice(1).map(displayName).join(' → ')}</small>}
+            {!inherited && candidates.length > 1 && <small className="assignment-count" title={text('Used in order when the first model is over quota or blocked by a constraint', '利用枠の上限や制約で最初のモデルが使えないとき、順に使う')}>{text('Backup ', '予備 ')}{candidates.slice(1).map((entry, index) => <Fragment key={index}>{index > 0 && ' → '}{renderName(entry)}</Fragment>)}</small>}
             {expanded && <div ref={popup} role="dialog" aria-label={prefix + ' ' + text('Assignment', '割り当て')} className="assignment-popover" style={{ top: position.top, left: position.left, maxHeight: `calc(100dvh - ${position.top + 8}px)` }}>
               <header><span>{NAMES[role][ja ? 1 : 0]} · {weightName(weight)}</span><button className="btn btn-ghost assignment-icon" aria-label={text('Close assignment', '割り当てを閉じる')} onClick={close}>×</button></header>
               <ol className="assignment-candidates">{candidates.map((entry, index) => {

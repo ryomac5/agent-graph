@@ -15,10 +15,10 @@ export const COMPACT_ROW_EXTRA = 16;
 export const GRAPH_ROW_HEIGHT = 32;
 export const RUNNING_ROW_HEIGHT = 52;
 export const APPROVAL_ROW_HEIGHT = 28;
-export type GraphRole = ChildRole | 'main';
+export type GraphRole = ChildRole | 'main' | 'planner';
 export const ROLES: ChildRole[] = ['orchestrate', 'advisor', 'research', 'implement', 'document', 'review', 'verify', 'proofread'];
-export const ROLE_ICONS: Record<GraphRole, IconName> = { main: 'message', orchestrate: 'message', advisor: 'plan', research: 'search', implement: 'tool', document: 'file', review: 'check', verify: 'check', proofread: 'file' };
-const ROLE_WORDS: Record<GraphRole, [string, string]> = { main: ['Main agent', 'メインエージェント'], orchestrate: ['Main agent', 'メインエージェント'], advisor: ['Advisor', 'アドバイザー'], research: ['Research', 'リサーチ'], implement: ['Implementation', '実装'], document: ['Documentation', 'ドキュメント'], review: ['Code review', 'コードレビュー'], verify: ['Verification', '動作検証'], proofread: ['Proofreading', '校正'] };
+export const ROLE_ICONS: Record<GraphRole, IconName> = { main: 'message', planner: 'plan', orchestrate: 'message', advisor: 'plan', research: 'search', implement: 'tool', document: 'file', review: 'check', verify: 'check', proofread: 'file' };
+const ROLE_WORDS: Record<GraphRole, [string, string]> = { main: ['Main agent', 'メインエージェント'], planner: ['Task graph', 'タスクグラフ'], orchestrate: ['Main agent', 'メインエージェント'], advisor: ['Advisor', 'アドバイザー'], research: ['Research', 'リサーチ'], implement: ['Implementation', '実装'], document: ['Documentation', 'ドキュメント'], review: ['Code review', 'コードレビュー'], verify: ['Verification', '動作検証'], proofread: ['Proofreading', '校正'] };
 export function roleWord(role: GraphRole, language: Language) { return ROLE_WORDS[role][language === 'ja' ? 1 : 0]; }
 export interface GraphNode extends TreeNode { activity?: string; currentWork?: string; report?: string; approvals?: Row[]; inferred?: boolean }
 export interface GraphTree extends Omit<DelegationTree, 'nodes'> { nodes: GraphNode[] }
@@ -84,7 +84,7 @@ export function buildRows(tree: GraphTree, options: { now: number; expanded?: Re
     if (!node || seen.has(id)) return;
     seen.add(id);
     const main = tree.roots.includes(id);
-    const rowRole = main ? 'main' : node.role === 'planner' ? 'advisor' : resolveChildRole({ role: node.role }, node.delegation);
+    const rowRole = main ? 'main' : node.role === 'planner' ? 'planner' : resolveChildRole({ role: node.role }, node.delegation);
     const running = ['starting', 'running'].includes(toDisplayState(node.state));
     all.push({ id, parent: ancestors.at(-1), depth: ancestors.length, ancestors, node, role: rowRole, runningBelow: 0, runningPath: running, selectedPath: id === selected,
       height: (running ? RUNNING_ROW_HEIGHT : GRAPH_ROW_HEIGHT) + (node.approvals?.length ?? 0) * APPROVAL_ROW_HEIGHT, segments: readSegments(node, now, state) });
@@ -101,7 +101,7 @@ export function buildRows(tree: GraphTree, options: { now: number; expanded?: Re
   let running = 0; let needsYou = 0;
   for (const row of all) {
     const node = row.node!; const shown = toDisplayState(node.state);
-    if (row.role !== 'main') roles[row.role as ChildRole] = (roles[row.role as ChildRole] ?? 0) + 1;
+    if (row.role !== 'main' && row.role !== 'planner') roles[row.role as ChildRole] = (roles[row.role as ChildRole] ?? 0) + 1;
     if (row.runningPath) { running++; for (const id of row.ancestors) { rowsById.get(id)!.runningBelow++; rowsById.get(id)!.runningPath = true; } }
     if (['waiting_approval', 'waiting_input'].includes(shown)) needsYou++;
     if (row.id === selected) row.ancestors.forEach(id => { rowsById.get(id)!.selectedPath = true; });
@@ -133,7 +133,7 @@ export function buildRows(tree: GraphTree, options: { now: number; expanded?: Re
       const shown = Math.min(members.length, Math.max(options.expanded?.get(id) ?? 0, selectedIndex < 0 ? 0 : Math.ceil((selectedIndex + 1) / PAGE_SIZE) * PAGE_SIZE));
       const groupRoles: GraphRows['roles'] = {};
       const descendants = all.filter(row => members.some(member => member.id === row.id || row.ancestors.includes(member.id)));
-      for (const row of descendants) if (row.role !== 'main') groupRoles[row.role as ChildRole] = (groupRoles[row.role as ChildRole] ?? 0) + 1;
+      for (const row of descendants) if (row.role !== 'main' && row.role !== 'planner') groupRoles[row.role as ChildRole] = (groupRoles[row.role as ChildRole] ?? 0) + 1;
       rows.push({ id, parent: parent.id, depth: parent.depth + 1, ancestors: [...parent.ancestors, parent.id], runningBelow: 0, runningPath: false, selectedPath: false, height: GRAPH_ROW_HEIGHT,
         segments: descendants.flatMap(row => row.segments), group: { kind, count: descendants.length, shown, roles: groupRoles, members: members.map(row => row.id) } });
       members.slice(0, shown).forEach(emit);

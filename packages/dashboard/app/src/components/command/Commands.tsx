@@ -3,10 +3,12 @@ import { DEFAULT_KEYS, keyLabel, validateBindings, type KeyBindings } from '../.
 import { useTurns } from '../../lib/turns.ts';
 import { orderCommands } from './navigation.ts';
 import type { SettingsClient, SettingsSnapshot } from '../../lib/settings.ts';
+import { useEscapeLayer } from '../../lib/escape-layers.ts';
 export interface Command { id: string; name: string; run(): void; disabled?: boolean }
 const KEY_REFRESH_MS = 1500;
 export function CommandDialog({ title, onClose, children, language = 'en' }: { title: string; onClose(): void; children: ReactNode; language?: 'en' | 'ja' }) {
   const ref = useRef<HTMLDivElement>(null);
+  useEscapeLayer(true, onClose);
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     (ref.current?.querySelector<HTMLElement>('input, textarea, select') ?? ref.current?.querySelector<HTMLElement>('button'))?.focus();

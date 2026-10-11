@@ -59,7 +59,7 @@ export function SettingsPage({ client, language, onAppearance, policyOnly = fals
       finally { refreshing = false; }
     }
     void refresh();
-    for (const provider of ['claude', 'codex', 'antigravity']) void requestSettings<ModelCatalog[string]>(client, 'settings.models', { provider }).then(result => { if (mounted.current) setModels(previous => ({ ...previous, [provider]: result })); }).catch(() => undefined);
+    for (const provider of ['claude', 'codex', 'antigravity']) void requestSettings<ModelCatalog[string]>(client, 'settings.models', { provider }).then(result => { if (mounted.current) setModels(previous => ({ ...previous, [provider]: result })); }).catch(() => { if (mounted.current) setModels(previous => ({ ...previous, [provider]: { state: 'unavailable', models: [] } })); });
     const timer = setInterval(refresh, REFRESH_MS);
     return () => { mounted.current = false; clearInterval(timer); };
   }, [client]);

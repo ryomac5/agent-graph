@@ -154,3 +154,41 @@ it.each([
   expect(selectedRows[0].closest('[data-node-id]')?.getAttribute('data-node-id')).toBe(selected);
   expect(selectedRows[0].getAttribute('aria-current')).toBe('page');
 });
+
+it('renders planner batches as task graphs without inventing an advisor, model or execution state', () => {
+  const target = createProjectionFixture();
+  render(<MemoryRouter><GraphPage embedded project="repo" target={target} client={{ command: vi.fn() }}/></MemoryRouter>);
+  const batch = screen.getByRole('treeitem', { name: 'batch · Task graph' });
+  expect(batch.querySelector('.graph-row-who')?.textContent).toBe('Task graph');
+  expect(batch.querySelector('.graph-row-end')?.textContent).toBe('');
+  expect(batch.getAttribute('aria-label')).not.toContain(' ·  · ');
+  expect(screen.queryByRole('button', { name: /^Advisor/ })).toBeNull();
+  const unknown = screen.getByRole('treeitem', { name: /unresolved|Codex.*Unknown/ });
+  expect(unknown.getAttribute('aria-label')).not.toContain(' ·  · ');
+});
+
+it('uses a known child run model and falls through an empty run model to relation evidence', () => {
+  const target = createProjectionFixture();
+  const state = target.getSnapshot();
+  state.projection.runs!.find(run => run.conversation_id === 'recent-a')!.model = '';
+  state.projection.relations!.find(row => row.to_id === 'recent-a')!.evidence = { agentType: 'general-purpose', description: 'recent-a', model: 'claude-fable-5-1' };
+  const catalogs = { claude: { state: 'known', models: [{ model: 'claude-fable-5-1', displayName: 'Fable 5.1' }] } };
+  render(<MemoryRouter><GraphPage embedded project="repo" target={target} client={{ command: vi.fn() }} catalogs={catalogs}/></MemoryRouter>);
+  expect(screen.getByRole('treeitem', { name: /^recent-a/ }).querySelector('.graph-row-who')?.textContent).toBe('Implementation · Claude Fable 5.1');
+  expect(screen.getByRole('treeitem', { name: /^recent-b/ }).querySelector('.graph-row-who')?.textContent).toBe('Implementation · Claude Opus 5.5');
+});
+
+it('uses the same catalog spelling in the graph row and right detail panel', () => {
+  const target = createProjectionFixture();
+  const state = target.getSnapshot();
+  state.projection.conversations!.find(row => row.id === 'recent-a')!.provider = 'codex';
+  const run = state.projection.runs!.find(run => run.conversation_id === 'recent-a')!;
+  run.model = 'gpt-6.1-sol';
+  run.launch = { model: { model: 'gpt-6-astra' } };
+  const catalogs = { codex: { state: 'known', models: [{ model: 'gpt-6.1-sol', displayName: 'GPT-6.1-Sol' }] } };
+  render(<MemoryRouter><GraphPage project="repo" target={target} client={{ command: vi.fn() }} catalogs={catalogs}/></MemoryRouter>);
+  const row = screen.getByRole('treeitem', { name: /^recent-a/ });
+  expect(row.querySelector('.graph-row-who')?.textContent).toBe('Implementation · Codex GPT-6.1-Sol');
+  fireEvent.click(row);
+  expect(screen.getByRole('complementary', { name: 'Request' }).querySelector('.graph-detail-provider')?.textContent).toBe('GPT-6.1-Sol');
+});

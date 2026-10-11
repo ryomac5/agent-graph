@@ -1,4 +1,5 @@
 import { SessionCreate } from './components/SessionCreate.tsx';
+import { dismissEscapeLayer } from './lib/escape-layers.ts';
 import { SettingsPage } from './pages/settings/SettingsPage.tsx';
 import { SettingsLayout } from './pages/settings/SettingsLayout.tsx';
 import { ResizeDivider } from './components/ResizeDivider.tsx';
@@ -193,6 +194,8 @@ export function App({ target = store, client = unavailableClient, searchClient =
   const handleKey = useMemo(() => createKeyHandler(Object.fromEntries(Object.entries(bindings).filter(([action]) => !['splitHorizontal', 'splitVertical', 'openFile', 'saveFile', 'togglePanel'].includes(action))), action => executeRef.current(action)), [bindings, location.pathname, overlay]);
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
+      if (dismissEscapeLayer(event)) return;
+      if (event.key === 'Escape' && document.querySelector('[role="menu"], [role="dialog"]')) return;
       if (event.target instanceof Element) {
         const projectRow = event.target.closest('.sidebar-project-row');
         if (event.target.closest('.project-actions-menu, .workbench-menu')

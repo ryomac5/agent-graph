@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router';
 import { Icon } from '../../components/Icon.tsx';
 import { StatusDot, stateLabel, toDisplayState } from '../../components/StateBadge.tsx';
 import { agentName, formatWhen, summarizeApproval } from '../../lib/format.ts';
+import type { ModelCatalog } from '../settings/ModelAssignments.tsx';
 import type { Language } from '../../lib/i18n.ts';
 import { graphText } from '../../lib/i18n.ts';
 import type { Row } from '../../lib/store.ts';
@@ -21,6 +22,7 @@ export function elapsed(row: GraphRow, now: number): string {
 export function rowEnd(row: GraphRow, language: Language, now: number): string {
   const ja = language === 'ja'; const node = row.node;
   if (!node) return '';
+  if (row.role === 'planner') return '';
   const state = toDisplayState(node.state);
   if (['starting', 'running'].includes(state)) return elapsed(row, now);
   if (state === 'waiting_approval') return ja ? '承認待ち' : 'Approval';
@@ -43,6 +45,7 @@ export function GraphSummary({ model, role, onRole, language, embedded }: { mode
   </div>;
 }
 export interface OutlineProps {
+  catalogs?: ModelCatalog;
   rootAssignment?: { provider: string; model: string; modelId?: string };
   model: GraphRows; language: Language; selected: string; now: number; embedded: boolean;
   href: (row: GraphRow) => string; onSelect: (row: GraphRow) => void; onGroup: (id: string, action: 'more' | 'close') => void;
@@ -50,7 +53,7 @@ export interface OutlineProps {
   timeline?: (row: GraphRow) => ReactNode;
 }
 export function GraphOutline(props: OutlineProps) {
-  const { rootAssignment, model, language, selected, now, embedded, href, onSelect, onGroup, onAnswer, sent, connected, timeline } = props;
+  const { rootAssignment, catalogs, model, language, selected, now, embedded, href, onSelect, onGroup, onAnswer, sent, connected, timeline } = props;
   const navigate = useNavigate();
   const refs = useRef(new Map<string, HTMLElement>());
   const t = graphText[language];
@@ -85,7 +88,7 @@ export function GraphOutline(props: OutlineProps) {
       const node = row.node; const state = toDisplayState(node?.state ?? 'idle');
       const running = ['starting', 'running'].includes(state);
       const rootModel = row.role === 'main' && rootAssignment && rootAssignment.provider === node?.provider && (!node?.model || node.model === rootAssignment.modelId) ? rootAssignment.model : '';
-      const agent = agentName(node?.provider ?? '', rootModel || node?.model);
+      const agent = agentName(node?.provider ?? '', rootModel || node?.model, catalogs?.[node?.provider ?? '']?.models);
       const target = node?.provider === 'codex' && !agent.startsWith('Codex') ? 'Codex ' + agent : agent;
       const groupWords = row.group ? ROLES.filter(role => row.group!.roles[role]).map(role => `${roleWord(role, language)} ${row.group!.roles[role]}`).join(' · ') : '';
       const descendants = row.role === 'main' ? model.all.filter(item => item.ancestors.includes(row.id) && item.node).length : 0;
@@ -98,14 +101,14 @@ export function GraphOutline(props: OutlineProps) {
       const taskNumber = /^T?\d+$/.test(task) ? `T${task.replace(/^T/, '')}` : '';
       const content = <>
         <span className="graph-indent" style={{ width: `calc(${row.depth} * var(--space-4))` }} aria-hidden="true"/>
-        {row.group ? <Icon name={row.group.shown ? 'chevronDown' : 'chevronRight'}/> : <StatusDot state={row.role === 'main' && row.runningBelow && state === 'idle' ? 'running' : node!.state} dotOnly dotLabel={row.role === 'main' && row.runningBelow ? t.running : undefined}/>}
+        {row.group ? <Icon name={row.group.shown ? 'chevronDown' : 'chevronRight'}/> : row.role === 'planner' ? <span aria-hidden="true"/> : <StatusDot state={row.role === 'main' && row.runningBelow && state === 'idle' ? 'running' : node!.state} dotOnly dotLabel={row.role === 'main' && row.runningBelow ? t.running : undefined}/>}
         {!row.group && <span className="graph-role" data-role={row.role} data-icon={ROLE_ICONS[row.role!]}><Icon name={ROLE_ICONS[row.role!]}/></span>}
         <span className="graph-row-title" title={title}>{Boolean(taskNumber) && <span className="graph-task-number">{taskNumber} </span>}{title}</span>
         <span className="graph-row-who" title={who}>{who}</span>
         {node && <span className={`graph-row-end state-${state}`} title={rowEnd(row, language, now)}>{rowEnd(row, language, now)}</span>}
       </>;
       const ref = (element: HTMLElement | null) => { if (element) refs.current.set(row.id, element); else refs.current.delete(row.id); };
-      const shared = { className: 'graph-row-main', tabIndex: 0, onKeyDown: (event: KeyboardEvent) => move(event, row), ref, 'aria-level': row.depth + 1, role: 'treeitem', 'aria-selected': selected === row.id, 'aria-current': embedded && selected === row.id ? 'page' as const : undefined, 'aria-label': row.group ? `${title} · ${groupWords}` : `${title} · ${roleWord(row.role!, language)}${row.role === 'main' ? '' : ` · ${target || (node?.kind === 'conversation' ? 'Agent' : '')}`} · ${row.role === 'main' && row.runningBelow ? (language === 'ja' ? 'サブエージェント ' + row.runningBelow + ' 件が実行中' : row.runningBelow + ' running below') : stateLabel(node!.state, language)}` };
+      const shared = { className: 'graph-row-main', tabIndex: 0, onKeyDown: (event: KeyboardEvent) => move(event, row), ref, 'aria-level': row.depth + 1, role: 'treeitem', 'aria-selected': selected === row.id, 'aria-current': embedded && selected === row.id ? 'page' as const : undefined, 'aria-label': row.group ? [title, groupWords].filter(Boolean).join(' · ') : [title, roleWord(row.role!, language), row.role === 'main' || row.role === 'planner' ? '' : target || (node?.kind === 'conversation' ? 'Agent' : ''), row.role === 'planner' ? '' : row.role === 'main' && row.runningBelow ? (language === 'ja' ? 'サブエージェント ' + row.runningBelow + ' 件が実行中' : row.runningBelow + ' running below') : stateLabel(node!.state, language)].filter(Boolean).join(' · ') };
       return <div key={row.id} className={`graph-row${running ? ' is-running' : ''}${selected === row.id ? ' is-selected' : ''}${['ended', 'idle'].includes(state) ? ' is-quiet' : ''}${timeline ? ' has-timeline' : ''}`} data-node-id={row.id} style={{ minHeight: row.height }}>
         <div className="graph-tree-cell">
           {row.group ? <button {...shared} aria-expanded={row.group.more ? undefined : row.group.shown > 0} onClick={() => onGroup(row.group!.groupId ?? row.id, row.group!.more || !row.group!.shown ? 'more' : 'close')}>{content}</button>

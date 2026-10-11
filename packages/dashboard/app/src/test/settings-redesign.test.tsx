@@ -12,7 +12,7 @@ afterEach(cleanup);
 it.each(['en', 'ja'] as const)('orders five sections, folds rules and keys, and avoids selects in %s', async language => {
   const client = { command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'test', ok: true, result: { connections: [] } })) };
   const policy = defaultPolicy();
-  const { container } = render(<div className="settings-page"><SettingsLayout client={client} projects={[]} language={language} theme="system" onTheme={vi.fn()} onLanguage={vi.fn()} bindings={DEFAULT_KEYS} onKeys={vi.fn()}><PolicyEditor client={client} policy={policy} models={{}} language={language} dirty={false} onChange={vi.fn()} onSaved={vi.fn()} onRefresh={vi.fn()}/></SettingsLayout></div>);
+  const { container } = render(<div className="settings-page"><SettingsLayout client={client} projects={[]} language={language} theme="system" onTheme={vi.fn()} onLanguage={vi.fn()} bindings={DEFAULT_KEYS} onKeys={vi.fn()}><PolicyEditor client={client} policy={policy} models={{ claude: { state: "unknown", models: [] }, codex: { state: "unknown", models: [] }, antigravity: { state: "unknown", models: [] } }} language={language} dirty={false} onChange={vi.fn()} onSaved={vi.fn()} onRefresh={vi.fn()}/></SettingsLayout></div>);
   expect([...container.querySelectorAll('[id^="settings-"]')].map(element => element.id)).toEqual(['settings-models', 'settings-rules', 'settings-appearance', 'settings-ssh', 'settings-keys']);
   for (const id of ['rules', 'ssh', 'keys']) expect(container.querySelector('#settings-' + id)).toHaveProperty('open', false);
   expect(container.querySelector('#settings-rules .settings-summary')?.textContent).toContain('70%');

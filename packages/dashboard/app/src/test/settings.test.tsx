@@ -315,7 +315,7 @@ it('supports drag reordering and standard inheritance with Japanese labels and p
   expect(screen.getByLabelText('実装 重い作業 1 モデル')).toHaveProperty('value', 'opus');
   fireEvent.click(screen.getByLabelText('実装 重い作業 ふつうと同じにする'));
   expect(screen.queryByRole('dialog')).toBeNull();
-  expect(screen.getByRole('button', { name: '実装 重い作業 割り当てを編集' }).textContent).toBe('gpt-6-astra');
+  expect(screen.getByRole('button', { name: '実装 重い作業 割り当てを編集' }).textContent).toBe('GPT-6 Astra');
   fireEvent.click(screen.getByRole('button', { name: '割り当てをプレビュー' })); await screen.findByText('claude · after-model');
   fireEvent.click(screen.getByRole('button', { name: '割り当てを保存' })); await screen.findByText('保存しました');
   const save = f.command.mock.calls.find(([name]) => name === 'settings.write')![1] as { patch: SettingsSnapshot['policy'] };
@@ -364,7 +364,7 @@ it('previews provider file diffs and requires confirmation before applying each 
   await waitFor(() => expect(screen.queryByRole('region', { name: 'Provider changes' })).toBeNull());
 });
 
-it('shows catalog display names and efforts in assignment buttons even before or without a catalog match', async () => {
+it('hides IDs while catalogs load, then shows catalog names and efforts or a formatted fallback', async () => {
   const f = createFixture();
   const original = f.command.getMockImplementation()!;
   let deliver!: () => void;
@@ -373,14 +373,17 @@ it('shows catalog display names and efforts in assignment buttons even before or
     await new Promise<void>(resolve => { deliver = resolve; });
     return { type: 'ack', cmd_id: name, ok: true, result: { state: 'known', models: [{ model: 'gpt-6-astra', displayName: 'GPT-6 Astra' }] } };
   });
-  // 遅い一覧でも保存済みの識別子を表示する。
+  // 一覧を待つ間は識別子を隠し、思考量は保つ。
   render(<SettingsPage client={f.client} policyOnly/>); await openRules();
   const button = await screen.findByRole('button', { name: 'Implementation Standard Edit assignment' });
-  expect(button.textContent).toContain('gpt-6-astra');
+  expect(button.textContent).not.toContain('gpt-6-astra');
+  expect(button.querySelector('.assignment-name-loading')).toBeTruthy();
   expect(button.textContent).toContain('high');
   expect(screen.queryByLabelText('Implementation Standard 1 Model')).toBeNull();
   deliver();
   await waitFor(() => expect(button.textContent).toContain('GPT-6 Astra'));
+  expect(button.querySelector('.assignment-name-loading')).toBeNull();
+  expect(button.textContent).not.toContain('gpt-6-astra');
   expect(screen.getByRole('button', { name: 'Main agent Standard Edit assignment' }).textContent).toContain('opus');
   expect(screen.getByRole('button', { name: 'Main agent Standard Edit assignment' }).querySelector('.assignment-effort')).toBeNull();
   expect(document.querySelector('.assignment-settings.settings-page')).toBeTruthy();

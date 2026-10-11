@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router';
 import { store, useScreenStore, type Row, type ScreenStore } from '../../lib/store.ts';
 import type { Language } from '../../lib/i18n.ts';
-import { agentName, conversationName, readModel } from '../../lib/format.ts';
+import { agentName, conversationName, readModel, formatModelName } from '../../lib/format.ts';
 import { buildRootTree, currentRootConversation, selectRoots, useRootIndex, type ChildRole } from '../../lib/roots.ts';
 import { getProjectName, resolveProjectId } from '../../lib/projects.ts';
 import { ProjectHeader } from '../workspace/WorkspacePage.tsx';
@@ -18,7 +18,8 @@ import { readBands } from '../settings/assignment-presets.ts';
 import type { ModelCatalog } from '../settings/ModelAssignments.tsx';
 import './graph.css';
 
-export function GraphPage({ project: suppliedProject, target = store, client, language = 'en', embedded = false, rootId, rootAssignment }: {
+export function GraphPage({ project: suppliedProject, target = store, client, language = 'en', embedded = false, rootId, rootAssignment, catalogs }: {
+  catalogs?: ModelCatalog;
   rootAssignment?: OutlineProps['rootAssignment'];
   project?: string; target?: ScreenStore; client: ConversationClient; language?: Language; embedded?: boolean; rootId?: string;
 }) {
@@ -41,7 +42,7 @@ export function GraphPage({ project: suppliedProject, target = store, client, la
       const edge = built.edges.find(edge => edge.target === node.id);
       const review = (state.projection.relations ?? []).find(row => row.type === 'review_of' && row.from_id === conversationId && row.active !== 0 && row.active !== false);
       return { ...node, conversationId, run, role: review ? 'review' : node.role,
-        provider: node.provider || String(conversation?.provider ?? ''), model: node.model || readModel(run).model || String(run?.model ?? conversation?.model ?? ''),
+        provider: node.provider || String(conversation?.provider ?? ''), model: node.model || readModel(run).model || readText(run?.model) || readText(conversation?.model),
         label: node.id === root.id ? root.name : readText(node.delegation?.description ?? readObject(node.delegation?.request).description) || edge?.title || conversationName(state, conversationId ?? '') || (node.role === 'planner' ? node.label : agentName(node.provider, node.model) || 'Agent'),
         state: approvals.length ? 'waiting_approval' : node.state, approvals,
         currentWork: readCurrentWork(state, conversationId ?? '', language), report: readReport(state, conversationId ?? ''),
@@ -111,7 +112,7 @@ export function GraphPage({ project: suppliedProject, target = store, client, la
     if (row.role !== 'main' && row.node?.conversationId) query.set('child', row.node.conversationId);
     return `/p/${encodeURIComponent(route)}?${query}`;
   }
-  const props: OutlineProps = { rootAssignment, model, language, selected, now, embedded, href, onSelect: row => {
+  const props: OutlineProps = { rootAssignment, catalogs, model, language, selected, now, embedded, href, onSelect: row => {
     setDetail(embedded && row.node?.conversationId ? undefined : row.id);
     if (!embedded) setSearch(current => { const query = new URLSearchParams(current); query.set('root', root!.id); query.delete('child'); if (row.role !== 'main' && row.node?.conversationId) query.set('child', row.node.conversationId); return query; });
   }, onGroup: group, onAnswer: answer, sent, connected: state.connection === 'connected' };
@@ -123,7 +124,7 @@ export function GraphPage({ project: suppliedProject, target = store, client, la
       <GraphSummary model={model} role={role} onRole={setRole} language={language} embedded={embedded}/>
       {error && <p className="banner banner-danger" role="alert">{error}</p>}
       {embedded ? <div className="graph-scroll"><GraphOutline {...props}/></div> : <GraphTimeline {...props} range={range} onRange={setRange}/>}
-      {(!embedded || detail) && selectedRow?.node && <GraphDetail row={selectedRow} language={language} now={now} href={href(selectedRow)} onClose={() => { setDetail(undefined); if (!embedded) setSearch(current => { const query = new URLSearchParams(current); query.delete('child'); return query; }); }}/>}
+      {(!embedded || detail) && selectedRow?.node && <GraphDetail row={selectedRow} catalogs={catalogs} language={language} now={now} href={href(selectedRow)} onClose={() => { setDetail(undefined); if (!embedded) setSearch(current => { const query = new URLSearchParams(current); query.delete('child'); return query; }); }}/>}
     </> : <div className="graph-empty">{language === 'ja' ? '会話がありません' : 'No conversations yet'}</div>}
   </div>;
 }
@@ -132,20 +133,26 @@ export function AssignedGraphPage(props: Parameters<typeof GraphPage>[0]) {
   const { client, target = store } = props;
   const state = useScreenStore(target);
   const [rootAssignment, setRootAssignment] = useState<OutlineProps['rootAssignment']>();
+  const [catalogs, setCatalogs] = useState<ModelCatalog>({});
   useEffect(() => {
     let active = true;
     setRootAssignment(undefined);
+    setCatalogs({});
     if (state.connection !== 'connected') return;
+    const available = new Map(['claude', 'codex', 'antigravity'].map(provider => [provider,
+      requestSettings<ModelCatalog[string]>(client, 'settings.models', { provider }).then(catalog => {
+        if (active) setCatalogs(previous => ({ ...previous, [provider]: catalog }));
+        return catalog;
+      }).catch(() => undefined)]));
     void requestSettings<SettingsSnapshot>(client, 'settings.read').then(async settings => {
       if (!settings?.policy) return;
       const candidate = readBands(settings.policy, 'orchestrate').standard?.[0];
       if (!candidate) return;
-      let name = candidate.model;
-      const catalog = await requestSettings<ModelCatalog[string]>(client, 'settings.models', { provider: candidate.executor }).catch(() => undefined);
-      name = catalog?.models.find(model => model.model === candidate.model)?.displayName || name;
+      const catalog = await available.get(candidate.executor);
+      const name = formatModelName(candidate.model, catalog?.models);
       if (active) setRootAssignment({ provider: candidate.executor, model: name, modelId: candidate.model });
     }).catch(() => undefined);
     return () => { active = false; };
   }, [client, state.connection, props.rootId]);
-  return <GraphPage {...props} rootAssignment={rootAssignment}/>;
+  return <GraphPage {...props} rootAssignment={rootAssignment} catalogs={catalogs}/>;
 }

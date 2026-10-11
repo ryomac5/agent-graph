@@ -340,7 +340,7 @@ async function main() {
     // 会話へ移るリンクだけを選び、会話の無い課題の行を除く。
     async function childRow(provider) {
       await waitForGraphRows();
-      const pattern = new RegExp(` · (${provider}) · `);
+      const pattern = new RegExp(` · (${provider})(?: [^·]+)? · `);
       const rows = tree().getByRole('treeitem', { name: pattern }).and(tree().locator('a[href*="child="]'));
       for (const row of await rows.all()) {
         if (new URL(await row.getAttribute('href'), BASE).searchParams.get('child')) return row;

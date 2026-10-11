@@ -243,3 +243,51 @@ it('applies configurable sidebar and panel shortcuts', async () => {
   expect(localStorage.getItem('agent-graph-sidebar-collapsed')).toBe('0');
   expect(localStorage.getItem('agent-graph-panel-collapsed')).toBe('0');
 });
+
+it.each(['claude', 'codex'])('closes the %s composer model menu before the App interrupt shortcut, even from outside the menu', async provider => {
+  const { target, client } = mount('/c/c');
+  act(() => target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: {
+    conversations: { remove: [], upsert: [{ id: 'c', task_id: 't', name: 'Build console', origin: 'managed', provider }] },
+  } }));
+  await act(async () => {});
+  const trigger = screen.getByRole('button', { name: /^Model · / });
+  fireEvent.click(trigger);
+  expect(screen.getByRole('menu')).toBeTruthy();
+  press('Escape');
+  expect(screen.queryByRole('menu')).toBeNull();
+  expect(screen.queryByRole('dialog', { name: 'Interrupt run?' })).toBeNull();
+  expect(document.activeElement).toBe(trigger);
+  expect(client.command.mock.calls.some(([name]) => name === 'interrupt')).toBe(false);
+  press('Escape');
+  expect(screen.getByRole('dialog', { name: 'Interrupt run?' })).toBeTruthy();
+});
+
+it('closes the composer effort menu without invoking App shortcuts', async () => {
+  const { target, client } = mount('/c/c');
+  act(() => target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: {
+    conversations: { remove: [], upsert: [{ id: 'c', task_id: 't', origin: 'managed', provider: 'codex' }] },
+    runs: { remove: [], upsert: [{ id: 'r', conversation_id: 'c', generation: 1, state: 'idle' }] },
+  } }));
+  await act(async () => {});
+  const trigger = screen.getByRole('button', { name: /^Effort · / });
+  fireEvent.click(trigger);
+  expect(screen.getByRole('menu')).toBeTruthy();
+  press('Escape', document.activeElement!);
+  expect(screen.queryByRole('menu')).toBeNull();
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(screen.getByTestId('location').textContent).toBe('/c/c');
+  expect(document.activeElement).toBe(trigger);
+  expect(client.command.mock.calls.some(([name]) => name === 'interrupt')).toBe(false);
+});
+
+it('closes settings model selection before App navigation and interruption', async () => {
+  const { client } = mount('/settings'); await act(async () => {});
+  const trigger = screen.getByRole('button', { name: 'Implementation Standard Edit assignment' });
+  fireEvent.click(trigger);
+  expect(screen.getByRole('dialog', { name: 'Implementation Standard Assignment' })).toBeTruthy();
+  press('Escape');
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(screen.getByTestId('location').textContent).toBe('/settings');
+  expect(document.activeElement).toBe(trigger);
+  expect(client.command.mock.calls.some(([name]) => name === 'interrupt')).toBe(false);
+});

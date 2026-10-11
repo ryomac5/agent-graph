@@ -59,3 +59,17 @@ it('依頼の題から Markdown の見出しの印を外す', async () => {
   expect(requestTitle('### 直す')).toBe('直す');
   expect(requestTitle('C# の直し')).toBe('C# の直し');
 });
+
+it('measures elapsed minutes from the last run start, independently of message times', async () => {
+  const { readSegments } = await import('../pages/graph/rows.ts');
+  const { elapsed } = await import('../pages/graph/GraphOutline.tsx');
+  const child = node('child', 'running');
+  child.run = { id: 'r', state: 'running', started_ts: '2026-10-11T15:36:21.912Z', last_evidence_ts: '2026-10-11T15:56:47.925Z' };
+  const captured = Date.parse('2026-10-11T16:16:06.461Z');
+  const row = buildRows(tree([node('root', 'idle', ['child']), child]), { now: captured }).all.find(row => row.id === 'child')!;
+  expect(elapsed(row, captured)).toBe('39m');
+  child.run = { ...child.run, state: 'ended', ended_ts: '2026-10-11T16:23:21.638Z' };
+  child.state = 'ended';
+  row.node = child; row.segments = readSegments(child, captured);
+  expect(elapsed(row, captured + 3600_000)).toBe('46m');
+});

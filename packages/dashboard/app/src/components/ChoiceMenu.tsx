@@ -1,6 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from './Icon.tsx';
+import { useEscapeLayer } from '../lib/escape-layers.ts';
 
 export interface MenuChoice { value: string; label: ReactNode; title?: string; detail?: string; older?: boolean; disabled?: boolean }
 export function ChoiceMenu({ label, name, value, choices, onChange, disabled, width = 200, footer, note, olderLabel }: {
@@ -13,6 +14,7 @@ export function ChoiceMenu({ label, name, value, choices, onChange, disabled, wi
   const choiceKeys = choices.map(choice => choice.value).join("\n");
   const visible = choices.filter(choice => older || !choice.older);
   function close() { setOpen(false); setOlder(false); trigger.current?.focus(); }
+  useEscapeLayer(open, close);
   useLayoutEffect(() => {
     if (!open) return;
     const rect = trigger.current!.getBoundingClientRect();

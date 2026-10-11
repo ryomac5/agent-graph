@@ -592,7 +592,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const dirty = edited && Boolean(model) && (selectedModel !== matchModel(appliedModel?.model || currentModel || (terminalConversation ? 'default' : '')) || effort !== (appliedModel?.effort ?? currentEffort));
   const usesDefault = !model || model === 'default' || models.some(item => item.model === model && isRecommended(item));
   const resolvedModel = appliedModel?.model || currentModel || (usesDefault ? recommendedModel : model);
-  const defaultLabel = defaults?.displayName ? defaults.displayName.replace(/^Claude\s+/, '') : recommendedModel ? displayModel(recommendedModel, models) : t('noModels');
+  const defaultLabel = defaults?.displayName ? displayModel(defaults.model ?? '', [{ model: defaults.model ?? '', displayName: defaults.displayName }]) : recommendedModel ? displayModel(recommendedModel, models) : t('noModels');
   const modelLabel = resolvedModel && !['default', 'Default'].includes(resolvedModel) ? (!shownModel && usesDefault ? defaultLabel : displayModel(resolvedModel, models)) : t('noModels');
   const modelSource = describeDefaultSource(defaults?.modelSource);
   const effortSource = describeDefaultSource(defaults?.effortSource);
@@ -601,7 +601,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const providerDefault = models.find(isRecommended);
   const modelChoices = [
     { value: providerDefault?.model ?? 'default', label: <>{t('recommended')} · {defaultLabel}</>, title: modelSource, detail: shownModel && matchModel(shownModel) === matchModel(recommendedModel) ? t('inUse') : undefined, disabled: codexActive },
-    ...models.filter(item => !isRecommended(item)).map(item => ({ value: item.model, label: item.displayName, title: item.displayName, older: olderModels.has(item.model), detail: matchModel(shownModel) === item.model ? t('inUse') : undefined, disabled: codexActive })),
+    ...models.filter(item => !isRecommended(item)).map(item => ({ value: item.model, label: displayModel(item.model, models), title: displayModel(item.model, models), older: olderModels.has(item.model), detail: matchModel(shownModel) === item.model ? t('inUse') : undefined, disabled: codexActive })),
   ];
   const hint = provider === 'codex' ? codexActive ? 'activeCodex' : 'nextTurn' : 'claudeEffort';
   const participants = resolveParticipants(state, conversationId, { user: t('user'), assistant: t('assistant'), parent: t('parentAgent') });
@@ -644,7 +644,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     </header>}
       {detailsOpen && <section id={detailsId} className="conv-details" aria-label={t('details')}>
         <dl className="conv-meta">
-          <div><dt>{t('model')}</dt><dd>{shownModel ? modelName(shownModel) : <span className="muted-text">{t('noModel')}</span>}</dd></div>
+          <div><dt>{t('model')}</dt><dd>{shownModel ? displayModel(shownModel, models) : <span className="muted-text">{t('noModel')}</span>}</dd></div>
           <div><dt>{t('effort')}</dt><dd>{effortLabel(shownEffort, language) || <span className="muted-text">{t('defaultEffort')}</span>}</dd></div>
           <div title={worktree?.full || t('worktree')}><dt>{t('worktree')}</dt><dd className="meta-item"><Icon name="branch" size={14}/>
             {worktree ? <><span className="truncate mono">{worktree.place}</span>{worktree.branch && <span className="branch-name mono">{worktree.branch}</span>}</>

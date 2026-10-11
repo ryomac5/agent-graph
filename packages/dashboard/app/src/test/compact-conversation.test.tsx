@@ -64,7 +64,8 @@ it('places the three icon actions in order, opens details and changed files abov
   const details = screen.getByRole('region', { name: 'Details' });
   expect(details.closest('.workbench-body')).toBeTruthy();
   expect(details.compareDocumentPosition(document.querySelector('.conv-timeline')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(within(details).getByText('model-a')).toBeTruthy();
+  expect(within(details).getByText('Model A')).toBeTruthy();
+  expect(within(details).queryByText('model-a')).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Files changed 1' }));
   const files = screen.getByRole('region', { name: 'Files changed' });
   expect(files.nextElementSibling?.classList.contains('conv-timeline')).toBe(true);

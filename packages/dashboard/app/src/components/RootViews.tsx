@@ -1,5 +1,5 @@
 import { SessionName, type RenameClient } from './SessionName.tsx';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { rootHref, useTurnConversations, useWorkingTurn, workingElapsed } from '../lib/turns.ts';
 import { isRunning, shownRole, type Root } from '../lib/roots.ts';
@@ -65,9 +65,11 @@ function RootElapsed({ state, root, now, language }: { state?: ScreenState; root
   }
   const run = [...latest.values()].filter(row => ['starting', 'running'].includes(readText(row.state)))
     .sort((a, b) => readText(b.last_evidence_ts).localeCompare(readText(a.last_evidence_ts)))[0];
-  const human = state && run && selectTimeline(state, readText(run.conversation_id)).reverse().find(entry => entry.kind === 'message'
-    && entry.row.role === 'user' && !isToolOnly(entry.row) && !isBlank(entry.row) && harnessKind(readBody(entry.row.body)) === 'user');
-  const turn = useWorkingTurn(run, human ? human.time : '');
+  const conversationId = readText(run?.conversation_id);
+  const humanTime = useMemo(() => state && conversationId ? selectTimeline(state, conversationId).reverse().find(entry => entry.kind === 'message'
+    && entry.row.role === 'user' && !isToolOnly(entry.row) && !isBlank(entry.row) && harnessKind(readBody(entry.row.body)) === 'user')?.time ?? '' : '',
+  [state?.projection.messages, state?.projection.message_memberships, conversationId]);
+  const turn = useWorkingTurn(run, humanTime);
   return <span className="root-elapsed numeric" aria-label={language === 'ja' ? '経過時間' : 'Elapsed time'}>{workingElapsed(turn, now) || '—'}</span>;
 }
 

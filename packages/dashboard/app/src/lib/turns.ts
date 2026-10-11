@@ -9,6 +9,7 @@ export const READ_KEY = 'agent-graph-read-turns';
 export const READY_KEY = 'agent-graph-ready-turns';
 export const RECENT_KEY = 'agent-graph-recent-conversations';
 export const RECENT_LIMIT = 10;
+const HUMAN_START_MAX_AGE_MS = 5 * 60 * 1000;
 export interface WorkingTurn { runKey: string; state: string; started: number; startEvidence: string }
 /** ツールや子の更新では時計を戻さない。承認待ちの間も同じターンの開始を保持する。 */
 export function resolveWorkingTurn(run: Row | undefined, humanTime = '', previous?: WorkingTurn): WorkingTurn | undefined {
@@ -17,14 +18,17 @@ export function resolveWorkingTurn(run: Row | undefined, humanTime = '', previou
   const runKey = JSON.stringify([run?.id, run?.generation]);
   const evidence = readObject(run?.last_evidence);
   const startEvidence = evidence.kind === 'turn_started' || evidence.hook_event_name === 'UserPromptSubmit' ? readText(run?.last_evidence_ts) : '';
-  if (previous?.runKey === runKey && Number.isFinite(previous.started) && !(startEvidence && startEvidence !== previous.startEvidence)) {
+  const human = Date.parse(humanTime);
+  if (previous?.runKey === runKey && Number.isFinite(previous.started) && !(startEvidence && startEvidence !== previous.startEvidence)
+    && !(!previous.startEvidence && human > previous.started)) {
     return { ...previous, state };
   }
-  const human = Date.parse(humanTime);
   const runStarted = Date.parse(readText(run?.started_ts));
+  const lastEvidence = Date.parse(readText(run?.last_evidence_ts ?? run?.started_ts));
   const started = startEvidence ? Date.parse(startEvidence)
-    : Number.isFinite(human) && (!Number.isFinite(runStarted) || human >= runStarted) ? human
-    : Date.parse(readText(run?.last_evidence_ts ?? run?.started_ts));
+    : Number.isFinite(human) && (!Number.isFinite(runStarted) || human >= runStarted)
+      && (!Number.isFinite(lastEvidence) || lastEvidence - human <= HUMAN_START_MAX_AGE_MS) ? human
+    : lastEvidence;
   return { runKey, state, started, startEvidence };
 }
 export function useWorkingTurn(run: Row | undefined, humanTime = ''): WorkingTurn | undefined {

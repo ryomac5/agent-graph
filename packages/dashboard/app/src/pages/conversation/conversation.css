@@ -157,7 +157,6 @@
 .composer-controls select:hover:not(:disabled) { background: var(--bg-2); color: var(--fg-1); }
 .composer-controls select:disabled { color: var(--fg-4); }
 .pulse { background: currentColor; border-radius: 50%; height: 6px; width: 6px; animation: none; }
-.working-line .pulse { color: var(--state-running); animation: session-pulse 1600ms var(--ease) infinite; }
 .conv-changed-file { overflow: hidden; margin-bottom: var(--space-2); border: 0; border-radius: 0; }
 .conv-title-row { gap: var(--space-2); flex: none; display: flex; flex-wrap: nowrap; align-items: center; min-width: 0; height: var(--header); }
 .conv-title { flex: 0 1 auto; min-width: 0; font: var(--type-title); }
@@ -186,7 +185,6 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .status-running .status-dot { animation: none; transition: none; }
-  .working-line .pulse { animation: none; transition: none; }
   .tool-run > summary .caret { animation: none; transition: none; }
 }
 

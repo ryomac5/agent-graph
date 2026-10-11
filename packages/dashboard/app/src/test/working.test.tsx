@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { ConversationPage, type ConversationClient } from '../pages/conversation/ConversationPage.tsx';
 import { RootList } from '../components/RootViews.tsx';
 import { Workbench } from '../pages/workspace/Workbench.tsx';
-import { createStore, type Row } from '../lib/store.ts';
+import { createStore, type Row, type ScreenState } from '../lib/store.ts';
 import { selectRoots } from '../lib/roots.ts';
 import { isWorkingTurn, resolveWorkingTurn, workingElapsed } from '../lib/turns.ts';
 
@@ -58,6 +58,27 @@ it('uses the user message when the start evidence has been replaced, with a time
   expect(workingElapsed(resolveWorkingTurn(tool, START), NOW)).toBe('3m 12s');
   expect(workingElapsed(resolveWorkingTurn(tool), NOW)).toBe('1m 12s');
   expect(workingElapsed(resolveWorkingTurn(run('running', { started_ts: undefined, last_evidence_ts: undefined })), NOW)).toBe('');
+});
+it('updates an inferred start when a newer user message arrives after the initial render', () => {
+  const tool = run('running', { last_evidence: { kind: 'tool_call' }, last_evidence_ts: '2026-10-11T00:02:00Z' });
+  const first = resolveWorkingTurn(tool, START);
+  const next = resolveWorkingTurn(tool, '2026-10-11T00:01:00Z', first);
+  expect(next?.started).toBe(Date.parse('2026-10-11T00:01:00Z'));
+  expect(workingElapsed(next, NOW)).toBe('2m 12s');
+  const laterTool = { ...tool, last_evidence_ts: '2026-10-11T00:03:00Z' };
+  expect(resolveWorkingTurn(laterTool, '2026-10-11T00:01:00Z', next)?.started).toBe(next?.started);
+  const confirmed = resolveWorkingTurn(run());
+  expect(resolveWorkingTurn(tool, '2026-10-11T00:01:00Z', confirmed)?.started).toBe(confirmed?.started);
+});
+it('falls back to the latest evidence for a background turn with only an old user message', () => {
+  const background = run('running', { last_evidence: { kind: 'tool_result' }, last_evidence_ts: START });
+  const turn = resolveWorkingTurn(background, '2026-10-10T20:00:00Z');
+  expect(turn?.started).toBe(Date.parse(START));
+  expect(workingElapsed(turn, NOW)).toBe('3m 12s');
+  expect(resolveWorkingTurn(background, '2026-10-10T23:55:00Z')?.started).toBe(Date.parse('2026-10-10T23:55:00Z'));
+  expect(resolveWorkingTurn(background, '2026-10-10T23:54:59Z')?.started).toBe(Date.parse(START));
+  const later = { ...background, last_evidence_ts: '2026-10-11T00:03:00Z' };
+  expect(resolveWorkingTurn(later, '2026-10-10T20:00:00Z', turn)?.started).toBe(turn?.started);
 });
 it('shows on turn start, ticks through waiting for a child and a background command, and disappears on parent completion', async () => {
   const target = setup();
@@ -122,6 +143,36 @@ it.each(['running', 'idle', 'waiting_approval', 'waiting_input'])('shows a named
   expect(tab.querySelector('.activity-mark .status-label')?.getAttribute('data-label')).toBe(label);
   expect(document.querySelector('.root-row-meta .status-label')?.textContent).toBe(label);
   expect(document.querySelector('.root-row .activity-mark')?.getAttribute('data-state')).toBe(state);
+});
+it('reuses the list user timestamp on clock ticks and refreshes it when messages, memberships or conversation change', () => {
+  const snapshot = setup('running').getSnapshot();
+  const roots = selectRoots(snapshot);
+  const readMessageBody = vi.fn(() => 'Build the feature');
+  let state: ScreenState = { ...snapshot, projection: { ...snapshot.projection,
+    messages: [{ ...snapshot.projection.messages[0], get body() { return readMessageBody(); } }],
+  } };
+  const view = (conversationIds = ['c']) => <MemoryRouter><RootList roots={roots.map(root => ({ ...root, conversation_ids: conversationIds }))} state={state}/></MemoryRouter>;
+  const { rerender } = render(view());
+  expect(readMessageBody).toHaveBeenCalled();
+  readMessageBody.mockClear();
+  act(() => vi.advanceTimersByTime(1000));
+  expect(screen.getByLabelText('Elapsed time').textContent).toBe('3m 13s');
+  expect(readMessageBody).not.toHaveBeenCalled();
+  state = { ...state, projection: { ...state.projection, runs: [run('running', { last_evidence: { kind: 'tool_result' } })] } };
+  rerender(view());
+  expect(readMessageBody).not.toHaveBeenCalled();
+  state = { ...state, projection: { ...state.projection, messages: [...state.projection.messages] } };
+  rerender(view());
+  expect(readMessageBody).toHaveBeenCalled();
+  readMessageBody.mockClear();
+  state = { ...state, projection: { ...state.projection, message_memberships: [...state.projection.message_memberships,
+    { id: 'd', message_id: 'u', conversation_id: 'd', active: 1 }] } };
+  rerender(view());
+  expect(readMessageBody).toHaveBeenCalled();
+  readMessageBody.mockClear();
+  state = { ...state, projection: { ...state.projection, runs: [run('running', { conversation_id: 'd' })] } };
+  rerender(view(['c', 'd']));
+  expect(readMessageBody).toHaveBeenCalled();
 });
 it('disables all activity animation for reduced motion and uses distinct shapes for running and waiting', () => {
   const css = readFileSync('app/src/styles.css', 'utf8');

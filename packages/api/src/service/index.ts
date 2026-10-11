@@ -21,6 +21,7 @@ import { createLocationResolver } from "../observe/location.ts";
 import { createKitObserver } from "../observe/kit/index.ts";
 import { hookOutboxPath, ledgerDbPath } from "../paths.ts";
 import { createIncrementalRolloutReader, createRolloutContext } from "./codex-reader.ts";
+import { createDirectCodexObserver } from "../observe/direct-codex.ts";
 import { createDirectoryReader } from "../observe/directories.ts";
 import type { FileCursor } from "../observe/files.ts";
 import type { RolloutCheckpoint } from "./codex-reader.ts";
@@ -243,6 +244,17 @@ export function openObservationService(options: ObservationOptions = {}) {
     }
   }
   const saveCheckpoint = projectionDb.prepare("INSERT OR REPLACE INTO api_observation_cursors VALUES (?, ?)");
+  const directCodex = createDirectCodexObserver(scanLedger);
+  let directSeq = 0;
+  const readDirectFacts = projectionDb.prepare(`SELECT * FROM facts f WHERE seq > ? AND seq <= ? AND (
+    kind LIKE 'conversation.%' OR kind LIKE 'relation.%'
+    OR source = 'transcript-claude' AND (
+      kind = 'message.created' AND instr(payload, 'codex exec') > 0
+      OR kind = 'message_membership.created' AND EXISTS (
+        SELECT 1 FROM facts m WHERE m.subject = 'message:' || json_extract(f.payload, '$.message_id')
+        AND m.kind = 'message.created' AND m.source = 'transcript-claude' AND instr(m.payload, 'codex exec') > 0
+      )
+    )) ORDER BY seq`);
   const list = createDirectoryReader();
   const listOutbox = createDirectoryReader(false);
   const kit = createKitObserver(scanLedger, checkpoints, refreshSnapshot);
@@ -357,6 +369,13 @@ export function openObservationService(options: ObservationOptions = {}) {
           if (located.some((result) => result.status === "conflict")) throw new Error("Conflicting Codex location");
           refreshSnapshot();
         }
+        const directThrough = Number(readLastSeq.get()!.seq ?? 0);
+        const directFacts = readDirectFacts.all(directSeq, directThrough).map(row => ({ ...row,
+          payload: row.payload === null ? null : JSON.parse(String(row.payload)),
+        } as Fact));
+        buffered.batch(() => directCodex(directFacts, codexFiles.filter(path => !path.startsWith(remoteProjects + "/"))));
+        directSeq = directThrough;
+        refreshSnapshot();
         ingestOutbox(scanLedger, listOutbox(hookOutboxPath(env, home),
           (name) => !name.startsWith(".") && name.endsWith(".json")), buffered.batch);
         refreshSnapshot();

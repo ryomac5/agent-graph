@@ -105,17 +105,17 @@ it('shows the flow under its root in the workspace, selects requests and sends t
   // 根を頂点に置き、依頼はその下に字下げで続ける。
   const apex = within(flow).getByRole('link', { name: /^Terminal/ });
   expect(apex.getAttribute('aria-current')).toBe('page');
-  const implement = within(flow).getByRole('link', { name: /(Codex|GPT)[^·]* · implement/ });
+  const implement = within(flow).getByRole('link', { name: /(Codex|GPT)[^·]* · Work/ });
   expect(implement.closest('.graph-card')?.getAttribute('style')).toContain('margin-left: 16px');
   expect(apex.closest('.graph-root')).toBeTruthy();
   fireEvent.click(implement);
-  expect(within(flow).getByRole('link', { name: /(Codex|GPT)[^·]* · implement/ }).getAttribute('aria-current')).toBe('page');
+  expect(within(flow).getByRole('link', { name: /(Codex|GPT)[^·]* · Work/ }).getAttribute('aria-current')).toBe('page');
   expect(within(flow).getByRole('link', { name: /^Terminal/ }).getAttribute('aria-current')).toBeNull();
   expect(within(flow).queryByRole('button', { name: 'Retry' })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
   await waitFor(() => expect(command).toHaveBeenCalledWith('intake.retry', { requestId: 'implementation' }));
-  fireEvent.click(within(flow).getByRole('link', { name: /Claude[^·]* · review/ }));
-  expect(within(flow).getByRole('link', { name: /Claude[^·]* · review/ }).getAttribute('aria-current')).toBe('page');
+  fireEvent.click(within(flow).getByRole('link', { name: /Claude[^·]* · Review/ }));
+  expect(within(flow).getByRole('link', { name: /Claude[^·]* · Review/ }).getAttribute('aria-current')).toBe('page');
   fireEvent.click(within(flow).getByRole('link', { name: /^Terminal/ }));
   expect(within(flow).getByRole('link', { name: /^Terminal/ }).getAttribute('aria-current')).toBe('page');
 });
@@ -138,8 +138,8 @@ it('groups retry executions in one delegation node and reports retry errors', as
   const command = vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'retry', ok: false, error: 'Runner unavailable' }));
   render(<MemoryRouter><WorkspacePage project={PROJECT} target={target} client={{ command }}/></MemoryRouter>);
   const flow = screen.getByRole('complementary', { name: 'Panel' });
-  expect(within(flow).getAllByRole('link', { name: /(Codex|GPT)[^·]* · implement/ })).toHaveLength(1);
-  fireEvent.click(within(flow).getByRole('link', { name: /(Codex|GPT)[^·]* · implement/ }));
+  expect(within(flow).getAllByRole('link', { name: /(Codex|GPT)[^·]* · Work/ })).toHaveLength(1);
+  fireEvent.click(within(flow).getByRole('link', { name: /(Codex|GPT)[^·]* · Work/ }));
   expect(within(flow).queryByRole('button', { name: 'Retry' })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
   await waitFor(() => expect(screen.getAllByRole('alert')[0].textContent).toBe('Runner unavailable'));
@@ -169,7 +169,7 @@ it('keeps a resumed delegated conversation under its origin with two attempts an
   render(<MemoryRouter><WorkspacePage project={PROJECT} target={target} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: true })) }}/></MemoryRouter>);
   const flow = screen.getByRole('complementary', { name: 'Panel' });
   fireEvent.click(within(flow).getByRole('button', { name: '1 earlier request' }));
-  expect(within(flow).getAllByRole('link', { name: /(Codex|GPT)[^·]* · implement/ })).toHaveLength(1);
+  expect(within(flow).getAllByRole('link', { name: /(Codex|GPT)[^·]* · Work/ })).toHaveLength(1);
 });
 
 it.each(['running', 'ended', 'failed', 'unknown'])('uses the resumed run state %s and resolves original run aliases independently of row order', status => {

@@ -99,7 +99,7 @@ it('shows roots and only their running descendants on the overview', () => {
  const section = screen.getByRole('region', { name: 'agent-graph' });
  expect(section.querySelector('.root-row')!.textContent).toContain('Unrelated terminal');
  expect(within(section).getByRole('link', { name: /Terminal root/ })).toBeTruthy();
- expect(within(section).getByRole('button', { name: /GPT-6.1 Sol · implement · Running$/ })).toBeTruthy();
+ expect(within(section).getByRole('button', { name: /GPT-6.1 Sol · Work · Running$/ })).toBeTruthy();
  expect(within(section).queryByText('Review the overview')).toBeNull(); expect(screen.queryByText('External conversations')).toBeNull();
  // 根でない会話は一覧に出さない。
  expect(screen.queryByText('Background')).toBeNull();
@@ -147,8 +147,8 @@ it('switches the request flow between roots in the workspace', () => {
  vi.stubGlobal('innerWidth', 1440); render(<MemoryRouter><WorkspacePage project="agent-graph" target={target} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: true })) }}/></MemoryRouter>);
  const flow = screen.getByRole('complementary', { name: 'Panel' });
  fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getByRole('link', { name: /Terminal root/ }));
- expect(within(flow).getByText('GPT-6.1 Sol · implement')).toBeTruthy();
- fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getByRole('link', { name: /Second root/ })); expect(within(flow).queryByText('GPT-6.1 Sol · implement')).toBeNull(); fireEvent.click(within(flow).getByRole('button', { name: '1 earlier request' })); expect(within(flow).getByText('Second review')).toBeTruthy();
+ expect(within(flow).getByText('GPT-6.1 Sol · Work')).toBeTruthy();
+ fireEvent.click(within(screen.getByRole('region', { name: 'Conversations' })).getByRole('link', { name: /Second root/ })); expect(within(flow).queryByText('GPT-6.1 Sol · Work')).toBeNull(); fireEvent.click(within(flow).getByRole('button', { name: '1 earlier request' })); expect(within(flow).getByText('Second review')).toBeTruthy();
 });
 it('lists projected roots with child counts and keeps unknown evidence out of a separate banner', () => {
  vi.stubGlobal('innerWidth', 1024); render(<MemoryRouter><WorkspacePage project="agent-graph" target={setup()} client={{ command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'c', ok: true })) }}/></MemoryRouter>);

@@ -60,6 +60,7 @@ export function GraphPage({ project: suppliedProject, target = store, client, la
   const [role, setRole] = useState<ChildRole>(); const [range, setRange] = useState<TimeRange>('6h');
   const requested = tree.nodes.find(node => node.conversationId === search.get('child'))?.id;
   const [detail, setDetail] = useState<string>();
+  useEffect(() => { setDetail(undefined); }, [requested, root?.id]);
   const selected = detail ?? requested ?? root?.id ?? '';
   const expanded = readExpanded(search.getAll('expanded'));
   const model = buildRows(tree, { now, expanded, selected, role, state });

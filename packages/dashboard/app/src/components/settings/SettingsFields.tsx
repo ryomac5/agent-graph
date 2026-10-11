@@ -48,7 +48,7 @@ export function SettingsFields({ value, onChange, language, prefix = '', inherit
     if (entry !== null && typeof entry === 'object' && !Array.isArray(entry)) return <fieldset key={key}><legend>{prefix === 'agents' ? key : labelSetting(key, language)}</legend><SettingsFields value={entry as Record<string, unknown>} onChange={update} language={language} prefix={path} inheritIsolation={inheritIsolation}/></fieldset>;
     if (Array.isArray(entry) && (key === 'constraints' || path.startsWith('roles.'))) {
       const template = key === 'constraints' ? { kind: 'reviewerDifferentFamily' } : { executor: 'codex', model: 'gpt-6-astra', family: 'openai', tier: 'high' };
-      return <fieldset key={key}><legend>{labelSetting(key, language)}</legend>{entry.map((item, index) => <fieldset key={index} className="settings-array-row"><legend>{key === 'constraints' ? labelConstraint(String((item as Record<string, unknown>).kind), language) : index + 1}</legend>
+      return <fieldset key={key}><legend>{labelSetting(key, language)}</legend>{entry.map((item, index) => <fieldset key={index} className="settings-array-row" aria-label={key === 'constraints' ? `${labelSetting('kind', language)} ${index + 1}` : undefined}>{key !== 'constraints' && <legend>{index + 1}</legend>}
         <SettingsFields value={item as Record<string, unknown>} onChange={next => {
           if (key === 'constraints') next = next.kind === 'minTierForRole' ? { kind: next.kind, role: next.role ?? 'implement', tier: next.tier ?? 'high' } : { kind: next.kind };
           update(entry.map((old, at) => at === index ? next : old));

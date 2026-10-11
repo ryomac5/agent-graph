@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { ProviderMark } from '../../components/RootViews.tsx';
 import type { Policy } from '../../lib/settings.ts';
 import type { Candidate, Role, Weight } from '../../../../../core/src/delegate/types.ts';
@@ -27,6 +27,7 @@ export function ModelAssignments({ policy, onChange, language, models, onRefresh
   onRefresh?(provider: Candidate['executor']): void; onApply?(): void; applyDisabled?: boolean;
 }) {
   const ja = language === 'ja';
+  const headingId = useId();
   const text = (en: string, jp: string) => ja ? jp : en;
   const displayText = (value: string) => ja ? value : BUILTIN_TEXT[value] ?? value;
   const weightName = (weight: Weight) => ({ light: text('Light', '軽量'), standard: text('Standard', '標準'), heavy: text('Heavy', '高負荷') })[weight];
@@ -68,8 +69,8 @@ export function ModelAssignments({ policy, onChange, language, models, onRefresh
   }
   const presetPolicy = preset && createPreset(policy, preset);
   const presetChanges = presetPolicy ? listPresetChanges(policy, presetPolicy) : [];
-  return <section className="model-assignments" aria-label={text('Model assignment settings', 'モデル割り当て設定')}>
-    <h3>{text('Models by role', '役割別のモデル')}</h3>
+  return <section className="model-assignments" aria-labelledby={headingId}>
+    <h3 id={headingId}>{text('Models by role', '役割別のモデル')}</h3>
     <div className="button-row assignment-actions">{(['performance', 'balanced', 'economy'] as const).map(value => <button key={value} className="btn btn-secondary" onClick={() => { close(); setPreset(value); }}>{({ performance: text('Performance', '性能重視'), balanced: text('Balanced', 'バランス'), economy: text('Economy', '節約') })[value]}</button>)}{onApply && <button className="btn btn-secondary assignment-apply-button" disabled={applyDisabled} onClick={onApply}>{text('Apply to configuration files', '設定ファイルに反映')}</button>}</div>
     {preset && <div role="dialog" aria-label={text('Preset changes', 'まとめて変更する内容')} className="assignment-preset">
       <table><thead><tr><th>{text('Assignment', '割り当て')}</th><th>{text('Before', '変更前')}</th><th>{text('After', '変更後')}</th></tr></thead><tbody>{presetChanges.map(change => <tr key={change.role + change.weight}><th>{NAMES[change.role][ja ? 1 : 0]} {weightName(change.weight)}</th>{(['before', 'after'] as const).map(side => <td key={side}>{change[side].map(candidate => displayName(candidate) + (candidate.effort ? ' · ' + candidate.effort : '')).join(' → ')}{change[side === 'before' ? 'inheritedBefore' : 'inheritedAfter'] && ' · ' + text('Use standard model', '標準モデルを使用')}</td>)}</tr>)}</tbody></table>

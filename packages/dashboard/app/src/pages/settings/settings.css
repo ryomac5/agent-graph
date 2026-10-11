@@ -98,3 +98,24 @@
   .settings-page .settings-card :is(input:not([type="checkbox"]), select, textarea) { flex: 0 1 240px; }
 }
 .settings-page .settings-card select.settings-constraint { width: max-content; flex: 0 1 auto; }
+
+.settings-page .settings-card .settings-number-unit { display: flex; align-items: center; gap: var(--space-2); }
+.settings-page .settings-card .settings-number-unit input { width: 100px; flex: 0 1 100px; }
+.settings-page input[aria-invalid='true'] { border-color: var(--state-failed); outline: 1px solid var(--state-failed); }
+.settings-weights { display: flex; align-items: center; gap: var(--space-6); }
+.settings-weight-controls { flex: 1; min-width: 0; }
+.settings-weight-row { display: flex; align-items: center; gap: var(--space-3); }
+.settings-page .settings-weight-row label { flex: 1; min-width: 0; }
+.settings-page .settings-weight-row label > span { display: flex; align-items: center; gap: var(--space-2); }
+.settings-page .settings-card .settings-weight-row input[type='range'] { width: 160px; flex: 0 1 160px; accent-color: var(--weight-color); }
+.settings-weight-color { background: var(--weight-color); }
+.settings-weight-row i { width: 10px; height: 10px; flex: 0 0 10px; border-radius: 2px; }
+.weight-acceptRate { --weight-color: #0031D8; }
+.weight-reviewApprove { --weight-color: #FA0000; }
+.weight-roundTrips { --weight-color: #C5D7FB; }
+.weight-tokens { --weight-color: #FFBBBB; }
+.settings-weight-bar { display: flex; width: 240px; height: 24px; flex: 0 1 240px; overflow: hidden; border-radius: var(--radius-1); }
+@media (max-width: 760px) {
+  .settings-weights { flex-direction: column; align-items: stretch; gap: var(--space-3); }
+  .settings-weight-bar { width: 100%; flex: auto; }
+}

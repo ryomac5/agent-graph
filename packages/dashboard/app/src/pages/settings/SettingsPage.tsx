@@ -4,6 +4,7 @@ import { APPEARANCE_CHOICES, loadAppearance, saveAppearance, requestSettings, de
   type Appearance, type PolicyPreview, type SettingsClient, type SettingsSnapshot, type SettingsStatus } from '../../lib/settings.ts';
 import { loadPreferences, NOTIFICATION_KINDS, notificationLabel, PREFERENCES_KEY, type NotificationPreferences } from '../../components/notifications/model.ts';
 import { ModelAssignments, type ModelCatalog } from './ModelAssignments.tsx';
+import { assignmentSettingText } from '../../lib/i18n.ts';
 import './settings.css';
 
 const ERROR_TEXT: Record<string, string> = {
@@ -78,7 +79,9 @@ export function SettingsPage({ client, language, onAppearance, policyOnly = fals
     setSettings(previous => previous && { ...previous, [store]: value });
     if (store === 'policy') { setPreview(undefined); setProviderPreview(undefined); setProviderConfirmed(false); }
   }
+  const quotaInvalid = !!settings && settings.policy.quota.softLimitPercent > settings.policy.quota.hardLimitPercent;
   async function save(store: FileStore) {
+    if (store === 'policy' && quotaInvalid) { setError(assignmentSettingText[lang].quotaError); return; }
     const revision = edits.current[store];
     const patch = settings![store];
     await perform(async () => {
@@ -93,6 +96,7 @@ export function SettingsPage({ client, language, onAppearance, policyOnly = fals
     });
   }
   async function previewPolicy() {
+    if (quotaInvalid) { setError(assignmentSettingText[lang].quotaError); return; }
     const revision = edits.current.policy;
     const patch = settings!.policy;
     await perform(async () => {
@@ -130,8 +134,8 @@ export function SettingsPage({ client, language, onAppearance, policyOnly = fals
         <div className="button-row"><button className="btn btn-secondary" disabled={busy || !providerConfirmed} onClick={() => void perform(async () => { for (const preview of providerPreview) { await requestSettings(client, 'settings.applyProvider', { provider: preview.provider, token: preview.token, confirmation: true }); setProviderPreview(previous => { const remaining = previous?.filter(entry => entry.provider !== preview.provider); return remaining?.length ? remaining : undefined; }); } setProviderPreview(undefined); setProviderConfirmed(false); setNotice(text('Applied', '反映しました')); })}>{text('Confirm and apply', '確認して反映')}</button><button className="btn btn-ghost" onClick={() => { setProviderPreview(undefined); setProviderConfirmed(false); }}>{text('Cancel', '取り消す')}</button></div>
       </div>}
       <SettingsFields value={{ maxRoundTrips: settings.policy.maxRoundTrips, quota: settings.policy.quota, performance: settings.policy.performance, constraints: settings.policy.constraints }} language={lang} onChange={next => edit('policy', { ...settings.policy, ...next })}/>
-      <div className="button-row"><button className="btn btn-secondary" disabled={busy} onClick={() => void previewPolicy()}>{text('Preview policy', '割り当てを試算')}</button>
-      <button className="btn btn-primary" disabled={busy || !preview} onClick={() => void save('policy')}>{text('Save policy', '割り当てを保存')}</button></div>
+      <div className="button-row"><button className="btn btn-secondary" disabled={busy || quotaInvalid} onClick={() => void previewPolicy()}>{text('Preview policy', '割り当てを試算')}</button>
+      <button className="btn btn-primary" disabled={busy || quotaInvalid || !preview} onClick={() => void save('policy')}>{text('Save policy', '割り当てを保存')}</button></div>
       {preview && <div role="region" aria-label={text('Policy preview', '割り当ての試算')}><table><thead><tr><th>{text('Delegation', '委譲')}</th><th>{text('Before', '変更前')}</th><th>{text('After', '変更後')}</th></tr></thead><tbody>{preview.rows.map(row => <tr key={row.id}><td>{row.id}</td><td>{describeDecision(row.before)}</td><td>{describeDecision(row.after)}</td></tr>)}</tbody></table>{!preview.rows.length && <p>{text('No past delegations available.', '試算できる過去の委譲がありません。')}</p>}</div>}
     </SettingsSection>
     {!policyOnly && <SettingsSection title={text('Projects', 'プロジェクト')}>

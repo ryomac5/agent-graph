@@ -49,3 +49,28 @@ export const graphText = {
     inferred: '推定', allow: '許可', deny: '拒否', requests: '依頼のグラフ', request: '依頼', who: '相手',
     now: '現在', range: '期間', report: '報告', elapsed: '経過', rounds: '往復', close: '詳細を閉じる', open: '会話を開く' },
 } as const;
+
+export const assignmentSettingText = {
+  en: {
+    weights: 'What to favor when choosing a model', softLimitPercent: 'Deprioritize at usage', hardLimitPercent: 'Stop using at usage',
+    minSamples: 'Results needed to rank', acceptRate: 'Pass rate', reviewApprove: 'Review approval', roundTrips: 'Fewer round trips', tokens: 'Fewer tokens',
+    runs: 'runs', distribution: 'Model preference shares',
+    softTitle: 'At or above this usage percentage, move the model behind other candidates.',
+    hardTitle: 'At or above this usage percentage, exclude the model from candidates.',
+    samplesTitle: 'Rank by performance only when every candidate has this many past results; otherwise keep the configured order.',
+    weightsTitle: 'Shares of preference when ranking by past results; changing one redistributes the others proportionally.',
+    passTitle: 'Rate of passing the acceptance criteria.',
+    quotaError: 'Deprioritize usage must not exceed stop-using usage.',
+  },
+  ja: {
+    weights: 'モデル選びで重視すること', softLimitPercent: '後回しにする使用率', hardLimitPercent: '使わない使用率',
+    minSamples: '実績で選ぶのに要る件数', acceptRate: '合格率', reviewApprove: 'レビューの承認率', roundTrips: '往復の少なさ', tokens: 'トークンの少なさ',
+    runs: '件', distribution: 'モデル選びの割合',
+    softTitle: 'この使用率以上になると、そのモデルを候補の後ろに回します。',
+    hardTitle: 'この使用率以上になると、そのモデルを候補から外します。',
+    samplesTitle: 'すべての候補にこの件数以上の過去の結果があるときだけ実績で並べ替え、足りなければ決めた順を使います。',
+    weightsTitle: '実績で並べ替えるときの重視の割合で、1つを変えると残りを比率で配り直します。',
+    passTitle: '受け入れ条件の合格率です。',
+    quotaError: '後回しにする使用率は、使わない使用率以下にしてください。',
+  },
+} as const;

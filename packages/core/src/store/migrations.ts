@@ -208,4 +208,8 @@ export const migrations: readonly Migration[] = [
     version: 6,
     sql: "ALTER TABLE sessions ADD COLUMN continued_in TEXT;",
   },
+  {
+    version: 7,
+    sql: "ALTER TABLE delegations ADD COLUMN weight TEXT NOT NULL DEFAULT 'standard'; ALTER TABLE assignments ADD COLUMN effort TEXT;",
+  },
 ];

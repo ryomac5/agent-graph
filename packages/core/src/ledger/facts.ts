@@ -1,11 +1,11 @@
 export const SOURCES = [
-  "host-claude", "host-codex", "hook", "transcript-claude", "rollout-codex",
+  "host-claude", "host-codex", "host-antigravity", "hook", "transcript-claude", "rollout-codex",
   "ui", "intake", "kit", "legacy",
 ] as const;
 export type Source = typeof SOURCES[number];
 export const CONFIDENCES = ["confirmed", "inferred", "unknown"] as const;
 export type Confidence = typeof CONFIDENCES[number];
-export type Provider = "claude" | "codex";
+export type Provider = "claude" | "codex" | "antigravity";
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 export type RunState = "starting" | "running" | "waiting_approval" | "waiting_input" | "idle" | "ended" | "failed" | "unknown";
 export type DelegationState = "received" | "accepted" | "assigned" | "running" | "verifying" | "reviewing" | "done" | "failed" | "interrupted" | "denied";
@@ -102,6 +102,7 @@ export interface DelegationPayload {
   parent_run_id?: string;
   origin?: { provider: Provider; native_id: string };
   role: string;
+  weight?: "light" | "standard" | "heavy";
   title: string;
   task?: string;
   accept?: string[];

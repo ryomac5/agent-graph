@@ -26,10 +26,12 @@ export type * from "./delegate/types.ts";
 export { runDelegation, type DelegationDeps, type DelegationCaller } from "./delegate/run.ts";
 export { assign, defaultPolicyTable } from "./assign/static.ts";
 export { decide, type DecisionInput, type QuotaView, type PerformanceView } from "./assign/assign.ts";
-export { loadPolicy, defaultPolicy, parsePolicyToml, policyVersion, type Policy } from "./assign/policy.ts";
+export { loadPolicy, defaultPolicy, parsePolicyToml, policyVersion, getCandidates, mergePolicy, type Policy } from "./assign/policy.ts";
 export { readCodexUsage } from "./usage/codex.ts";
 export { probeClaudeUsage } from "./usage/claude.ts";
 export { aggregatePerformance, type Performance } from "./store/performance.ts";
 export type { UsageSample } from "./usage/types.ts";
 export { runAcceptance } from "./accept/run.ts";
 export { execute, type ExecRequest, type ExecResult } from "./exec/types.ts";
+
+export { resolveModel, modelNotice, type ModelUsage } from "./assign/models.ts";

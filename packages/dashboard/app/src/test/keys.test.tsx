@@ -5,6 +5,8 @@ import { App } from '../App.tsx';
 import { createStore } from '../lib/store.ts';
 import { createKeyHandler, DEFAULT_KEYS, SEQUENCE_TIMEOUT_MS, validateBindings } from '../lib/keys.ts';
 import { CommandPalette } from '../components/command/Commands.tsx';
+import { defaultConfig, defaultProject } from '../../../../core/src/settings/index.ts';
+import { defaultPolicy } from '../../../../core/src/assign/policy.ts';
 
 beforeEach(() => {
   localStorage.clear();
@@ -27,7 +29,9 @@ function mount(path = '/') {
   let keys = { ...DEFAULT_KEYS };
   const client = { command: vi.fn(async (name: string, payload?: unknown) => {
     if (name === 'settings.write') keys = { ...(payload as { patch: { keys: typeof keys } }).patch.keys };
-    return { type: 'ack' as const, cmd_id: name, ok: true, result: name === 'settings.read' ? { config: { keys } } : [] };
+    return { type: 'ack' as const, cmd_id: name, ok: true, result: name === 'settings.read' ? {
+      config: { ...defaultConfig(), keys }, policy: defaultPolicy(), project: defaultProject(), errors: {}, apiKeyConfigured: false,
+    } : name === 'settings.models' ? { state: 'unknown', models: [] } : [] };
   }) };
   render(<MemoryRouter initialEntries={[path]}><App target={target} client={client}/><Location/></MemoryRouter>);
   return { target, client, setKeys: (value: typeof keys) => { keys = value; } };

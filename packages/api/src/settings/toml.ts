@@ -145,6 +145,27 @@ function serializeValue(value: unknown): string {
   return JSON.stringify(value);
 }
 export function updateSettingsToml(text: string, patch: Record<string, unknown>, policy = false): string {
+  if (policy && patch.roles) {
+    const old = readDocument(text);
+    const roles = patch.roles as Record<string, unknown>;
+    // 旧い候補の注釈を残し、見出しだけを standard へ移す。
+    for (const [role, bands] of Object.entries(roles)) {
+      if (!bands || Array.isArray(bands) || !Array.isArray((old.value.roles as Record<string, unknown> | undefined)?.[role])) continue;
+      text = text.replace(new RegExp(`\\[\\[roles\\.${role}\\]\\]`, "g"), `[[roles.${role}.standard]]`);
+    }
+    const current = readDocument(text);
+    const previous = current.value.roles as Record<string, unknown> | undefined;
+    const migrated = Object.keys(roles).filter(role => !Array.isArray(roles[role]) && Array.isArray(previous?.[role])).map(role => `roles.${role}`);
+    for (const [role, bands] of Object.entries(roles)) {
+      if (!bands || Array.isArray(bands) || !previous?.[role] || Array.isArray(previous[role])) continue;
+      for (const weight of Object.keys(previous[role] as object)) if (!Object.hasOwn(bands, weight)) migrated.push(`roles.${role}.${weight}`);
+    }
+    if (migrated.length) {
+      const remove = new Set<number>();
+      for (const entry of current.entries) if (migrated.some(path => entry.path === path || entry.path === `@${path}` || entry.path.startsWith(`${path}.`))) for (let line = entry.line; line <= entry.end; line++) remove.add(line);
+      text = current.lines.filter((_, line) => !remove.has(line)).join("\n");
+    }
+  }
   const document = readDocument(text);
   const leaves: Record<string, unknown> = {};
   function flatten(value: Record<string, unknown>, prefix = ""): void {

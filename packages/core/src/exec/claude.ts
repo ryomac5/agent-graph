@@ -4,7 +4,7 @@ import type { ExecRequest, ExecResult } from "./types.ts";
 export async function executeClaude(req: ExecRequest): Promise<ExecResult> {
   const task = `無人実行です。質問せずに作業を完了し、最後に結果を報告してください。\n${req.task}`;
   const result = await runProcess({ ...req, task }, process.env.AGENT_GRAPH_CLAUDE_BIN || "claude", [
-    "-p", "--model", req.model, "--output-format", "stream-json", "--verbose",
+    "-p", "--model", req.model, ...(req.effort ? ["--effort", req.effort] : []), "--output-format", "stream-json", "--verbose",
     "--permission-mode", "acceptEdits",
     "--settings", JSON.stringify({ sandbox: { enabled: true, allowUnsandboxedCommands: false } }),
   // 無人実行の印と委譲した側のセッション。hook はこれを見て番号を取らない

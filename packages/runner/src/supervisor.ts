@@ -72,7 +72,7 @@ export class Supervisor {
     for (const approval of approvals) {
       if (approval.run_id && managedIds.has(approval.run_id) && ["pending", "requested", "waiting", "waiting_approval"].includes(approval.state)) {
         const source = store.lastFact(`approval:${approval.id}`)?.source;
-        if (source !== "host-claude" && source !== "host-codex") continue;
+        if (source !== "host-claude" && source !== "host-codex" && source !== "host-antigravity") continue;
         this.append({ ...this.stamp(), source, kind: "approval.resolved", subject: `approval:${approval.id}`,
           confidence: "confirmed", payload: { state: "expired", reason: "restart" } });
       }

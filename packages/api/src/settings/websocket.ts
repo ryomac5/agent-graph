@@ -8,7 +8,7 @@ export interface SettingsRequestPort { request(request: RunnerRequest): Promise<
 export function bindSettingsRequests(port: SettingsRequestPort, settings: SettingsService): () => void {
   const original = port.request;
   port.request = async (request) => {
-    if (!request.command.startsWith("settings.")) return original.call(port, request);
+    if (!request.command.startsWith("settings.") && !["models.resolve", "models.table"].includes(request.command)) return original.call(port, request);
     const { type: _type, ...response } = await settings.handle({ ...request, type: "cmd" });
     return { type: "res", ...response };
   };

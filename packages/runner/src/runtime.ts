@@ -7,6 +7,7 @@ import { INTEGRATION_MODES, type AgentHost, type Decision, type IntegrationMode,
 import { ClaudeHost, type ClaudeHostOptions } from "./hosts/claude/index.ts";
 
 type Launch = { cwd: string; model: ModelChoice; integrationMode?: IntegrationMode };
+import { AntigravityHost } from "./hosts/antigravity/index.ts";
 import { CodexHost } from "./hosts/codex/index.ts";
 import { Recovery, type RecoveryAction } from "./recovery.ts";
 import { type SocketRequest, type RunnerEvent } from "./socket.ts";
@@ -88,7 +89,7 @@ export class RunnerRuntime {
     }
   }
   private getHost(provider: unknown): AgentHost {
-    if (provider !== "claude" && provider !== "codex") throw new TypeError("Invalid provider");
+    if (provider !== "claude" && provider !== "codex" && provider !== "antigravity") throw new TypeError("Invalid provider");
     const host = this.hosts.get(provider);
     if (!host) throw new Error(`Host unavailable: ${provider}`);
     return host;
@@ -202,6 +203,6 @@ export class RunnerRuntime {
 }
 
 export async function serveRunner(ledger: Ledger, path: string, options: IntakeOptions & { hosts?: readonly AgentHost[]; isolation?: "shared" | "worktree"; claude?: ClaudeHostOptions } = {}) {
-  const hosts = options.hosts ?? [new ClaudeHost(undefined, { enableFork: true, ...options.claude }), new CodexHost()];
+  const hosts = options.hosts ?? [new ClaudeHost(undefined, { enableFork: true, ...options.claude }), new CodexHost(), new AntigravityHost()];
   return serveMcpRunner(ledger, path, { ...options, hosts });
 }

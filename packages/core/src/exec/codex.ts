@@ -6,7 +6,7 @@ import type { ExecRequest, ExecResult } from "./types.ts";
 export async function executeCodex(req: ExecRequest): Promise<ExecResult> {
   const lastMessage = join(req.workDir, "last.md");
   const result = await runProcess(req, process.env.AGENT_GRAPH_CODEX_BIN || "codex", [
-    "exec", "-m", req.model, "--sandbox", "workspace-write", "--skip-git-repo-check",
+    "exec", "-m", req.model, ...(req.effort ? ["-c", `model_reasoning_effort=${JSON.stringify(req.effort)}`] : []), "--sandbox", "workspace-write", "--skip-git-repo-check",
     "--output-last-message", lastMessage, "-",
   ]);
   const output = await readFile(lastMessage, "utf8").catch((error: NodeJS.ErrnoException) => {

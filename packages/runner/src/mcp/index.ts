@@ -17,7 +17,8 @@ const SOCKET_PROBE_TIMEOUT_MS = 5000;
 export const TOOLS = [
   { name: "delegate", description: "Accept a delegation without waiting for its result. Use agent-graph watch for long tasks.", inputSchema: {
     type: "object", required: ["role", "title", "task", "accept"], properties: {
-      requestId: { type: "string" }, role: { type: "string", enum: ["implement", "review", "research", "document", "orchestrate"] },
+      weight: { type: "string", enum: ["light", "standard", "heavy"] },
+      requestId: { type: "string" }, role: { type: "string", enum: ["implement", "review", "research", "document", "orchestrate", "advisor", "plan", "proofread"] },
       title: { type: "string" }, task: { type: "string" }, accept: { type: "array", items: { type: "string" } },
       scope: { type: "array", items: { type: "string" } }, cwd: { type: "string" },
       outputs: { type: "array", items: { type: "string" } }, constraints: { type: "object" }, timeoutSec: { type: "number" }, review: { type: "boolean" },

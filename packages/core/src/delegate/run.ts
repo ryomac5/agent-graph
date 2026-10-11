@@ -92,12 +92,12 @@ export async function runDelegation(
   // 依頼の詳細と往復は表に残し、詳細パネルが events を辿らずに読めるようにする
   store.insertDelegation({ id: delegationId, repoKey: caller.repoKey,
     sessionId: caller.sessionId, parentId: caller.parentDelegationId,
-    role: req.role, title: req.title, status: "requested",
+    role: req.role, weight: req.weight ?? "standard", title: req.title, status: "requested",
     task: req.task, scope: req.scope, outputs: req.outputs, worktree: cwd });
   store.insertDelegationRound(delegationId, "request", req.task, now().toISOString());
   store.db.prepare("INSERT INTO delegation_requests (delegation_id, request) VALUES (?, ?)").run(delegationId, JSON.stringify(req));
   store.insertSpan({ trace, name: "delegate", startedAt: now().toISOString(), status: "unset",
-    attributes: { "agent.role": req.role, "agent.executor": "", "agent.model": "",
+    attributes: { "agent.role": req.role, "agent.weight": req.weight ?? "standard", "agent.executor": "", "agent.model": "",
       "agent.session": caller.sessionId, "agent.delegation": delegationId } });
   try {
     event("delegation.requested", { delegationId, task: req.task });
@@ -148,7 +148,7 @@ export async function runDelegation(
         try {
           event("execution.started", { delegationId });
           execution = await (deps.execute ?? runExecute)({
-            executor: assignment.executor, model: assignment.model, task, cwd, trace: executeTrace,
+            executor: assignment.executor, model: assignment.model, effort: assignment.effort, task, cwd, trace: executeTrace,
             sessionId: caller.sessionId, delegationId,
             timeoutMs: (req.timeoutSec ?? DEFAULT_TIMEOUT_SEC) * 1000, workDir,
           });
@@ -179,7 +179,7 @@ export async function runDelegation(
           if (status === "done" && (req.review ?? req.role === "implement")) {
             const diff = await readReviewDiff(cwd, baseRef);
             const reviewResult = await runDelegation({
-              role: "review", title: `Review: ${req.title}`, cwd,
+              role: "review", weight: req.weight, title: `Review: ${req.title}`, cwd,
               task: `元の依頼:\n${req.task}\n\n受け入れ結果:\n${JSON.stringify(acceptance)}\n\ngit diff:\n${diff}\n\n最終行に VERDICT: approve または VERDICT: request_changes を書いてください。`,
               accept: ["true"], review: false,
               constraints: { excludeFamily: [assignment.family] },

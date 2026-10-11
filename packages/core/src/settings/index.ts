@@ -1,4 +1,4 @@
-import { defaultPolicy, type Policy } from "../assign/policy.ts";
+import { defaultPolicy, mergePolicy, type Policy } from "../assign/policy.ts";
 import { validateRules } from "../ledger/redact.ts";
 
 export type Isolation = "read-only" | "workspace-write" | "danger-full-access";
@@ -64,6 +64,7 @@ export function mergeSettings(base: unknown, patch: unknown): unknown {
 }
 function assertChoice(value: string, choices: string[], path: string): void { if (!choices.includes(value)) throw new TypeError(`Invalid ${path}`); }
 export function validateSettings<S extends keyof SettingsByStore>(store: S, input: unknown): SettingsByStore[S] {
+  if (store === "policy") return mergePolicy(defaultPolicy(), input) as SettingsByStore[S];
   const defaults = getDefaults(store);
   const value = mergeSettings(defaults, input) as SettingsByStore[S];
   function check(actual: unknown, expected: unknown, path: string): void {
@@ -78,30 +79,6 @@ export function validateSettings<S extends keyof SettingsByStore>(store: S, inpu
       if (path === "project.isolation.policy" && typeof actual === "string") return;
       if (actual !== null && (typeof actual !== "number" || !Number.isSafeInteger(actual) || actual < 0)) throw new TypeError(`Invalid ${path}`);
     } else if (typeof actual !== typeof expected || typeof actual === "number" && (!Number.isFinite(actual) || actual < 0) || typeof actual === "string" && !actual.trim()) throw new TypeError(`Invalid ${path}`);
-  }
-  // 候補と制約の配列は可変の形を持つため、個別に検証する。
-  if (store === "policy") {
-    const p = value as Policy;
-    check({ ...p, roles: defaults && (defaults as Policy).roles, constraints: [] }, { ...defaultPolicy(), constraints: [] }, "policy");
-    if (!p.roles || typeof p.roles !== "object" || Array.isArray(p.roles)
-      || Object.keys(p.roles).some((role) => !Object.hasOwn(defaultPolicy().roles, role))) throw new TypeError("Invalid roles");
-    for (const entries of Object.values(p.roles)) {
-      if (!Array.isArray(entries)) throw new TypeError("Invalid roles");
-      for (const c of entries) {
-        if (!c || typeof c.model !== "string" || !c.model.trim()) throw new TypeError("Invalid candidate");
-        if (Object.keys(c).some((key) => !["executor", "model", "family", "tier"].includes(key))) throw new TypeError("Unknown candidate field");
-        assertChoice(c.executor, ["claude", "codex"], "executor"); assertChoice(c.family, ["anthropic", "openai"], "family"); assertChoice(c.tier, ["high", "mid", "low"], "tier");
-      }
-    }
-    if (!Array.isArray(p.constraints)) throw new TypeError("Invalid constraints");
-    for (const c of p.constraints) {
-      if (!c || typeof c !== "object") throw new TypeError("Invalid constraint");
-      assertChoice(c.kind, ["reviewerDifferentFamily", "implementerNotOrchestrator", "minTierForRole"], "constraint");
-      if (Object.keys(c).some((key) => !(c.kind === "minTierForRole" ? ["kind", "role", "tier"] : ["kind"]).includes(key))) throw new TypeError("Unknown constraint field");
-      if (c.kind === "minTierForRole") { assertChoice(c.role, Object.keys(p.roles), "role"); assertChoice(c.tier, ["high", "mid", "low"], "tier"); }
-    }
-    if (!Number.isSafeInteger(p.maxRoundTrips) || !Number.isSafeInteger(p.performance.minSamples) || p.quota.softLimitPercent > p.quota.hardLimitPercent || p.quota.hardLimitPercent > 100) throw new TypeError("Invalid policy limits");
-    return value;
   }
   check(value, defaults, store);
   if (store === "config") {

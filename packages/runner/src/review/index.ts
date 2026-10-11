@@ -80,7 +80,7 @@ export class ReviewFlow {
     while (origin.previous_artifact_id && !visited.has(origin.id)) {
       visited.add(origin.id); origin = this.artifact(origin.previous_artifact_id);
     }
-    const delegation = readProjection(this.ledger).records<{ run_id: string; title: string; task: string; accept: string[]; scope?: string[]; request: { timeoutSec?: number }; result: { output: string } }>("delegation", "run_id = ?", [origin.run_id])[0];
+    const delegation = readProjection(this.ledger).records<{ run_id: string; title: string; task: string; accept: string[]; weight?: "light" | "standard" | "heavy"; scope?: string[]; request: { timeoutSec?: number }; result: { output: string } }>("delegation", "run_id = ?", [origin.run_id])[0];
     if (!delegation?.task || !delegation.accept) throw new Error("Original request unavailable");
     return { ...delegation, task: delegation.task, accept: delegation.accept };
   }
@@ -274,7 +274,7 @@ export class ReviewFlow {
   private async startReview(id: string): Promise<JsonValue> {
     const { artifact, provider, delegation, original, conversation, reply, patch, findings } = this.prepareReview(id);
     const family = provider === "codex" ? "openai" : "anthropic";
-    const selected = decide({ role: "review", title: "Artifact review", task: "Review fixed artifact", accept: [],
+    const selected = decide({ role: "review", weight: delegation.weight, title: "Artifact review", task: "Review fixed artifact", accept: [],
       constraints: { excludeFamily: [family] } }, { ...this.decision, implementerFamily: family });
     if (!selected.ok) throw new Error(selected.reason.join("\n"));
     const runId = randomUUID(); const conversationId = randomUUID();
@@ -286,7 +286,7 @@ export class ReviewFlow {
       to_id: original.conversation_id!, active: true, confidence: "confirmed",
       evidence: { artifact_id: artifact.id, patch_hash: artifact.patch_hash } });
     await this.runtime.supervisor.start(selected.assignment.executor, { runId, conversationId, generation: 1,
-      cwd: this.run(artifact.run_id).cwd!, model: { model: selected.assignment.model },
+      cwd: this.run(artifact.run_id).cwd!, model: { model: selected.assignment.model, effort: selected.assignment.effort },
       input: { text: buildReviewPrompt({ request: { title: delegation.title!, task: delegation.task, accept: delegation.accept!, scope: delegation.scope },
         reply, artifact: { ...artifact, diff: patch, findings } }) }, outputSchema: json(REVIEW_OUTPUT_SCHEMA) as { [key: string]: JsonValue } });
     await this.finishRun(runId);

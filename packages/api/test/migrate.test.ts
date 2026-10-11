@@ -47,7 +47,7 @@ test("旧行の規則を写し、二度の変換で件数・台帳・旧 DB の�
     VALUES ('d', 'old', 'first', 'implement', 'task', 'done', 1, 'request', '["src/**"]', '["result"]', 'complete')`).run();
   db.prepare("INSERT INTO delegation_requests VALUES ('d', ?)").run(JSON.stringify({ task: "request", scope: ["src/**"] }));
   db.prepare("INSERT INTO delegation_rounds VALUES ('d', 1, 'request', 'do it', ?), ('d', 2, 'report', 'done', ?)").run(TS, LATER);
-  db.prepare("INSERT INTO assignments VALUES ('d', 'codex', 'model', 'family', 'tier', 'reason', 'v1')").run();
+  db.prepare("INSERT INTO assignments (delegation_id, executor, model, family, tier, reason, policy_version) VALUES ('d', 'codex', 'model', 'family', 'tier', 'reason', 'v1')").run();
   db.prepare("INSERT INTO acceptances VALUES ('d', 1, ?, '[]')").run(JSON.stringify([{ passed: true }]));
   db.prepare("INSERT INTO reviews VALUES ('d', 'd', 'approve', 'good')").run();
   const original = readFileSync(path);

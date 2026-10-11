@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Event, Span } from "../events.ts";
-import type { AcceptanceResult, Assignment, Role, TokenUsage } from "../delegate/types.ts";
+import type { AcceptanceResult, Assignment, Role, Weight, TokenUsage } from "../delegate/types.ts";
 import type { UsageSample } from "../usage/types.ts";
 import { migrate } from "./migrate.ts";
 import { ulid } from "../ulid.ts";
@@ -649,13 +649,13 @@ export class Store {
   }
 
   // task は依頼文、scope と outputs は依頼の指定、worktree は子が働いた作業木。詳細パネルに出す。
-  insertDelegation(row: { id: string; repoKey: string; sessionId: string; parentId?: string; role: Role; title: string;
+  insertDelegation(row: { id: string; repoKey: string; sessionId: string; parentId?: string; role: Role; weight?: Weight; title: string;
     status: string; kind?: "delegation" | "subagent"; task?: string; scope?: string[]; outputs?: string[]; worktree?: string }): void {
-    this.db.prepare(`INSERT INTO delegations (id, repo_key, session_id, parent_id, role, title, status, kind, task, scope, outputs, worktree)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    this.db.prepare(`INSERT INTO delegations (id, repo_key, session_id, parent_id, role, title, status, kind, task, scope, outputs, worktree, weight)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(row.id, row.repoKey, row.sessionId, row.parentId ?? null, row.role, row.title, row.status, row.kind ?? "delegation",
         row.task ?? null, row.scope ? JSON.stringify(row.scope) : null, row.outputs ? JSON.stringify(row.outputs) : null,
-        row.worktree ?? null);
+        row.worktree ?? null, row.weight ?? "standard");
     this.notifyChange();
   }
 
@@ -689,10 +689,10 @@ export class Store {
 
   insertAssignment(id: string, assignment: Assignment): void {
     this.db.prepare(`INSERT INTO assignments
-      (delegation_id, executor, model, family, tier, reason, policy_version)
-      VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      (delegation_id, executor, model, family, tier, reason, policy_version, effort)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(id, assignment.executor, assignment.model, assignment.family, assignment.tier,
-        JSON.stringify(assignment.reason), assignment.policyVersion);
+        JSON.stringify(assignment.reason), assignment.policyVersion, assignment.effort ?? null);
     this.notifyChange();
   }
 

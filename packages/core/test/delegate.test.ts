@@ -6,6 +6,8 @@ import { join } from "node:path";
 import test from "node:test";
 import { childContext, openStore, runDelegation, type DelegationDeps, type DelegateRequest } from "../src/index.ts";
 
+import { defaultPolicy, getCandidates } from "../src/assign/policy.ts";
+
 const caller = { repoKey: "repo", repoRoot: process.cwd(), sessionId: "session" };
 const request: DelegateRequest = { role: "research", title: "調査", task: "調べる", accept: ["true"] };
 
@@ -15,7 +17,9 @@ function setup(t: { after: (fn: () => void) => void }): DelegationDeps {
   store.upsertRepo({ key: "repo", rootPath: caller.repoRoot, name: "repo" });
   store.insertSession({ id: "session", repoKey: "repo", name: "repo-1", client: "codex",
     traceId: "1".repeat(32), startedAt: new Date().toISOString() });
-  return { store,
+  const policy = defaultPolicy();
+  policy.roles.research = [...getCandidates(policy, "research"), { executor: "codex", model: "gpt-6.1-sol", family: "openai", tier: "mid" }];
+  return { store, policy,
     execute: async (req) => ({ exitCode: 0, output: "完了", timedOut: false,
       usage: { inputTokens: 2, outputTokens: 3 }, durationMs: 1, childTrace: childContext(req.trace) }),
     accept: async () => ({ passed: true, results: [], scopeViolations: [] }),
@@ -179,7 +183,7 @@ test("Claude のモデル別利用枠は表示名の語で照合する", async (
   deps.store.appendUsageSample({ ts: new Date().toISOString(), provider: "anthropic", window: "7d", percent: 95,
     model: "Claude Sonnet 5.5" });
   const result = await runDelegation({ ...request, review: false }, caller, deps);
-  assert.equal(result.assignment.model, "gpt-6-sol");
+  assert.equal(result.assignment.model, "gpt-6.1-sol");
   assert.match(result.assignment.reason.join(" "), /sonnet excluded at 95%.*Claude Sonnet 5.5/);
 });
 
@@ -189,7 +193,7 @@ test("Claude のモデル別利用枠が一致しなければ全体枠を使う"
   deps.store.appendUsageSample({ ts: new Date().toISOString(), provider: "anthropic", window: "7d", percent: 10,
     model: "Claude Opus 5.5" });
   const result = await runDelegation({ ...request, review: false }, caller, deps);
-  assert.equal(result.assignment.model, "gpt-6-sol");
+  assert.equal(result.assignment.model, "gpt-6.1-sol");
   assert.match(result.assignment.reason.join(" "), /sonnet excluded at 95%.*anthropic 5h/);
 });
 
@@ -198,7 +202,7 @@ test("メモリと store のうち新しい利用枠を使う", async (t) => {
   deps.store.appendUsageSample({ ts: "2026-09-25T00:00:00.000Z", provider: "anthropic", window: "5h", percent: 20 });
   deps.usageSamples = [{ ts: "2026-09-25T00:01:00.000Z", provider: "anthropic", window: "5h", percent: 95 }];
   const result = await runDelegation({ ...request, review: false }, caller, deps);
-  assert.equal(result.assignment.model, "gpt-6-sol");
+  assert.equal(result.assignment.model, "gpt-6.1-sol");
   assert.match(result.assignment.reason.join(" "), /sonnet excluded at 95%/);
 });
 
@@ -280,4 +284,17 @@ test("依頼の task と scope と outputs と cwd を列に残し、往復を d
   assert.equal(plainRow.scope, null);
   assert.equal(plainRow.outputs, null);
   assert.equal(plainRow.worktree, caller.repoRoot);
+});
+
+test("重さと深さを実行と委譲と割り当てに保存する", async t => {
+  const deps = setup(t);
+  let effort: string | undefined;
+  deps.execute = async req => {
+    effort = req.effort;
+    return { exitCode: 0, output: "完了", timedOut: false, usage: { inputTokens: 0, outputTokens: 0 }, durationMs: 1, childTrace: childContext(req.trace) };
+  };
+  const result = await runDelegation({ ...request, role: "implement", weight: "heavy", review: false }, caller, deps);
+  assert.equal(result.status, "done"); assert.equal(effort, "xhigh");
+  assert.equal(deps.store.db.prepare("SELECT weight FROM delegations WHERE id = ?").get(result.delegationId)!.weight, "heavy");
+  assert.equal(deps.store.db.prepare("SELECT effort FROM assignments WHERE delegation_id = ?").get(result.delegationId)!.effort, "xhigh");
 });

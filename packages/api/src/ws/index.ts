@@ -153,7 +153,7 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
             () => send(socket, { type: 'ack', cmd_id: message.cmd_id, ok: false, error: 'Invalid usage request' }));
           return;
         }
-        if (message.command.startsWith("settings.") && options.settings) {
+        if ((message.command.startsWith("settings.") || ["models.resolve", "models.table"].includes(message.command)) && options.settings) {
           void options.settings.handle(message).then(ack => send(socket, ack));
           return;
         }

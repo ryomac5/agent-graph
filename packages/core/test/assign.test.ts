@@ -5,15 +5,21 @@ import { join } from "node:path";
 import test from "node:test";
 import { assign, defaultPolicyTable } from "../src/assign/static.ts";
 import { decide } from "../src/assign/assign.ts";
-import { defaultPolicy } from "../src/assign/policy.ts";
+import { defaultPolicy, getCandidates } from "../src/assign/policy.ts";
 import type { DelegateRequest, Role } from "../src/delegate/types.ts";
 
+function createPolicy() {
+  const policy = defaultPolicy();
+  policy.roles.implement = [...getCandidates(policy, "implement").slice(0, 1), { executor: "codex", model: "gpt-6.1-sol", family: "openai", tier: "mid" }, ...getCandidates(policy, "implement").slice(1)];
+  policy.roles.document = [{ executor: "claude", model: "sonnet", family: "anthropic", tier: "mid" }, { executor: "claude", model: "opus", family: "anthropic", tier: "high" }];
+  return policy;
+}
 function request(role: Role, constraints?: DelegateRequest["constraints"]): DelegateRequest {
   return { role, title: "task", task: "task", accept: ["true"], constraints };
 }
 
 test("役割ごとの先頭候補を選ぶ", () => {
-  const expected = { implement: "gpt-6-astra", review: "fable", research: "sonnet", document: "sonnet", orchestrate: "fable" };
+  const expected = { implement: "gpt-6-astra", review: "opus", research: "sonnet", document: "opus", orchestrate: "opus" };
   for (const [role, model] of Object.entries(expected)) {
     const result = assign(request(role as Role), defaultPolicyTable());
     assert.equal(result.ok, true);
@@ -26,11 +32,11 @@ test("役割ごとの先頭候補を選ぶ", () => {
 });
 
 test("hard 超で除外し、soft 超で降格する。各段の理由を残す", () => {
-  const policy = defaultPolicy();
+  const policy = createPolicy();
   const input = {
     policy,
     quota: (candidate: { model: string }) => candidate.model === "gpt-6-astra"
-      ? { percent: 90, source: "weekly" } : candidate.model === "gpt-6-sol"
+      ? { percent: 90, source: "weekly" } : candidate.model === "gpt-6.1-sol"
         ? { percent: 70, source: "primary" } : undefined,
     performance: () => undefined,
   };
@@ -53,9 +59,9 @@ test("hard で全候補が外れる", () => {
 });
 
 test("実績不足は静的順位、十分ならスコア順", () => {
-  const policy = defaultPolicy();
+  const policy = createPolicy();
   const performance = (_role: Role, model: string) => ({
-    samples: 19, acceptRate: model === "gpt-6-sol" ? 1 : 0,
+    samples: 19, acceptRate: model === "gpt-6.1-sol" ? 1 : 0,
     reviewApprove: 0, avgRoundTrips: 0, avgTokens: 0,
   });
   const input = { policy, quota: () => undefined, performance };
@@ -64,18 +70,18 @@ test("実績不足は静的順位、十分ならスコア順", () => {
   const second = decide(request("implement"), {
     ...input, performance: (role: Role, model: string) => ({ ...performance(role, model), samples: 20 }),
   });
-  assert.equal(second.ok && second.assignment.model, "gpt-6-sol");
+  assert.equal(second.ok && second.assignment.model, "gpt-6.1-sol");
 });
 
 test("policy 制約と依頼の minTier を適用する", () => {
-  const input = { policy: defaultPolicy(), quota: () => undefined, performance: () => undefined };
+  const input = { policy: createPolicy(), quota: () => undefined, performance: () => undefined };
   const reviewer = decide(request("review"), { ...input, implementerFamily: "anthropic" as const });
   assert.equal(reviewer.ok && reviewer.assignment.family, "openai");
-  if (reviewer.ok) assert.match(reviewer.assignment.reason.join(" "), /reviewerDifferentFamily: fable excluded/);
+  if (reviewer.ok) assert.match(reviewer.assignment.reason.join(" "), /reviewerDifferentFamily: opus excluded/);
   const implementer = decide(request("implement"), { ...input, orchestratorModel: "gpt-6-astra" });
-  assert.equal(implementer.ok && implementer.assignment.model, "gpt-6-sol");
+  assert.equal(implementer.ok && implementer.assignment.model, "gpt-6.1-sol");
   if (implementer.ok) assert.match(implementer.assignment.reason.join(" "), /implementerNotOrchestrator: gpt-6-astra excluded/);
-  const policy = defaultPolicy();
+  const policy = createPolicy();
   policy.constraints.push({ kind: "minTierForRole", role: "document", tier: "high" });
   const tier = decide(request("document"), { ...input, policy });
   assert.equal(tier.ok && tier.assignment.model, "opus");

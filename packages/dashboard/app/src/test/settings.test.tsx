@@ -5,6 +5,8 @@ import { defaultPolicy } from '../../../../core/src/assign/policy.ts';
 import { SettingsPage } from '../pages/settings/SettingsPage.tsx';
 import { loadAppearance, type SettingsSnapshot, type SettingsStatus } from '../lib/settings.ts';
 import { PREFERENCES_KEY } from '../components/notifications/model.ts';
+import { MemoryRouter } from 'react-router';
+import { App } from '../App.tsx';
 
 beforeEach(() => {
   localStorage.clear();
@@ -30,6 +32,21 @@ function createFixture() {
   return { value, status, command, client: { command } };
 }
 
+it('edits and saves model assignments from the production settings route', async () => {
+  const f = createFixture();
+  render(<MemoryRouter initialEntries={['/settings']}><App client={f.client}/></MemoryRouter>);
+  await screen.findByRole('region', { name: 'Model assignments' });
+  expect(screen.getByLabelText('Theme')).toBeTruthy();
+  fireEvent.change(screen.getByLabelText('Implementation Heavy 1 Model'), { target: { value: 'custom-astra' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Preview policy' }));
+  await screen.findByRole('region', { name: 'Policy preview' });
+  fireEvent.click(screen.getByRole('button', { name: 'Save policy' }));
+  await waitFor(() => expect(f.command).toHaveBeenCalledWith('settings.write', expect.objectContaining({
+    store: 'policy', previewToken: 'preview-token', patch: expect.objectContaining({
+      roles: expect.objectContaining({ implement: expect.objectContaining({ heavy: expect.arrayContaining([expect.objectContaining({ model: 'custom-astra' })]) }) }),
+    }),
+  })));
+});
 it('renders all eight sections, file settings and live diagnostics with English defaults', async () => {
   const f = createFixture(); render(<SettingsPage client={f.client}/>);
   await screen.findByRole('region', { name: 'Agents and models' });
@@ -156,4 +173,46 @@ it('discards a policy preview if the policy changes before its response', async 
   await waitFor(() => expect(screen.getByRole('button', { name: 'Preview policy' })).toHaveProperty('disabled', false));
   expect(screen.queryByRole('region', { name: 'Policy preview' })).toBeNull();
   expect(screen.getByRole('button', { name: 'Save policy' })).toHaveProperty('disabled', true);
+});
+
+it('edits weighted assignments, candidate order, criteria and model notes then saves the previewed policy', async () => {
+  const f = createFixture(); render(<SettingsPage client={f.client}/>);
+  const assignments = await screen.findByRole('region', { name: 'Model assignments' });
+  expect(within(assignments).getAllByText('Top performance on SWE-bench.').length).toBeGreaterThan(0);
+  fireEvent.change(screen.getByLabelText('Implementation Heavy 1 Effort'), { target: { value: 'max' } });
+  fireEvent.change(screen.getByLabelText('Implementation Heavy Weight criteria'), { target: { value: 'Changes across packages' } });
+  fireEvent.click(screen.getByLabelText('Implementation Heavy 2 Move up'));
+  expect(screen.getByLabelText('Implementation Heavy 1 Model')).toHaveProperty('value', 'opus');
+  fireEvent.click(screen.getByLabelText('Implementation Heavy Add candidate'));
+  fireEvent.change(screen.getByLabelText('Implementation Heavy 3 Provider'), { target: { value: 'antigravity' } });
+  fireEvent.change(screen.getByLabelText('Implementation Heavy 3 Model'), { target: { value: 'manual-gemini' } });
+  fireEvent.click(screen.getByLabelText('Implementation Heavy 2 Remove'));
+  fireEvent.click(screen.getByLabelText('Advisor Light Use standard'));
+  fireEvent.change(screen.getByLabelText('Advisor Light 1 Model'), { target: { value: 'sonnet' } });
+  fireEvent.change(screen.getByLabelText('Model note 1 strength'), { target: { value: 'Strong implementation' } });
+  fireEvent.click(screen.getByLabelText('Model note 1 latest'));
+  fireEvent.click(screen.getByRole('button', { name: 'Preview policy' })); await screen.findByText('claude · after-model');
+  fireEvent.click(screen.getByRole('button', { name: 'Save policy' })); await screen.findByText('Saved');
+  const save = f.command.mock.calls.find(([name]) => name === 'settings.write')![1] as { patch: SettingsSnapshot['policy'] };
+  const roles = save.patch.roles;
+  expect(roles.implement).toMatchObject({ heavy: [{ executor: 'claude', model: 'opus' }, { executor: 'antigravity', model: 'manual-gemini', family: 'google' }] });
+  expect(roles.advisor).toMatchObject({ light: [{ model: 'sonnet' }] });
+  expect(save.patch.criteria.implement?.heavy).toBe('Changes across packages');
+  expect(save.patch.modelNotes[0]).toMatchObject({ latest: true, strength: 'Strong implementation' });
+});
+it('supports drag reordering and standard inheritance with Japanese labels and provider catalogs', async () => {
+  const f = createFixture(); const original = f.command.getMockImplementation()!;
+  f.command.mockImplementation(async (name, payload) => name === 'settings.models' ? { type: 'ack', cmd_id: name, ok: true, result: { state: 'known', models: [{ model: `${(payload as { provider: string }).provider}-listed`, displayName: 'Listed model' }] } } : original(name, payload));
+  render(<SettingsPage client={f.client} language="ja"/>); await screen.findByRole('region', { name: 'モデルの割り当て' });
+  const model = screen.getByLabelText('実装 重い 1 モデル') as HTMLInputElement;
+  await waitFor(() => expect(document.getElementById(model.getAttribute('list')!)?.textContent).toContain('Listed model'));
+  const first = model.closest('li')!; const second = screen.getByLabelText('実装 重い 2 モデル').closest('li')!;
+  fireEvent.dragStart(first); fireEvent.dragOver(second); fireEvent.drop(second);
+  expect(screen.getByLabelText('実装 重い 1 モデル')).toHaveProperty('value', 'opus');
+  fireEvent.click(screen.getByLabelText('実装 重い 標準を使う'));
+  expect(screen.getByLabelText('実装 重い 1 モデル')).toHaveProperty('disabled', true);
+  fireEvent.click(screen.getByRole('button', { name: '割り当てを試算' })); await screen.findByText('claude · after-model');
+  fireEvent.click(screen.getByRole('button', { name: '割り当てを保存' })); await screen.findByText('保存しました');
+  const save = f.command.mock.calls.find(([name]) => name === 'settings.write')![1] as { patch: SettingsSnapshot['policy'] };
+  expect(save.patch.roles.implement).not.toHaveProperty('heavy');
 });

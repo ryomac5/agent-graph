@@ -304,7 +304,7 @@ function updateProjection(ledger: DatabaseSync, sinceSeq?: number, initial = fal
         if (fact.kind === "run.created" && fact.payload?.conversation_id && fact.payload.generation !== undefined) runSubject.run(fact.payload.conversation_id, fact.payload.generation, fact.subject.slice(4));
         const command = payload?.review_command;
         if (command?.id) receipt.run(command.id, JSON.stringify(command), fact.seq, fact.subject);
-        if (fact.kind === "run.updated" && fact.confidence === "confirmed" && (fact.source === "host-claude" || fact.source === "host-codex") && payload?.git_commit_result) {
+        if (fact.kind === "run.updated" && fact.confidence === "confirmed" && (fact.source === "host-claude" || fact.source === "host-codex" || fact.source === "host-antigravity") && payload?.git_commit_result) {
           commit.run(fact.fact_id, fact.subject.slice(4), JSON.stringify(payload!.git_commit_result), fact.seq);
         }
       }

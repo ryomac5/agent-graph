@@ -67,7 +67,8 @@ export function validateRequest(value: unknown): asserts value is IntakeRequest 
   const r = value as IntakeRequest;
   for (const field of ["requestId", "title", "task"] as const) if (typeof r[field] !== "string" || !r[field]) throw new TypeError(`Invalid ${field}`);
   if (!["ui", "mcp", "planner", "kit"].includes(r.source)) throw new TypeError("Invalid source");
-  if (!["implement", "review", "research", "document", "orchestrate"].includes(r.role)) throw new TypeError("Invalid role");
+  if (!["implement", "review", "research", "document", "orchestrate", "advisor", "plan", "proofread"].includes(r.role)) throw new TypeError("Invalid role");
+  if (r.weight !== undefined && !["light", "standard", "heavy"].includes(r.weight)) throw new TypeError("Invalid weight");
   for (const field of ["accept", "scope", "outputs"] as const) {
     if ((field === "accept" || r[field] !== undefined) && (!Array.isArray(r[field]) || !r[field]!.every((v) => typeof v === "string"))) throw new TypeError(`Invalid ${field}`);
   }
@@ -77,7 +78,7 @@ export function validateRequest(value: unknown): asserts value is IntakeRequest 
   if (r.constraints !== undefined) {
     const c = r.constraints;
     if (!c || typeof c !== "object" || Array.isArray(c)) throw new TypeError("Invalid constraints");
-    if (c.excludeFamily !== undefined && (!Array.isArray(c.excludeFamily) || !c.excludeFamily.every((v) => ["openai", "anthropic"].includes(v)))) throw new TypeError("Invalid excludeFamily");
+    if (c.excludeFamily !== undefined && (!Array.isArray(c.excludeFamily) || !c.excludeFamily.every((v) => ["openai", "anthropic", "google"].includes(v)))) throw new TypeError("Invalid excludeFamily");
     if (c.excludeModels !== undefined && (!Array.isArray(c.excludeModels) || !c.excludeModels.every((v) => typeof v === "string"))) throw new TypeError("Invalid excludeModels");
     if (c.minTier !== undefined && !["low", "mid", "high"].includes(c.minTier)) throw new TypeError("Invalid minTier");
   }

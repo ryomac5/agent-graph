@@ -54,11 +54,11 @@ export function GraphTimeline({ range, onRange, ...props }: OutlineProps & { ran
     <div className="graph-scroll">
       <div className="graph-time-header"><div>{t.request}<span>{t.who}</span></div><div ref={measure} className="graph-time-axis">
         {scale.ticks.map(time => <time key={time} style={{ left: `${scale.position(time)}%` }}>{new Date(time).toLocaleTimeString(props.language, { hour: '2-digit', minute: '2-digit' })}</time>)}
-        {scale.gaps.map(gap => <span key={gap.start} className="graph-time-gap" style={{ left: `${scale.position((gap.start + gap.end) / 2)}%` }}>≈</span>)}<span className="graph-now-label">{t.now}</span>
+        {/* 何も動いていない長い時間は詰めて描く。軸の上にだけ、詰めた所の印を出す。 */}
+        {scale.gaps.map(gap => <span key={gap.start} className="graph-time-gap" title={props.language === 'ja' ? '動きのない時間を詰めています' : 'Idle time is compressed'} style={{ left: `${scale.position((gap.start + gap.end) / 2)}%` }}>⋯</span>)}<span className="graph-now-label">{t.now}</span>
       </div><div/></div>
       <GraphOutline {...props} timeline={row => <>
         <div className="graph-time-cell" style={{ '--graph-node-center': `${(row.height - (row.node?.approvals?.length ?? 0) * APPROVAL_ROW_HEIGHT) / 2}px` } as CSSProperties}><i className="graph-now"/>
-          {scale.gaps.map(gap => <span key={gap.start} className="graph-time-gap" style={{ left: `${scale.position((gap.start + gap.end) / 2)}%` }}>≈</span>)}
           {row.segments.filter(segment => segment.end >= scale.start).map((segment, index) => <span key={index} className={`graph-time-bar tone-${stateTone(toDisplayState(segment.state))}`} title={`${new Date(segment.start).toLocaleString(props.language)} – ${new Date(segment.end).toLocaleString(props.language)}`}
             style={{ left: `${scale.position(segment.start)}%`, width: `${Math.max(0.1, scale.position(segment.end) - scale.position(segment.start))}%` }} data-segment={index}/>)}
           {row.parent && row.segments[0] && offsets.has(row.parent) && row.segments[0].start >= scale.start && <i className={`graph-time-connector${row.runningPath ? ' is-running' : ''}`} style={{ left: `${scale.position(row.segments[0].start)}%`, top: `calc(var(--graph-node-center) - ${(offsets.get(row.id)! - offsets.get(row.parent)!)}px)`, height: offsets.get(row.id)! - offsets.get(row.parent)! }}/>}

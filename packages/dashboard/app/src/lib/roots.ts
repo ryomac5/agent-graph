@@ -165,6 +165,8 @@ export function shownRole(role: string, language = typeof document !== 'undefine
 export function nodeLine(node: TreeNode): string {
   return [agentName(node.provider, node.model) || 'Agent', shownRole(node.role)].filter(Boolean).join(' · ');
 }
+/** 依頼の題から、依頼のファイルの Markdown の見出しの印を外す。「# グラフを直す」は「グラフを直す」と出す。 */
+export function requestTitle(title: string): string { return title.replace(/^\s*#{1,6}\s+/, '').trim(); }
 export function buildRootTree(root: Root, index: RootIndex): DelegationTree {
   const nodes: TreeNode[] = [];
   const edges: DelegationTree['edges'] = [];
@@ -190,7 +192,7 @@ export function buildRootTree(root: Root, index: RootIndex): DelegationTree {
       node.label = nodeLine(node);
       nodes.push(node); parent.children.push(id);
       // 頼んだ内容は、子のエージェントの説明か、runner の委譲の題から取る。
-      edges.push({ id: `relation:${readText(relation.id) || id}`, source: parent.id, target: id, title: readText(evidence.description) || readText(delegation?.title),
+      edges.push({ id: `relation:${readText(relation.id) || id}`, source: parent.id, target: id, title: requestTitle(readText(evidence.description) || readText(delegation?.title)),
         confidence: readText(relation.confidence) || 'confirmed', kind: 'delegated' });
       addChildren(node, id);
     }

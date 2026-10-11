@@ -29,5 +29,5 @@ it('passes roles and request headings into existing tree cards', () => {
   expect(tree.nodes.find(node => node.id === 'direct')?.role).toBe('work');
   expect(tree.nodes.find(node => node.id === 'direct')?.label).toContain('Work');
   expect(tree.nodes.find(node => node.id === 'delegation:task')?.role).toBe('review');
-  expect(tree.edges.find(edge => edge.target === 'direct')?.title).toBe('# Build');
+  expect(tree.edges.find(edge => edge.target === 'direct')?.title).toBe('Build');
 });

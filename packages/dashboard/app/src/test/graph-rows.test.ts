@@ -52,3 +52,10 @@ it('uses actual attempt times and compresses only gaps beyond thirty minutes', (
   expect(scale.position(now)).toBe(100);
   expect(createTimeScale(segments, now, '1h', 600).gaps).toHaveLength(0);
 });
+
+it('依頼の題から Markdown の見出しの印を外す', async () => {
+  const { requestTitle } = await import('../lib/roots.ts');
+  expect(requestTitle('# グラフを直す')).toBe('グラフを直す');
+  expect(requestTitle('### 直す')).toBe('直す');
+  expect(requestTitle('C# の直し')).toBe('C# の直し');
+});

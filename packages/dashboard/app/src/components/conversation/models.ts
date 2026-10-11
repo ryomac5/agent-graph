@@ -1,11 +1,15 @@
 import { modelName } from '../../lib/format.ts';
 import { readObject, readText } from './model.ts';
+import type { DefaultSource } from '../../lib/settings.ts';
 
 export interface ComposerModel { model: string; displayName: string; effort?: string }
 export function isRecommended(model: ComposerModel): boolean { return /^(?:default|default \(recommended\))$/i.test(model.displayName) || model.model === 'default'; }
 export function displayModel(model: string, models: ComposerModel[]): string {
   const entry = models.find(item => item.model === model);
   return (entry && !isRecommended(entry) ? entry.displayName : modelName(model)).replace(/^Claude\s+/, '');
+}
+export function describeDefaultSource(source: DefaultSource | undefined): string {
+  return source ? [source.path, source.key].filter(Boolean).join(' · ') : '';
 }
 export function readRecommendedModel(settings: unknown, provider: string): string {
   const snapshot = readObject(settings);

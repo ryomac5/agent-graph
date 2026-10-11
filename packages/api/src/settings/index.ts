@@ -7,6 +7,7 @@ import { getDefaults, mergeSettings, validateSettings, type FileStore, type Sett
 import { mergePolicy } from "../../../core/src/assign/policy.ts";
 import { resolveModel, type ModelUsage } from "../../../core/src/assign/models.ts";
 import { readAvailableModels } from "./models.ts";
+import { resolveProviderDefaults, type DefaultOptions } from "./defaults.ts";
 import { decide, type DecisionInput } from "../../../core/src/assign/assign.ts";
 import type { DelegateRequest, Role, Weight } from "../../../core/src/delegate/types.ts";
 import type { Ledger } from "../../../core/src/ledger/ledger.ts";
@@ -25,6 +26,7 @@ export interface SettingsOptions {
   providerHome?: string;
   mcpRegistration?: { command: string; args: string[] };
   modelOptions?: Parameters<typeof readAvailableModels>[2];
+  defaultOptions?: DefaultOptions;
   ledger: Ledger;
   keychain: KeychainPort;
   history(): PastDelegation[];
@@ -215,9 +217,14 @@ export class SettingsService {
     if (command === "settings.status") return JSON.parse(JSON.stringify({ ...await this.options.status(), rebuild: this.rebuildState }));
     if (command === "settings.models") {
       if (p.provider !== "claude" && p.provider !== "codex" && p.provider !== "antigravity") throw new TypeError("Invalid provider");
+      if (p.cwd !== undefined && (typeof p.cwd !== "string" || !isAbsolute(p.cwd))) throw new TypeError("Default model cwd must be absolute");
       const catalog = await readAvailableModels(p.provider, provider => this.options.listModels(provider), { home: this.options.providerHome, ...this.options.modelOptions });
       this.catalogs[p.provider] = catalog.models;
-      return JSON.parse(JSON.stringify(catalog));
+      if (p.cwd === undefined) return JSON.parse(JSON.stringify(catalog));
+      // session.launch と同じ環境にする。端末起動では CLAUDE_CODE_* を引き継がない。
+      const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("AGENT_GRAPH") && !key.startsWith("CLAUDE_CODE") && key !== "CLAUDECODE"));
+      const defaults = await resolveProviderDefaults(p.provider, p.cwd as string, catalog.models, { home: this.options.providerHome, env, ...this.options.defaultOptions });
+      return JSON.parse(JSON.stringify({ ...catalog, defaults }));
     }
     if (command === "settings.rebuild") {
       if (this.rebuildState.state === "running") throw new TypeError("Rebuild already running");

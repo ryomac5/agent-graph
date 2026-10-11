@@ -27,7 +27,8 @@ import { collectToolResults } from '../../components/conversation/ToolCall.tsx';
 import { resolveParticipants, senderOf, type Sender } from '../../components/conversation/participants.ts';
 import { ACTIVE_STATES, compareEntries, messageSignature, PENDING_APPROVALS, readObject, readText, selectTimeline, showValue, type TimelineEntry } from '../../components/conversation/model.ts';
 import { ChoiceMenu } from '../../components/ChoiceMenu.tsx';
-import { displayModel, findOlderModels, isRecommended, readRecommendedModel, readVisibleModels, type ComposerModel } from '../../components/conversation/models.ts';
+import { describeDefaultSource, displayModel, findOlderModels, isRecommended, readVisibleModels, type ComposerModel } from '../../components/conversation/models.ts';
+import type { ProviderDefaults } from '../../lib/settings.ts';
 import { effortLabel, translate, type ConversationText } from '../../components/conversation/text.ts';
 import { collectConversationChanges } from '../../lib/conversation-changes.ts';
 import { resolveProjectId } from '../../lib/projects.ts';
@@ -219,12 +220,15 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const savedCwd = readText(launch.cwd ?? run?.cwd ?? run?.worktree_path ?? conversation?.cwd) || newSession?.cwd || readText(state.projection.projects?.find(row => row.id === conversation?.project)?.root_path);
   const [models, setModels] = useState<Model[]>([]);
   const [modelsError, setModelsError] = useState('');
-  const [recommendedModel, setRecommendedModel] = useState('');
+  const [providerDefaults, setProviderDefaults] = useState<{ provider: string; cwd: string; value: ProviderDefaults }>();
   const [visibleModels, setVisibleModels] = useState<string[]>([]);
   const [edited, setEdited] = useState(false);
   const [model, setModel] = useState('');
   const [effort, setEffort] = useState('');
   const [cwd, setCwd] = useState('');
+  const defaultCwd = cwd.trim() || savedCwd;
+  const defaults = providerDefaults?.provider === provider && providerDefaults.cwd === defaultCwd ? providerDefaults.value : undefined;
+  const recommendedModel = defaults?.model ?? '';
   const [input, setInput] = useState('');
   const attachments = useAttachments(conversationId, language, client);
   const [dragging, setDragging] = useState(false);
@@ -441,19 +445,29 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
         return typeof value.model === 'string' ? [{ model: value.model, displayName: readText(value.displayName) || value.model, effort: readText(value.effort) || undefined }] : [];
       });
       setModels(available);
-      if (!currentModel) setModel(value => value || available[0]?.model || '');
+      if (!currentModel) setModel(value => value || (terminalConversation ? 'default' : available[0]?.model || ''));
     }).catch(reason => { if (!disposed) setModelsError(String(reason)); });
     return () => { disposed = true; };
   }, [client, provider, connected, language, conversationId]);
 
   useEffect(() => {
     let disposed = false;
-    setRecommendedModel(''); setVisibleModels([]);
+    setProviderDefaults(undefined);
+    if (!provider || !connected || !defaultCwd) return;
+    void client.command('settings.models', { provider, cwd: defaultCwd }).then(ack => {
+      const value = readObject(ack.result).defaults;
+      if (!disposed && ack.ok && value) setProviderDefaults({ provider, cwd: defaultCwd, value: value as ProviderDefaults });
+    }).catch(() => {});
+    return () => { disposed = true; };
+  }, [client, provider, connected, conversationId, defaultCwd]);
+
+  useEffect(() => {
+    let disposed = false;
+    setVisibleModels([]);
     if (!provider || !connected) return;
     void client.command('settings.read', {}).then(ack => {
       if (!disposed && ack.ok) {
-        const recommended = readRecommendedModel(ack.result, provider);
-        setRecommendedModel(recommended); setVisibleModels(readVisibleModels(ack.result));
+        setVisibleModels(readVisibleModels(ack.result));
       }
     }).catch(() => {});
     return () => { disposed = true; };
@@ -495,7 +509,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
           }
           let terminalId = existingPending?.terminalId;
           if (!terminalId) {
-            const ack = await client.command('session.launch', { projectId, provider: provider || 'claude', ...(resume ? { resume } : {}), ...(model ? { model } : {}) });
+            const ack = await client.command('session.launch', { projectId, provider: provider || 'claude', ...(resume ? { resume } : {}), ...(model && model !== 'default' ? { model } : {}) });
             if (!ack.ok) throw new Error(ack.error ?? t('failed'));
             terminalId = readText(readObject(ack.result).terminalId);
             setPendingHost({ conversationId, terminalId });
@@ -552,7 +566,9 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     }
   }
   async function applyModel() {
-    if (await execute('set_model', { runId: run!.id, model: { model, ...(effort ? { effort } : {}) } })) setAppliedModel({ model, effort });
+    const applied = model === 'default' ? recommendedModel : model;
+    if (!applied) return;
+    if (await execute('set_model', { runId: run!.id, model: { model: applied, ...(effort ? { effort } : {}) } })) setAppliedModel({ model: applied, effort });
   }
   async function answer(approvalId: unknown, decision: string) {
     if (await execute('answer', { approvalId, decision })) setAnswered(previous => new Set([...previous, approvalId]));
@@ -573,16 +589,19 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const matchModel = (value: string) => models.find(item => item.model === value)?.model
     ?? models.find(item => modelName(value) !== '' && [item.displayName, `Claude ${item.displayName}`].includes(modelName(value)))?.model ?? value;
   const selectedModel = matchModel(model);
-  const dirty = edited && Boolean(model) && (selectedModel !== matchModel(appliedModel?.model || currentModel) || effort !== (appliedModel?.effort ?? currentEffort));
-  const resolvedModel = appliedModel?.model || currentModel || model || recommendedModel;
-  const modelLabel = resolvedModel && !['default', 'Default'].includes(resolvedModel) ? displayModel(resolvedModel, models) : t('noModels');
+  const dirty = edited && Boolean(model) && (selectedModel !== matchModel(appliedModel?.model || currentModel || (terminalConversation ? 'default' : '')) || effort !== (appliedModel?.effort ?? currentEffort));
+  const usesDefault = !model || model === 'default' || models.some(item => item.model === model && isRecommended(item));
+  const resolvedModel = appliedModel?.model || currentModel || (usesDefault ? recommendedModel : model);
+  const defaultLabel = defaults?.displayName ? defaults.displayName.replace(/^Claude\s+/, '') : recommendedModel ? displayModel(recommendedModel, models) : t('noModels');
+  const modelLabel = resolvedModel && !['default', 'Default'].includes(resolvedModel) ? (!shownModel && usesDefault ? defaultLabel : displayModel(resolvedModel, models)) : t('noModels');
+  const modelSource = describeDefaultSource(defaults?.modelSource);
+  const effortSource = describeDefaultSource(defaults?.effortSource);
+  const effortValue = edited ? effort || t('defaultEffort') : effort || shownEffort || (usesDefault ? defaults?.effort : models.find(item => item.model === selectedModel)?.effort) || t('defaultEffort');
   const olderModels = findOlderModels(models, [selectedModel, matchModel(currentModel), recommendedModel, ...visibleModels.map(matchModel)]);
-  const recommended = matchModel(recommendedModel);
   const providerDefault = models.find(isRecommended);
   const modelChoices = [
-    ...(providerDefault ? [{ value: providerDefault.model, label: <>{t('recommended')} · {t('noModels')}</>, detail: shownModel === providerDefault.model ? t('inUse') : undefined, disabled: codexActive }] : []),
-    ...(!providerDefault && recommended ? [{ value: recommended, label: <>{t('recommended')} · {displayModel(recommended, models)}</>, detail: matchModel(shownModel) === recommended ? t('inUse') : undefined, disabled: codexActive }] : []),
-    ...models.filter(item => !isRecommended(item) && (providerDefault || item.model !== recommended)).map(item => ({ value: item.model, label: item.displayName, title: item.displayName, older: olderModels.has(item.model), detail: matchModel(shownModel) === item.model ? t('inUse') : undefined, disabled: codexActive })),
+    { value: providerDefault?.model ?? 'default', label: <>{t('recommended')} · {defaultLabel}</>, title: modelSource, detail: shownModel && matchModel(shownModel) === matchModel(recommendedModel) ? t('inUse') : undefined, disabled: codexActive },
+    ...models.filter(item => !isRecommended(item)).map(item => ({ value: item.model, label: item.displayName, title: item.displayName, older: olderModels.has(item.model), detail: matchModel(shownModel) === item.model ? t('inUse') : undefined, disabled: codexActive })),
   ];
   const hint = provider === 'codex' ? codexActive ? 'activeCodex' : 'nextTurn' : 'claudeEffort';
   const participants = resolveParticipants(state, conversationId, { user: t('user'), assistant: t('assistant'), parent: t('parentAgent') });
@@ -719,12 +738,12 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
           }}/>
         <div className="composer-toolbar">
           <div className="composer-controls">
-            {starting && <div className="composer-provider" role="group" aria-label={language === 'ja' ? '提供元' : 'Provider'}>{['claude', 'codex'].map(value => <button type="button" key={value} aria-pressed={sessionProvider === value} disabled={pending} onClick={() => { setSessionProvider(value); setModel(''); setEffort(''); }}>{value === 'claude' ? 'Claude' : 'Codex'}</button>)}</div>}
-            <ChoiceMenu name={t('model') + ' · ' + modelLabel} label={<><span className={"composer-provider-mark provider-" + provider} aria-hidden="true"><Icon name={provider === "claude" ? "sparkle" : "terminal"} size={16}/></span><span className="truncate">{modelLabel}</span></>} width={320} value={selectedModel} choices={modelChoices} disabled={!connected || pending} olderLabel={language === 'ja' ? '古いバージョン ' + olderModels.size + ' 件' : olderModels.size + ' older versions'}
+            {starting && <div className="composer-provider" role="group" aria-label={language === 'ja' ? '提供元' : 'Provider'}>{['claude', 'codex'].map(value => <button type="button" key={value} aria-pressed={sessionProvider === value} disabled={pending} onClick={() => { setSessionProvider(value); setModel(''); setEffort(''); setEdited(false); }}>{value === 'claude' ? 'Claude' : 'Codex'}</button>)}</div>}
+            <ChoiceMenu name={t('model') + ' · ' + modelLabel} label={<><span className={"composer-provider-mark provider-" + provider} aria-hidden="true"><Icon name={provider === "claude" ? "sparkle" : "terminal"} size={16}/></span><span className="truncate" title={!shownModel && usesDefault ? modelSource : undefined}>{modelLabel}</span>{usesDefault && !shownModel && <span className="muted-text" style={{ font: "var(--type-meta)" }}>{t('recommended')}</span>}</>} width={320} value={selectedModel} choices={modelChoices} disabled={!connected || pending} olderLabel={language === 'ja' ? '古いバージョン ' + olderModels.size + ' 件' : olderModels.size + ' older versions'}
               note={codexActive ? t('activeCodex') : models.length ? undefined : t('noModels')} onChange={value => { setEdited(true); setModel(value); if (provider === 'codex') setEffort(models.find(item => item.model === value)?.effort ?? ''); }}
-              footer={<button className="btn btn-primary btn-sm" disabled={codexActive || !dirty || (!external && !writable)} onClick={() => { if (!external) void applyModel(); }}>{t('applyShort')}</button>}/>
-            {provider === 'codex' && <ChoiceMenu name={t('effort') + ' · ' + (effort || t('defaultEffort'))} label={<>{t('effort')} <span className="mono">{effort || t('defaultEffort')}</span></>} value={effort} disabled={!connected || pending || codexActive}
-              choices={[{ value: '', label: t('defaultEffort') }, ...[...new Set([...CODEX_EFFORTS, ...(effort ? [effort] : [])])].map(value => ({ value, label: <span className="mono">{value}</span> }))]} onChange={value => { setEdited(true); setEffort(value); }}
+              footer={<button className="btn btn-primary btn-sm" disabled={codexActive || !dirty || model === 'default' && !recommendedModel || (!external && !writable)} onClick={() => { if (!external) void applyModel(); }}>{t('applyShort')}</button>}/>
+            {provider === 'codex' && <ChoiceMenu name={t('effort') + ' · ' + effortValue} label={<>{t('effort')} <span className="mono">{effortValue}</span></>} value={effort} disabled={!connected || pending || codexActive}
+              choices={[{ value: '', label: t('defaultEffort'), title: effortSource }, ...[...new Set([...CODEX_EFFORTS, ...(effort ? [effort] : [])])].map(value => ({ value, label: <span className="mono">{value}</span> }))]} onChange={value => { setEdited(true); setEffort(value); }}
               footer={!external ? <button className="btn btn-primary btn-sm" disabled={!writable || !dirty} onClick={() => void applyModel()}>{t('applyShort')}</button> : undefined}/>}
             {!savedCwd && <input className="input-sm" aria-label={t('cwd')} placeholder={t('cwd')} value={cwd} disabled={pending} onChange={event => setCwd(event.target.value)}/>}
           </div>

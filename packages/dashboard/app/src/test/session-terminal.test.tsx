@@ -39,6 +39,7 @@ function fixture({ hosted = false, state = 'running', evidence }: { hosted?: boo
   let launched = hosted;
   let discover = true;
   const command = vi.fn(async (name: string, _payload?: unknown): Promise<Ack> => {
+    if (name === 'settings.models') return ack({ defaults: { model: 'opus', displayName: 'Opus', modelSource: { kind: 'file', path: '/home/.claude/settings.json', key: 'model' } } });
     if (name === 'list_models') return ack([{ model: 'opus', displayName: 'Opus' }]);
     if (name === 'session.launch') { launched = true; return ack({ terminalId: 'terminal', pid: 123 }); }
     if (name === 'session.hosts') return ack({ hosts: launched && discover ? [{ conversationId, terminalId: 'terminal', pid: 123, startedAt: 'now' }] : [] });
@@ -97,7 +98,7 @@ it('interrupts and opens the hosted terminal in a neighboring pane, restores out
 it('waits for the new conversation before sending its first message', async () => {
   const f = fixture(); f.setDiscover(false); render(<f.Wrapper newSession/>);
   await send('最初の発言');
-  expect(f.command).toHaveBeenCalledWith('session.launch', { projectId: 'p', provider: 'claude', model: 'opus' });
+  expect(f.command).toHaveBeenCalledWith('session.launch', { projectId: 'p', provider: 'claude' });
   expect(f.command.mock.calls.some(([name]) => name === 'session.send')).toBe(false);
   expect(screen.getByRole('textbox', { name: '入力' })).toHaveProperty('value', '最初の発言');
   fireEvent.click(screen.getByRole('button', { name: 'ターミナル' }));

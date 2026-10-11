@@ -104,6 +104,7 @@ it.each(['claude', 'codex'])('creates a %s session from the project menu, opens 
   const conversationId = JSON.stringify([provider, '12345678-1234-1234-1234-123456789abc']);
   let launched = false;
   f.command.mockImplementation(async (name: string) => {
+    if (name === 'settings.models') return ack({ defaults: { model: 'model-a', displayName: 'Model A', effort: 'high', modelSource: { kind: 'file', path: '/repo/.codex/config.toml', key: 'model' }, effortSource: { kind: 'file', path: '/repo/.codex/config.toml', key: 'model_reasoning_effort' } } });
     if (name === 'list_models') return ack([{ model: 'model-a', displayName: 'Model A' }]);
     if (name === 'ssh.read') return ack({ connections: [] });
     if (name === 'git.branches') return ack({ branches: ['main', 'origin/main'] });
@@ -162,6 +163,7 @@ it('opens exactly one empty tab for a project without sessions and keeps it when
   const conversationId = '["codex","started"]';
   let launched = false;
   f.command.mockImplementation(async (name: string) => {
+    if (name === 'settings.models') return ack({ defaults: { model: 'model-a', displayName: 'Model A', effort: 'high', modelSource: { kind: 'file', path: '/repo/.codex/config.toml', key: 'model' }, effortSource: { kind: 'file', path: '/repo/.codex/config.toml', key: 'model_reasoning_effort' } } });
     if (name === 'list_models') return ack([{ model: 'model-a', displayName: 'Model A' }]);
     if (name === 'session.launch') { launched = true; return ack({ terminalId: 'started-terminal' }); }
     if (name === 'session.hosts') return ack({ hosts: launched ? [{ terminalId: 'started-terminal', conversationId, provider: 'codex', projectId: 'p', cwd: '/repo' }] : [] });
@@ -188,7 +190,7 @@ it('opens exactly one empty tab for a project without sessions and keeps it when
 
 it('keeps the first input and shows the reason when starting fails', async () => {
   const f = fixture();
-  f.command.mockImplementation(async (name: string) => name === 'list_models' ? ack([{ model: 'model-a', displayName: 'Model A' }]) : name === 'session.launch' ? { type: 'ack', cmd_id: 'cmd', ok: false, error: 'Host unavailable' } : ack([]));
+  f.command.mockImplementation(async (name: string) => name === 'settings.models' ? ack({ defaults: { model: 'model-a', displayName: 'Model A', effort: 'high', modelSource: { kind: 'file', path: '/repo/.codex/config.toml', key: 'model' }, effortSource: { kind: 'file', path: '/repo/.codex/config.toml', key: 'model_reasoning_effort' } } }) : name === 'list_models' ? ack([{ model: 'model-a', displayName: 'Model A' }]) : name === 'session.launch' ? { type: 'ack', cmd_id: 'cmd', ok: false, error: 'Host unavailable' } : ack([]));
   render(<MemoryRouter initialEntries={['/p/p?session=draft']}><App target={f.target} client={f.client}/></MemoryRouter>);
   await waitFor(() => expect(screen.getByRole('button', { name: /^(Model|モデル) · / }).textContent).toContain('Model A'));
   fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'First input' } });

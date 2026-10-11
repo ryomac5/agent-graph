@@ -578,8 +578,39 @@
 - 行の間は `--border` の横線だけにする。カードの外枠は引かない
 - 文の中の数値の入力は幅 64px、高さ 28px、`--type-ui`、右揃え。文は `--fg-1`、入力の枠は `--border`
 - 入力の枠は `--line` にする。`--input-line` の濃い枠はやめ、フォーカスで `--accent` にする
-- 実績の重みのつまみは高さ 4px の帯と 12px の丸にする。`accent-color` は使わず、自前で描く
-- 重みの帯は 4 色を使う。値は第 7 節の末尾の変数にする
+- 実績の重みのつまみは次の「実績の重み」の決まりに従う
+
+### 実績の重み
+
+4 つの項目に色を付けない。4 本のつまみは同じ見た目にする。
+色は値を動かしているつまみだけに付ける。理由は、項目の色は意味を持たず、強弱を壊すだけだからである。
+下の 4 色の帯は消す。4 本の軌道が同じ幅で並ぶので、塗りの長さだけで割合を比べられる。
+項目の左の色の点も消す。
+
+```
+実績の重み
+合格率              ━━━━━━━━━━━━━━●──────────────────────   [ 40] %
+レビューの承認率      ━━━━━━━━━━●──────────────────────────   [ 30] %
+やりとりの少なさ      ━━━━━●───────────────────────────────   [ 20] %
+トークンの少なさ      ━━●──────────────────────────────────   [ 10] %
+```
+
+| 部分 | 値 |
+| --- | --- |
+| 行 | 高さ 40px。左に名前、真ん中に軌道、右に数値の入力と `%`。行の間は `--border` の横線だけにする。 |
+| 名前 | 幅 200px、`--type-ui` の `--fg-1`。色の点は置かない。 |
+| 軌道 | 高さ 4px、角 2px、色 `--slider-track`。幅は行の残り全部にする。 |
+| 塗り | 軌道の左から値の分だけ塗る。色は `--slider-fill`。 |
+| 取っ手 | 直径 12px の円。地 `--bg-0`、枠 1px の `--slider-fill`。 |
+| 動かしている間 | 指を置いた、フォーカスした、ドラッグ中のつまみだけ、塗りと取っ手の枠を `--accent` にする。 |
+| フォーカス | 取っ手に `outline: 2px solid var(--focus)` と `outline-offset: 1px`。 |
+| 数値 | 幅 64px、高さ 28px、右揃え、`--type-ui`。枠は `--line`。 |
+| 変化 | 塗りの幅は `transition` を付けない。色だけ `--duration` で変える。 |
+
+- `input[type=range]` の見た目は `appearance: none` で消し、軌道と塗りと取っ手を自前で描く。`accent-color` は使わない
+- 1 つを動かすと残りが比例で変わる動きはいまのままにする。`PerformanceWeights.tsx` の `allocatePercent` は触らない
+- `aria-valuetext` に「40%」を入れる。見た目の変更で読み上げを減らさない
+- 4 つの合計が 100 であることは数値の列で分かる。合計の表示は足さない
 
 ### 節の見出し
 
@@ -604,12 +635,12 @@
 | `--type-ui-strong` | `600 13px/20px var(--font)` | 同じ | 節の移動の帯でいまの節。表の個別に決めたセルの名前。 |
 | `--control-lg` | `32px` | 同じ | 設定の頁のボタンと入力。 |
 | `--segment-shadow` | `0 1px 2px rgb(15 17 26 / 0.08)` | `0 1px 2px rgb(0 0 0 / 0.4)` | 区切りボタンの選んだ項目。 |
-| `--weight-1` | `#5e6ad2` | `#7b84e6` | 合格率。`--accent` と同じ値。 |
-| `--weight-2` | `#2f7fd8` | `#5aa2f0` | レビューの承認率。`--state-reply` と同じ値。 |
-| `--weight-3` | `#8b8d96` | `#6f717a` | やりとりの少なさ。`--fg-3` と同じ値。 |
-| `--weight-4` | `#d2d3d8` | `#3a3b42` | トークンの少なさ。 |
+| `--slider-track` | `var(--bg-3)` | `var(--bg-3)` | つまみの軌道。明るい表示で `#e8e8eb`、暗い表示で `#27282e` になる。 |
+| `--slider-fill` | `var(--fg-4)` | `var(--fg-4)` | 休んでいるつまみの塗りと取っ手の枠。明るい表示で `#63656e`、暗い表示で `#979ba7` になる。 |
 
+- 動かしているつまみの色は `--accent` を使う。専用の変数は足さない
 - `settings.css` の `#0031D8`、`#FA0000`、`#C5D7FB`、`#FFBBBB` は消す
+- 本番に出した `--weight-1` から `--weight-4` と `.settings-weight-bar`、`.settings-weight-color` は消す
 - `--provider-antigravity` がない。`#3b82f6` と暗い表示 `#7cb1ff` で足し、16px の印だけに使う
 
 ## 8 受け入れの基準
@@ -629,6 +660,9 @@
 - 「保存」の primary が各節に 1 つだけで、頁の下の共通の保存がない
 - 「書き出す」が secondary で、未保存のときは押せず `title` に理由がある
 - 利用枠と実績の設定が文の形で、数値の入力が文の中にある
+- 実績の重みの 4 本のつまみが同じ灰色で、項目ごとの色と左の色の点と下の 4 色の帯がない
+- つまみに指を置いたときだけ、その 1 本の塗りと取っ手が `--accent` になる
+- `grep -c 'weight-[1-4]\|settings-weight-bar' packages/dashboard/app/src/pages/settings/settings.css packages/dashboard/app/src/styles.css` が 0 である
 - 制約の 3 つの文が、文の表のとおりである
 - `select` 要素が設定の画面に 0 個である。`grep -c '<select' packages/dashboard/app/src/pages/settings/*.tsx packages/dashboard/app/src/components/settings/*.tsx packages/dashboard/app/src/components/SshSettings.tsx packages/dashboard/app/src/components/command/Commands.tsx` が 0 である
 - `grep -nE '#[0-9a-fA-F]{3,6}' packages/dashboard/app/src/pages/settings/settings.css` が 0 件である

@@ -6,45 +6,6 @@ import { currentRootConversation, rootProject, selectRoots, type Root } from '..
 import { OTHER_PROJECT, getRegisteredProjects, resolveProjectId } from '../lib/projects.ts';
 import { publishTurns, readHistory, recordTransitions, rememberConversation, selectTurns, useTurns, READ_KEY, READY_KEY, RECENT_KEY } from '../lib/turns.ts';
 
-export function TabBadge({ count }: { count: number }) {
-  useEffect(() => {
-    const title = document.title;
-    let icon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
-    const original = icon?.getAttribute('href');
-    const type = icon?.getAttribute('type');
-    const created = !icon;
-    document.title = count ? `(${count}) agent-graph` : 'agent-graph';
-    let disposed = false;
-    if (count) {
-      icon ??= document.createElement('link'); icon.rel = 'icon';
-      if (created) document.head.append(icon);
-      const canvas = document.createElement('canvas'); canvas.width = canvas.height = 32;
-      const context = canvas.getContext('2d');
-      const draw = (base?: CanvasImageSource) => {
-        if (!context || disposed) return;
-        context.clearRect(0, 0, 32, 32);
-        if (base) context.drawImage(base, 0, 0, 32, 32);
-        else { context.fillStyle = '#0031D8'; context.fillRect(0, 0, 32, 32); }
-        context.fillStyle = '#FA0000'; context.beginPath(); context.arc(23, 23, 9, 0, Math.PI * 2); context.fill();
-        context.fillStyle = '#fff'; context.font = 'bold 12px sans-serif'; context.textAlign = 'center'; context.textBaseline = 'middle';
-        context.fillText(count > 99 ? '99+' : String(count), 23, 23, 17);
-        icon!.href = canvas.toDataURL('image/png'); icon!.type = 'image/png';
-      };
-      draw();
-      if (original) { const image = new Image(); image.onload = () => draw(image); image.src = original; }
-    }
-    return () => {
-      disposed = true; document.title = title;
-      if (created) icon?.remove();
-      else if (icon) {
-        if (original === null || original === undefined) icon.removeAttribute('href'); else icon.setAttribute('href', original);
-        if (type === null || type === undefined) icon.removeAttribute('type'); else icon.setAttribute('type', type);
-      }
-    };
-  }, [count]);
-  return null;
-}
-
 export function TurnSignals({ target = store, bindings }: { target?: ScreenStore; bindings: KeyBindings }) {
   const state = useScreenStore(target);
   const location = useLocation(); const navigate = useNavigate();
@@ -116,5 +77,5 @@ export function TurnSignals({ target = store, bindings }: { target?: ScreenStore
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
   }, [bindings, turns, history.recent, location.pathname, location.search, navigate]);
-  return <TabBadge count={turns.length}/>;
+  return null;
 }

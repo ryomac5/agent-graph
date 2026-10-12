@@ -5,7 +5,7 @@ import { createStore, type ScreenState } from '../lib/store.ts';
 import { selectRoots } from '../lib/roots.ts';
 import { DEFAULT_KEYS, keyLabel } from '../lib/keys.ts';
 import { readHistory, recordTransitions, rememberConversation, selectTurns, publishTurns, RECENT_KEY, READ_KEY } from '../lib/turns.ts';
-import { TurnSignals, TabBadge } from '../components/TurnSignals.tsx';
+import { TurnSignals } from '../components/TurnSignals.tsx';
 import { RootList } from '../components/RootViews.tsx';
 import { CommandPalette } from '../components/command/Commands.tsx';
 import { orderCommands } from '../components/command/navigation.ts';
@@ -15,8 +15,6 @@ const LAST = '2026-10-08T02:00:00Z';
 const EMPTY = { read: {}, ready: {}, recent: [] };
 beforeEach(() => {
   localStorage.clear(); document.title = 'agent-graph';
-  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ clearRect: vi.fn(), drawImage: vi.fn(), fillRect: vi.fn(), beginPath: vi.fn(), arc: vi.fn(), fill: vi.fn(), fillText: vi.fn() } as unknown as CanvasRenderingContext2D);
-  vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue('data:image/png;base64,badge');
 });
 afterEach(() => { cleanup(); publishTurns(); vi.restoreAllMocks(); document.querySelectorAll('link[rel="icon"]').forEach(row => row.remove()); });
 function fixture() {
@@ -47,30 +45,38 @@ it('selects pending approvals, latest input waits and only transitioned unread i
   expect(selectTurns(newer, history).some(turn => turn.kind === 'input')).toBe(false);
   expect(recordTransitions(selectRoots(state), selectRoots({ ...next, projection: { ...next.projection, roots: next.projection.roots.map(root => ({ ...root, state: 'unknown' })) } }), EMPTY).ready).toEqual({});
 });
-it('updates tab count and root dot, reads an opened root and remembers the read time after remount', () => {
+it('updates the root dot, reads an opened root and remembers the read time after remount', () => {
   const target = fixture();
   const view = render(<MemoryRouter><TurnSignals target={target} bindings={DEFAULT_KEYS}/><RootList roots={selectRoots(idle(target.getSnapshot()))}/><Location/></MemoryRouter>);
-  expect(document.title).toBe('(2) agent-graph');
   act(() => target.setSnapshot(idle(target.getSnapshot())));
-  expect(document.title).toBe('(3) agent-graph');
   expect(screen.getByRole('img', { name: 'Your turn' })).toBeTruthy();
   fireEvent.click(screen.getByText('Read root'));
-  expect(document.title).toBe('(2) agent-graph');
   expect(JSON.parse(localStorage.getItem(READ_KEY)!)).toEqual({ root: LAST });
   view.unmount();
   render(<MemoryRouter><TurnSignals target={target} bindings={DEFAULT_KEYS}/></MemoryRouter>);
-  expect(document.title).toBe('(2) agent-graph');
   const snapshot = target.getSnapshot();
   act(() => target.setSnapshot({ ...snapshot, projection: { ...snapshot.projection, approvals: [], runs: [] } }));
-  expect(document.title).toBe('agent-graph');
+  expect(selectTurns(target.getSnapshot(), readHistory())).toEqual([]);
 });
-it('draws a canvas badge over the original icon and restores it at zero', () => {
-  const icon = document.createElement('link'); icon.rel = 'icon'; icon.href = '/original.svg'; icon.type = 'image/svg+xml'; document.head.append(icon);
-  const { rerender } = render(<TabBadge count={3}/>);
-  expect(icon.getAttribute('href')).toBe('data:image/png;base64,badge');
-  expect(HTMLCanvasElement.prototype.getContext).toHaveBeenCalledWith('2d');
-  rerender(<TabBadge count={0}/>);
-  expect(icon.getAttribute('href')).toBe('/original.svg'); expect(icon.type).toBe('image/svg+xml'); expect(document.title).toBe('agent-graph');
+it('keeps the tab title and favicon unchanged as the turn count changes', () => {
+  const icon = document.createElement('link'); icon.rel = 'icon'; icon.href = '/favicon.svg'; icon.type = 'image/svg+xml'; document.head.append(icon);
+  const target = fixture();
+  const view = render(<MemoryRouter><TurnSignals target={target} bindings={DEFAULT_KEYS}/></MemoryRouter>);
+  function expectUnchanged(count: number) {
+    expect(selectTurns(target.getSnapshot(), readHistory())).toHaveLength(count);
+    expect(document.title).toBe('agent-graph');
+    expect(document.querySelectorAll('link[rel="icon"]')).toHaveLength(1);
+    expect(icon.getAttribute('href')).toBe('/favicon.svg');
+    expect(icon.type).toBe('image/svg+xml');
+  }
+  expectUnchanged(2);
+  act(() => target.setSnapshot(idle(target.getSnapshot())));
+  expectUnchanged(3);
+  const snapshot = target.getSnapshot();
+  act(() => target.setSnapshot({ ...snapshot, projection: { ...snapshot.projection, approvals: [], runs: [], roots: [] } }));
+  expectUnchanged(0);
+  view.unmount();
+  expectUnchanged(0);
 });
 it('navigates to the oldest turn with g n, cycles onward and ignores typing and open dialogs', () => {
   render(<MemoryRouter><TurnSignals target={fixture()} bindings={DEFAULT_KEYS}/><Location/><input aria-label="Draft"/></MemoryRouter>);
@@ -129,10 +135,10 @@ it('keeps a completion unread in a background tab until the conversation becomes
   render(<MemoryRouter initialEntries={['/c/root']}><TurnSignals target={target} bindings={DEFAULT_KEYS}/></MemoryRouter>);
   const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
   act(() => target.setSnapshot(idle(target.getSnapshot())));
-  expect(document.title).toBe('(3) agent-graph');
+  expect(selectTurns(target.getSnapshot(), readHistory())).toHaveLength(3);
   expect(readHistory().read.root).toBeUndefined();
   visibility.mockReturnValue('visible');
   act(() => document.dispatchEvent(new Event('visibilitychange')));
-  expect(document.title).toBe('(2) agent-graph');
+  expect(selectTurns(target.getSnapshot(), readHistory())).toHaveLength(2);
   expect(readHistory().read.root).toBe(LAST);
 });

@@ -73,14 +73,25 @@ for (const provider of ["claude", "codex"] as const) {
       generation: api.feed.snapshot().generation, scope: { conversations: [JSON.stringify([provider, "fixture"])] } })), false);
     await delay(50);
     const times: number[] = [];
+    const initialObservation = service.getObservation();
+    let patchSerializations = 0;
+    const stringify = JSON.stringify;
+    t.mock.method(JSON, "stringify", (...args: Parameters<typeof JSON.stringify>) => {
+      if (args[0]?.type === "patch") patchSerializations++;
+      return stringify(...args);
+    });
     for (let i = 0; i < SAMPLES; i++) {
       frames.length = 0;
+      patchSerializations = 0;
       const start = performance.now();
       // 短い間隔の追記と途中の行を、同じ変更通知の組として流す。
       const body = message(`reply-${i}`);
       appendFileSync(path, body.slice(0, -1));
       appendFileSync(path, "\n");
       await waitUntil(() => frames.some(({ frame }) => frame.type === "patch" && frame.changes?.messages?.upsert.length));
+      if (i === 0) assert.equal(service.getObservation(), initialObservation, "Watch ingestion must preserve observation state and report");
+      assert.equal(patchSerializations, frames.filter(({ frame }) => frame.type === "patch").length,
+        "Each scoped patch must be serialized only for sending");
       times.push(frames.find(({ frame }) => frame.type === "patch" && frame.changes?.messages?.upsert.length)!.at - start);
       await delay(40);
     }

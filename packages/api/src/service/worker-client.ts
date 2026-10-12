@@ -42,14 +42,14 @@ export async function startObservationWorker(service: ReturnType<typeof openObse
     }
     if (message.type === "started") service.setObservation({ state: "running", processed: 0, total: 0 });
     if (message.type === "progress") service.setObservation({ state: "running", processed: message.processed, total: message.total });
-    if (message.type === "complete") {
+    if (message.type === "complete" || message.type === "watched") {
       memory = message.memory;
       if (message.activity) {
         activity[message.activity.watch ? "watches" : "polls"]++;
         activity.opened += message.activity.opened;
         activity.contentBytes += message.activity.contentBytes;
       }
-      service.setObservation({ state: message.report ? "idle" : "failed", report: message.report, seq: message.seq });
+      if (message.type === "complete") service.setObservation({ state: message.report ? "idle" : "failed", report: message.report, seq: message.seq });
     }
     if (message.type === "projected") service.notifyProjection();
     if (message.type === "appended") service.notifyAppend(message.seq);

@@ -18,6 +18,7 @@ export interface CodexObservationOptions {
   fileBatch?: (path: string, operation: () => AppendResult[]) => AppendResult[];
   locate?: LocationResolver;
   titleCursors?: Map<string, FileCursor>;
+  observeTitles?: boolean;
 }
 /** 会話の場所の事実の識別。これがあれば、場所を読み終えている。 */
 export function codexLocationEventId(nativeId: string): string {
@@ -128,6 +129,7 @@ export function observeCodex(ledger: Ledger, options: CodexObservationOptions = 
       return options.fileBatch ? options.fileBatch(path, operation)
         : (options.batch ?? ((operation) => operation()))(operation);
     });
+  if (options.observeTitles === false) return results;
   return [...results, ...observeCodexTitles(ledger, home, options.observedTs ?? new Date().toISOString(), index.subjects, options.titleCursors)];
 }
 

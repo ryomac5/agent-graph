@@ -260,6 +260,10 @@ export function openObservationService(options: ObservationOptions = {}) {
   let cachedClaudeFiles: string[] = [];
   let cachedCodexFiles: string[] = [];
   let cachedRemoteFiles: string[] = [];
+  let watchPathsDirty = true;
+  let watchProjectionSeq = -1;
+  let watchExpires = 0;
+  let selectedWatchPaths: string[] = [];
   let changedHistoryPaths: ReadonlySet<string> | undefined;
   const readDirectFacts = prepareDirectFacts(projectionDb);
   const readDirectLocations = projectionDb.prepare("SELECT 1 FROM facts WHERE seq > ? AND seq <= ? AND kind GLOB 'conversation.*' AND json_type(payload, '$.cwd') = 'text' LIMIT 1");
@@ -352,6 +356,11 @@ export function openObservationService(options: ObservationOptions = {}) {
     setUiAppender(append: UiAppender) { appendUi = append; },
     checkpoint: buffered.checkpoint,
     watchPaths() {
+      const seq = Number(readProjectionState.get()?.last_seq ?? 0);
+      if (!watchPathsDirty && seq === watchProjectionSeq && Date.now() < watchExpires) return selectedWatchPaths;
+      watchPathsDirty = false;
+      watchProjectionSeq = seq;
+      watchExpires = Infinity;
       const active = new Set(readWatchConversations.all().map(row => `${row.provider}:${row.native_id}`));
       const activePaths = new Set<string>();
       if (active.size) for (const path of historyFiles) {
@@ -360,11 +369,15 @@ export function openObservationService(options: ObservationOptions = {}) {
         const key = nativeId ? `codex:${nativeId}` : `claude:${basename(path, ".jsonl")}`;
         if (active.has(key)) activePaths.add(path);
       }
-      return [...checkpoints].filter(([path, cursor]) => historyFiles.has(path)
+      selectedWatchPaths = [...checkpoints].filter(([path, cursor]) => historyFiles.has(path)
         && !path.includes("/archived_sessions/")
         && (activePaths.has(path) || (cursor.mtimeMs ?? 0) >= Date.now() - WATCH_ACTIVITY_MS))
         .sort((a, b) => Number(activePaths.has(b[0])) - Number(activePaths.has(a[0]))
-          || (b[1].mtimeMs ?? 0) - (a[1].mtimeMs ?? 0)).slice(0, WATCH_FILE_LIMIT).map(([path]) => path);
+          || (b[1].mtimeMs ?? 0) - (a[1].mtimeMs ?? 0)).slice(0, WATCH_FILE_LIMIT).map(([path, cursor]) => {
+          if (!activePaths.has(path)) watchExpires = Math.min(watchExpires, (cursor.mtimeMs ?? 0) + WATCH_ACTIVITY_MS);
+          return path;
+        });
+      return selectedWatchPaths;
     },
     useWorkerProjection() {
       if (!options.readerOnly) return;
@@ -398,7 +411,7 @@ export function openObservationService(options: ObservationOptions = {}) {
       ingesting = true;
       const previousCheckpoints = new Map(checkpoints);
       try {
-        const changes = historyFiles.size ? changedHistoryPaths : undefined;
+        const changes = changedHistoryPaths;
         refreshSnapshot();
         const codex = rollout ??= createIncrementalRolloutReader(scanLedger, rollouts);
         decorate = codex.decorate;
@@ -412,7 +425,9 @@ export function openObservationService(options: ObservationOptions = {}) {
         const codexHome = env.CODEX_HOME ?? join(home, ".codex");
         const codexFiles = changes ? cachedCodexFiles : [...remoteFiles.filter(path => path.includes("/codex/")), ...codex.reader.list(join(codexHome, "sessions")), ...codex.reader.list(join(codexHome, "archived_sessions"))];
         if (!changes) {
-          historyFiles = new Set([...claudeFiles, ...codexFiles]);
+          const nextFiles = new Set([...claudeFiles, ...codexFiles]);
+          if (nextFiles.size !== historyFiles.size || [...nextFiles].some(path => !historyFiles.has(path))) watchPathsDirty = true;
+          historyFiles = nextFiles;
           cachedClaudeFiles = claudeFiles; cachedCodexFiles = codexFiles; cachedRemoteFiles = remoteFiles;
         }
         const codexPaths = new Set(codexFiles.filter(path => (!changes || changes.has(path)) && hasChanged(path)));
@@ -432,11 +447,11 @@ export function openObservationService(options: ObservationOptions = {}) {
                 (path, operation) => observeFileBatch(path, "transcript-claude", () => trackBatch(operation), result => result.conflicts));
             }
             if (codexPaths.size) observeCodex(scanLedger,
-              { codexHome, reader: codex.reader, paths: codexPaths, titleCursors: checkpoints,
+              { codexHome, reader: codex.reader, paths: codexPaths, titleCursors: checkpoints, observeTitles: !changes,
                 fileBatch: (path, operation) => observeFileBatch(path, "rollout-codex", () => trackBatch(operation),
                   results => results.filter(result => result.status === "conflict")) });
           });
-          if (!codexPaths.size) {
+          if (!changes && !codexPaths.size) {
             const titles = buffered.batch(() => observeCodexTitles(scanLedger, codexHome, new Date().toISOString(), undefined, checkpoints));
             if (titles.some(result => result.status === "conflict")) throw new Error("Conflicting Codex title");
           }
@@ -456,33 +471,39 @@ export function openObservationService(options: ObservationOptions = {}) {
           if (located.some((result) => result.status === "conflict")) throw new Error("Conflicting Codex location");
           refreshSnapshot();
         }
-        const directThrough = Number(readLastSeq.get()!.seq ?? 0);
-        function* readLaunchFacts(): Generator<Fact> {
-          for (const row of readDirectFacts.iterate(directSeq, directThrough)) yield { ...row,
-            payload: row.payload === null ? null : JSON.parse(String(row.payload)),
-          } as Fact;
+        if (!changes) {
+          const directThrough = Number(readLastSeq.get()!.seq ?? 0);
+          function* readLaunchFacts(): Generator<Fact> {
+            for (const row of readDirectFacts.iterate(directSeq, directThrough)) yield { ...row,
+              payload: row.payload === null ? null : JSON.parse(String(row.payload)),
+            } as Fact;
+          }
+          const localDirectFiles = codexFiles.filter(path => !path.startsWith(remoteProjects + "/"));
+          const changedDirectFacts = directSeq !== directThrough
+            && (readDirectFacts.get(directSeq, directThrough) || readDirectLocations.get(directSeq, directThrough));
+          if (changedDirectFacts || claudePaths.length || codexPaths.size
+            || localDirectFiles.length !== directFiles.length || localDirectFiles.some((path, index) => path !== directFiles[index])
+            || directCodex.hasChangedPrompts()) {
+            buffered.batch(() => directCodex(readLaunchFacts(), localDirectFiles, new Date().toISOString(), codexPaths));
+            directFiles = localDirectFiles;
+          }
+          directSeq = directThrough;
+          refreshSnapshot();
         }
-        const localDirectFiles = codexFiles.filter(path => !path.startsWith(remoteProjects + "/"));
-        const changedDirectFacts = directSeq !== directThrough
-          && (readDirectFacts.get(directSeq, directThrough) || readDirectLocations.get(directSeq, directThrough));
-        if (changedDirectFacts || claudePaths.length || codexPaths.size
-          || localDirectFiles.length !== directFiles.length || localDirectFiles.some((path, index) => path !== directFiles[index])
-          || directCodex.hasChangedPrompts()) {
-          buffered.batch(() => directCodex(readLaunchFacts(), localDirectFiles, new Date().toISOString(), codexPaths));
-          directFiles = localDirectFiles;
+        let aliases = { pending: 0, deferred: 0 };
+        if (!changes) {
+          ingestOutbox(scanLedger, listOutbox(hookOutboxPath(env, home),
+            (name) => !name.startsWith(".") && name.endsWith(".json")), buffered.batch);
+          refreshSnapshot();
+          aliases = kit.observe();
+          refreshSnapshot();
+          remoteConversations = buffered.batch(() => observeRemoteStatus(scanLedger, remoteFiles, snapshot));
+          if (existsSync(claudeSessionsDirectory)) buffered.batch(() => observeClaudeSessions());
+          refreshSnapshot();
+          buffered.batch(() => observeCodexSessions());
         }
-        directSeq = directThrough;
-        refreshSnapshot();
-        ingestOutbox(scanLedger, listOutbox(hookOutboxPath(env, home),
-          (name) => !name.startsWith(".") && name.endsWith(".json")), buffered.batch);
-        refreshSnapshot();
-        const aliases = kit.observe();
-        refreshSnapshot();
-        remoteConversations = buffered.batch(() => observeRemoteStatus(scanLedger, remoteFiles, snapshot));
-        if (existsSync(claudeSessionsDirectory)) buffered.batch(() => observeClaudeSessions());
-        refreshSnapshot();
-        buffered.batch(() => observeCodexSessions());
         const changedCheckpoints = [...checkpoints].filter(([path, cursor]) => previousCheckpoints.get(path) !== cursor);
+        if (changedCheckpoints.some(([path]) => historyFiles.has(path))) watchPathsDirty = true;
         if (changedCheckpoints.length) {
           projectionDb.exec("BEGIN IMMEDIATE");
           try {

@@ -5,17 +5,16 @@ import { pollObservation } from "./poll.ts";
 
 import { createHistoryWatch } from "./history-watch.ts";
 import { fileReadMetrics } from "../observe/files.ts";
+import { createCheckpointSchedule } from "./checkpoint-schedule.ts";
 
 const port = parentPort!;
 const { observe, hook: enableHook = true, measureMemory, ...options } = workerData as ObservationOptions & { observe: boolean; hook?: boolean; measureMemory?: boolean };
-const CHECKPOINT_SETTLE_MS = 100;
+const shouldCheckpoint = createCheckpointSchedule(OBSERVATION_POLL_MS);
+let watchCycle = false;
 const PROJECTION_RETRY_MS = 25;
-let checkpointCandidate: number | undefined;
-let checkpointCandidateTime = 0;
-let checkpointTime = 0;
 let progressTime = 0;
 const service = openObservationService({ ...options, writerOnly: true, projectInWorker: true, onProgress(progress) {
-  if (progress.processed === 0 || progress.processed === progress.total || performance.now() - progressTime >= 50) {
+  if (!watchCycle && (progress.processed === 0 || progress.processed === progress.total || performance.now() - progressTime >= 50)) {
     progressTime = performance.now();
     port.postMessage({ type: "progress", ...progress });
   }
@@ -56,13 +55,8 @@ function scheduleProjection(): void {
 }
 function checkpoint(): void {
   if (stopped) return;
-  const seq = service.lastSeq();
-  const now = performance.now();
-  if (service.projectionSeq() !== seq) checkpointCandidate = undefined;
-  else if (checkpointCandidate !== seq) { checkpointCandidate = seq; checkpointCandidateTime = now; }
-  else if (now - checkpointCandidateTime >= CHECKPOINT_SETTLE_MS && now - checkpointTime >= OBSERVATION_POLL_MS) {
+  if (shouldCheckpoint(service.lastSeq(), service.projectionSeq(), performance.now())) {
     pollObservation(() => service.checkpoint());
-    checkpointTime = now;
   }
 }
 const projectionPoll = setInterval(() => { scheduleProjection(); checkpoint(); }, PROJECTION_POLL_MS);
@@ -73,11 +67,12 @@ const historyWatch = createHistoryWatch((paths) => {
 });
 function ingest(paths?: ReadonlySet<string>): void {
   if (!paths) timer = undefined;
-  port.postMessage({ type: "started" });
+  watchCycle = !!paths;
+  if (!paths) port.postMessage({ type: "started" });
   try {
     const reads = measureMemory ? { ...fileReadMetrics } : undefined;
     const report = pollObservation(() => paths ? service.ingestChanged(paths) : service.ingestOnce());
-    port.postMessage({ type: "complete", report, seq: service.lastSeq(), memory: measureMemory ? process.memoryUsage() : undefined,
+    port.postMessage({ type: paths ? "watched" : "complete", report, seq: service.lastSeq(), memory: measureMemory ? process.memoryUsage() : undefined,
       activity: reads ? { watch: !!paths, opened: fileReadMetrics.opened - reads.opened,
         contentBytes: fileReadMetrics.contentBytes - reads.contentBytes } : undefined });
     if (!paths) watchedPaths = service.watchPaths();
@@ -89,6 +84,7 @@ function ingest(paths?: ReadonlySet<string>): void {
     port.postMessage({ type: "fatal", message: error instanceof Error ? error.message : String(error) });
     return;
   }
+  watchCycle = false;
   // 次の走査は前の走査の完了後に予約する。
   if (!stopped && !paths) timer = setTimeout(ingest, OBSERVATION_POLL_MS);
 }

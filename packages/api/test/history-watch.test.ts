@@ -64,3 +64,67 @@ test("長いターンの履歴は更新が十分以上止まっていても監�
   service.catchUp();
   assert.ok(!service.watchPaths().includes(path));
 });
+
+test("監視対象が不変なら一覧を再利用し、期限と新規ファイルで作り直す", async t => {
+  const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { openObservationService } = await import("../src/service/index.ts");
+  const home = mkdtempSync(join(tmpdir(), "api-watch-cache-"));
+  const directory = join(home, ".claude/projects/fixture");
+  mkdirSync(directory, { recursive: true });
+  const row = (id: string) => JSON.stringify({ type: "assistant", uuid: id, timestamp: new Date().toISOString(),
+    message: { role: "assistant", content: id } }) + "\n";
+  writeFileSync(join(directory, "first.jsonl"), row("first"));
+  const service = openObservationService({ home, env: { HOME: home }, dbPath: join(home, "ledger.db") });
+  t.after(() => { service.close(); rmSync(home, { recursive: true, force: true }); });
+  service.ingestOnce();
+  const paths = service.watchPaths();
+  service.ingestOnce();
+  assert.equal(service.watchPaths(), paths);
+  const now = Date.now();
+  t.mock.method(Date, "now", () => now + 11 * 60 * 1000);
+  assert.deepEqual(service.watchPaths(), []);
+  t.mock.restoreAll();
+  writeFileSync(join(directory, "second.jsonl"), row("second"));
+  service.ingestOnce();
+  assert.equal(service.watchPaths().length, 2);
+});
+
+test("監視周期は変更履歴だけを読み、outbox と Codex 題名は見回りで読む", async t => {
+  const { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { openObservationService } = await import("../src/service/index.ts");
+  const home = mkdtempSync(join(tmpdir(), "api-watch-only-"));
+  const codexHome = join(home, ".codex");
+  const directory = join(codexHome, "sessions");
+  const outbox = join(home, ".local/state/agent-graph/outbox");
+  mkdirSync(directory, { recursive: true });
+  mkdirSync(outbox, { recursive: true });
+  const path = join(directory, "rollout-test.jsonl");
+  const timestamp = new Date().toISOString();
+  writeFileSync(path, JSON.stringify({ type: "session_meta", timestamp,
+    payload: { id: "test", timestamp, source: "cli", history_mode: "legacy" } }) + "\n");
+  const service = openObservationService({ home, env: { HOME: home }, dbPath: join(home, "ledger.db") });
+  t.after(() => { service.close(); rmSync(home, { recursive: true, force: true }); });
+  service.ingestOnce();
+  writeFileSync(join(codexHome, "session_index.jsonl"), JSON.stringify({ id: "test", thread_name: "Deferred title", updated_at: timestamp }) + "\n");
+  appendFileSync(path, JSON.stringify({ type: "response_item", timestamp,
+    payload: { type: "message", id: "reply", role: "assistant", content: "Reply" } }) + "\n");
+  writeFileSync(join(outbox, ".probe"), "");
+  let scans = 0;
+  const readdir = fs.readdirSync;
+  t.mock.method(fs, "readdirSync", (...args: Parameters<typeof fs.readdirSync>) => {
+    if (String(args[0]) === outbox) scans++;
+    return readdir(...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  assert.ok(service.ingestChanged(new Set([path])).appended > 0);
+  assert.equal(scans, 0);
+  assert.ok(!service.ledger.readSince(0, 100).some(fact => fact.kind === "conversation.updated" && fact.payload?.ai_title === "Deferred title"));
+  service.ingestOnce();
+  assert.ok(scans > 0);
+  assert.ok(service.ledger.readSince(0, 100).some(fact => fact.kind === "conversation.updated" && fact.payload?.ai_title === "Deferred title"));
+});

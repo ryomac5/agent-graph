@@ -62,6 +62,7 @@ export class ProjectionFeed {
   private state: ProjectionState;
   private history: ProjectionPatch[] = [];
   private historyBytes = 0;
+  private serialized = new WeakMap<ProjectionPatch, string>();
   private historySizes: number[] = [];
   private floor: number;
   private limit: number;
@@ -70,6 +71,7 @@ export class ProjectionFeed {
   private requiresGeneration: boolean;
   private identities: ScreenIdentities = { conversations: {}, runs: {} };
   private observation?: ObservationProgress;
+  private projectBaseline?: { projects: Map<string, Record<string, SQLOutputValue>>; references: Map<string, string> };
   private registeredRepositories = new Map<string, string[]>();
   private statements = new Map<string, StatementSync>();
   private inputQueues = new Map<string, unknown[]>();
@@ -116,6 +118,7 @@ export class ProjectionFeed {
       initializeSummaryIndex(this.db);
       this.updateIdentities();
       this.updateProjects();
+      this.projectBaseline = undefined;
       this.db.exec("DELETE FROM api_conversation_summaries");
       for (const row of this.prepare("SELECT id FROM conversations").iterate()) this.updateSummary(String(row.id));
       this.cursor = Number(this.prepare("SELECT coalesce(max(cursor), 0) AS cursor FROM api_projection_changes").get()!.cursor);
@@ -192,7 +195,13 @@ export class ProjectionFeed {
   }
   private updateProjects(): { upsert: Record<string, unknown>[]; remove: string[]; resolved: string[] } {
     const projects = projectProjects(decodeFacts(this.prepare("SELECT * FROM facts WHERE seq <= ? AND kind LIKE 'project.%' ORDER BY seq").all(this.state.last_seq)));
-    const previous = new Map(this.prepare("SELECT * FROM api_projects").all().map(row => [String(row.id), row]));
+    // 部分書き込みの後も、配信済みの状態を比較の基準に残す。
+    this.projectBaseline ??= {
+      projects: new Map(this.prepare("SELECT * FROM api_projects").all().map(row => [String(row.id), row])),
+      references: new Map(this.prepare("SELECT * FROM api_project_resolution").all()
+        .map(row => [String(row.id), JSON.stringify(row)])),
+    };
+    const previous = new Map(this.projectBaseline.projects);
     const insert = this.prepare("INSERT OR REPLACE INTO api_projects VALUES (?, ?, ?, ?)");
     const upsert: Record<string, unknown>[] = [];
     for (const project of projects) {
@@ -203,8 +212,7 @@ export class ProjectionFeed {
       previous.delete(row.id);
     }
     for (const id of previous.keys()) this.prepare("DELETE FROM api_projects WHERE id = ?").run(id);
-    const previousReferences = new Map(this.prepare("SELECT * FROM api_project_resolution").all()
-      .map(row => [String(row.id), JSON.stringify(row)]));
+    const previousReferences = this.projectBaseline.references;
     this.db.exec("DELETE FROM api_project_resolution");
     this.registeredRepositories.clear();
     for (const row of this.prepare("SELECT id, root_path FROM api_projects WHERE state = 'registered' AND root_path IS NOT NULL").iterate()) {
@@ -286,31 +294,76 @@ export class ProjectionFeed {
     const state = this.catchUp();
     this.observation = (state as ProjectionState & { observation?: ObservationProgress }).observation;
     if (state.generation === this.state.generation && state.last_seq === this.state.last_seq) return;
-    // 書き手が持つロックは待たず、次の通知か見回りで同じ差分を再試行する。
-    try { this.db.exec("BEGIN IMMEDIATE"); }
-    catch (error) {
-      if (error instanceof Error && "errcode" in error && Number(error.errcode) === 5) return;
-      throw error;
-    }
     const previous = this.state;
     const cursor = this.cursor;
+    const identities = { conversations: { ...this.identities.conversations }, runs: { ...this.identities.runs } };
+    const roots = this.roots;
+    const inputQueues = new Map(this.inputQueues);
+    const registeredRepositories = new Map(this.registeredRepositories);
+    // 読み取りの組を固定し、要約の計算中は書き手を塞がない。
+    this.db.exec("BEGIN");
+    let stored: ProjectionState;
+    let changes: Record<string, SQLOutputValue>[];
     try {
-      const stored = this.prepare("SELECT last_seq, generation FROM projection_state WHERE id = 1").get()!;
-      const patch = this.refreshProjection({ ...state, last_seq: Number(stored.last_seq), generation: Number(stored.generation) });
+      const row = this.prepare("SELECT last_seq, generation FROM projection_state WHERE id = 1").get()!;
+      stored = { ...state, last_seq: Number(row.last_seq), generation: Number(row.generation) };
+      changes = this.prepare("SELECT * FROM api_projection_changes WHERE cursor > ? ORDER BY cursor").all(cursor);
       this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+    try {
+      const patch = this.refreshProjection(stored, changes);
+      const nextCursor = Number(changes.at(-1)?.cursor ?? cursor);
+      // 成功した組だけ消す。途中の失敗と並行追記は次回に残す。
+      this.prepare("DELETE FROM api_projection_changes WHERE cursor <= ?").run(nextCursor);
+      this.cursor = nextCursor;
+      this.projectBaseline = undefined;
+      if (patch === "resync") {
+        this.history = []; this.historySizes = []; this.historyBytes = 0;
+        this.requiresGeneration = true; this.floor = stored.last_seq;
+      } else {
+        this.history.push(patch);
+        this.historySizes.push(0);
+        while (this.history.length > this.limit || this.historyBytes > PATCH_RETENTION_BYTES) {
+          this.floor = this.history.shift()!.seq;
+          this.historyBytes -= this.historySizes.shift()!;
+        }
+      }
       return patch;
     } catch (error) {
-      this.db.exec("ROLLBACK");
       this.state = previous;
-      this.cursor = cursor;
+      this.identities = identities;
+      this.roots = roots;
+      this.inputQueues = inputQueues;
+      this.registeredRepositories = registeredRepositories;
+      if (error instanceof Error && "errcode" in error && (Number(error.errcode) & 0xff) === 5) return;
       throw error;
     }
   }
-  private refreshProjection(state: ProjectionState): ProjectionPatch | "resync" {
+  serializePatch(patch: ProjectionPatch): string {
+    let text = this.serialized.get(patch);
+    if (text === undefined) {
+      const { detail, ...message } = patch;
+      text = JSON.stringify(message);
+      this.serialized.set(patch, text);
+      this.recordPatchBytes(patch, text);
+    }
+    return text;
+  }
+  recordPatchBytes(patch: ProjectionPatch, text: string): void {
+    const index = this.history.indexOf(patch);
+    if (index < 0) return;
+    const bytes = Buffer.byteLength(text);
+    if (bytes <= this.historySizes[index]) return;
+    this.historyBytes += bytes - this.historySizes[index];
+    this.historySizes[index] = bytes;
+    while (this.historyBytes > PATCH_RETENTION_BYTES) {
+      this.floor = this.history.shift()!.seq;
+      this.historyBytes -= this.historySizes.shift()!;
+    }
+  }
+  private refreshProjection(state: ProjectionState, changes: Record<string, SQLOutputValue>[]): ProjectionPatch | "resync" {
     const previous = this.state;
     this.state = state;
-    const changes = this.prepare("SELECT * FROM api_projection_changes WHERE cursor > ? ORDER BY cursor").all(this.cursor);
-    this.cursor = Number(changes.at(-1)?.cursor ?? this.cursor);
     const groups = new Map<string, Set<string>>();
     const conversations = new Set<string>();
     const membershipConversations: Record<string, string[]> = {};
@@ -379,7 +432,6 @@ export class ProjectionFeed {
     this.updateInputQueues(resetQueues ? undefined : [...queueIds]);
     groups.set("conversations", ids);
     if (state.generation !== previous.generation || state.last_seq < previous.last_seq) {
-      this.history = []; this.historySizes = []; this.historyBytes = 0; this.requiresGeneration = true; this.floor = state.last_seq;
       this.roots = this.readRoots();
       return "resync";
     }
@@ -419,16 +471,6 @@ export class ProjectionFeed {
       }
     }
     if (patch.changes.delegations) patch.changes.delegations.upsert = this.rootDelegations(patch.changes.delegations.upsert);
-    const bytes = Buffer.byteLength(JSON.stringify(patch));
-    this.history.push(patch);
-    this.historySizes.push(bytes);
-    this.historyBytes += bytes;
-    while (this.history.length > this.limit || this.historyBytes > PATCH_RETENTION_BYTES) {
-      this.floor = this.history.shift()!.seq;
-      this.historyBytes -= this.historySizes.shift()!;
-    }
-    // 配信済みの変更は patch の識別子だけに置き換える。
-    this.prepare("DELETE FROM api_projection_changes WHERE cursor <= ?").run(this.cursor);
     return patch;
   }
   replay(seq: number, generation?: number): ProjectionPatch[] | undefined {

@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import { resolveProjection, resolveRow, type ScreenIdentities } from './identities.ts';
+import { mergeIdentities, resolveProjection, resolveRow, type ScreenIdentities } from './identities.ts';
 
 export type ConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'runner_unavailable';
 export type Row = Record<string, unknown>;
@@ -24,18 +24,19 @@ export function createStore() {
     clearDeltas: () => update({ ...state, deltas: {} }),
     mergeProjection(projection: Record<string, Row[]>, generation: number, identities = state.identities, pages = state.pages, projectionError = state.projectionError) {
       if (generation !== state.generation) return;
-      const next = { ...state.projection };
+      identities = mergeIdentities(state.identities, identities);
+      const next = identities === state.identities ? { ...state.projection } : resolveProjection(state.projection, identities);
       for (const [table, incoming] of Object.entries(resolveProjection(projection, identities))) {
         const rows = new Map((next[table] ?? []).map(row => [String(row.id), row]));
         for (const row of incoming) if (!rows.has(String(row.id))) rows.set(String(row.id), row);
         next[table] = [...rows.values()];
       }
-      update({ ...state, projection: next, pages, projectionError });
+      update({ ...state, projection: next, identities, pages, projectionError });
     },
     applyPatch(patch: Patch): boolean {
       if (patch.generation !== state.generation || patch.from_seq > state.seq) return false;
       if (patch.seq <= state.seq) return true;
-      const identities = patch.identities ?? state.identities;
+      const identities = mergeIdentities(state.identities, patch.identities);
       const projection = identities === state.identities ? { ...state.projection } : resolveProjection(state.projection, identities);
       const deltas = { ...state.deltas };
       for (const [table, change] of Object.entries(patch.changes)) {

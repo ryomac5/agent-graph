@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { PERF, REPEATS, summarize } from './baseline.mjs';
+import { isLastMessageVisible, measureConversationScroll } from './browser-metrics.mjs';
 
 const BASE = process.env.AGENT_GRAPH_PERF_URL ?? 'http://127.0.0.1:7420';
 const PLAYWRIGHT = process.env.AGENT_GRAPH_PERF_PLAYWRIGHT ?? '/Users/r/.npm/_npx/d71ea5ed3eabc9b3/node_modules/playwright/index.mjs';
@@ -87,14 +88,7 @@ await attempt('dashboard', async () => {
   const active = () => page.locator('.workbench-body:not([hidden])').first();
   async function painted() { await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))); }
   async function lastVisible() {
-    await page.waitForFunction(() => {
-      const root = document.querySelector('.workbench-body:not([hidden])');
-      const box = root?.querySelector('.conv-timeline');
-      const article = [...root?.querySelectorAll('article.message') ?? []].at(-1);
-      if (!box || !article || root.querySelector('.history-loading')) return false;
-      const a = article.getBoundingClientRect(), b = box.getBoundingClientRect();
-      return a.bottom > b.top && a.top < b.bottom;
-    });
+    await page.waitForFunction(isLastMessageVisible);
     await painted();
   }
   const cold = [];
@@ -134,16 +128,7 @@ await attempt('dashboard', async () => {
   await page.goto(`${BASE}/c/${encodeURIComponent(selected.long.id)}`); await lastVisible();
   const scroll = [];
   for (let i = 0; i < REPEATS; i++) {
-    scroll.push(await page.evaluate(async () => {
-      const box = document.querySelector('.workbench-body:not([hidden]) .conv-timeline');
-      const m = window.__perf; const commits = m.commits, work = m.workFibers, task = m.longTasks.length;
-      const deltas = []; let previous = performance.now(); const start = previous;
-      for (let step = 0; step < 120; step++) {
-        box.scrollTop = Math.max(0, box.scrollTop - 150); box.dispatchEvent(new Event('scroll', { bubbles: true }));
-        await new Promise(resolve => requestAnimationFrame(now => { deltas.push(now - previous); previous = now; resolve(); }));
-      }
-      return { ms: performance.now() - start, frames: deltas, commits: m.commits - commits, workFibers: m.workFibers - work, longTasks: m.longTasks.slice(task), messages: box.querySelectorAll('article.message').length };
-    }));
+    scroll.push(await page.evaluate(measureConversationScroll));
     await page.waitForFunction(() => !document.querySelector('.workbench-body:not([hidden]) .history-loading'));
   }
   const wsStart = wsFrames.length; const startWs = performance.now(); await delay(10000);

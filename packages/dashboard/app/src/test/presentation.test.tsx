@@ -124,6 +124,7 @@ it('shows the conversation header with model, effort, worktree place and branch,
 it('folds tool calls with their paired output and places approvals inline at their requested time', () => {
   const target = setup();
   render(<MemoryRouter><ConversationPage conversationId={CONVERSATION} target={target} client={client}/></MemoryRouter>);
+  fireEvent.click(document.querySelector('.tool-run > summary')!);
   const tool = screen.getByText('ls -la', { selector: '.tool-summary' }).closest('details')!;
   expect(tool.open).toBe(false);
   fireEvent.click(tool.querySelector('summary')!);

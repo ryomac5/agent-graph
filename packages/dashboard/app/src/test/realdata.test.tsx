@@ -8,7 +8,7 @@ import { ConversationPage } from '../pages/conversation/ConversationPage.tsx';
 import { SearchPage } from '../pages/search/SearchPage.tsx';
 import { isTemporaryPath } from '../lib/projects.ts';
 import { extractSnippet, type SearchResult } from '../pages/search/model.ts';
-import { compareMessages, loadConversationWindow } from '../lib/projection-client.ts';
+import { compareMessages, loadConversationEdits, loadConversationWindow } from '../lib/projection-client.ts';
 
 const CONVERSATION_COUNT = 10_000;
 const NOW = new Date().toISOString();
@@ -85,11 +85,13 @@ it('fetches conversation bodies, shows loading and displays the newest two hundr
   const messages = Array.from({ length: 450 }, (_, index) => ({ id: `m${String(index).padStart(3, '0')}`,
     role: 'user', body: `Message ${index}`, body_state: 'stored', source_ts: new Date(Date.parse(OLD) + index * 1000).toISOString() }));
   const fetcher = vi.fn(async (url: URL) => {
-    const after = url.searchParams.get('after') ?? '';
-    const rows = messages.filter(row => row.id > after).slice(0, 200);
+    const params = url.searchParams;
+    const before = params.get('before');
+    const end = before ? messages.findIndex(row => row.id === JSON.parse(before).id) : messages.length;
+    const rows = params.has('edits') ? [] : messages.slice(Math.max(0, end - 200), end);
     return { ok: true, json: async () => ({ generation: 0, projection: { messages: rows,
       message_memberships: rows.map(row => ({ id: row.id, message_id: row.id, conversation_id: 'c', active: 1 })) },
-    next: rows.length === 200 ? rows.at(-1)!.id : null }) };
+    hasOlder: end > 200, next: null }) };
   });
   vi.stubGlobal('fetch', fetcher);
   render(<MemoryRouter><ConversationPage conversationId="c" target={target} client={client}/></MemoryRouter>);
@@ -97,10 +99,13 @@ it('fetches conversation bodies, shows loading and displays the newest two hundr
   await screen.findByText('Message 449');
   expect(fetcher.mock.calls[0][0].pathname).toBe('/conversation');
   expect(fetcher.mock.calls[0][0].searchParams.get('id')).toBe('c');
+  expect(fetcher.mock.calls[0][0].searchParams.get('latest')).toBe('1');
+  expect(fetcher.mock.calls.filter(([url]) => !url.searchParams.has('edits'))).toHaveLength(1);
   expect(screen.queryByText('Message 249')).toBeNull();
   expect(screen.getAllByRole('article', { name: 'User message' })).toHaveLength(200);
   fireEvent.scroll(document.querySelector('.conv-timeline')!, { target: { scrollTop: 0 } });
   await screen.findByText('Message 50');
+  expect(JSON.parse(fetcher.mock.calls.find(([url]) => url.searchParams.has('before'))![0].searchParams.get('before')!)).toEqual({ id: 'm250', source_ts: messages[250].source_ts, source_event_id: '' });
   expect(screen.getAllByRole('article', { name: 'User message' })).toHaveLength(400);
 });
 it('shows a conversation fetch failure and retries successfully', async () => {
@@ -128,11 +133,12 @@ it('loads roots after the snapshot page without overwriting a newer live root', 
   const rows = Array.from({ length: 600 }, (_, index) => ({ id: `m${String(index).padStart(3, '0')}`,
     body: `Body ${index}`, role: 'user', source_ts: new Date(Date.parse(OLD) + index * 1000).toISOString() }));
   const page = await loadConversationWindow('c', new AbortController().signal, undefined, 'm250', async path => {
-    const after = new URL(path, 'http://localhost').searchParams.get('after') ?? '';
-    const messages = rows.filter(row => row.id > after).slice(0, 200);
+    const params = new URL(path, 'http://localhost').searchParams;
+    const end = rows.findIndex(row => row.id === params.get('message')) + 1;
+    const messages = rows.slice(Math.max(0, end - 200), end);
     return { generation: 0, projection: { messages,
       message_memberships: messages.map(row => ({ id: row.id, message_id: row.id, conversation_id: 'c', active: 1 })) },
-    next: messages.length === 200 ? messages.at(-1)!.id : null };
+    hasOlder: true, next: null };
   });
   expect(page.projection.messages).toHaveLength(200);
   expect(page.projection.messages.at(-1)?.id).toBe('m250');
@@ -175,17 +181,16 @@ it('orders same-time legacy Codex messages by their numeric line position, whate
     source_event_id: `message:rollout.jsonl:${offset}:h:1` }));
   expect(rows.toSorted(compareMessages).map(row => row.source_event_id)).toEqual([20, 9999, 104048].map(offset => `message:rollout.jsonl:${offset}:h:1`));
 });
-it('窓から外れた古い発言でも、ファイルを変えた発言は残して返す', async () => {
-  const rows = Array.from({ length: 600 }, (_, index) => ({ id: `m${String(index).padStart(3, '0')}`, role: 'assistant',
-    body: index === 3 ? JSON.stringify([{ type: 'tool_use', id: 't', name: 'Edit', input: { file_path: '/repo/a.ts', old_string: 'a', new_string: 'b' } }]) : `Body ${index}`,
-    source_ts: new Date(Date.parse(OLD) + index * 1000).toISOString() }));
-  const page = await loadConversationWindow('c', new AbortController().signal, undefined, undefined, async path => {
-    const after = new URL(path, 'http://localhost').searchParams.get('after') ?? '';
-    const messages = rows.filter(row => row.id > after).slice(0, 200);
-    return { generation: 0, projection: { messages,
-      message_memberships: messages.map(row => ({ id: row.id, message_id: row.id, conversation_id: 'c', active: 1 })) },
-    next: messages.length === 200 ? messages.at(-1)!.id : null };
+it('fetches old file changes separately from the latest conversation window', async () => {
+  const edit = { id: 'old-edit', role: 'assistant', body: JSON.stringify([{ type: 'tool_use', name: 'Edit', input: { file_path: '/repo/a.ts', old_string: 'a', new_string: 'b' } }]) };
+  const fetchPage = vi.fn(async (path: string) => {
+    const params = new URL(path, 'http://localhost').searchParams;
+    return { generation: 0, projection: { messages: params.has('edits') ? [edit] : [{ id: 'latest', body: 'Latest' }] }, next: null };
   });
-  expect(page.projection.messages.some(row => row.id === 'm003')).toBe(false);
-  expect(page.projection.edit_messages.map(row => row.id)).toEqual(['m003']);
+  const window = await loadConversationWindow('c', new AbortController().signal, undefined, undefined, fetchPage);
+  expect(window.projection.messages.map(row => row.id)).toEqual(['latest']);
+  expect(fetchPage).toHaveBeenCalledTimes(1);
+  const edits = await loadConversationEdits('c', new AbortController().signal, fetchPage);
+  expect(edits.map(row => row.id)).toEqual(['old-edit']);
+  expect(new URL(fetchPage.mock.calls[1][0], 'http://localhost').searchParams.get('edits')).toBe('1');
 });

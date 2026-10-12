@@ -84,6 +84,7 @@ it('renders chronological messages, tool calls, provenance, approval requests, b
   expect(within(articles[0]!).getByRole('heading', { name: 'Plan' }).tagName).toBe('H3');
   expect(document.querySelector('.md-code code')!.textContent).toBe('const value = 1;');
   expect(document.querySelector('.md-code-language')!.textContent).toBe('TypeScript');
+  fireEvent.click(document.querySelector('.tool-run > summary')!);
   const tool = screen.getByText('Bash').closest('details')!;
   expect(tool.open).toBe(false);
   expect(within(tool).getByText('pwd', { selector: '.tool-summary' })).toBeTruthy();
@@ -233,6 +234,7 @@ it('decodes SQLite JSON columns from real snapshot rows for tool content and app
   } });
   await waitModels();
   expect(screen.getByText('Decoded message')).toBeTruthy();
+  fireEvent.click(document.querySelector('.tool-run > summary')!);
   expect(within(screen.getByText('Write', { selector: '.tool-call .tool-name' }).closest('details')!).getByText('demo.ts', { selector: '.tool-summary' })).toBeTruthy();
   expect(screen.queryByRole('separator')).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Allow' }));
@@ -309,6 +311,8 @@ it('puts the user on the right and the agent on the left, naming each run of the
   expect(articles[0]!.className).toContain('message-user');
   expect(articles[1]!.className).toContain('message-agent');
   // 道具の呼び出しは左の列の中に、1 行に畳んだ枠で出す。
+  expect(document.querySelector('.tool-run-body')).toBeNull();
+  fireEvent.click(document.querySelector('.tool-run > summary')!);
   const tool = screen.getByText('ls', { selector: '.tool-summary' }).closest('details')!;
   expect(tool.open).toBe(false);
   expect(tool.closest('.tool-run')).toBeTruthy();

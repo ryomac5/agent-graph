@@ -3,7 +3,8 @@ import type { Row } from './store.ts';
 import { changesFiles } from './conversation-changes.ts';
 
 export const MESSAGE_PAGE_SIZE = 200;
-export interface ConversationPageData { generation: number; projection: Record<string, Row[]>; next: string | null }
+export type MessageCursor = { source_ts: string; source_event_id: string; id: string };
+export interface ConversationPageData { generation: number; projection: Record<string, Row[]>; next: string | null; hasOlder?: boolean; olderCursor?: MessageCursor | null }
 export function compareMessages(a: Row, b: Row): number {
   // 同じ時刻の発言は core と同じ順序で並べる。旧い Codex の行の位置は数として比べる。
   return String(a.source_ts ?? '').localeCompare(String(b.source_ts ?? ''))
@@ -16,49 +17,31 @@ export async function fetchProjection<T>(path: string, signal?: AbortSignal, bas
   if (!response.ok) throw new Error(`The server answered ${response.status}.`);
   return response.json() as Promise<T>;
 }
-// API は ID 順のページだけを配る。全本文を保持せず、時刻順の必要な窓だけを残す。
+// 初回と巻き戻しは時刻順の窓を一つだけ取得する。
 export async function loadConversationWindow(id: string, signal: AbortSignal, before?: Row, messageId?: string,
-  fetchPage = (path: string) => fetchProjection<ConversationPageData>(path, signal)): Promise<{
-    generation: number | undefined; projection: { messages: Row[]; message_memberships: Row[]; edit_messages: Row[] };
-    hasOlder: boolean; conversation?: Row;
-  }> {
+  fetchPage = (path: string) => fetchProjection<ConversationPageData>(path, signal)) {
+  const params = new URLSearchParams({ id, ...(before ? { before: JSON.stringify({
+    source_ts: String(before.source_ts ?? ''), source_event_id: String(before.source_event_id ?? ''), id: String(before.id),
+  }) } : messageId ? { message: messageId } : { latest: '1' }) });
+  const page = await fetchPage('/conversation?' + params);
+  signal.throwIfAborted();
+  return { generation: page.generation, projection: { messages: (page.projection.messages ?? []).toSorted(compareMessages).slice(-MESSAGE_PAGE_SIZE),
+    message_memberships: page.projection.message_memberships ?? [], edit_messages: [] as Row[] },
+    hasOlder: page.hasOlder ?? false, olderCursor: page.olderCursor ?? page.projection.messages?.toSorted(compareMessages)[0],
+    conversation: page.projection.conversations?.[0] };
+}
+
+// 変更ファイルの要求は本文の表示を待たせない。
+export async function loadConversationEdits(id: string, signal: AbortSignal,
+  fetchPage = (path: string) => fetchProjection<ConversationPageData>(path, signal)): Promise<Row[]> {
+  const edits: Row[] = [];
   let after = '';
-  let messages: Row[] = [];
-  let memberships: Row[] = [];
-  let hasOlder = false;
-  // 窓から外れる古い発言でも、ファイルを変えた発言は残す。会話の画面が変えたファイルを全体から数えるためである。
-  const edits = new Map<string, Row>();
-  let generation: number | undefined;
-  let anchor: Row | undefined;
-  // 会話の名前と依頼の抜粋は、api が core の投影の値を会話の行で返す。本文から導かない。
-  let conversation: Row | undefined;
   do {
-    const page = await fetchPage(`/conversation?id=${encodeURIComponent(id)}&after=${encodeURIComponent(after)}`);
+    const page = await fetchPage('/conversation?' + new URLSearchParams({ id, edits: '1', after }));
     signal.throwIfAborted();
-    if (generation !== undefined && page.generation !== generation) throw new Error('Conversation changed. Please retry.');
-    generation = page.generation;
-    const incoming = page.projection.messages ?? [];
-    conversation ??= page.projection.conversations?.[0];
-    anchor ??= incoming.find(row => row.id === messageId);
-    for (const row of incoming) if (changesFiles(row)) edits.set(String(row.id), row);
-    messages = [...new Map([...messages, ...incoming.filter(row => !before || compareMessages(row, before) < 0)].map(row => [String(row.id), row])).values()]
-      .sort(compareMessages);
-    if (messages.length > MESSAGE_PAGE_SIZE) { hasOlder = true; messages = messages.slice(-MESSAGE_PAGE_SIZE); }
-    const selected = new Set(messages.map(row => row.id));
-    memberships = [...memberships, ...(page.projection.message_memberships ?? [])].filter(row => selected.has(row.message_id));
-    const next = page.next ?? '';
-    if (next && next === after) throw new Error('Unable to advance conversation history');
-    after = next;
+    edits.push(...(page.projection.messages ?? []).filter(changesFiles));
+    if (page.next === after) throw new Error('Unable to advance conversation changes');
+    after = page.next ?? '';
   } while (after);
-  if (anchor && !messages.some(row => row.id === anchor!.id)) {
-    const context = await loadConversationWindow(id, signal, anchor, undefined, fetchPage);
-    if (context.generation !== generation) throw new Error('Conversation changed. Please retry.');
-    const preceding = context.projection.messages.slice(-(MESSAGE_PAGE_SIZE - 1));
-    const selected = new Set(preceding.map(row => row.id));
-    messages = [...preceding, anchor];
-    memberships = [...context.projection.message_memberships.filter(row => selected.has(row.message_id)),
-      { id: `search:${anchor.id}`, conversation_id: id, message_id: anchor.id, active: 1 }];
-    hasOlder = context.hasOlder || context.projection.messages.length > preceding.length;
-  }
-  return { generation, projection: { messages, message_memberships: memberships, edit_messages: [...edits.values()] }, hasOlder, ...(conversation ? { conversation } : {}) };
+  return edits;
 }

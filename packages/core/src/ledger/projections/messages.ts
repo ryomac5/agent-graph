@@ -1,10 +1,12 @@
 import type { Fact, JsonValue } from "../facts.ts";
+import { normalizeClaudeContent } from "./claude-content.ts";
 import { compareFacts, compareText, createNativeId, projectConversationIds, projectEntities, serializeValue } from "./relations.ts";
 import type { ProjectedEntity } from "./relations.ts";
 
 // 出所と確度は、本文を決めた事実から取る。本文がなければ最初の事実から取る。
 export type ProjectedMessage = ProjectedEntity<"message"> & {
   source_ts: string; source_event_id: string; source: string; confidence: string;
+  content_normalized?: boolean;
 };
 export type ProjectedMembership = ProjectedEntity<"message_membership">;
 export interface MessageProjection {
@@ -81,7 +83,7 @@ export function projectMessages(facts: readonly Fact[]): MessageProjection {
   return {
     messages: messages.map((message) => {
       const origin = selectOrigin(message.id);
-      return { ...message,
+      return { ...message, ...normalizeClaudeContent(message),
         source_ts: firstFacts.get(message.id)!.source_ts,
         source_event_id: firstFacts.get(message.id)!.source_event_id,
         source: origin.source, confidence: origin.confidence,

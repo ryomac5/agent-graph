@@ -192,3 +192,26 @@ it('結果を返して待機に戻った Claude の子は完了と出し、gener
   expect(row.getAttribute('aria-label')).toContain('Done');
   expect(row.textContent).not.toContain('general-purpose');
 });
+
+it('正規化済みの子の報告を畳み、通知を利用者の吹き出しに出さない', () => {
+  const participants = { child: false, parent: 'User', self: 'Claude' };
+  const report = { id: 'normalized-report', role: 'agent_report', body: '作業が完了しました。', content_normalized: true };
+  const shown = render(<Message row={report} sender={senderOf(report, participants)} language="ja"/>);
+  expect(shown.container.querySelector('details.message-report')?.hasAttribute('open')).toBe(false);
+  expect(shown.container.querySelector('.message-user')).toBeNull();
+  expect(shown.container.textContent).toContain('作業が完了しました。');
+  const notice = { id: 'normalized-notice', role: 'notification', body: '', content_normalized: true };
+  const hidden = render(<Message row={notice} sender={senderOf(notice, participants)}/>);
+  expect(hidden.container.textContent).toBe('');
+});
+
+it('正規化済みの依頼は本文内の札や報告の接頭辞をそのまま表示する', () => {
+  const participants = { child: false, parent: 'User', self: 'Claude' };
+  const row = { id: 'normalized-user', role: 'user', content_normalized: 1,
+    body: 'Another Claude session sent a message: の意味は？\n例: `<system-reminder>本文</system-reminder>` と `<pasted_content id="a">本文</pasted_content id="a">`' };
+  expect(senderOf(row, participants)).toMatchObject({ side: 'end' });
+  const shown = render(<Message row={row} sender={senderOf(row, participants)}/>);
+  expect(shown.container.querySelector('.message-user')).toBeTruthy();
+  expect(shown.container.textContent).toContain('<system-reminder>本文</system-reminder>');
+  expect(shown.container.textContent).toContain('<pasted_content id="a">本文</pasted_content id="a">');
+});

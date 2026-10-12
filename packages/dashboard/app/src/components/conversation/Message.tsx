@@ -103,6 +103,8 @@ export function Message({ row, sender, showName = true, language = 'en', streami
     </header>
     {parentRequest && <span className="message-request-label">{language === 'ja' ? '受けた依頼' : 'Request from root'}</span>}
     <div className="message-main">
+      {row.delivery_state === 'sending' && <p className="status-line" role="status">Sending…</p>}
+      {row.delivery_state === 'queued' && <p className="status-line" role="status">Queued — Claude will read this after the current step</p>}
       {images.length > 0 && <div className="message-images">{images.map((src, index) => <img key={index} src={src} alt={`${t('image')} ${index + 1}`} loading="lazy"/>)}</div>}
       {unavailable ? <p className="message-gap">{t(row.body_state === 'omitted' ? 'omitted' : 'unavailable')}</p>
         : hasDelegations ? flow.map((part, index) => {

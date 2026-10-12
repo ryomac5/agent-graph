@@ -289,13 +289,15 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     return first ? [entry] : [{ kind: 'boundary', key: 'series:' + id, time: entry.time, row: { type: 'continued', series: true } } satisfies TimelineEntry, entry];
   });
   const messageEntries = allEntries.filter(entry => entry.kind === 'message');
+  const pendingInputs = (Array.isArray(conversation?.pending_inputs) ? conversation.pending_inputs : []).map(readObject);
   useEffect(() => {
     const reconciled = new Set<unknown>();
     setSentMessages(previous => {
       const remaining = previous.filter(message => {
         if (resolveConversation(message.conversationId) !== conversationId) return true;
-        const match = messageEntries.find(entry => !message.known.has(entry.row.id) && !reconciled.has(entry.row.id) && entry.row.role === 'user' && sameSent(readBody(entry.row.body), message.text));
-        if (match) reconciled.add(match.row.id);
+        const match = messageEntries.find(entry => !message.known.has(entry.row.id) && !reconciled.has(entry.row.id) && entry.row.role === 'user' && sameSent(readBody(entry.row.body), message.text))?.row
+          ?? pendingInputs.find(row => !message.known.has(row.id) && !reconciled.has(row.id) && sameSent(readBody(row.body), message.text));
+        if (match) reconciled.add(match.id);
         return !match;
       });
       return remaining.length === previous.length ? previous : remaining;
@@ -345,7 +347,9 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const lastTool = lastToolBlock && (isDelegationTool(lastToolBlock) ? readText(lastToolInput.description ?? lastToolInput.title) || readText(lastToolBlock.name) : readText(lastToolBlock.name));
   const shownMessages = new Set(messageEntries.slice(-messageLimit).map(entry => entry.row.id));
   if (anchorId) shownMessages.add(anchorId);
-  const entries = allEntries.filter(entry => entry.kind !== 'message' || shownMessages.has(entry.row.id));
+  const entries = [...allEntries.filter(entry => entry.kind !== 'message' || shownMessages.has(entry.row.id)),
+    ...pendingInputs.filter(() => active).map(row => ({ kind: 'message', key: readText(row.id), time: readText(row.source_ts),
+      row: { ...row, role: 'user', body_state: 'stored', delivery_state: 'queued' } } satisfies TimelineEntry))].sort(compareEntries);
   async function loadHistory(older = false) {
     historyController.current?.abort();
     const controller = new AbortController(); historyController.current = controller;
@@ -493,7 +497,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     const sent = input;
     const messageId = crypto.randomUUID();
     following.current = true;
-    setSentMessages(previous => [...previous, { id: messageId, conversationId, text: sent, known: new Set(messageEntries.map(entry => entry.row.id)) }]);
+    setSentMessages(previous => [...previous, { id: messageId, conversationId, text: sent, known: new Set([...messageEntries.map(entry => entry.row.id), ...pendingInputs.map(row => row.id)]) }]);
     if (terminalConversation) {
       const sourceConversation = conversationId;
       setPending(true); setError('');
@@ -684,7 +688,8 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
           {!entry.row.series && entry.time && <TimeStamp value={entry.time} fallback="" language={language}/>}
         </div>;
       })}
-      {sentMessages.filter(message => resolveConversation(message.conversationId) === conversationId).map(message => <Message key={message.id} language={language} sender={senderOf({ role: 'user' }, participants)} row={{ id: message.id, role: 'user', body: message.text, body_state: 'stored' }}/>) }
+      {sentMessages.filter(message => resolveConversation(message.conversationId) === conversationId
+        && !pendingInputs.some(row => !message.known.has(row.id) && sameSent(readBody(row.body), message.text))).map(message => <Message key={message.id} language={language} sender={senderOf({ role: 'user' }, participants)} row={{ id: message.id, role: 'user', body: message.text, body_state: 'stored', delivery_state: 'sending' }}/>) }
       {deltas.map(([key, delta]) => <Message key={key} language={language} streaming sender={agentSender} showName={nameShown(agentSender)}
         row={{ id: delta.messageId ?? key, role: 'assistant', body: delta.text, body_state: 'stored' } satisfies Row}/>)}
     </div></div>

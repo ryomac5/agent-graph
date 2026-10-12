@@ -32,6 +32,40 @@ function setup(messages: Row[] = [], extra: Record<string, Row[]> = {}) {
 function Location() { return <output data-testid="url">{useLocation().search}</output>; }
 function entry(id: string, kind: TimelineEntry['kind'], row: Row = {}): TimelineEntry { return { kind, key: id, time: '', row: { id, ...row } }; }
 
+it.each(['running', 'idle'])('shows observed queued inputs in their bubbles while %s', async state => {
+  const target = setup([], { conversations: [{ id: 'c', provider: 'claude', origin: 'managed', pending_inputs: [
+    { id: 'queue', body: 'Next step', source_ts: '2026-10-13T00:00:00Z', state: 'queued' },
+  ] }], runs: [{ id: 'r', conversation_id: 'c', state, generation: 1 }] });
+  render(<MemoryRouter><ConversationPage conversationId="c" target={target} client={client} language="en"/></MemoryRouter>);
+  await act(async () => {});
+  expect(screen.queryByText('Next step') !== null).toBe(state === 'running');
+  expect(screen.queryByText('Queued — Claude will read this after the current step') !== null).toBe(state === 'running');
+  await act(async () => { target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: {
+    conversations: { upsert: [{ id: 'c', provider: 'claude', origin: 'managed', pending_inputs: [] }], remove: [] },
+    messages: { upsert: [{ id: 'read', role: 'user', body: 'Next step' }], remove: [] },
+    message_memberships: { upsert: [{ id: 'read', message_id: 'read', conversation_id: 'c', active: 1 }], remove: [] },
+  } }); });
+  expect(screen.getAllByText('Next step')).toHaveLength(1);
+});
+
+it('marks an optimistic input as sending until enqueue is observed', async () => {
+  const target = setup();
+  render(<MemoryRouter><ConversationPage conversationId="c" target={target} client={client} language="en"/></MemoryRouter>);
+  await act(async () => {});
+  fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Next step' } });
+  fireEvent.keyDown(screen.getByRole('textbox', { name: 'Message' }), { key: 'Enter', metaKey: true });
+  await screen.findByText('Sending…');
+  await act(async () => { target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: {
+    runs: { upsert: [{ id: 'r', conversation_id: 'c', state: 'running', generation: 1 }], remove: [] },
+    conversations: { upsert: [{ id: 'c', provider: 'claude', origin: 'managed', pending_inputs: [
+      { id: 'queue', body: 'Next step', state: 'queued' },
+    ] }], remove: [] },
+  } }); });
+  expect(screen.queryByText('Sending…')).toBeNull();
+  expect(screen.getAllByText('Next step')).toHaveLength(1);
+  expect(screen.getByText('Queued — Claude will read this after the current step')).toBeTruthy();
+});
+
 it.each(['Agent', 'Task', 'mcp__agent-graph__delegate', 'runner.delegate', 'planner.delegate'])('keeps %s requests outside tool folds and navigates to the same child as the tree', async name => {
   const target = setup([{ id: 'm', role: 'assistant', body: [
     { type: 'tool_use', id: 'bash', name: 'Bash', input: { command: 'pwd' } },

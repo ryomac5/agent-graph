@@ -23,6 +23,46 @@ function createMessage(uuid: string, content = "Fictional body.", version = "2.1
 function readFacts(ledger: Ledger) { return ledger.readSince(0, Number.MAX_SAFE_INTEGER); }
 function readNativeId(id: string): string { return (JSON.parse(id) as string[])[1]; }
 
+test("待ち行列を追記し、dequeue と user の観測後も再読で衝突しない", t => {
+  const { ledger, directory } = createFixture(t);
+  const path = join(directory, "queue.jsonl");
+  const queue = (operation: string, content?: string) => JSON.stringify({ type: "queue-operation", operation, content, timestamp: TS });
+  writeFileSync(path, `${createMessage("before")}\n${queue("enqueue", "Next step")}\n`);
+  observeClaudeFile(ledger, path, { observedTs: TS });
+  const readInputs = () => project(readFacts(ledger)).conversations[0].pending_inputs;
+  assert.equal(readInputs()?.[0].state, "queued");
+  assert.equal(readInputs()?.[0].body, "Next step");
+  applyIncremental(readLedgerDatabase(ledger), 0);
+  const stored = readLedgerDatabase(ledger).prepare("SELECT data FROM projection_records WHERE projection = 'conversations'").get();
+  assert.equal(JSON.parse(String(stored?.data)).pending_inputs[0].state, "queued");
+  appendFileSync(path, `${queue("future-operation")}\n${queue("dequeue")}\n`);
+  observeClaudeFile(ledger, path, { observedTs: TS });
+  assert.deepEqual(readInputs(), []);
+  appendFileSync(path, `${createMessage("read", "Next step")}\n`);
+  const observed = observeClaudeFile(ledger, path, { observedTs: TS });
+  assert.deepEqual(readInputs(), []);
+  const facts = readFacts(ledger);
+  const replay = observeClaudeFile(ledger, path, { cursor: { ...observed.cursor, identity: "replaced" }, observedTs: "2026-10-07T00:00:00Z" });
+  assert.equal(replay.appended, 0);
+  assert.deepEqual(replay.conflicts, []);
+  assert.deepEqual(readFacts(ledger), facts);
+  assert.deepEqual(project([...facts].reverse()), project(facts));
+});
+
+test("user と tool_result の行は待ち行列の事実を増やさない", t => {
+  const { ledger, directory } = createFixture(t);
+  const path = join(directory, "queue.jsonl");
+  writeFileSync(path, JSON.stringify({ type: "queue-operation", operation: "enqueue", content: "Read directly", timestamp: TS }) + "\n");
+  observeClaudeFile(ledger, path, { observedTs: TS });
+  appendFileSync(path, createMessage("read", "Read directly") + "\n");
+  observeClaudeFile(ledger, path, { observedTs: TS });
+appendFileSync(path, JSON.stringify({ type: "user", uuid: "tool-result", timestamp: TS,
+    message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tool", content: "Large result".repeat(1000) }] } }) + "\n");
+  observeClaudeFile(ledger, path, { observedTs: TS });
+  assert.equal(readFacts(ledger).filter(fact => fact.kind === "conversation.input_queue_changed").length, 1);
+  assert.equal(project(readFacts(ledger)).conversations[0].pending_inputs?.[0].body, "Read directly");
+});
+
 for (const sample of ["S1", "S4"]) {
   test(`${sample} の事実と投影が標本に一致し、再読込と再構築で増えない`, (t) => {
     const { ledger, directory } = createFixture(t);
@@ -121,7 +161,7 @@ test("旧い版と新しい版の発言を構造で取り込む", (t) => {
 test("実在する補助記録を無視し、後続の発言を取り込む", (t) => {
   const { ledger, directory } = createFixture(t);
   const path = join(directory, "metadata.jsonl");
-  const types = ["file-history-snapshot", "queue-operation", "progress", "summary", "custom-title", "agent-name", "last-prompt", "pr-link", "system", "agent-setting", "relocated", "worktree-state", "attachment", "ai-title", "permission-mode", "mode", "atis-latch", "cost-state", "file-history-delta", "bridge-session"];
+  const types = ["file-history-snapshot", "progress", "summary", "custom-title", "agent-name", "last-prompt", "pr-link", "system", "agent-setting", "relocated", "worktree-state", "attachment", "ai-title", "permission-mode", "mode", "atis-latch", "cost-state", "file-history-delta", "bridge-session"];
   writeFileSync(path, [...types.map((type) => JSON.stringify({ type, version: "2.1.273", timestamp: "invalid" })),
     createMessage("after-metadata")].join("\n") + "\n");
   assert.equal(observeClaudeFile(ledger, path).appended, 3);

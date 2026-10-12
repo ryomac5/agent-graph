@@ -503,7 +503,7 @@ textarea::placeholder { color: var(--fg-4); }
 .status-running { border-color: transparent; background: transparent; border: 0; color: var(--fg-2); }
 .status-starting { border-color: transparent; background: transparent; border: 0; color: var(--fg-2); }
 .status-waiting_approval { border-color: var(--line); background: transparent; border: 0; color: var(--fg-2); }
-.status-waiting_input { border-color: var(--line); background: transparent; border: 0; color: var(--fg-2); }
+.status-waiting_input { border-color: var(--line); background: transparent; border: 0; color: var(--state-reply); }
 .status-idle { background: transparent; border: 0; color: var(--fg-2); }
 .status-ended { background: transparent; border: 0; color: var(--fg-2); }
 .status-failed { border: 0; border-color: var(--line); background: var(--bg-1); color: var(--state-failed); }
@@ -612,3 +612,5 @@ textarea::placeholder { color: var(--fg-4); }
 .sidebar-project-row[aria-keyshortcuts] { touch-action: none; user-select: none; }
 
 .project-start-spinner { width: 12px; height: 12px; border: 1px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: working-spin 1s linear infinite; }
+
+.status-input, .status-waiting_input, .state-badge.status-input, .state-badge.status-waiting_input { color: var(--state-reply); font-weight: 600; }

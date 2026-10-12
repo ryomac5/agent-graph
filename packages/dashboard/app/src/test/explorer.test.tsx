@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
+import { FileViewerPanel, useFileExplorer } from '../pages/files/FilesPage.tsx';
 import { App } from '../App.tsx';
 import { ChangesPage } from '../pages/changes/ChangesPage.tsx';
 import { detectLanguage, highlightLines, type Token } from '../pages/files/highlight.ts';
@@ -85,6 +86,25 @@ const row = (element: HTMLElement) => element.querySelector<HTMLElement>(':scope
 const location = () => screen.getByTestId('location').textContent;
 
 describe('Files explorer', () => {
+  it('keeps a File click made as soon as the mode buttons appear', async () => {
+    const client = createClient();
+    const target = createTarget();
+    let clicked = false;
+    function Viewer() {
+      const explorer = useFileExplorer({ client, target, project: 'repo-id' });
+      return <FileViewerPanel explorer={explorer}/>;
+    }
+    const observer = new MutationObserver(() => {
+      const button = screen.queryByRole('button', { name: 'File' });
+      if (button && !clicked) { clicked = true; fireEvent.click(button); }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    try {
+      render(<MemoryRouter initialEntries={['/p/repo/files?path=README.md']}><Viewer/></MemoryRouter>);
+      expect(await screen.findByRole('region', { name: 'Contents of README.md' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'File' }).getAttribute('aria-pressed')).toBe('true');
+    } finally { observer.disconnect(); }
+  });
   it.each(['connecting', 'reconnecting'] as const)('shows a connection warning while %s and clears it on connection', async connection => {
     const { target } = setup();
     await screen.findByRole('tree', { name: 'Files' });

@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { RootList } from '../components/RootViews.tsx';
-import { conversationName, formatStartedAt } from '../lib/format.ts';
+import { conversationName, conversationTitle, formatStartedAt } from '../lib/format.ts';
 import { selectRoots } from '../lib/roots.ts';
 import { createStore } from '../lib/store.ts';
 
@@ -63,4 +63,25 @@ it.each(['en', 'ja'] as const)('shows the start time at the row end and full ide
   expect(link.title).toContain('repo-001');
   expect(link.title).toContain(new Date(2026, 9, 12, 14, 2).toISOString());
   expect(link.title).toContain('2026-10-12T15:00:00Z');
+});
+
+it('prefers user names, AI titles, first requests and existing names in conversations and roots', () => {
+  const conversation = { user_name: 'Custom', ai_title: 'Generated', first_request_excerpt: 'Request', name: 'Existing', provider: 'codex' };
+  expect(conversationTitle(conversation)).toBe('Custom');
+  expect(conversationTitle({ ...conversation, user_name: null })).toBe('Generated');
+  expect(conversationTitle({ ...conversation, user_name: null, ai_title: null })).toBe('Request');
+  expect(conversationTitle({ ...conversation, user_name: null, ai_title: null, first_request_excerpt: null })).toBe('Existing');
+  const state = createFixture().getSnapshot();
+  state.projection.conversations![0].ai_title = 'Generated';
+  expect(selectRoots(state)[0].name).toBe('Custom');
+  expect(selectRoots(state)[0].auto_name).toBe('Generated');
+  state.projection.roots![0].user_name = null;
+  expect(selectRoots(state)[0].name).toBe('Generated');
+  state.projection.relations = [{ type: 'delegated', to_id: 'first', evidence: { description: 'Delegated task' } }];
+  expect(conversationName(state, 'first')).toBe('Delegated task');
+  state.projection.conversations![0].user_name = 'Child custom';
+  expect(conversationName(state, 'first')).toBe('Child custom');
+  state.projection.conversations![0].user_name = null;
+  state.projection.relations = [];
+  expect(conversationName(state, 'first')).toBe('Generated');
 });

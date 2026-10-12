@@ -166,8 +166,8 @@ test("4500 発言と 301 ファイルをまとめて投影し、空の送信待�
   const initialMs = performance.now() - started;
   t.diagnostic(`initial ingest: ${initialMs.toFixed(1)} ms`);
   assert.ok(initialMs < INITIAL_INGEST_LIMIT_MS, `initial ingest exceeded ${INITIAL_INGEST_LIMIT_MS} ms`);
-  // 各会話は作成に加え、場所と会話の記録の実行と最初のターンの根拠を 1 件ずつ持つ。
-  assert.equal(report.appended, messages * 2 + (BULK_FILE_COUNT + 1) * 4);
+  // 各会話は作成に加え、場所と題名の補完の印と会話の記録の実行と最初のターンの根拠を 1 件ずつ持つ。
+  assert.equal(report.appended, messages * 2 + (BULK_FILE_COUNT + 1) * 5);
   const before = f.read();
   const projection = readProjection(f.dbPath);
   assert.equal(projection.messages.length, messages);
@@ -215,8 +215,8 @@ test("一時 HOME の標本を CLI で二度取り込んでも増えず、停止
   writeFileSync(join(f.home, ".claude", "projects", "new-session.jsonl"), createClaudeMessage("service-new-session"));
   appendFileSync(join(codexDirectory, "rollout-exec.jsonl"), createCodexMessage("service-codex-added"));
   const next = f.run("ingest", "--once");
-  // 新しい会話は、場所と会話の記録の実行と最初のターンの根拠も持つ。
-  assert.equal(next.appended, 10);
+  // 新しい会話は、場所と題名の補完の印と会話の記録の実行と最初のターンの根拠も持つ。
+  assert.equal(next.appended, 11);
   assert.equal(next.unsupported, 0);
   assert.equal(f.run("ingest", "--once").appended, 0);
   const facts = f.read();
@@ -648,10 +648,10 @@ for (const live of [false, true]) {
       positions.push(Number(reader.prepare("SELECT last_seq FROM projection_state").get()!.last_seq));
       return result;
     };
-    // 3 件の発言と所属、会話、場所、会話の記録の実行、最初のターンの根拠を 1 回の走査で追記する。
-    assert.equal(service.ingestOnce().appended, 10);
-    assert.deepEqual(positions, Array(10).fill(0));
-    assert.equal(reader.prepare("SELECT last_seq FROM projection_state").get()!.last_seq, 10);
+    // 3 件の発言と所属、会話、場所、題名の補完の印、会話の記録の実行、最初のターンの根拠を 1 回の走査で追記する。
+    assert.equal(service.ingestOnce().appended, 11);
+    assert.deepEqual(positions, Array(11).fill(0));
+    assert.equal(reader.prepare("SELECT last_seq FROM projection_state").get()!.last_seq, 11);
     assert.equal(service.ingestOnce().appended, 0);
   });
 }
@@ -839,4 +839,33 @@ test("既存の Claude の子の親を補い、根の snapshot にキットの�
   assert.ok(typeof rows[0].current_conversation_id === 'string');
   assert.ok(rows[0].conversation_ids.includes(rows[0].current_conversation_id));
   assert.deepEqual(Object.keys(rows[0]).sort(), ["id", "name", "project", "state", "last_activity_ts", "conversation_ids", "current_conversation_id", "running_children", "total_children"].sort());
+});
+
+test("本文が変わらない周期でも Codex の題名を取り込み、投影と配信と再構築に残す", t => {
+  const f = createFixture(t);
+  const directory = join(f.home, ".codex", "sessions");
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(join(directory, "rollout-title.jsonl"), JSON.stringify({ type: "session_meta", timestamp: TS,
+    payload: { id: "title", timestamp: TS, source: "cli" } }) + "\n" + createCodexMessage("title-request"));
+  const service = openObservationService({ home: f.home, env: f.env });
+  t.after(() => service.close());
+  const index = join(f.home, ".codex", "session_index.jsonl");
+  writeFileSync(index, JSON.stringify({ id: "title", thread_name: "Initial", updated_at: TS }) + "\n");
+  service.ingestOnce();
+  assert.equal(project(service.ledger.readSince(0, Number.MAX_SAFE_INTEGER)).conversations[0].ai_title, "Initial");
+  writeFileSync(index, JSON.stringify({ id: "title", thread_name: "Generated", updated_at: TS }) + "\n");
+  assert.equal(service.ingestOnce().appended, 1);
+  assert.equal(service.ingestOnce().appended, 0);
+  const feed = new ProjectionFeed(service.dbPath, service.catchUp);
+  t.after(() => feed.close());
+  assert.equal(feed.snapshot().projection.conversations[0].ai_title, "Generated");
+  const db = new DatabaseSync(service.dbPath);
+  t.after(() => db.close());
+  assert.equal(db.prepare("SELECT ai_title FROM conversations").get()!.ai_title, "Generated");
+  rebuild(db);
+  assert.equal(db.prepare("SELECT ai_title FROM conversations").get()!.ai_title, "Generated");
+  appendFileSync(index, JSON.stringify({ id: "title", thread_name: "Changed", updated_at: "2026-10-07T00:00:00Z" }) + "\n");
+  assert.equal(service.ingestOnce().appended, 1);
+  feed.refresh();
+  assert.equal(feed.snapshot().projection.conversations[0].ai_title, "Changed");
 });

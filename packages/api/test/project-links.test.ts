@@ -160,7 +160,7 @@ test("取り込みは、変更のない既存の会話の記録にも一度だ�
   ledger.close();
   const service = openObservationService({ env, home, dbPath });
   t.after(() => service.close());
-  assert.equal(service.ingestOnce().appended, 3);
+  assert.equal(service.ingestOnce().appended, 4);
   assert.equal(service.ingestOnce().appended, 0);
   const view = project(openLedger(dbPath).readSince(0, Number.MAX_SAFE_INTEGER));
   assert.equal(view.runs[0].state, "running");

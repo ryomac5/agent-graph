@@ -11,6 +11,7 @@ import { WebSocket } from "ws";
 import type { Fact, Ledger } from "../../core/src/ledger/index.ts";
 import { observeClaudeFile } from "../src/observe/claude/index.ts";
 import { observeClaudeContext } from "../src/observe/claude/context.ts";
+import { observeClaudeTitles } from "../src/observe/claude/titles.ts";
 import { observeCodex, observeCodexLocations } from "../src/observe/codex/index.ts";
 import { fileReadMetrics, readAppendOnlyFile } from "../src/observe/files.ts";
 import { openBatchLedger } from "../src/service/batch-ledger.ts";
@@ -115,12 +116,17 @@ test("worker の大量取り込み中も主スレッドの遅れは 100 ms 以�
   const reference = openBatchLedger(join(f.home, "reference.db"));
   f.cleanup(() => reference.ledger.close());
   reference.batch(() => {
-    // 各合成 Claude ファイルは独立した新規会話なので、既存履歴は空になる。
-    const ledger: Ledger = { ...reference.ledger, readSince: () => [] };
-    // 形式読みに続けて、会話の場所とターンの根拠の部品も同じ行から読む。
+    // 各合成 Claude ファイルの履歴だけを渡し、場所と題名とターンの根拠も同じ行から読む。
     for (let index = 0; index < CLAUDE_COUNT; index += 1) {
+      const history: Fact[] = [];
+      const ledger: Ledger = { ...reference.ledger, readSince: () => history, append(input) {
+        const result = reference.ledger.append(input);
+        if (result.status === "appended") history.push({ ...input, seq: result.seq, fact_id: result.fact_id } as Fact);
+        return result;
+      } };
       const path = join(f.claude, `claude-${index}.jsonl`);
       const observation = observeClaudeFile(ledger, path);
+      observeClaudeTitles(ledger, path, { lines: observation.lines, fromStart: true });
       observeClaudeContext(ledger, path, { lines: observation.lines, fromStart: true });
     }
     observeCodex(reference.ledger, { codexHome: join(f.home, ".codex"), batch: reference.batch });
@@ -232,8 +238,8 @@ test("Codex の旧形式メタでも追記だけを読み、新しいディレ�
   const newDirectory = join(home, ".claude", "projects", "new-project", "nested");
   mkdirSync(newDirectory, { recursive: true });
   writeFileSync(join(newDirectory, "new-session.jsonl"), createMessage("new-message"));
-  // 発言と所属と会話に加え、場所の印と会話の記録の実行と最初のターンの根拠を足す。
-  assert.equal(service.ingestOnce().appended, 6);
+  // 発言と所属と会話に加え、場所と題名の補完の印と会話の記録の実行と最初のターンの根拠を足す。
+  assert.equal(service.ingestOnce().appended, 7);
   rmSync(join(newDirectory, "new-session.jsonl"));
   assert.equal(service.ingestOnce().appended, 0);
 });

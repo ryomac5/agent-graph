@@ -1,3 +1,4 @@
+import { observeCodexTitles } from "../observe/codex/titles.ts";
 import { readRemoteMetadata, observeRemoteStatus } from '../remote/observation.ts';
 import { cacheRoot } from '../remote/index.ts';
 import { createHash } from "node:crypto";
@@ -12,6 +13,7 @@ import type { HookEvent } from "../hook/index.ts";
 import { observeClaudeHistories } from "./claude-reader.ts";
 import { codexLocationEventId, observeCodex, observeCodexLocations } from "../observe/codex/index.ts";
 import { claudeConversationId, claudeLocationEventId } from "../observe/claude/context.ts";
+import { claudeTitleBackfillEventId } from "../observe/claude/titles.ts";
 import { registerLedgerDatabase } from "../../../core/src/ledger/repository.ts";
 import { createSessionQuery } from "../observe/session-query.ts";
 import { createClaudeSessionObserver } from "../observe/claude/sessions.ts";
@@ -270,14 +272,20 @@ export function openObservationService(options: ObservationOptions = {}) {
     return !previous || previous.identity !== `${stat.dev}:${stat.ino}` || previous.size !== stat.size
       || previous.mtimeMs !== stat.mtimeMs || previous.ctimeMs !== stat.ctimeMs;
   }
-  // 場所とターンの根拠をまだ読んでいない会話の記録は、変更がなくても一度だけ読み直す。
+  // 場所とターンの根拠と題名をまだ読んでいない会話の記録は、変更がなくても一度だけ読み直す。
   const locate = createLocationResolver();
   const locatedEvents = new Set<string>();
+  const titledConversations = new Set<string>();
   let locatedThrough = 0;
   const contextAttempted = new Set<string>();
   function readLocated(): Set<string> {
     for (; locatedThrough < snapshot.length; locatedThrough += 1) {
       const fact = snapshot[locatedThrough];
+      if ((fact.kind === "conversation.created" || fact.kind === "conversation.updated" || fact.kind === "conversation.corrected")
+        && (typeof fact.payload?.ai_title === "string" && fact.payload.ai_title.trim()
+        || fact.source === "transcript-claude" && fact.source_event_id === claudeTitleBackfillEventId(fact.subject.slice("conversation:".length)))) {
+        titledConversations.add(fact.subject);
+      }
       if ((fact.source === "transcript-claude" || fact.source === "rollout-codex") && fact.kind === "conversation.updated"
         && fact.source_event_id.endsWith(":location")) locatedEvents.add(`${fact.source}:${fact.source_event_id}`);
     }
@@ -286,7 +294,9 @@ export function openObservationService(options: ObservationOptions = {}) {
   function needsClaudeContext(path: string): boolean {
     if (contextAttempted.has(path)) return false;
     contextAttempted.add(path);
-    return path.includes("/subagents/") || !readLocated().has(`transcript-claude:${claudeLocationEventId(claudeConversationId(path))}`);
+    const id = claudeConversationId(path);
+    const located = readLocated().has(`transcript-claude:${claudeLocationEventId(id)}`);
+    return path.includes("/subagents/") || !located || !titledConversations.has(`conversation:${id}`);
   }
   function needsCodexLocation(path: string): boolean {
     const nativeId = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i.exec(basename(path))?.[1];
@@ -345,6 +355,10 @@ export function openObservationService(options: ObservationOptions = {}) {
               { codexHome, reader: codex.reader, paths: codexPaths, batch: trackBatch }) : [];
             if (results.some((result) => result.status === "conflict")) throw new Error("Conflicting Codex history");
           });
+          if (!codexPaths.size) {
+            const titles = buffered.batch(() => observeCodexTitles(scanLedger, codexHome, new Date().toISOString()));
+            if (titles.some(result => result.status === "conflict")) throw new Error("Conflicting Codex title");
+          }
           codex.commit();
           for (const path of codexPaths) {
             const state = rollouts.get(path);

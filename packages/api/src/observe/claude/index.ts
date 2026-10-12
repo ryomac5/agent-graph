@@ -114,6 +114,16 @@ export function observeClaudeFile(ledger: Ledger, path: string, options: ClaudeO
           evidence: { toolUseId: metadata.toolUseId ?? null, description: metadata.description ?? null, agentType: metadata.agentType ?? null } } });
     }
   }
+  // 時刻のない題名は観測時刻と行の位置で順序を保つ。再読時は同じ行を追記しない。
+  const latestTitle = rows.findLast(({ row }) => row?.type === "ai-title" && readString(row.aiTitle)?.trim());
+  if (latestTitle) {
+    const title = String(latestTitle.row!.aiTitle).trim();
+    const eventId = `ai-title:${id}:${latestTitle.line.cursor.identity}:${String(latestTitle.line.cursor.offset).padStart(16, "0")}:${latestTitle.line.cursor.hash}`;
+    if (previous?.ai_title !== title && !existing.some(fact => fact.source === "transcript-claude" && fact.source_event_id === eventId)) {
+      append({ source: "transcript-claude", source_event_id: eventId, source_ts: observedTs, observed_ts: observedTs,
+        confidence: "confirmed", kind: "conversation.updated", subject: `conversation:${id}`, payload: { ai_title: title }, cursor: null });
+    }
+  }
   const unsupported = new Map<string, UnsupportedInput>();
   const knownUnsupported = new Set(existing.filter((fact) => fact.source === "transcript-claude"
     && fact.kind === "observation.unsupported").map((fact) => fact.source_event_id));

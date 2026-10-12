@@ -213,7 +213,7 @@ export class ProjectionFeed {
     // 会話の名前と依頼の抜粋は core の投影の値をそのまま配る。画面は本文から名前を導かない。
     // プロジェクトは作業、会話の開始の場所、実行の場所の順に結ぶ。
     if (table === "conversations") return this.prepare(`SELECT t.id, t.provider, t.origin, t.type, t.task_id, t.kit_name, t.user_name, t.created_ts, substr(t.name, 1, ${NAME_LENGTH}) AS name,
-      t.name_is_provisional, substr(t.first_request_excerpt, 1, ${NAME_LENGTH}) AS first_request_excerpt, t.cwd,
+      t.name_is_provisional, substr(t.ai_title, 1, ${NAME_LENGTH}) AS ai_title, substr(t.first_request_excerpt, 1, ${NAME_LENGTH}) AS first_request_excerpt, t.cwd,
       r.project_id AS project, coalesce(r.state, 'unregistered') AS project_state,
       coalesce(s.message_count, 0) AS message_count, s.last_message_ts, coalesce(s.last_message_excerpt, '') AS last_message_excerpt
       FROM conversations t LEFT JOIN tasks task ON task.id = t.task_id

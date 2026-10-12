@@ -5,6 +5,7 @@ import { createNativeId, projectEntities } from "../../../core/src/ledger/index.
 import type { Fact, FactInput, Ledger } from "../../../core/src/ledger/index.ts";
 import { observeClaudeFile } from "../observe/claude/index.ts";
 import { observeClaudeContext } from "../observe/claude/context.ts";
+import { observeClaudeTitles } from "../observe/claude/titles.ts";
 import type { LocationResolver } from "../observe/location.ts";
 import type { ClaudeObservation } from "../observe/claude/index.ts";
 import type { FileCursor } from "../observe/files.ts";
@@ -83,10 +84,12 @@ export function observeClaudeHistories(ledger: Ledger, directory: string, facts:
     try {
       result = batch(() => {
         const observation = observeClaudeFile(fileLedger, file, { cursor: start });
+        const titles = observeClaudeTitles(fileLedger, file, { lines: observation.lines,
+          fromStart: !start || observation.reset || start.offset === 0 });
         // 発言の取り込みで読んだ行から、場所とターンの根拠を同じ取引で足す。
         const context = observeClaudeContext(fileLedger, file, { lines: observation.lines,
           fromStart: !start || observation.reset || start.offset === 0, ...(readLocation ? { locate: readLocation } : {}) });
-        return { ...observation, conflicts: [...observation.conflicts, ...context.conflicts] };
+        return { ...observation, conflicts: [...observation.conflicts, ...titles.filter(result => result.status === "conflict"), ...context.conflicts] };
       });
     }
     catch (error) {

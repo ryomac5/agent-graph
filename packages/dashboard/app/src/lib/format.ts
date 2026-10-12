@@ -115,7 +115,8 @@ export function conversationStart(state: ScreenState, conversationId: string): s
 }
 /** 名前は core の投影の値をそのまま出す。名前のない会話は provider と始まりの時刻で呼び、本文から名前を導かない。 */
 export function conversationTitle(conversation: Row | undefined, startedAt?: unknown, now = Date.now()): string {
-  const name = readTitle(conversation?.name);
+  const name = readTitle(conversation?.user_name) || readTitle(conversation?.ai_title)
+    || readTitle(conversation?.first_request_excerpt) || readTitle(conversation?.name);
   if (name) return name;
   const provider = providerName(text(conversation?.provider)) || 'Conversation';
   const time = formatWhen(startedAt, 'en', now);
@@ -140,6 +141,9 @@ export function conversationName(state: ScreenState, conversationId: string, vis
   const delegation = state.projection.delegations?.find(row => row.request_id === evidence.request_id && evidence.request_id
     || row.conversation_id === conversationId || runs.has(row.run_id)
     || Array.isArray(row.attempts) && row.attempts.some(attempt => runs.has(object(attempt).run_id)));
+  const conversation = state.projection.conversations?.find(row => row.id === conversationId);
+  const userName = readTitle(conversation?.user_name);
+  if (userName) return userName;
   const task = delegatedTitle(evidence, delegation);
   if (task) return task;
   const review = state.projection.relations?.find(row => row.type === 'review_of' && row.from_id === conversationId
@@ -148,7 +152,6 @@ export function conversationName(state: ScreenState, conversationId: string, vis
     const original = conversationName(state, text(review.to_id), visited);
     if (original) return `Review of ${original}`;
   }
-  const conversation = state.projection.conversations?.find(row => row.id === conversationId);
   return conversation ? conversationTitle(conversation, conversationStart(state, conversationId)) : '';
 }
 

@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 
-// 版を上げると、次の反映で全投影を台帳から作り直す。6 でターンの開始時刻と hook の状態優先を加えた。
-export const RUNNER_PROJECTION_VERSION = 8;
+// 版を上げると、次の反映で全投影を台帳から作り直す。9 で会話の生成題名を加えた。
+export const RUNNER_PROJECTION_VERSION = 9;
 export const RECORD_ENTITIES = ["run", "conversation", "delegation", "artifact", "approval", "finding", "relation", "message", "message_membership"] as const;
 
 const PROJECTION_VERSION_DDL = "CREATE TABLE IF NOT EXISTS runner_projection_version (id INTEGER PRIMARY KEY, version INTEGER NOT NULL)";

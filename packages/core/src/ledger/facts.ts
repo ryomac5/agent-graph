@@ -37,6 +37,7 @@ export interface TaskPayload {
 }
 export interface ConversationPayload {
   user_name?: string | null;
+  ai_title?: string | null;
   provider: Provider;
   native_id: string;
   origin: "managed" | "observed";

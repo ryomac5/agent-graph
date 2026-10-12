@@ -1,3 +1,4 @@
+import { observeCodexTitles } from "./titles.ts";
 import { homedir } from "node:os";
 import { basename, join, normalize, sep } from "node:path";
 import { createNativeId } from "../../../../core/src/ledger/projections/relations.ts";
@@ -115,17 +116,19 @@ export function observeCodex(ledger: Ledger, options: CodexObservationOptions = 
   const index = readIndex(ledger);
   const archivedPaths = reader.list(join(home, "archived_sessions"));
   const archivedFileIds = new Set(archivedPaths.map((path) => basename(path)));
-  return [...reader.list(join(home, "sessions")), ...archivedPaths]
+  const results = [...reader.list(join(home, "sessions")), ...archivedPaths]
     .filter((path) => !options.paths || options.paths.has(path))
     .flatMap((path) => (options.batch ?? ((operation) => operation()))(
       () => observeFile(ledger, path, { ...options, reader }, index, archivedFileIds)));
+  return [...results, ...observeCodexTitles(ledger, home, options.observedTs ?? new Date().toISOString(), index.subjects)];
 }
 
 export function observeCodexFile(ledger: Ledger, path: string, options: CodexObservationOptions = {}): AppendResult[] {
   const reader = options.reader ?? rolloutReader;
   const archivedFileIds = new Set(reader.list(join(resolveCodexHome(options), "archived_sessions"))
     .map((archivedPath) => basename(archivedPath)));
-  return observeFile(ledger, path, options, readIndex(ledger), archivedFileIds);
+  const results = observeFile(ledger, path, options, readIndex(ledger), archivedFileIds);
+  return [...results, ...observeCodexTitles(ledger, resolveCodexHome(options), options.observedTs ?? new Date().toISOString())];
 }
 
 function observeFile(ledger: Ledger, path: string, options: CodexObservationOptions, index: ObservationIndex,

@@ -591,3 +591,30 @@ test("offset のない旧い集約を再起動時に全行から補い、以降�
     assert.equal(service.ingestOnce().unsupported, 0);
   } finally { service.close(); }
 });
+
+test("session_index の最新の題名を取り込み、同じ題名と古い更新を追記しない", t => {
+  const f = createFixture(t, "S6");
+  f.observe();
+  const nativeId = project(f.read()).conversations[0].native_id!;
+  const path = join(f.home, "session_index.jsonl");
+  const title = (thread_name: string, updated_at = OBSERVED, id = nativeId) =>
+    JSON.stringify({ id, thread_name, updated_at }) + "\n";
+  writeFileSync(path, title("Old", "2026-10-07T00:00:00Z") + title("URLを教える")
+    + title("Stale", "2026-10-06T00:00:00Z") + title("Unknown", OBSERVED, "unknown") + '{"id":');
+  f.observe();
+  const readTitle = () => project(f.read()).conversations.find(row => row.native_id === nativeId)!.ai_title;
+  assert.equal(readTitle(), "URLを教える");
+  const count = f.read().length;
+  f.observe();
+  assert.equal(f.read().length, count);
+  writeFileSync(path, title("URLを教える", "2026-10-09T00:00:00Z"));
+  f.observe();
+  assert.equal(f.read().length, count);
+  appendFileSync(path, title("New", "2026-10-10T00:00:00Z"));
+  f.observe();
+  assert.equal(readTitle(), "New");
+  writeFileSync(path, title("Stale", "2026-10-06T00:00:00Z"));
+  f.observe();
+  assert.equal(readTitle(), "New");
+  assert.deepEqual(project([...f.read()].reverse()), project(f.read()));
+});

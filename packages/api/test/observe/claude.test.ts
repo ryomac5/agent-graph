@@ -303,3 +303,23 @@ test("所属の追記前に停止しても、台帳の cursor から再読込し
   assert.equal(observeClaudeFile(ledger, path).appended, 1);
   assert.equal(project(readFacts(ledger)).message_memberships.length, 2);
 });
+
+test("ai-title は最後の題名を記録し、同じ題名と再読で増殖しない", t => {
+  const { ledger, directory } = createFixture(t);
+  const path = join(directory, "session.jsonl");
+  const title = (aiTitle: string) => JSON.stringify({ type: "ai-title", aiTitle, sessionId: "session" }) + "\n";
+  writeFileSync(path, createMessage("first") + "\n" + title("Old") + title("ブラウザ入力のターミナル反映"));
+  const first = observeClaudeFile(ledger, path, { observedTs: TS });
+  assert.equal(first.conflicts.length, 0);
+  assert.equal(project(readFacts(ledger)).conversations[0].ai_title, "ブラウザ入力のターミナル反映");
+  assert.equal(readFacts(ledger).filter(fact => fact.kind === "conversation.updated").length, 1);
+  appendFileSync(path, title("ブラウザ入力のターミナル反映"));
+  assert.equal(observeClaudeFile(ledger, path, { observedTs: TS }).appended, 0);
+  appendFileSync(path, title("New"));
+  observeClaudeFile(ledger, path, { observedTs: TS });
+  assert.equal(project(readFacts(ledger)).conversations[0].ai_title, "New");
+  const facts = readFacts(ledger);
+  observeClaudeFile(ledger, path, { cursor: { ...first.cursor, identity: "replay" }, observedTs: TS });
+  assert.deepEqual(readFacts(ledger), facts);
+  assert.deepEqual(project([...facts].reverse()), project(facts));
+});

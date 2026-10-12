@@ -51,7 +51,7 @@ export function startedAt(state: ScreenState, root: Root, times = readConversati
   const starts = root.conversation_ids.map(id => times.get(id)?.first).filter((value): value is number => value !== undefined);
   return starts.length ? Math.min(...starts) : undefined;
 }
-/** 最初の依頼を題に使う。依頼がなければキット名から日付の題を作り、識別子を残す。 */
+/** 生成題名、最初の依頼の順に題に使う。依頼がなければキット名から日付の題を作り、識別子を残す。 */
 function renameKitRoots(state: ScreenState, roots: Root[], times: Map<string, ConversationTimes>): Root[] {
   const groups = new Map<string, { root: Root; start: number }[]>();
   for (const root of roots) {
@@ -68,7 +68,8 @@ function renameKitRoots(state: ScreenState, roots: Root[], times: Map<string, Co
     .forEach(({ root }, index) => { root.kit_name = root.name; root.name = index === 0 ? base : `${base}-${index + 1}`; });
   for (const root of roots) {
     const first = root.conversation_ids.toSorted((a, b) => (times.get(a)?.first ?? Number.NEGATIVE_INFINITY) - (times.get(b)?.first ?? Number.NEGATIVE_INFINITY))[0];
-    const excerpt = readText(state.projection.conversations?.find(row => row.id === first)?.first_request_excerpt);
+    const conversation = state.projection.conversations?.find(row => row.id === first);
+    const excerpt = readTitle(conversation?.ai_title) || readText(conversation?.first_request_excerpt);
     if (excerpt) root.name = excerpt;
   }
   return roots;

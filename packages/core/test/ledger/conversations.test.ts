@@ -409,3 +409,15 @@ test("同じ時刻の発言は、識別子に含まれる行の位置を数と�
   assert.equal(projectConversations(facts).conversations[0].name, "最初の依頼。");
   assert.equal(projectConversations([...facts].reverse()).conversations[0].name, "最初の依頼。");
 });
+
+test("生成題名は会話の独立した列として最新の更新を投影する", () => {
+  const facts = [createConversation("a"),
+    createFact({ source: "rollout-codex", source_event_id: "title:1", kind: "conversation.updated",
+      subject: "conversation:a", source_ts: TS, confidence: "confirmed", payload: { ai_title: "Old" } }),
+    createFact({ source: "rollout-codex", source_event_id: "title:2", kind: "conversation.updated",
+      subject: "conversation:a", source_ts: TS, confidence: "confirmed", payload: { ai_title: "New" } })];
+  const projection = projectConversations(facts);
+  assert.equal(projection.conversations[0].ai_title, "New");
+  assert.deepEqual(projectConversations([...facts].reverse()), projection);
+  assert.equal(projectConversations([createConversation("b")]).conversations[0].ai_title, null);
+});

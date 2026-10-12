@@ -12,6 +12,7 @@ export type ProjectedConversation = ProjectedEntity<"conversation"> & {
   created_ts: string | null;
   name_is_provisional: boolean;
   first_request_excerpt: string | null;
+  ai_title: string | null;
 };
 export interface ConversationProjection {
   tasks: ProjectedTask[];
@@ -184,7 +185,7 @@ export function projectConversations(
       : conversation.type === "subagent" ? explicitName ?? task?.name ?? null : task?.name ?? explicitName ?? provisionalName;
     const kitName = kitNames.get(conversation.id) ?? conversation.kit_name;
     return { ...conversation, ...(kitName === undefined ? {} : { kit_name: kitName }), name, created_ts: created.get(conversation.id) ?? null, name_is_provisional: name !== null && (unattended || !explicitName && !task?.name),
-      first_request_excerpt: provisionalName };
+      first_request_excerpt: provisionalName, ai_title: conversation.ai_title ?? null };
   });
   const relations = projectRelations(facts);
   return {

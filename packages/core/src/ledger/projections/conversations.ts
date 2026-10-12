@@ -1,4 +1,5 @@
 import type { Fact } from "../facts.ts";
+import { projectInputQueues, type PendingInput } from "./input-queue.ts";
 import { compareEventOrder } from "../event-order.ts";
 import { getMessageText, projectMessages } from "./messages.ts";
 import type { MessageProjection } from "./messages.ts";
@@ -13,6 +14,7 @@ export type ProjectedConversation = ProjectedEntity<"conversation"> & {
   name_is_provisional: boolean;
   first_request_excerpt: string | null;
   ai_title: string | null;
+  pending_inputs?: PendingInput[];
 };
 export interface ConversationProjection {
   tasks: ProjectedTask[];
@@ -152,6 +154,7 @@ export function projectConversations(
   facts: readonly Fact[], names?: ReadonlyMap<string, string>,
 ): ConversationProjection {
   const { tasks, aliases } = projectNames(facts);
+  const queues = projectInputQueues(facts);
   const rows = projectEntities(facts, "conversation", (payload, id) =>
     payload.provider && payload.native_id ? createNativeId(payload.provider, payload.native_id) : id,
   (fact) => [fact.source.startsWith("host-") ? 1 : 0]);
@@ -184,7 +187,8 @@ export function projectConversations(
     const name = unattended ? provisionalName
       : conversation.type === "subagent" ? explicitName ?? task?.name ?? null : task?.name ?? explicitName ?? provisionalName;
     const kitName = kitNames.get(conversation.id) ?? conversation.kit_name;
-    return { ...conversation, ...(kitName === undefined ? {} : { kit_name: kitName }), name, created_ts: created.get(conversation.id) ?? null, name_is_provisional: name !== null && (unattended || !explicitName && !task?.name),
+    const { input_queue_event: _event, ...fields } = conversation;
+    return { ...fields, ...(queues.has(conversation.id) ? { pending_inputs: queues.get(conversation.id) } : {}), ...(kitName === undefined ? {} : { kit_name: kitName }), name, created_ts: created.get(conversation.id) ?? null, name_is_provisional: name !== null && (unattended || !explicitName && !task?.name),
       first_request_excerpt: provisionalName, ai_title: conversation.ai_title ?? null };
   });
   const relations = projectRelations(facts);

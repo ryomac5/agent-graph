@@ -100,10 +100,12 @@ it('loads older history near the top once, shows a thin loading indicator and pr
   let release: (() => void) | undefined;
   let delay = false;
   const fetchConversation = vi.fn(async (path: string) => {
+    if (new URL(path, 'http://localhost').searchParams.has('edits')) return { generation: 0, projection: { messages: [], message_memberships: [] }, next: null };
     if (delay) { delay = false; await new Promise<void>(resolve => { release = resolve; }); }
-    const after = new URL(path, 'http://localhost').searchParams.get('after') ?? '';
-    const page = rows.filter(row => row.id > after).slice(0, 200);
-    return { generation: 0, projection: { messages: page, message_memberships: page.map(row => ({ id: row.id, message_id: row.id, conversation_id: 'c', active: 1 })) }, next: page.length === 200 ? page.at(-1)!.id : null };
+    const before = new URL(path, 'http://localhost').searchParams.get('before');
+    const end = before ? rows.findIndex(row => row.id === JSON.parse(before).id) : rows.length;
+    const page = rows.slice(Math.max(0, end - 200), end);
+    return { generation: 0, projection: { messages: page, message_memberships: page.map(row => ({ id: row.id, message_id: row.id, conversation_id: 'c', active: 1 })) }, hasOlder: end > 200, next: null };
   });
   f.client.fetchConversation = fetchConversation;
   mount(f); await screen.findByText('Message 449');
@@ -147,4 +149,42 @@ it('shows all three actions for a conversation without changes and hides them wh
   expect(screen.queryByRole('button', { name: 'Files changed 0' })).toBeNull();
   fireEvent.click(screen.getByRole('tab', { name: 'Custom session' }));
   expect(screen.getByRole('button', { name: 'Details' })).toBeTruthy();
+});
+
+it('keeps the viewed message fixed when live input arrives during an older window request', async () => {
+  const rows = messages(); const f = setup([], 'idle');
+  let release: (() => void) | undefined;
+  f.client.fetchConversation = vi.fn(async path => {
+    const params = new URL(path, 'http://localhost').searchParams;
+    if (params.has('edits')) return { generation: 0, projection: { messages: [], message_memberships: [] }, next: null };
+    const before = params.get('before');
+    if (before) await new Promise<void>(resolve => { release = resolve; });
+    const end = before ? rows.findIndex(row => row.id === JSON.parse(before).id) : rows.length;
+    const page = rows.slice(Math.max(0, end - 200), end);
+    return { generation: 0, projection: { messages: page,
+      message_memberships: page.map(row => ({ id: row.id, message_id: row.id, conversation_id: 'c', active: 1 })) },
+      hasOlder: end > 200, next: null };
+  });
+  mount(f); await screen.findByText('Message 449');
+  const timeline = document.querySelector<HTMLDivElement>('.conv-timeline')!;
+  Object.defineProperty(timeline, 'scrollHeight', { configurable: true, get: () => timeline.querySelectorAll('article.message').length * 10 });
+  Object.defineProperty(timeline, 'clientHeight', { configurable: true, value: 100 });
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+    const index = [...timeline.querySelectorAll('article.message')].indexOf(this);
+    const top = index >= 0 ? index * 10 - timeline.scrollTop : 0;
+    return { top, bottom: top + 10, height: 10, left: 0, right: 100, width: 100, x: 0, y: top, toJSON() {} };
+  });
+  fireEvent.scroll(timeline, { target: { scrollTop: 60 } });
+  const viewed = document.getElementById('message-m256')!;
+  const top = viewed.getBoundingClientRect().top;
+  await act(async () => {
+    f.target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: {
+      messages: { remove: [], upsert: [{ id: 'live', role: 'user', body: 'New message', source_ts: '2030-01-01T00:00:00Z' }] },
+      message_memberships: { remove: [], upsert: [{ id: 'live', message_id: 'live', conversation_id: 'c', active: 1 }] },
+    } });
+  });
+  expect(document.getElementById('message-m250')).toBeTruthy();
+  expect(viewed.getBoundingClientRect().top).toBe(top);
+  await act(async () => release!());
+  expect(viewed.getBoundingClientRect().top).toBe(top);
 });

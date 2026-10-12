@@ -93,7 +93,10 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
         response.writeHead(400).end(); return;
       }
       response.writeHead(200, { "Content-Type": "application/json" });
-      response.end(JSON.stringify(path === "/conversation" ? feed.conversation(id!, params.get("after") ?? "") : feed.list(table!, params.get("after") ?? "")));
+      response.end(JSON.stringify(path === "/conversation" ? feed.conversation(id!, params.get("after") ?? "", {
+        latest: params.get("latest") === "1", before: params.get("before") ?? undefined,
+        message: params.get("message") ?? undefined, edits: params.get("edits") === "1",
+      }) : feed.list(table!, params.get("after") ?? "")));
       return;
     }
     if (request.method !== "GET" || path !== "/snapshot") { response.writeHead(404).end(); return; }

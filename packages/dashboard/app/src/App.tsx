@@ -1,10 +1,10 @@
+import { FeatureErrorBoundary } from './components/FeatureErrorBoundary.tsx';
 import { SessionCreate } from './components/SessionCreate.tsx';
 import { dismissEscapeLayer } from './lib/escape-layers.ts';
-import { SettingsPage } from './pages/settings/SettingsPage.tsx';
-import { SettingsLayout } from './pages/settings/SettingsLayout.tsx';
+import { LoadingFeature } from './components/LoadingFeature.tsx';
 import { ResizeDivider } from './components/ResizeDivider.tsx';
 import { SIDEBAR_WIDTH_KEY, SIDEBAR_COLLAPSED_KEY, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_INITIAL_WIDTH, SIDEBAR_COMPACT_WIDTH, SIDEBAR_RESTORE_WIDTH, clampSidebar, useStoredToggle } from './lib/layout.ts';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { createKeyHandler, isTextInput, keyLabel, type KeyAction } from './lib/keys.ts';
 import { CommandDialog, CommandPalette, useKeySettings, type Command } from './components/command/Commands.tsx';
 import { ProjectAdd } from './components/ProjectAdd.tsx';
@@ -35,6 +35,8 @@ import type { Row } from './lib/store.ts';
 import { getRegisteredProjects, OTHER_PROJECT, resolveProjectId } from './lib/projects.ts';
 import './styles.css';
 
+const SettingsPage = lazy(() => import('./pages/settings/SettingsPage.tsx').then(module => ({ default: module.SettingsPage })));
+const SettingsLayout = lazy(() => import('./pages/settings/SettingsLayout.tsx').then(module => ({ default: module.SettingsLayout })));
 
 export type Theme = 'system' | 'light' | 'dark';
 export function applyTheme(theme: Theme, dark: boolean) {
@@ -283,7 +285,7 @@ export function App({ target = store, client = unavailableClient, searchClient =
       <Route path="/p/:project/changes" element={<ChangesPage target={target} client={client} language={language}/>}/>
       <Route path="/p/:project/files" element={<div className="files-page"><FileTreePanel explorer={explorer} language={language}/><FileNotices explorer={explorer}/><FileViewerPanel explorer={explorer} actions={<button className="btn btn-ghost btn-xs" onClick={explorer.closeFile}><Icon name="chevronLeft" size={12}/>Back</button>}/></div>}/>
       <Route path="/search" element={<SearchPage target={target} client={searchClient} language={language} backAction={backAction}/>}/>
-      <Route path="/settings" element={<div className="page settings-page"><header className="page-header">{backAction}<h1>{t('settings')}</h1></header><SettingsLayout client={client} projects={getRegisteredProjects(state)} language={language} theme={theme} onTheme={setTheme} onLanguage={setLanguage} bindings={bindings} onKeys={setBindings}><SettingsPage client={client} language={language} policyOnly/></SettingsLayout></div>}/>
+      <Route path="/settings" element={<div className="page settings-page"><header className="page-header">{backAction}<h1>{t('settings')}</h1></header><FeatureErrorBoundary><Suspense fallback={<LoadingFeature language={language}/>}><SettingsLayout client={client} projects={getRegisteredProjects(state)} language={language} theme={theme} onTheme={setTheme} onLanguage={setLanguage} bindings={bindings} onKeys={setBindings}><SettingsPage client={client} language={language} policyOnly/></SettingsLayout></Suspense></FeatureErrorBoundary></div>}/>
       <Route path="*" element={<EmptyView title="notFound" t={t}/>}/>
     </Routes>{commandError && <p role="alert" className="banner banner-danger">{commandError}</p>}</main></div>
     {addingProject && <ProjectAdd client={client} language={language} onClose={() => setAddingProject(false)} onAdded={id => { setAddingProject(false); setRevealedProject(id); setCollapsedProjects(value => ({ ...value, [id]: false })); navigate('/p/' + encodeURIComponent(id)); }}/> }

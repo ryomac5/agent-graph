@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, symlinkSync, utimesSync } from 'node:fs';
+import { brotliCompressSync, brotliDecompressSync, gzipSync, gunzipSync } from 'node:zlib';
 import http, { request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -127,16 +128,16 @@ test('static handler serves real files and applies security without a socket', a
     upstream: { url: 'http://127.0.0.1:1', wsUrl: 'ws://127.0.0.1:1/ws', token: 'injected-token', runner: { available: false } } });
   t.after(() => endpoint.close());
   async function get(url: string, headers: Record<string, string> = {}, remoteAddress = '127.0.0.1') {
-    let status = 0; let body = '';
+    let status = 0; let body = ''; let bytes = Buffer.alloc(0);
     const responseHeaders: Record<string, string> = {};
     const response = Object.assign(new EventEmitter(), {
       setHeader: (key: string, value: string) => { responseHeaders[key] = value; },
       writeHead: (code: number, values: Record<string, string> = {}) => { status = code; Object.assign(responseHeaders, values); return response; },
-      end: (value?: Buffer | string) => { body = value?.toString() ?? ''; },
+      end: (value?: Buffer | string) => { bytes = Buffer.from(value ?? ''); body = bytes.toString(); },
     });
     await handle({ method: 'GET', url, headers: { host: '127.0.0.1:12345', ...headers },
       socket: { remoteAddress } } as http.IncomingMessage, response as unknown as http.ServerResponse);
-    return { status, body, headers: responseHeaders };
+    return { status, body, bytes, headers: responseHeaders };
   }
   const logo = await get('/brand/claude.svg');
   assert.equal(logo.status, 200);
@@ -179,8 +180,69 @@ test('static handler serves real files and applies security without a socket', a
   assert.equal(nonces.size, 3);
   assert.equal((await get('/app.css')).headers['Content-Type'], 'text/css; charset=utf-8');
   assert.equal((await get('/missing.js')).status, 404);
+  mkdirSync(join(directory, '.vite'));
+  writeFileSync(join(directory, '.vite/manifest.json'), '{"entry":"assets/app.js"}');
+  writeFileSync(join(directory, '.vite/bundle-analysis.json'), '{"id":"/private/source.ts"}');
+  for (const path of ['/.vite', '/.vite/', '/.vite/manifest.json', '/.vite/bundle-analysis.json', '/%2evite/manifest.json', '/.vite%2fbundle-analysis.json']) {
+    const response = await get(path);
+    assert.equal(response.status, 404);
+    assert.equal(response.body, '');
+  }
   assert.equal((await get('/%2e%2e%2fsecret')).status, 403);
   assert.equal((await get('/', { origin: 'https://evil.example' })).status, 403);
   assert.equal((await get('/', { host: 'evil.example' })).status, 403);
   assert.equal((await get('/snapshot')).status, 403);
+
+  // 実際の圧縮ファイルを使い、ソケット制限下でも配信の見出しを検証する。
+  mkdirSync(join(directory, 'assets'));
+  const source = 'console.log("compressed asset")';
+  const asset = join(directory, 'assets/app-abcdefgh.js');
+  writeFileSync(asset, source);
+  writeFileSync(asset + '.br', brotliCompressSync(source));
+  writeFileSync(asset + '.gz', gzipSync(source));
+  for (const [accept, encoding] of [
+    ['gzip, br', 'br'], ['gzip', 'gzip'], ['br;q=0, gzip;q=1', 'gzip'],
+    ['br;q=0.2, gzip;q=0.8', 'gzip'], ['*', 'br'], ['BR', 'br'],
+    ['br;q=0, gzip;q=0', undefined], ['', undefined], ['deflate', undefined],
+  ] as const) {
+    const response = await get('/assets/app-abcdefgh.js', { 'accept-encoding': accept });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers['Content-Encoding'], encoding);
+    assert.equal(response.headers['Vary'], 'Accept-Encoding');
+    assert.equal(response.headers['Content-Type'], 'text/javascript; charset=utf-8');
+    assert.equal(response.headers['Cache-Control'], 'public, max-age=31536000, immutable');
+    assert.equal(Number(response.headers['Content-Length']), response.bytes.length);
+    const decoded = encoding === 'br' ? brotliDecompressSync(response.bytes) : encoding === 'gzip' ? gunzipSync(response.bytes) : response.bytes;
+    assert.equal(decoded.toString(), source);
+  }
+  assert.equal((await get('/app.css', { 'accept-encoding': 'br, gzip' })).body, 'body{}');
+  assert.equal((await get('/app.css')).headers['Cache-Control'], 'no-store');
+  writeFileSync(join(directory, 'app.css.gz'), gzipSync('body{}'));
+  const css = await get('/app.css', { 'accept-encoding': 'br, gzip' });
+  assert.equal(css.headers['Content-Encoding'], 'gzip');
+  assert.equal(css.headers['Content-Type'], 'text/css; charset=utf-8');
+  assert.equal(gunzipSync(css.bytes).toString(), 'body{}');
+  writeFileSync(join(directory, 'assets/plain.js'), source);
+  assert.equal((await get('/assets/plain.js')).headers['Cache-Control'], 'no-store');
+  assert.equal((await get('/assets/missing-abcdefgh.js')).status, 404);
+  assert.equal((await get('/app.css', { 'accept-encoding': 'identity;q=0, *;q=0' })).status, 406);
+  const html = await get('/', { 'accept-encoding': 'br, gzip' });
+  assert.equal(html.headers['Content-Encoding'], undefined);
+  assert.equal(html.headers['Cache-Control'], 'no-store');
+  assert.match(html.body, /injected-token/);
+  writeFileSync(join(directory, 'index.html'), '<html><head></head><body>new build __AGENT_GRAPH_TOKEN__</body></html>');
+  assert.match((await get('/')).body, /new build injected-token/);
+  const updated = 'console.log("new build")';
+  writeFileSync(asset, updated);
+  utimesSync(asset + '.br', 0, 0); utimesSync(asset + '.gz', 0, 0);
+  const stale = await get('/assets/app-abcdefgh.js', { 'accept-encoding': 'br, gzip' });
+  assert.equal(stale.headers['Content-Encoding'], undefined); assert.equal(stale.body, updated);
+  writeFileSync(asset + '.gz', gzipSync(updated));
+  const rebuilt = await get('/assets/app-abcdefgh.js', { 'accept-encoding': 'br, gzip' });
+  assert.equal(rebuilt.headers['Content-Encoding'], 'gzip'); assert.equal(gunzipSync(rebuilt.bytes).toString(), updated);
+  const outside = mkdtempSync(join(tmpdir(), 'ag-static-outside-'));
+  t.after(() => rmSync(outside, { recursive: true, force: true }));
+  writeFileSync(join(outside, 'private.br'), brotliCompressSync('private'));
+  symlinkSync(join(outside, 'private.br'), join(directory, 'app.css.br'));
+  assert.equal((await get('/app.css', { 'accept-encoding': 'br' })).body, 'body{}');
 });

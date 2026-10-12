@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import type { Language } from '../../lib/i18n.ts';
 import type { Row } from '../../lib/store.ts';
 import { formatClock } from '../../lib/format.ts';
@@ -39,7 +39,7 @@ export function countTools(rows: Row[]): number {
  * 発言を 1 つ描く。右の列は利用者の吹き出し、左の列はエージェントの吹き出しにする。
  * 送り主の名前は、続く同じ送り主の発言では省く。時刻は常に出す。
  */
-export function Message({ row, sender, showName = true, language = 'en', streaming = false, parentRequest = false, toolResults, delegationNode, onSelectChild }: {
+function RenderMessage({ row, sender, showName = true, language = 'en', streaming = false, parentRequest = false, toolResults, delegationNode, onSelectChild }: {
   row: Row; sender: Sender; showName?: boolean; language?: Language; streaming?: boolean; parentRequest?: boolean; toolResults?: Map<string, unknown>; delegationNode?: (tool: Row) => TreeNode | undefined; onSelectChild?: (id: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -103,6 +103,8 @@ export function Message({ row, sender, showName = true, language = 'en', streami
     </header>
     {parentRequest && <span className="message-request-label">{language === 'ja' ? '受けた依頼' : 'Request from root'}</span>}
     <div className="message-main">
+      {row.delivery_state === 'sending' && <p className="status-line" role="status">Sending…</p>}
+      {row.delivery_state === 'queued' && <p className="status-line" role="status">Queued — Claude will read this after the current step</p>}
       {images.length > 0 && <div className="message-images">{images.map((src, index) => <img key={index} src={src} alt={`${t('image')} ${index + 1}`} loading="lazy"/>)}</div>}
       {unavailable ? <p className="message-gap">{t(row.body_state === 'omitted' ? 'omitted' : 'unavailable')}</p>
         : hasDelegations ? flow.map((part, index) => {
@@ -127,14 +129,48 @@ export function Message({ row, sender, showName = true, language = 'en', streami
 }
 
 /** 返答全体の呼び出しを 1 行に畳み、名前と失敗数を添える。 */
-export function ToolRun({ rows, toolResults, language = 'en' }: { rows: Row[]; toolResults?: Map<string, unknown>; language?: Language }) {
+function RenderToolRun({ rows, toolResults, language = 'en' }: { rows: Row[]; toolResults?: Map<string, unknown>; language?: Language }) {
+  const [open, setOpen] = useState(false);
   const tools = rows.flatMap(row => Array.isArray(row.body) ? row.body.map(readObject).filter(block => block.type === 'tool_use') : []);
   const names = [...new Set(tools.map(tool => readText(tool.name) || 'Tool'))].slice(0, 3);
   const failed = tools.filter(tool => readObject(toolResults?.get(readText(tool.id))).is_error === true).length;
-  return <details className="tool-run">
-    <summary><Icon name="chevronRight" size={16} className="caret"/><span>{toolsLabel(tools.length, language)}</span>
+  return <details className="tool-run" open={open} onToggle={event => setOpen(event.currentTarget.open)}>
+    <summary onClick={event => { event.preventDefault(); setOpen(value => !value); }}><Icon name="chevronRight" size={16} className="caret"/><span>{toolsLabel(tools.length, language)}</span>
       {failed > 0 && <span className="tool-failed">{language === 'ja' ? '失敗' : 'Failed'} {failed}</span>}
       {names.length > 0 && <span className="truncate tool-run-names">· {names.join(' · ')}</span>}</summary>
-    <div className="tool-run-body">{rows.flatMap(row => Array.isArray(row.body) ? row.body.map(readObject) : []).map((block, index) => <ToolCall key={readText(block.id) || index} language={language} name={readText(block.name) || translate(language, 'toolOutput')} input={block.input} result={block.type === 'tool_result' ? block : toolResults?.get(readText(block.id))}/>)}</div>
+    {open && <div className="tool-run-body">{rows.flatMap(row => Array.isArray(row.body) ? row.body.map(readObject) : []).map((block, index) => <ToolCall key={readText(block.id) || index} language={language} name={readText(block.name) || translate(language, 'toolOutput')} input={block.input} result={block.type === 'tool_result' ? block : toolResults?.get(readText(block.id))}/>)}</div>}
   </details>;
 }
+
+// 値が変わらない発言は、時計や別の会話の更新から切り離す。
+function sameValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return false;
+  const left = a as Row;
+  const right = b as Row;
+  const keys = Object.keys(left);
+  return keys.length === Object.keys(right).length && keys.every(key => Object.hasOwn(right, key) && left[key] === right[key]);
+}
+function sameResults(rows: Row[], a?: Map<string, unknown>, b?: Map<string, unknown>): boolean {
+  if (a === b) return true;
+  return rows.every(row => !Array.isArray(row.body) || row.body.every(value => {
+    const block = readObject(value);
+    const id = readText(block.id ?? block.tool_use_id);
+    return !id || sameValue(a?.get(id), b?.get(id));
+  }));
+}
+export const Message = memo(RenderMessage, (a, b) => {
+  if (!sameValue(a.row, b.row) || !sameValue(a.sender, b.sender) || a.showName !== b.showName
+    || a.language !== b.language || a.streaming !== b.streaming || a.parentRequest !== b.parentRequest
+    || a.onSelectChild !== b.onSelectChild || !sameResults([b.row], a.toolResults, b.toolResults)) return false;
+  const tools = Array.isArray(b.row.body) ? b.row.body.map(readObject).filter(isDelegationTool) : [];
+  return tools.every(tool => {
+    const left = a.delegationNode?.(tool);
+    const right = b.delegationNode?.(tool);
+    // 委譲カードが表示・選択に使う項目だけを比べる。
+    return left?.conversationId === right?.conversationId && left?.provider === right?.provider && left?.state === right?.state;
+  });
+});
+export const ToolRun = memo(RenderToolRun, (a, b) => a.language === b.language
+  && a.rows.length === b.rows.length && a.rows.every((row, index) => sameValue(row, b.rows[index]))
+  && sameResults(b.rows, a.toolResults, b.toolResults));

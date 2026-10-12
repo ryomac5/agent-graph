@@ -4,7 +4,7 @@ import type { Fact } from "../../../core/src/ledger/facts.ts";
 import { PROJECTION_TABLES, type ProjectionState } from "../../../core/src/ledger/rebuild.ts";
 import { projectProjects } from "../../../core/src/ledger/projections/projects.ts";
 import { getMessageText } from "../../../core/src/ledger/projections/messages.ts";
-import { compareEventOrder } from "../../../core/src/ledger/event-order.ts";
+import { compareEventOrder, encodeEventOrder } from "../../../core/src/ledger/event-order.ts";
 import { resolveProjectLocation } from "../../../core/src/ledger/repository.ts";
 import { createScreenIdentities, type ScreenIdentities } from './screen-identities.ts';
 import type { ObservationProgress } from "./index.ts";
@@ -25,6 +25,21 @@ const PATCH_RETENTION_BYTES = 16 * 1024 * 1024;
 const LIST_PAGE_SIZE = 1000;
 const EXCERPT_LENGTH = 120;
 const DETAIL_PAGE_SIZE = 200;
+export interface MessageCursor { source_ts: string; source_event_id: string; id: string }
+function compareMessageCursors(a: MessageCursor, b: MessageCursor): number {
+  return a.source_ts.localeCompare(b.source_ts)
+    || compareEventOrder(a.source_event_id, b.source_event_id) || compareEventOrder(a.id, b.id);
+}
+function readMessageCursor(value: string | MessageCursor): string | MessageCursor {
+  if (typeof value !== 'string') return value;
+  // HTTP の before には組を JSON で載せる。旧い ID（JSON 配列を含む）も受ける。
+  try {
+    const cursor = JSON.parse(value);
+    if (cursor && typeof cursor.source_ts === 'string' && typeof cursor.source_event_id === 'string'
+      && typeof cursor.id === 'string') return cursor;
+  } catch { /* 旧い ID はそのまま使う。 */ }
+  return value;
+}
 const NAME_LENGTH = 160;
 const SCREEN_CACHE_KIB = 16 * 1024;
 const IDENTITY_BATCH_FACTS = 256;
@@ -57,6 +72,7 @@ export class ProjectionFeed {
   private observation?: ObservationProgress;
   private registeredRepositories = new Map<string, string[]>();
   private statements = new Map<string, StatementSync>();
+  private inputQueues = new Map<string, unknown[]>();
   private prepare(sql: string): StatementSync {
     let statement = this.statements.get(sql);
     if (!statement) { statement = this.db.prepare(sql); this.statements.set(sql, statement); }
@@ -71,6 +87,10 @@ export class ProjectionFeed {
     this.db.exec(`PRAGMA busy_timeout = 5000; PRAGMA synchronous = NORMAL; PRAGMA wal_autocheckpoint = 0; PRAGMA cache_size = -${SCREEN_CACHE_KIB}`);
     this.catchUp = catchUp;
     this.limit = limit;
+    // 前の実装が残した全レコード用の trigger は、起動時に外す。
+    for (const operation of ["INSERT", "UPDATE", "DELETE"]) {
+      this.db.exec(`DROP TRIGGER IF EXISTS api_change_conversation_record_${operation}`);
+    }
     this.db.exec(`CREATE TABLE IF NOT EXISTS api_projection_changes (
       cursor INTEGER PRIMARY KEY AUTOINCREMENT, table_name TEXT NOT NULL, id TEXT NOT NULL, conversation_id TEXT);
       CREATE TABLE IF NOT EXISTS api_conversation_summaries (id TEXT PRIMARY KEY, message_count INTEGER NOT NULL,
@@ -100,19 +120,33 @@ export class ProjectionFeed {
       for (const row of this.prepare("SELECT id FROM conversations").iterate()) this.updateSummary(String(row.id));
       this.cursor = Number(this.prepare("SELECT coalesce(max(cursor), 0) AS cursor FROM api_projection_changes").get()!.cursor);
       this.prepare("DELETE FROM api_projection_changes WHERE cursor <= ?").run(this.cursor);
+      this.updateInputQueues();
       this.roots = this.readRoots();
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); this.db.close(); throw error; }
     this.floor = this.state.last_seq;
     this.db.exec("PRAGMA busy_timeout = 0");
   }
+  private updateInputQueues(ids?: string[]): void {
+    if (ids?.length === 0) return;
+    if (ids === undefined) this.inputQueues.clear();
+    else for (const id of ids) this.inputQueues.delete(id);
+    const where = ids === undefined ? "" : "AND entity_id IN (SELECT value FROM json_each(?))";
+    const statement = this.prepare(`SELECT entity_id, json_extract(data, '$.pending_inputs') AS inputs
+      FROM projection_records WHERE projection = 'conversations' ${where}`);
+    const rows = ids === undefined ? statement.iterate() : statement.iterate(JSON.stringify(ids));
+    for (const row of rows) {
+      const inputs = row.inputs ? JSON.parse(String(row.inputs)) : [];
+      if (inputs.length) this.inputQueues.set(String(row.entity_id), inputs);
+    }
+  }
   private updateIdentities(sinceSeq?: number): ScreenIdentities {
     const subset = sinceSeq === undefined ? "" : `AND subject IN (SELECT subject FROM facts WHERE seq > ? AND seq <= ?
-      AND (kind GLOB 'conversation.*' OR kind = 'run.created'))`;
+      AND (kind GLOB 'conversation.*' OR kind = 'run.created') AND kind != 'conversation.input_queue_changed')`;
     const rows = this.prepare(`SELECT seq, fact_id, source, source_event_id, kind, subject, source_ts, observed_ts, confidence, supersedes,
         json_patch('{}', json_object('provider', json_extract(payload, '$.provider'), 'native_id', json_extract(payload, '$.native_id'),
           'conversation_id', json_extract(payload, '$.conversation_id'), 'generation', json_extract(payload, '$.generation'))) AS payload
-      FROM facts WHERE seq <= ? AND (kind GLOB 'conversation.*' OR kind = 'run.created') ${subset} ORDER BY subject, seq`)
+      FROM facts WHERE seq <= ? AND (kind GLOB 'conversation.*' OR kind = 'run.created') AND kind != 'conversation.input_queue_changed' ${subset} ORDER BY subject, seq`)
       .iterate(...(sinceSeq === undefined ? [this.state.last_seq] : [this.state.last_seq, sinceSeq, this.state.last_seq]));
     const next: ScreenIdentities = { conversations: {}, runs: {} };
     const createdRuns: { conversation_id: string; generation: number; subject_id: string }[] = [];
@@ -222,7 +256,8 @@ export class ProjectionFeed {
     const limit = ids ? "" : `LIMIT ${LIST_PAGE_SIZE}`;
     // 会話の名前と依頼の抜粋は core の投影の値をそのまま配る。画面は本文から名前を導かない。
     // プロジェクトは作業、会話の開始の場所、実行の場所の順に結ぶ。
-    if (table === "conversations") return this.prepare(`SELECT t.id, t.provider, t.origin, t.type, t.task_id, t.kit_name, t.user_name, t.created_ts, substr(t.name, 1, ${NAME_LENGTH}) AS name,
+    if (table === "conversations") {
+      const rows = this.prepare(`SELECT t.id, t.provider, t.origin, t.type, t.task_id, t.kit_name, t.user_name, t.created_ts, substr(t.name, 1, ${NAME_LENGTH}) AS name,
       t.name_is_provisional, substr(t.ai_title, 1, ${NAME_LENGTH}) AS ai_title, substr(t.first_request_excerpt, 1, ${NAME_LENGTH}) AS first_request_excerpt, t.cwd,
       r.project_id AS project, coalesce(r.state, 'unregistered') AS project_state,
       coalesce(s.message_count, 0) AS message_count, s.last_message_ts, coalesce(s.last_message_excerpt, '') AS last_message_excerpt
@@ -230,8 +265,9 @@ export class ProjectionFeed {
       LEFT JOIN api_project_resolution r ON r.id = coalesce(task.project, t.repository_id,
         (SELECT repository_id FROM runs WHERE (conversation_id = t.id OR conversation_id IN (
           SELECT id FROM api_conversation_ids WHERE canonical_id = t.id)) AND repository_id IS NOT NULL ORDER BY generation DESC LIMIT 1))
-      LEFT JOIN api_conversation_summaries s ON s.id = t.id ${where} ORDER BY t.id ${limit}`).all(parameter)
-      .map(row => ({ ...row, name_is_provisional: row.name_is_provisional === 1 }));
+      LEFT JOIN api_conversation_summaries s ON s.id = t.id ${where} ORDER BY t.id ${limit}`).all(parameter);
+      return rows.map(row => ({ ...row, pending_inputs: this.inputQueues.get(String(row.id)) ?? [], name_is_provisional: row.name_is_provisional === 1 }));
+    }
     // 試行は画面が木と 1 行の要約に使う欄だけを配り、受け入れの出力や報告の本文は配らない。
     if (table === "delegations") return this.prepare(`SELECT t.id, t.request_id, t.kit, t.parent_run_id, t.role, t.title, t.attempt, t.state,
       t.cwd, t.origin, t.parent, t.repository_id, t.provider, t.model, r.project_id AS project,
@@ -291,7 +327,7 @@ export class ProjectionFeed {
     for (const row of this.prepare(`SELECT DISTINCT conversation_id FROM message_memberships
       WHERE message_id IN (SELECT value FROM json_each(?))`).all(JSON.stringify(messages))) conversations.add(String(row.conversation_id));
     for (const id of conversations) this.updateSummary(id);
-    const identityChanged = !!this.prepare("SELECT 1 FROM facts WHERE seq > ? AND seq <= ? AND (kind GLOB 'conversation.*' OR kind = 'run.created') LIMIT 1").get(previous.last_seq, state.last_seq);
+    const identityChanged = !!this.prepare("SELECT 1 FROM facts WHERE seq > ? AND seq <= ? AND (kind GLOB 'conversation.*' OR kind = 'run.created') AND kind != 'conversation.input_queue_changed' LIMIT 1").get(previous.last_seq, state.last_seq);
     const identities = identityChanged || state.generation !== previous.generation
       ? this.updateIdentities(state.generation === previous.generation ? previous.last_seq : undefined) : undefined;
     const projectFactsChanged = !!this.prepare("SELECT 1 FROM facts WHERE seq > ? AND seq <= ? AND kind LIKE 'project.%' LIMIT 1").get(previous.last_seq, state.last_seq);
@@ -330,6 +366,17 @@ export class ProjectionFeed {
         .all(JSON.stringify(projectChanges.resolved))) delegations.add(String(row.id));
       if (delegations.size) groups.set("delegations", delegations);
     }
+    const queueIds = new Set<string>();
+    for (const row of this.prepare(`SELECT DISTINCT substr(subject, 14) AS id FROM facts
+      WHERE seq > ? AND seq <= ? AND kind = 'conversation.input_queue_changed'`).all(previous.last_seq, state.last_seq)) {
+      const id = this.conversationId(String(row.id));
+      ids.add(id); queueIds.add(id);
+    }
+    // 待ち行列が変わった会話だけ読み直し、通常の一覧取得にはレコード表を持ち込まない。
+    for (const id of ids) if (this.inputQueues.has(id)) queueIds.add(id);
+    const resetQueues = state.generation !== previous.generation || state.last_seq < previous.last_seq
+      || Object.keys(identities?.conversations ?? {}).length > 0;
+    this.updateInputQueues(resetQueues ? undefined : [...queueIds]);
     groups.set("conversations", ids);
     if (state.generation !== previous.generation || state.last_seq < previous.last_seq) {
       this.history = []; this.historySizes = []; this.historyBytes = 0; this.requiresGeneration = true; this.floor = state.last_seq;
@@ -451,15 +498,49 @@ export class ProjectionFeed {
     return { seq: this.state.last_seq, generation: this.state.generation, rows,
       next: rows.length === LIST_PAGE_SIZE ? rows.at(-1)!.id : null };
   }
-  conversation(id: string, after = "") {
+  conversation(id: string, after = "", window?: { latest?: boolean; before?: string | MessageCursor; message?: string; edits?: boolean }) {
     id = this.conversationId(id);
-    const messages = this.prepare(`SELECT m.*, mm.id AS membership_id FROM message_memberships mm JOIN messages m ON m.id = mm.message_id
-      WHERE mm.conversation_id = ? AND mm.active = 1 AND m.id > ? ORDER BY m.id LIMIT ?`).all(id, after, DETAIL_PAGE_SIZE);
+    let hasOlder = false;
+    let olderCursor: MessageCursor | null = null;
+    let messages;
+    if (window?.latest || window?.before || window?.message) {
+      // 並べるのは識別子と時刻だけ。本文は選んだ窓だけを読む。
+      const ordered = this.prepare(`SELECT m.id, m.source_ts, m.source_event_id FROM message_memberships mm JOIN messages m ON m.id = mm.message_id
+        WHERE mm.conversation_id = ? AND mm.active = 1`).all(id).map(row => ({ id: String(row.id), source_ts: String(row.source_ts ?? ''), source_event_id: String(row.source_event_id ?? ''),
+          eventOrder: encodeEventOrder(String(row.source_event_id ?? '')), idOrder: encodeEventOrder(String(row.id)),
+        })).sort((a, b) =>
+        String(a.source_ts ?? '').localeCompare(String(b.source_ts ?? ''))
+        || (a.eventOrder < b.eventOrder ? -1 : a.eventOrder > b.eventOrder ? 1 : 0)
+        || (a.idOrder < b.idOrder ? -1 : a.idOrder > b.idOrder ? 1 : 0));
+      const anchor = window.before ? readMessageCursor(window.before) : window.message;
+      // 旧形式も所属から切り離して位置を解決する。新形式は取得時の位置を保持する。
+      const cursor = typeof anchor === 'string' ? this.prepare(`SELECT id, source_ts, source_event_id FROM messages WHERE id = ?`).get(anchor) as MessageCursor | undefined : anchor;
+      const index = cursor ? ordered.findIndex(row => window.message
+        ? compareMessageCursors(row, cursor) > 0 : compareMessageCursors(row, cursor) >= 0) : -1;
+      const end = index < 0 ? ordered.length : index;
+      const start = Math.max(0, end - DETAIL_PAGE_SIZE);
+      hasOlder = start > 0;
+      const first = ordered[start];
+      if (first && start < end) olderCursor = { source_ts: first.source_ts, source_event_id: first.source_event_id, id: first.id };
+      const ids = ordered.slice(start, end).map(row => row.id);
+      messages = this.prepare(`SELECT m.*, mm.id AS membership_id FROM json_each(?) selected JOIN messages m ON m.id = selected.value
+        JOIN message_memberships mm ON mm.message_id = m.id AND mm.conversation_id = ? AND mm.active = 1
+        ORDER BY CAST(selected.key AS INTEGER)`).all(JSON.stringify(ids), id);
+    } else {
+      messages = this.prepare(`SELECT m.*, mm.id AS membership_id FROM message_memberships mm JOIN messages m ON m.id = mm.message_id
+        WHERE mm.conversation_id = ? AND mm.active = 1 AND m.id > ?
+        ${window?.edits ? `AND EXISTS (SELECT 1 FROM json_each(
+          CASE WHEN json_valid(m.body) AND json_type(m.body) = 'array' THEN m.body ELSE '[]' END) block
+          WHERE json_extract(CASE WHEN block.type = 'object' THEN block.value ELSE '{}' END, '$.type') = 'tool_use'
+          AND (json_extract(block.value, '$.name') IN ('Edit', 'Write', 'MultiEdit')
+            OR json_extract(block.value, '$.input') LIKE '%*** Begin Patch%'))` : ''}
+        ORDER BY m.id LIMIT ?`).all(id, after, DETAIL_PAGE_SIZE);
+    }
     const memberships = messages.map(row => ({ id: row.membership_id, message_id: row.id, conversation_id: id, active: 1 }));
     return { seq: this.state.last_seq, generation: this.state.generation,
       projection: { conversations: this.readList("conversations", [id]),
         messages: messages.map(({ membership_id, ...row }) => row), message_memberships: memberships },
-      next: messages.length === DETAIL_PAGE_SIZE ? messages.at(-1)!.id : null };
+      hasOlder, olderCursor, next: window?.latest || window?.before || window?.message ? null : messages.length === DETAIL_PAGE_SIZE ? messages.at(-1)!.id : null };
   }
   conversationId(id: string): string { return this.identities.conversations[id] ?? id; }
   scopePatch(patch: ProjectionPatch, opened: Set<string>): ProjectionPatch {

@@ -1,12 +1,12 @@
 import { readSessionProvider, SESSION_PROVIDER_KEY } from '../../lib/session-start.ts';
 import { createPortal } from 'react-dom';
 import { SessionName } from '../../components/SessionName.tsx';
-import { useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useLayoutEffect, useRef, useState } from 'react';
 import { OpenWorkspaceConversation, OpenWorkspaceTerminal, WorkspaceConversationHeader, type ConversationTabMetadata } from '../../lib/workspace-context.ts';
 import { useAutosizeTextarea } from './useAutosizeTextarea.ts';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import { getRegisteredProjects, OTHER_PROJECT } from '../../lib/projects.ts';
-import { compareMessages, loadConversationWindow, MESSAGE_PAGE_SIZE } from '../../lib/projection-client.ts';
+import { loadConversationEdits, loadConversationWindow, MESSAGE_PAGE_SIZE } from '../../lib/projection-client.ts';
 import { staleApprovalText } from '../changes/model.ts';
 import type { Ack, createClient } from '../../lib/client.ts';
 import { store, useScreenStore, type Row, type ScreenState, type ScreenStore } from '../../lib/store.ts';
@@ -65,6 +65,7 @@ function isStoppedEvidence(value: unknown): boolean {
     || evidence.kind === 'process_check' && evidence.succeeded === true && evidence.matches === false;
 }
 const SUPPORTED_FORMATS = ['jsonl', 'legacy', 'paginated'];
+const EMPTY_PROJECTION: Record<string, Row[]> = {};
 const TICK_MS = 1000;
 const STICK_TO_BOTTOM_PX = 120;
 const LOAD_OLDER_THRESHOLD_PX = 80;
@@ -161,7 +162,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   useEffect(() => { if (requestedId !== conversationId) onConversation?.(conversationId); }, [requestedId, conversationId]);
   const workspaceHeader = useContext(WorkspaceConversationHeader);
   const olderPending = useRef(false);
-  const scrollAnchor = useRef<{ height: number; top: number } | undefined>(undefined);
+  const scrollAnchor = useRef<{ height: number; top: number; id?: string; offset?: number } | undefined>(undefined);
   const timeline = useRef<HTMLDivElement>(null);
   const following = useRef(true);
   const location = useLocation();
@@ -172,18 +173,22 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const root = roots.find(item => item.id === search.get('root')) ?? roots.find(item => item.conversation_ids.includes(conversationId));
   const delegationNode = (tool: Row) => resolveDelegationNode(tool, conversationId, state, rootIndex, root);
   const openWorkspaceConversation = useContext(OpenWorkspaceConversation);
-  const selectChild = (id: string) => {
+  const selectChildAction = useRef<(id: string) => void>(() => {});
+  selectChildAction.current = (id: string) => {
     if (openWorkspaceConversation?.(id)) return;
     if (embedded) { const next = new URLSearchParams(search); if (root) next.set('root', root.id); next.set('child', id); setSearch(next); }
     else if (onConversation) onConversation(id);
     else navigate(`/c/${encodeURIComponent(id)}?child=${encodeURIComponent(id)}`);
   };
+  const selectChild = useCallback((id: string) => selectChildAction.current(id), []);
   const anchorId = location.hash.startsWith('#message-') ? decodeURIComponent(location.hash.slice(9)) : undefined;
-  const [detail, setDetail] = useState<{ id: string; projection: Record<string, Row[]>; hasOlder: boolean }>();
+  const [detail, setDetail] = useState<{ id: string; projection: Record<string, Row[]>; hasOlder: boolean; windows: Record<string, boolean>; cursors: Record<string, Row | undefined> }>();
+  const [editHistory, setEditHistory] = useState<{ id: string; rows: Row[] }>();
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState('');
   const [historyRevision, setHistoryRevision] = useState(0);
   const [messageLimit, setMessageLimit] = useState(MESSAGE_PAGE_SIZE);
+  const firstShown = useRef<{ conversationId: string; limit: number; key?: string }>({ conversationId: '', limit: MESSAGE_PAGE_SIZE });
   const historyController = useRef<AbortController | null>(null);
   const detailRef = useRef(detail);
   detailRef.current = detail;
@@ -264,38 +269,46 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const activity = resolveActivity(state, activityIds, readText(run?.state) || seriesState, turns);
   const rawStatus = activity.state;
   const status = executionStates.find(value => value === rawStatus) ?? 'unknown';
-  const local = detail?.id === conversationId ? detail.projection : {};
+  const local = detail?.id === conversationId ? detail.projection : EMPTY_PROJECTION;
   const combine = (table: string) => [...new Map([...(local[table] ?? []), ...(state.projection[table] ?? [])].map(row => [readText(row.id), row])).values()];
-  const historyState = { ...state, projection: { ...state.projection, messages: combine('messages'), message_memberships: combine('message_memberships') } };
+  const historyMessages = useMemo(() => combine('messages'), [local.messages, state.projection.messages]);
+  const historyMemberships = useMemo(() => combine('message_memberships'), [local.message_memberships, state.projection.message_memberships]);
+  const historyState = { ...state, projection: { ...state.projection, messages: historyMessages, message_memberships: historyMemberships } };
   const historyIds = seriesIds?.length ? seriesIds.map(resolveConversation) : [conversationId];
   const seriesKey = historyIds.join('|');
-  const seenMessages = new Set<string>();
-  // 系列の発言は会話をまたいで時刻順に並べる。最新の発言が末尾に来る。会話が替わる所に区切りを 1 つ置く。
-  const owner = new Map<string, string>();
-  const seriesEntries = historyIds.flatMap(id => selectTimeline(historyState, id).filter(entry => {
-    if (entry.kind === 'boundary' && seriesIds && entry.row.type === 'continued') return false;
-    if (entry.kind !== 'message') return true;
-    const signature = messageSignature(entry.row, entry.time);
-    if (seenMessages.has(`id:${entry.row.id}`) || seenMessages.has(signature)) return false;
-    seenMessages.add(`id:${entry.row.id}`); seenMessages.add(signature); owner.set(entry.key, id); return true;
-  }));
-  if (historyIds.length > 1) seriesEntries.sort(compareEntries);
-  const seriesStarted = new Set<string>();
-  const allEntries = seriesEntries.flatMap(entry => {
-    const id = owner.get(entry.key);
-    if (!id || seriesStarted.has(id)) return [entry];
-    const first = seriesStarted.size === 0;
-    seriesStarted.add(id);
-    return first ? [entry] : [{ kind: 'boundary', key: 'series:' + id, time: entry.time, row: { type: 'continued', series: true } } satisfies TimelineEntry, entry];
-  });
-  const messageEntries = allEntries.filter(entry => entry.kind === 'message');
+  const timelineRuns = (state.projection.runs ?? []).filter(row => historyIds.includes(readText(row.conversation_id))).map(row => row.id).join('|');
+  const { allEntries, owner } = useMemo(() => {
+    const seenMessages = new Set<string>();
+    // 系列の発言は会話をまたいで時刻順に並べる。最新の発言が末尾に来る。会話が替わる所に区切りを 1 つ置く。
+    const owner = new Map<string, string>();
+    const seriesEntries = historyIds.flatMap(id => selectTimeline(historyState, id).filter(entry => {
+      if (entry.kind === 'boundary' && seriesIds && entry.row.type === 'continued') return false;
+      if (entry.kind !== 'message') return true;
+      const signature = messageSignature(entry.row, entry.time);
+      if (seenMessages.has(`id:${entry.row.id}`) || seenMessages.has(signature)) return false;
+      seenMessages.add(`id:${entry.row.id}`); seenMessages.add(signature); owner.set(entry.key, id); return true;
+    }));
+    if (historyIds.length > 1) seriesEntries.sort(compareEntries);
+    const seriesStarted = new Set<string>();
+    const allEntries = seriesEntries.flatMap(entry => {
+      const id = owner.get(entry.key);
+      if (!id || seriesStarted.has(id)) return [entry];
+      const first = seriesStarted.size === 0;
+      seriesStarted.add(id);
+      return first ? [entry] : [{ kind: 'boundary', key: 'series:' + id, time: entry.time, row: { type: 'continued', series: true } } satisfies TimelineEntry, entry];
+    });
+    return { allEntries, owner };
+  }, [historyMessages, historyMemberships, state.projection.approvals, state.projection.relations, state.projection.observation_gaps, timelineRuns, seriesKey, Boolean(seriesIds)]);
+  const messageEntries = useMemo(() => allEntries.filter(entry => entry.kind === 'message'), [allEntries]);
+  const pendingInputs = useMemo(() => (Array.isArray(conversation?.pending_inputs) ? conversation.pending_inputs : []).map(readObject), [conversation?.pending_inputs]);
   useEffect(() => {
     const reconciled = new Set<unknown>();
     setSentMessages(previous => {
       const remaining = previous.filter(message => {
         if (resolveConversation(message.conversationId) !== conversationId) return true;
-        const match = messageEntries.find(entry => !message.known.has(entry.row.id) && !reconciled.has(entry.row.id) && entry.row.role === 'user' && sameSent(readBody(entry.row.body), message.text));
-        if (match) reconciled.add(match.row.id);
+        const match = messageEntries.find(entry => !message.known.has(entry.row.id) && !reconciled.has(entry.row.id) && entry.row.role === 'user' && sameSent(readBody(entry.row.body), message.text))?.row
+          ?? pendingInputs.find(row => !message.known.has(row.id) && !reconciled.has(row.id) && sameSent(readBody(row.body), message.text));
+        if (match) reconciled.add(match.id);
         return !match;
       });
       return remaining.length === previous.length ? previous : remaining;
@@ -331,10 +344,11 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     return () => { disposed = true; clearInterval(timer); };
   }, [client, nativeProvider, provider, conversationId, state.connection]);
   // 画面に出す発言は新しい窓だけだが、変えたファイルは読み込みで残した古い発言も含めて数える。
-  const editRows = [...new Map([...(local.edit_messages ?? []), ...messageEntries.map(entry => entry.row)].map(row => [readText(row.id), row])).values()];
-  const changedFiles = collectConversationChanges(editRows, {
-    cwd: readText(conversation?.cwd) || savedCwd, projectRoot: readText(project?.root_path),
-  });
+  const changedFiles = useMemo(() => {
+    const editRows = [...new Map([...(editHistory?.id === conversationId ? editHistory.rows : []), ...messageEntries.map(entry => entry.row)]
+      .map(row => [readText(row.id), row])).values()];
+    return collectConversationChanges(editRows, { cwd: readText(conversation?.cwd) || savedCwd, projectRoot: readText(project?.root_path) });
+  }, [editHistory, messageEntries, conversationId, conversation?.cwd, savedCwd, project?.root_path]);
   // 系列の古い会話が動いている場合も、その会話の時計と道具を使う。子の実行は親の終了を上書きしない。
   const activityRun = activity.run ?? run;
   const activityMessages = messageEntries.filter(entry => owner.get(entry.key) === activityRun?.conversation_id);
@@ -343,9 +357,17 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     .flatMap(entry => Array.isArray(entry.row.body) ? entry.row.body.map(readObject).filter(block => block.type === 'tool_use').reverse() : [])[0];
   const lastToolInput = readObject(lastToolBlock?.input);
   const lastTool = lastToolBlock && (isDelegationTool(lastToolBlock) ? readText(lastToolInput.description ?? lastToolInput.title) || readText(lastToolBlock.name) : readText(lastToolBlock.name));
-  const shownMessages = new Set(messageEntries.slice(-messageLimit).map(entry => entry.row.id));
+  // 巻き戻し中は窓の先頭を保持し、新着で読んでいる発言を押し出さない。
+  if (firstShown.current.conversationId !== conversationId || firstShown.current.limit !== messageLimit
+    || !firstShown.current.key || following.current && !scrollAnchor.current) {
+    firstShown.current = { conversationId, limit: messageLimit, key: messageEntries[Math.max(0, messageEntries.length - messageLimit)]?.key };
+  }
+  const firstIndex = messageEntries.findIndex(entry => entry.key === firstShown.current.key);
+  const shownMessages = new Set(messageEntries.slice(firstIndex < 0 ? -messageLimit : firstIndex).map(entry => entry.row.id));
   if (anchorId) shownMessages.add(anchorId);
-  const entries = allEntries.filter(entry => entry.kind !== 'message' || shownMessages.has(entry.row.id));
+  const entries = useMemo(() => [...allEntries.filter(entry => entry.kind !== 'message' || shownMessages.has(entry.row.id)),
+    ...pendingInputs.filter(() => active).map(row => ({ kind: 'message', key: readText(row.id), time: readText(row.source_ts),
+      row: { ...row, role: 'user', body_state: 'stored', delivery_state: 'queued' } } satisfies TimelineEntry))].sort(compareEntries), [allEntries, firstIndex, messageLimit, anchorId, pendingInputs, active]);
   async function loadHistory(older = false) {
     historyController.current?.abort();
     const controller = new AbortController(); historyController.current = controller;
@@ -353,23 +375,29 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     const previous = older && detailRef.current?.id === conversationId ? detailRef.current : undefined;
     try {
       // 系列は最新の会話から読む。読めた会話から順に出し、古い会話は後から上に足す。
-      const order = [...historyIds].reverse();
+      const reversed = [...historyIds].reverse();
+      const order = older ? reversed.filter(id => previous?.windows[id] !== false).slice(0, 1) : reversed;
+      const windows = { ...previous?.windows };
+      const cursors = { ...previous?.cursors };
       const pages: Awaited<ReturnType<typeof loadConversationWindow>>[] = [];
       for (const id of order) {
         const part = await loadConversationWindow(id, controller.signal,
-          older ? previous?.projection.messages?.filter(row => previous.projection.message_memberships?.some(link => link.message_id === row.id && link.conversation_id === id)).toSorted(compareMessages)[0] : undefined,
+          older ? cursors[id] : undefined,
           older ? undefined : anchorId, client.fetchConversation ? path => client.fetchConversation!(path, controller.signal) : undefined);
         if (controller.signal.aborted || !isVisible(conversationId)) return;
         if (pages.length && part.generation !== pages[0].generation) throw new Error('Conversation changed. Please retry.');
         pages.push(part);
-        const page = { generation: pages[0].generation, hasOlder: pages.some(page => page.hasOlder) || pages.length < order.length, projection: {} as Record<string, Row[]> };
+        windows[id] = part.hasOlder;
+        cursors[id] = part.olderCursor;
+        const page = { generation: pages[0].generation, hasOlder: reversed.some(id => windows[id] !== false), projection: {} as Record<string, Row[]> };
         for (const piece of pages) for (const [table, rows] of Object.entries(piece.projection)) page.projection[table] = [...(page.projection[table] ?? []), ...rows];
         if (page.generation !== target.getSnapshot().generation) throw new Error('Conversation changed. Please retry.');
         const projection = Object.fromEntries(Object.entries(page.projection).map(([table, rows]) => [table,
           [...new Map([...(previous?.projection[table] ?? []), ...rows].map(row => [readText(row.id), row])).values()]]));
-        setDetail({ id: conversationId, projection, hasOlder: pages.length === order.length ? pages.some(page => page.hasOlder) : page.hasOlder });
+        setDetail({ id: conversationId, projection, hasOlder: page.hasOlder, windows: { ...windows }, cursors: { ...cursors } });
         // 一覧の先頭のページにない会話も、api が返す投影の行で名前を出す。
         if (part.conversation && part.generation !== undefined) target.mergeProjection({ conversations: [part.conversation] }, part.generation);
+        if (!older && pages.reduce((count, page) => count + page.projection.messages.length, 0) >= MESSAGE_PAGE_SIZE) break;
       }
       if (older) { following.current = false; setMessageLimit(value => value + MESSAGE_PAGE_SIZE); }
     } catch (error) { if (!controller.signal.aborted) setHistoryError(`Unable to load messages. ${error instanceof Error ? error.message : ''}`.trim()); }
@@ -383,11 +411,21 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     return () => { historyController.current?.abort(); for (const release of releases) release?.(); };
   }, [conversationId, seriesKey, state.generation, client, anchorId, historyRevision]);
   useEffect(() => {
+    if (!detail || detail.id !== conversationId) return;
+    const controller = new AbortController();
+    void Promise.all(historyIds.map(id => loadConversationEdits(id, controller.signal,
+      client.fetchConversation ? path => client.fetchConversation!(path, controller.signal) : undefined)))
+      .then(rows => { if (!controller.signal.aborted) setEditHistory({ id: conversationId, rows: rows.flat() }); })
+      .catch(() => { /* 会話の表示は維持し、次の取得で再試行する。 */ });
+    return () => controller.abort();
+  }, [conversationId, seriesKey, state.generation, client, historyRevision, Boolean(detail)]);
+  useEffect(() => {
     if (!anchorId || !shownMessages.has(anchorId)) return;
     const element = document.getElementById(`message-${encodeURIComponent(anchorId)}`);
     if (element) { following.current = false; element.scrollIntoView?.({ block: 'center' }); }
   }, [detail, anchorId]);
-  const toolResults = collectToolResults(entries.filter(entry => entry.kind === 'message').map(entry => entry.row));
+  const displayEntries = useMemo(() => groupToolRuns(entries), [entries]);
+  const toolResults = useMemo(() => collectToolResults(entries.filter(entry => entry.kind === 'message').map(entry => entry.row)), [entries]);
   const deltas = Object.entries(state.deltas).filter(([, delta]) => historyIds.includes(delta.conversationId ?? '') || !delta.conversationId && delta.runId === run?.id);
   const streamLength = deltas.reduce((total, [, delta]) => total + delta.text.length, 0);
 
@@ -410,8 +448,11 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     const element = timeline.current;
     if (element && scrollAnchor.current) {
       const anchor = scrollAnchor.current;
-      element.scrollTop = anchor.top + element.scrollHeight - anchor.height;
-      scrollAnchor.current = { height: element.scrollHeight, top: element.scrollTop };
+      const viewed = anchor.id ? document.getElementById(anchor.id) : undefined;
+      element.scrollTop = viewed && anchor.offset !== undefined
+        ? element.scrollTop + viewed.getBoundingClientRect().top - element.getBoundingClientRect().top - anchor.offset
+        : anchor.top + element.scrollHeight - anchor.height;
+      scrollAnchor.current = { ...anchor, height: element.scrollHeight, top: element.scrollTop };
       if (!historyLoading) { scrollAnchor.current = undefined; olderPending.current = false; }
     } else if (element && following.current) element.scrollTop = element.scrollHeight;
   }, [entries.length, streamLength, conversationId, sentMessages.length, historyLoading, messageLimit, detail]);
@@ -422,11 +463,18 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     observer.observe(inner.current); observer.observe(element);
     return () => observer.disconnect();
   }, [conversation !== undefined]);
+  function captureScrollAnchor(element: HTMLDivElement) {
+    const top = element.getBoundingClientRect().top;
+    const viewed = [...element.querySelectorAll<HTMLElement>('[id^="message-"]')]
+      .find(row => row.getBoundingClientRect().height > 0 && row.getBoundingClientRect().bottom > top);
+    return { height: element.scrollHeight, top: element.scrollTop, id: viewed?.id,
+      offset: viewed ? viewed.getBoundingClientRect().top - top : undefined };
+  }
   function loadOlderNearTop(element: HTMLDivElement) {
     if (element.scrollTop > LOAD_OLDER_THRESHOLD_PX || historyLoading || historyError || olderPending.current || !(detail?.hasOlder || messageEntries.length > shownMessages.size)) return;
     following.current = false;
     olderPending.current = true;
-    scrollAnchor.current = { height: element.scrollHeight, top: element.scrollTop };
+    scrollAnchor.current = captureScrollAnchor(element);
     if (messageEntries.length > shownMessages.size) setMessageLimit(value => value + MESSAGE_PAGE_SIZE);
     else void loadHistory(true);
   }
@@ -493,7 +541,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     const sent = input;
     const messageId = crypto.randomUUID();
     following.current = true;
-    setSentMessages(previous => [...previous, { id: messageId, conversationId, text: sent, known: new Set(messageEntries.map(entry => entry.row.id)) }]);
+    setSentMessages(previous => [...previous, { id: messageId, conversationId, text: sent, known: new Set([...messageEntries.map(entry => entry.row.id), ...pendingInputs.map(row => row.id)]) }]);
     if (terminalConversation) {
       const sourceConversation = conversationId;
       setPending(true); setError('');
@@ -656,13 +704,13 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
       </section>}
     {filesOpen && changedFiles.length > 0 && <ChangedFiles id={filesId} key={conversationId} files={changedFiles} language={language}/>}
     <div className="conv-timeline" ref={timeline} aria-label={t('conversation')} tabIndex={0}
-      onScroll={event => { if (!scrollAnchor.current) following.current = nearBottom(event.currentTarget); loadOlderNearTop(event.currentTarget); }}
+      onScroll={event => { if (scrollAnchor.current) scrollAnchor.current = captureScrollAnchor(event.currentTarget); else following.current = nearBottom(event.currentTarget); loadOlderNearTop(event.currentTarget); }}
       onWheel={userScrolled} onTouchMove={userScrolled} onKeyDown={userScrolled} onPointerUp={userScrolled}><div className="conv-timeline-inner" ref={inner}>
       {anchorId && <AppLink to={`/c/${encodeURIComponent(conversationId)}`}>Latest</AppLink>}
       {historyLoading && <div role="status" aria-label={language === 'ja' ? '発言を読み込み中' : 'Loading messages…'} className="history-loading"/>}
       {historyError && <p role="alert" className="status-line danger">{historyError} <button className="btn btn-secondary btn-sm" onClick={() => setHistoryRevision(value => value + 1)}>Retry</button></p>}
       {!historyLoading && !historyError && entries.length === 0 && deltas.length === 0 && <p className="timeline-empty"><Icon name="message" size={16}/>{t('empty')}</p>}
-      {groupToolRuns(entries).map(entry => {
+      {displayEntries.map(entry => {
         if (entry.kind === 'tools') {
           return <ToolRun key={entry.key} rows={entry.rows.map(item => item.row)} toolResults={toolResults} language={language}/>;
         }
@@ -684,7 +732,8 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
           {!entry.row.series && entry.time && <TimeStamp value={entry.time} fallback="" language={language}/>}
         </div>;
       })}
-      {sentMessages.filter(message => resolveConversation(message.conversationId) === conversationId).map(message => <Message key={message.id} language={language} sender={senderOf({ role: 'user' }, participants)} row={{ id: message.id, role: 'user', body: message.text, body_state: 'stored' }}/>) }
+      {sentMessages.filter(message => resolveConversation(message.conversationId) === conversationId
+        && !pendingInputs.some(row => !message.known.has(row.id) && sameSent(readBody(row.body), message.text))).map(message => <Message key={message.id} language={language} sender={senderOf({ role: 'user' }, participants)} row={{ id: message.id, role: 'user', body: message.text, body_state: 'stored', delivery_state: 'sending' }}/>) }
       {deltas.map(([key, delta]) => <Message key={key} language={language} streaming sender={agentSender} showName={nameShown(agentSender)}
         row={{ id: delta.messageId ?? key, role: 'assistant', body: delta.text, body_state: 'stored' } satisfies Row}/>)}
     </div></div>

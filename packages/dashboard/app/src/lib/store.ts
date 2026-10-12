@@ -36,7 +36,7 @@ export function createStore() {
       if (patch.generation !== state.generation || patch.from_seq > state.seq) return false;
       if (patch.seq <= state.seq) return true;
       const identities = patch.identities ?? state.identities;
-      const projection = resolveProjection(state.projection, identities);
+      const projection = identities === state.identities ? { ...state.projection } : resolveProjection(state.projection, identities);
       const deltas = { ...state.deltas };
       for (const [table, change] of Object.entries(patch.changes)) {
         const rows = new Map((projection[table] ?? []).map(row => [String(row.id), row]));

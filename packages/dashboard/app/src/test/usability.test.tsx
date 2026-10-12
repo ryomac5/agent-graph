@@ -159,11 +159,11 @@ it('6: idle rows show their status and time and the five visible states have dis
   style.remove();
 });
 
-it('7: command palette and shortcut settings follow Japanese and the html language', () => {
+it('7: command palette and shortcut settings follow Japanese and the html language', async () => {
   localStorage.setItem('agent-graph-language', 'ja');
   render(<MemoryRouter initialEntries={['/settings']}><App target={target()} client={client}/></MemoryRouter>);
   expect(document.documentElement.lang).toBe('ja');
-  expect(screen.getByRole('heading', { name: 'キーボードショートカット' })).toBeTruthy();
+  expect(await screen.findByRole('heading', { name: 'キーボードショートカット' })).toBeTruthy();
   fireEvent.keyDown(document.body, { key: 'k', metaKey: true });
   expect(screen.getByRole('dialog', { name: 'コマンドと検索' })).toBeTruthy();
   expect(screen.getByRole('button', { name: '会話を検索' })).toBeTruthy();

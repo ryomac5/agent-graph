@@ -27,10 +27,10 @@ it.each([['Settings', 'Settings'], ['Overview', 'Overview'], ['Approvals', 'Appr
   fireEvent.click(screen.getByRole('button', { name: '← Back' }));
   expect(screen.getByTestId('location').textContent).toBe(url);
 });
-it('supports Escape outside inputs and uses the last project for direct Settings visits', () => {
+it('supports Escape outside inputs and uses the last project for direct Settings visits', async () => {
   localStorage.setItem('agent-graph-last-workspace', '/p/last?root=root');
   mount('/settings');
-  const input = screen.getAllByRole('textbox')[0];
+  const input = (await screen.findAllByRole('textbox'))[0];
   fireEvent.keyDown(input, { key: 'Escape' });
   expect(screen.getByTestId('location').textContent).toBe('/settings');
   fireEvent.keyDown(screen.getByRole('button', { name: 'Light' }), { key: 'Escape' });

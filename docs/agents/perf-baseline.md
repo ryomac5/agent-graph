@@ -209,6 +209,127 @@ node scripts/perf/browser.mjs
 | API と runner | 再起動なし / 製品コード変更なし / コミットなし |
 | ブラウザの残作業 | 本番へ接続できる環境で台本の実機検証と値の記入 |
 
+## 改善 1: 初回の読み込み
+
+前後とも同じ作業ツリー内へビルドを出力し、本番の配信ファイルに対する書き込みを避けた。
+
+```sh
+node scripts/perf/baseline.mjs --only=build
+```
+
+初回の対象は一覧画面から静的に参照する全チャンクとし、遅延読み込みの分は集計から除いた。
+
+| 対象 | 変更前 bytes | 変更後 bytes |
+| --- | ---: | ---: |
+| 初回 JS の圧縮前合計 | 1,994,001 | 763,923 |
+| 初回 JS の gzip 合計 | 643,525 | 240,524 |
+| 初回 JS の Brotli 合計 | 未測定 | 203,302 |
+| JS 全チャンクの圧縮前合計 | 2,326,384 | 2,327,366 |
+| CSS 全チャンクの圧縮前合計 | 134,288 | 134,290 |
+
+初回に読む JS の gzip 合計は、変更前の同じ圧縮条件と比べて 62.6% 減った。
+
+初回の転送量は本番の未圧縮値と比べて減るが、今回の値には通信路の見出しを含めていない。
+
+| 初回 JS の内訳 | 圧縮前 bytes | gzip bytes | Brotli bytes |
+| --- | ---: | ---: | ---: |
+| index | 650,829 | 200,935 | 168,348 |
+| settings 共有部 | 58,454 | 20,349 | 17,851 |
+| Icon 共有部 | 44,364 | 15,263 | 13,562 |
+| preload-helper 共有部 | 10,276 | 3,977 | 3,541 |
+| 合計 | 763,923 | 240,524 | 203,302 |
+
+モジュールの内訳はビルドの集計を使い、最小化前の大きさとして配信ファイルと区別した。
+
+| 変更前の index に含む主なモジュール | 集計 bytes | 読み込みの変更 |
+| --- | ---: | --- |
+| CodeMirror と Lezer の言語解析器 | 1,052,215 | コードタブを開く時に読む |
+| Tiptap と ProseMirror と marked と linkifyjs | 890,669 | Markdown ファイルを表示する時に読む |
+| react-dom | 537,035 | 初回に読む |
+| @codemirror/view | 326,955 | CodeMirror 集計の内数 |
+| prosemirror-view | 171,569 | Tiptap 集計の内数 |
+| @tiptap/core | 171,143 | Tiptap 集計の内数 |
+
+解析結果はビルド出力の専用ファイルへ保存し、各チャンクに含むモジュールと依存を記録した。
+
+| ビルド出力 | 用途 |
+| --- | --- |
+| .vite/bundle-analysis.json | モジュールの renderedLength とチャンクの依存 |
+| .vite/manifest.json | 初回 JS の静的な依存を重複なく集計 |
+| assets/*.br と assets/*.gz | 最終出力と一致する配信用の圧縮版 |
+| .perf/baseline.json の build.initialJs | 初回 JS の対象と各圧縮形式の合計 |
+
+設定画面とコード編集と Markdown 編集を分割し、使う部分にだけ軽い待機表示を出す。
+
+会話の描画は従来の同期読み込みを保ち、初回の一覧と共通の枠は追加の待機なしで表示する。
+
+端末本体は既存の遅延読み込みを保ち、会話が使う Markdown の拡張は今回は変更しない。
+
+圧縮ファイルは最終出力からビルド時に生成し、配信の要求ごとに圧縮する処理を追加しない。
+
+圧縮の選択は利用者の許容値に従い、同じ優先度では Brotli を gzip より先に使う。
+
+HTML は毎回トークンと nonce を埋め込むため、圧縮済みのファイルによる配信から除いた。
+
+HTML は毎回の確認を要求する設定とし、ハッシュ付きの資産だけを一年間のキャッシュで返す。
+
+| 配信対象 | 見出し |
+| --- | --- |
+| 圧縮版 | Content-Encoding: br または gzip |
+| HTML 以外の静的ファイル | Vary: Accept-Encoding |
+| ハッシュ付きの /assets/ | Cache-Control: public, max-age=31536000, immutable |
+| index.html と画面の経路 | Cache-Control: no-store |
+
+配信時には毎回ファイルを読み直し、古い圧縮版は避けてビルド後の内容を再起動なしで返す。
+
+圧縮形式とキャッシュの見出しはソケットなしの試験を通し、更新時の再読み込みも確かめた。
+
+生成した全 JS と CSS の圧縮版を展開し、最終出力と内容が一致することを確認した。
+
+| 受け入れのコマンド | 結果 |
+| --- | --- |
+| builtin cd packages/dashboard && node --run test:app | 56 ファイルと 724 試験が成功 |
+| builtin cd packages/dashboard && node --run build:app | 成功 |
+| builtin cd packages/api && node --run test | 380 成功 / 1 失敗 / 21 省略 |
+| node --run typecheck | 既存の packages/daemon/src/http/views.ts:83 の TS2322 のみ |
+| 後続パッケージと scripts と app の個別型検査 | すべて成功 |
+
+直下の型検査は既存の daemon の誤りで止まり、後続の対象は個別の型検査で確認した。
+
+主スレッドの遅れの試験は基準を超えたため、全試験の実行で得た最大遅延を下の表に示した。
+
+| 主スレッドの試験 | 値 |
+| --- | ---: |
+| 最大主スレッド遅延 | 185.6 ms |
+| 許容値 | 100 ms |
+| 最大投影配信更新 | 67.7 ms |
+| 全試験の実行時間 | 225,377 ms |
+
+API の全試験とビルドの実行時間は一部重なり、単独実行による主スレッドの遅延は未測定である。
+
+ソケットを使う二十一件は環境の制限で省略され、圧縮配信はソケットなしの実装経路で確認した。
+
+本番の API と runner の再起動は行わず、ブラウザでの表示時間は今回計測していない。
+
+### 初回読み込みのレビュー修正
+
+- `main.tsx` で `vite:preloadError` の回復処理を登録した。自動再読み込みは sessionStorage に時刻を保存し、ページを読み直しても30秒に1回までに制限する。保存できない場合や制限中は import の失敗を境界へ渡す。
+- SettingsLayout、SettingsPage、CodeTab、MarkdownEditor を囲む各 Suspense の外側に ErrorBoundary を置いた。失敗した領域に英語の “A new version is available.” と Reload ボタンを表示する。遅延 import の拒否を注入する試験で、ナビゲーション、設定の見出し、別の会話ペイン、Markdown の周囲が残ることを確認した。
+- `immediatelyRender: false` の削除は試したが、`document-preview.test.tsx` の “preserves every source character when preview is opened, selected and saved with Cmd+S” が失敗した。Suspense の待機中に Tiptap のエディターが破棄され、MarkdownBlocks の初期化で `Cannot read properties of null (reading 'nodeFromJSON')` が発生するため指定を残した。editor が null の間は Markdown 本文を表示し、空の surface を防ぐ。待機中の本文表示も試験に追加した。
+- 静的配信で `/.vite` とその配下を404にした。解析資料の生成先は維持し、manifest と絶対パスを含む bundle-analysis の配信を防ぐ。URL エンコードされた指定も試験した。
+
+修正後の検証:
+
+| コマンド | 結果 |
+| --- | --- |
+| builtin cd packages/dashboard && node --run test:app | 60 ファイル、731 試験が成功 |
+| builtin cd packages/dashboard && node --run build:app | 成功（この作業ツリー内の dist に出力） |
+| builtin cd packages/api && node --test --import ./test/setup.ts test/static.test.ts | 1 成功、3 件はソケット制限で省略、失敗なし |
+| node --run typecheck | 既存の packages/daemon/src/http/views.ts:83 の TS2322 のみ |
+| daemon より後の dashboard、adapters、planner、scripts、app の個別型検査 | すべて成功 |
+
+本番の API と runner は再起動していない。本番の配信先には出力していない。
+
 ## 改善 2: 観測と配信
 
 今回の比較では同じ台帳の写しを二つに分け、変更前と変更後の台本を順番に実行した。
@@ -352,3 +473,242 @@ AGENT_GRAPH_PERF_DIR="$PWD/.perf/compare-final" node --expose-gc scripts/perf/ru
 | 試験の結果 | .perf/api-tests.log / core-tests.log / typecheck.log |
 
 本番の api と runner は再起動せず、台帳の追記先と計測の生成物は作業ツリー内に隔離した。
+
+### merge 後の待機ＣＰＵの再測定
+
+待機ＣＰＵは外部更新のない固定した履歴を使い、変更前後で六十秒の測定を三回ずつ行った。
+
+変更前は main の `5147ab5` を使い、変更後は衝突を解消した統合結果のコードを使った。
+
+初回取り込み後の台帳は投影を末尾まで反映し、両方の実行で同じ準備台帳の写しを使用した。
+
+既存の事実の識別子と本文は台帳に保存した値を維持し、今回の統合作業でも書き換えていない。
+
+準備後に五回連続で履歴の読み取りがない周期を確認し、その後の三つの測定窓を順番に取得した。
+
+主スレッドと観測ワーカーを含むＣＰＵ時間を取得し、六十秒の経過時間と一コアを基準に算出した。
+
+各測定窓で事実の追記と履歴の読み取りがないことを確認し、監視通知による周期も発生しなかった。
+
+| 条件 | 値 |
+| --- | --- |
+| Node | v24.6.0 |
+| 変更前のコード | main / 5147ab5180ad3e575b663cd1b25b0e761b0064b2 |
+| 変更後のコード | この merge の結果 / .perf/idle-merge/after |
+| 元の台帳の事実 | 278,467 件 |
+| 共有の準備台帳の事実 | 290,469 件 |
+| 履歴の固定先 | .perf/idle-merge/frozen |
+| 準備台帳 | .perf/idle-merge/settled.db |
+| 測定の順序 | 変更前の三回 → 変更後の三回 |
+| 構成 | 観測ワーカーと投影配信 / hook とソケットは無効 |
+| 配信の見回り | 両方とも 500 ms |
+| 通知による配信の集約 | 両方とも 25 ms |
+| 各窓の事実の追記 | 六回とも 0 件 |
+| 各窓の履歴読み取り | 六回とも opened 0 / prefixBytes 0 / contentBytes 0 |
+| 各窓の監視通知の周期 | 六回とも 0 回 |
+| 試験との同時実行 | なし |
+
+| 実行 | 経過 ms | CPU ms | 一コアの CPU | 見回り | checkpoint | 配信更新 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 変更前 1 | 60002.4 | 4602.491 | 7.67% | 55 | 55 | 120 |
+| 変更前 2 | 60002.7 | 4831.333 | 8.05% | 55 | 55 | 119 |
+| 変更前 3 | 60002.1 | 4225.372 | 7.04% | 56 | 56 | 120 |
+| 変更後 1 | 60002.6 | 2753.694 | 4.59% | 57 | 57 | 120 |
+| 変更後 2 | 60001.9 | 2815.381 | 4.69% | 58 | 58 | 119 |
+| 変更後 3 | 60001.4 | 2668.723 | 4.45% | 57 | 57 | 120 |
+| 中央値 | — | — | 7.67% → 4.59% | — | — | — |
+| 中央値の低下率 | — | — | 40.2% | — | — | — |
+
+今回の固定条件では待機ＣＰＵの増加は見られず、前回の十秒測定だけでは回帰を判定できない。
+
+見回りの回数は変更前後でほぼ同じ範囲に収まり、変更通知による観測周期の倍増は見られなかった。
+
+この比較では本番の履歴更新がない状態に限定し、実行中の書き込み負荷でのＣＰＵは測っていない。
+
+| 計測資料 | 保存先 |
+| --- | --- |
+| 変更前の六十秒三回 | .perf/idle-merge/base-idle.json |
+| 変更後の六十秒三回 | .perf/idle-merge/after-idle.json |
+| 計測台本 | .perf/idle-merge/measure.mjs |
+| 周期と読み取りの計装 | .perf/idle-merge/prepare.mjs |
+| 準備台帳の投影反映 | .perf/idle-merge/settle.mjs / settle.log |
+| 変更前の実行ログ | .perf/idle-merge/base-idle-final.log |
+| 変更後の実行ログ | .perf/idle-merge/after-idle-final.log |
+
+~~~sh
+node .perf/idle-merge/measure.mjs base
+node .perf/idle-merge/measure.mjs after
+~~~
+
+### merge 後の受け入れ
+
+同一性の検索は部分索引の条件を保ったまま、待ち行列の事実だけを同一性の更新から除外した。
+
+待ち行列の初期読み込みは配信準備の取引内に置き、一覧と根の投影が同じ状態を参照するようにした。
+
+投影の版は既存の第十版を今回もそのまま維持し、台帳全体を作り直す版の更新は行っていない。
+
+| 検証 | 統合後の結果 |
+| --- | --- |
+| builtin cd packages/api && node --run test | 419 件 / 398 成功 / 21 省略 / 失敗 0 |
+| 主スレッドの最大遅延 | 38.7 ms / 許容値 100 ms |
+| 配信更新の最大時間 | 32.6 ms |
+| builtin cd packages/core && node --run test | 399 件 / 全件成功 |
+| builtin cd packages/dashboard && node --run test:app | 最終回は 61 ファイル / 741 件 / 全件成功 |
+| 画面の初回試験 | 740 成功 / README.md の表示待ちだけ失敗 |
+| 画面の対象ファイルの再実行 | explorer.test.tsx / 31 件 / 全件成功 |
+| node --run typecheck | packages/daemon/src/http/views.ts:83 の既存の TS2322 のみ |
+| daemon より後の対象の個別型検査 | dashboard / adapters / planner / scripts / app が成功 |
+| 同一性の問い合わせの実行計画 | api_identity_subject_seq を使用 |
+| 窓のカーソルと旧い引数 | conversation-window.test.ts が成功 |
+| 待ち行列の反映と再構築 | input-queue.test.ts が成功 |
+| ファイル内の衝突の印 | 二つのファイルとも残存なし |
+| git add | sandbox が作業ツリー外の index.lock 作成を拒否 |
+| git diff --name-only --diff-filter=U | index 更新が拒否されたため二件が残る |
+
+画面の初回試験では一件の表示待ちが期限を超えたが、対象の単独実行と全体の再実行は成功した。
+
+直下の型検査は既存の daemon の誤りで止まるため、後続の対象も個別に検査して成功を確認した。
+
+本番の api と runner は今回の計測中も起動状態を維持し、再起動は一度も行っていない。
+
+| 試験の記録 | 保存先 |
+| --- | --- |
+| API | .perf/merge-api-tests.log |
+| core | .perf/merge-core-tests.log |
+| 画面の初回 | .perf/merge-dashboard-tests.log |
+| 画面の対象ファイル | .perf/merge-dashboard-explorer.log |
+| 画面の最終回 | .perf/merge-dashboard-tests-final.log |
+| 直下の型検査 | .perf/merge-typecheck.log |
+| 後続の型検査 | .perf/merge-typecheck-following.log |
+
+## 改善 3: 会話の画面
+
+会話の初回取得を最新の二百件に限り、上へ巻き戻した時だけ前の窓を一つずつ取得する。
+
+検索で指定した発言も窓の末尾として取得し、同じ時刻の発言は出所の数値順で整列する。
+
+変更ファイルの候補は本文の窓と別に取得し、古い変更を数える処理で会話の表示を待たせない。
+
+発言と道具の部品を memo で保護し、本文や関係する結果が変わらない更新では描き直さない。
+
+投影の参照と発言の解析結果を保持することで、毎秒の時計や別の会話の更新から描画を切り離す。
+
+畳まれた道具の詳細は開いた時だけ描画し、短い会話でも初回に不要な本文を組み立てない。
+
+巻き戻し中は表示窓の先頭を保持することで、新しい発言の到着で読んでいる発言を押し出さない。
+
+上に読み足す時は見えている発言の位置を基準に補正し、同時に末尾が伸びても位置を維持する。
+
+追加の依存は使わずに取得と描画を分離しており、画面外の発言を除く仮想化は今回は導入していない。
+
+### 会話を開く時間の調査
+
+会話の初回表示には固定の待機がなく、端末の一覧やモデルの取得は本文と並行して進む。
+
+端末の起動を待つ処理は送信の経路にあり、既存の会話の本文を表示する条件には含まれない。
+
+短い会話の取得は一ミリ秒未満で終わり、ブラウザの一二二二ミリ秒を取得時間では説明できない。
+
+短い会話には五件の道具の呼び出しがあり、閉じた詳細の本文も初回の描画対象になっていた。
+
+長い会話の窓には道具の呼び出しがなく、件数だけで初回の描画負荷を比べることはできない。
+
+本番の表示時間の内訳は未測定のため、畳んだ道具の描画だけで遅さの原因を確定したとは扱わない。
+
+| 調査した経路 | ソース |
+| --- | --- |
+| 本文の取得と一秒時計 | packages/dashboard/app/src/pages/conversation/ConversationPage.tsx |
+| 畳んだ道具の先行描画 | packages/dashboard/app/src/components/conversation/Message.tsx |
+| 端末の起動を待つ経路 | ConversationPage.tsx の送信処理 |
+| 全ページの直列取得 | packages/dashboard/app/src/lib/projection-client.ts の変更前 |
+
+### 同じ台帳の写しによる比較
+
+変更前の取得関数を同じ写しで再実行し、通信とブラウザの描画を除いた五回の中央値を比べた。
+
+| 対象 | 変更前 | 変更後 |
+| --- | ---: | ---: |
+| 長い会話の発言数 | 16,429 | 16,429 |
+| 長い会話の取得処理 | 692.180 ms | 103.956 ms |
+| 長い会話の API 処理合計 | 314.200 ms | 101.826 ms |
+| 長い会話の要求数 | 83 | 1 |
+| 長い会話の応答合計 | 28,661,038 bytes | 332,842 bytes |
+| 前の窓の取得処理 | 未測定 | 104.328 ms |
+| 前の窓の要求数 | 83 | 1 |
+| 前の窓の応答合計 | 未測定 | 316,401 bytes |
+| 変更ファイルの別要求 | 全履歴に含む | 30.418 ms / 1 要求 / 933 bytes |
+| 初回と変更ファイルの応答合計 | 28,661,038 bytes | 333,775 bytes |
+| 最初に保持する発言数 | 200 | 200 |
+| 短い会話の取得処理 | 0.933 ms | 0.712 ms |
+| 短い会話の要求数 | 1 | 1 |
+
+本文は選んだ窓だけを取得する一方、時刻順の決定には会話全体の識別子と時刻を読み込む。
+
+変更ファイルの別要求はこの比較に含めず、窓の表示後に古い変更の候補だけを取得する。
+
+比較の台帳は作業ツリー内の写しだけを更新し、本番の状態ディレクトリには書き込みを行っていない。
+
+| 計測資料 | 保存先 |
+| --- | --- |
+| 同じ写しの変更前 | .perf/ledger-before.json |
+| 変更後の五回の標本 | .perf/ledger.json |
+| 元の報告の取得処理 | 673.145 ms |
+| 元の報告の応答合計 | 28,657,967 bytes |
+| 変更前との差 | API に追加した hasOlder の本文量 |
+
+```sh
+PERF_REUSE_DB=1 node scripts/perf/baseline.mjs --only=ledger
+node --test scripts/perf/browser-metrics.test.mjs
+AGENT_GRAPH_PERF_SEND=0 node scripts/perf/browser.mjs
+```
+
+### 試験と本番の残作業
+
+毎秒の更新で本文を描き直さない試験に加え、実際の本文が変わる場合は再描画することも確認した。
+
+最新の窓だけを取る試験と前の窓を取る試験を足し、新着と上への読み足しが重なる位置も確認した。
+
+送信中と Queued の表示は既存の試験を維持し、送信から待ち行列と記録への切り替えも確認した。
+
+| 受け入れのコマンド | 結果 |
+| --- | --- |
+| builtin cd packages/dashboard && node --run test:app | 61 ファイル / 736 成功 |
+| builtin cd packages/dashboard && node --run build:app | 成功 |
+| builtin cd packages/api && node --run test | 385 成功 / 主スレッド試験だけ失敗 / 21 省略 |
+| builtin cd packages/core && node --run test | 399 成功 |
+| node --run typecheck | 既存の daemon/src/http/views.ts:83 の TS2322 のみ |
+| 後続パッケージと scripts と app の個別型検査 | 成功 |
+| node --test scripts/perf/browser-metrics.test.mjs | 2 成功 |
+
+主スレッドの遅れは同時実行中に基準を超えたため、失敗した値も成功した値と並べて記録する。
+
+| 実行 | 最大主スレッド遅延 ms | 最大投影配信更新 ms | 結果 |
+| --- | ---: | ---: | --- |
+| API 全試験の初回 | 738.4 | 731.9 | 失敗 |
+| 主スレッド試験の再実行 | 1048.7 | 1040.5 | 失敗 |
+| API 全試験の再実行 | 77.3 | 55.9 | 成功 |
+| API 全試験の最終回 | 675.8 | 667.2 | 失敗 |
+
+最初の試験は core の全試験と重なり、再実行した主スレッド試験は変更前の計測と重なった。
+
+変更前のブラウザ値は利用者の本番計測を記載し、写しによる取得処理の測定値とは区別する。
+
+| 本番ブラウザの項目 | 変更前 | 変更後 |
+| --- | --- | --- |
+| 巻き戻し百二十回 | 7.5〜8.6 秒 | 未測定 |
+| 長いタスクの時間と回数 | 60〜140 ms / 12〜14 回 | 未測定 |
+| React の commit | 15〜20 回 | 未測定 |
+| 作業した fiber | 22,617〜53,435 | 未測定 |
+| 描画された発言 | 119〜250 件 | 未測定 |
+| 短い会話を開く中央値 | 1,222 ms | 未測定 |
+| 長い会話を開く中央値 | 467 ms | 未測定 |
+| 切り替え時のサイドバー | 35〜60 ms | 未測定 |
+| 切り替えから最後の発言 | 217〜292 ms | 未測定 |
+| 大きな Claude の最後の発言 | 975〜1,029 ms | 未測定 |
+
+本番のブラウザ値は利用者が再測定するため、開く時間と切り替えと巻き戻しの改善値は未測定である。
+
+ブラウザ台本の可視判定と巻き戻し処理を試験し、百二十回の描画と長いタスクの値を確認した。
+
+本番の API と runner は再起動しておらず、ビルドの出力先も作業ツリーだけに限っている。

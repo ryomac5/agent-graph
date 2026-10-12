@@ -116,6 +116,7 @@ it('answers a named approval from the palette on any page', async () => {
 });
 it('saves remapped keys through config, applies immediately and rejects duplicates', async () => {
   const { client } = mount('/settings'); await act(async () => {});
+  await screen.findByLabelText('keys · command');
   const shortcuts = document.getElementById('settings-keys')!;
   fireEvent.click(shortcuts.querySelector('summary')!);
   fireEvent.change(screen.getByLabelText('keys · command'), { target: { value: 'Cmd+O' } });
@@ -283,7 +284,7 @@ it('closes the composer effort menu without invoking App shortcuts', async () =>
 
 it('closes settings model selection before App navigation and interruption', async () => {
   const { client } = mount('/settings'); await act(async () => {});
-  const trigger = screen.getByRole('button', { name: 'Implementation Standard Edit assignment' });
+  const trigger = await screen.findByRole('button', { name: 'Implementation Standard Edit assignment' });
   fireEvent.click(trigger);
   expect(screen.getByRole('dialog', { name: 'Implementation Standard Assignment' })).toBeTruthy();
   press('Escape');

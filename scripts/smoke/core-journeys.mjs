@@ -16,6 +16,7 @@ const MODEL = 'haiku';
 const REPLY_TIMEOUT_MS = 90_000;
 const CHANGES_TIMEOUT_MS = 5_000;
 const UI_TIMEOUT_MS = 20_000;
+const MIDTURN_WAIT_SECONDS = 20;
 // 1x1 の赤い png。
 const RED_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC';
 const UNSUPPORTED = ['この会話の履歴からは続きを始められません', 'Unable to continue from this conversation history'];
@@ -276,6 +277,55 @@ async function main() {
         if (alert.length) throw new Error(`composer alert: ${alert.join(' ')}`);
         return `${smoke.created ? 'created' : 'reused'} ${smoke.id}, reply in ${((Date.now() - started) / 1000).toFixed(1)}s, launches=${smoke.launches.join(',') || 'none'}`;
       } finally { page.off('framenavigated', trackNavigation); }
+    });
+
+    await step('1c send during work and reload', async () => {
+      if (!smoke.id) throw new Error('no smoke session');
+      smoke.phase = 'send';
+      const marker = `確かめの ${stamp()} 作業中 ${Date.now()}`;
+      const first = `${marker} 最初。Bash で sleep ${MIDTURN_WAIT_SECONDS} を実行してから OK とだけ返してください。`;
+      const second = `${marker} 追加。この発言も読んだら OK とだけ返してください。`;
+      const input = composer().getByRole('textbox', { name: 'Message', exact: true });
+      const send = composer().getByRole('button', { name: 'Send', exact: true });
+      await input.fill(first);
+      await waitFor(() => send.isEnabled(), 'first Send enabled');
+      await send.click();
+      // 待つ道具が動いたことを実際の履歴で確かめ、実行中に二通目を送る。
+      const transcript = await waitFor(() => findTranscript(smoke.native), 'midturn transcript', 30_000);
+      await waitFor(async () => {
+        const rows = (await readFile(transcript, 'utf8')).split('\n').filter(Boolean).map(JSON.parse);
+        const index = rows.findLastIndex(row => row.type === 'user' && JSON.stringify(row.message?.content).includes(marker));
+        const tail = rows.slice(index + 1);
+        const calls = tail.flatMap(row => row.message?.content ?? []).filter(block => block.type === 'tool_use'
+          && block.name === 'Bash' && new RegExp(`\\bsleep\\s+${MIDTURN_WAIT_SECONDS}\\b`).test(block.input?.command ?? ''));
+        const completed = new Set(tail.flatMap(row => row.message?.content ?? []).filter(block => block.type === 'tool_result').map(block => block.tool_use_id));
+        return index >= 0 && calls.some(call => !completed.has(call.id));
+      }, 'sleep tool running', REPLY_TIMEOUT_MS, 100);
+      await input.fill(second);
+      await waitFor(() => send.isEnabled(), 'midturn Send enabled');
+      await send.click();
+      const bubble = () => active().locator('article.message[data-side="end"]', { hasText: second });
+      await waitFor(async () => await bubble().count() === 1 && !(await bubble().innerText()).includes('Sending…'),
+        'second bubble becomes Queued or recorded');
+      // 手元の optimistic state がなくなっても同じ文が一件だけ残る。
+      await page.reload();
+      await composer().getByRole('textbox', { name: 'Message', exact: true }).waitFor({ timeout: UI_TIMEOUT_MS });
+      await waitFor(async () => await bubble().count() === 1 && !(await bubble().innerText()).includes('Sending…'),
+        'second bubble survives reload');
+      await waitReply(marker);
+      const deliveredRows = (await readFile(transcript, 'utf8')).split('\n').filter(Boolean).map(JSON.parse);
+      const attachments = deliveredRows.filter(row => row.type === 'attachment' && row.attachment?.type === 'queued_command'
+        && typeof row.attachment.prompt === 'string' && row.attachment.prompt.includes(second));
+      const removals = deliveredRows.filter(row => row.type === 'queue-operation' && row.operation === 'remove'
+        && row.reason === 'absorbed_mid_turn' && row.content === second);
+      if (attachments.length !== 1 || removals.length !== 1) {
+        throw new Error(`midturn delivery evidence: queued_command=${attachments.length}, absorbed_mid_turn=${removals.length}`);
+      }
+      await waitFor(async () => !(await bubble().innerText()).includes('Queued'), 'second bubble recorded', REPLY_TIMEOUT_MS);
+      await page.reload();
+      await waitFor(async () => await bubble().count() === 1 && !/Sending…|Queued/.test(await bubble().innerText()),
+        'recorded midturn message survives reload');
+      return 'second message persisted through queue delivery and two reloads';
     });
 
     await step('2 send with image', async () => {

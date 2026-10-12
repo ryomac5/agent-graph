@@ -23,6 +23,76 @@ function createMessage(uuid: string, content = "Fictional body.", version = "2.1
 function readFacts(ledger: Ledger) { return ledger.readSince(0, Number.MAX_SAFE_INTEGER); }
 function readNativeId(id: string): string { return (JSON.parse(id) as string[])[1]; }
 
+function createQueuedCommand(uuid: string, kind: string | undefined = "human", commandMode = "prompt") {
+  return { type: "attachment", uuid, timestamp: "2026-10-06T10:01:00.000Z", attachment: {
+    type: "queued_command", prompt: "Next step", source_uuid: `source-${uuid}`, delivery_id: `delivery-${uuid}`,
+    commandMode, ...(kind ? { origin: { kind } } : {}), humanTurn: true, timestamp: TS,
+  } };
+}
+
+test("実物の enqueue・remove・queued_command から利用者の発言を一件だけ残す", t => {
+  const { ledger, directory } = createFixture(t);
+  const path = join(directory, "midturn.jsonl");
+  writeFileSync(path, [
+    { type: "queue-operation", operation: "enqueue", content: "Next step", timestamp: TS },
+    { type: "queue-operation", operation: "remove", content: "Next step", reason: "absorbed_mid_turn",
+      commandUuid: "source-human", deliveryId: "delivery-human", timestamp: "2026-10-06T10:01:00.000Z" },
+    createQueuedCommand("human"),
+  ].map(row => JSON.stringify(row)).join("\n") + "\n");
+  const first = observeClaudeFile(ledger, path);
+  const facts = readFacts(ledger);
+  const projection = project(facts);
+  assert.equal(facts.filter(fact => fact.kind === "message.created").length, 1);
+  assert.deepEqual(projection.messages.map(row => [row.native_id, row.role, row.body, row.source_ts]),
+    [["human", "user", "Next step", TS]]);
+  assert.deepEqual(projection.conversations[0].pending_inputs, []);
+  assert.equal(projection.message_memberships.length, 1);
+  assert.deepEqual(project([...facts].reverse()), projection);
+  assert.deepEqual(observeClaudeFile(ledger, path, { cursor: { ...first.cursor, identity: "replay" } }).conflicts, []);
+  assert.deepEqual(readFacts(ledger), facts);
+});
+
+test("古い humanTurn を取り込み、peer は子の報告にして通知と別の起源は入れない", t => {
+  const { ledger, directory } = createFixture(t);
+  const path = join(directory, "origins.jsonl");
+  const peer = createQueuedCommand("peer", "peer");
+  peer.attachment.prompt = '<agent-message from="child">Report</agent-message>';
+  writeFileSync(path, [createQueuedCommand("legacy", undefined), peer,
+    createQueuedCommand("notification", "task-notification", "task-notification"),
+    createQueuedCommand("coordinator", "coordinator")].map(row => JSON.stringify(row)).join("\n") + "\n");
+  observeClaudeFile(ledger, path);
+  assert.deepEqual(project(readFacts(ledger)).messages.map(row => [row.native_id, row.role, row.body]),
+    [["legacy", "user", "Next step"], ["peer", "agent_report", "Report"]]);
+});
+
+test("通常の user と attachment が同じ uuid を持っても一件に投影し、既存事実と衝突しない", t => {
+  for (const userFirst of [false, true]) {
+    const { ledger, directory } = createFixture(t);
+    const path = join(directory, "duplicate.jsonl");
+    const user = createMessage("shared", "Next step");
+    const attachment = JSON.stringify(createQueuedCommand("shared"));
+    writeFileSync(path, (userFirst ? user : attachment) + "\n");
+    const first = observeClaudeFile(ledger, path);
+    const original = readFacts(ledger);
+    appendFileSync(path, (userFirst ? attachment : user) + "\n");
+    assert.deepEqual(observeClaudeFile(ledger, path, { cursor: first.cursor }).conflicts, []);
+    const facts = readFacts(ledger);
+    assert.deepEqual(facts.slice(0, original.length), original);
+    assert.equal(project(facts).messages.length, 1);
+    assert.equal(project(facts).message_memberships.length, 1);
+    assert.deepEqual(observeClaudeFile(ledger, path, { cursor: { ...first.cursor, identity: "replay" } }).conflicts, []);
+    assert.deepEqual(readFacts(ledger), facts);
+  }
+});
+
+test("本文が同じでも UUID が異なる再発言は消さない", t => {
+  const { ledger, directory } = createFixture(t);
+  const path = join(directory, "repeated.jsonl");
+  writeFileSync(path, JSON.stringify(createQueuedCommand("queued")) + "\n" + createMessage("later", "Next step") + "\n");
+  observeClaudeFile(ledger, path);
+  assert.equal(project(readFacts(ledger)).messages.length, 2);
+});
+
 test("待ち行列を追記し、dequeue と user の観測後も再読で衝突しない", t => {
   const { ledger, directory } = createFixture(t);
   const path = join(directory, "queue.jsonl");

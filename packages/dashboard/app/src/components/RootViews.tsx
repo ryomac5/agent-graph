@@ -1,7 +1,7 @@
 import { resolveReplyStatus } from '../lib/reply-status.ts';
 import { translate } from './conversation/text.ts';
 import { SessionName, type RenameClient } from './SessionName.tsx';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { rootHref, useTurnConversations, useWorkingTurn, workingElapsed } from '../lib/turns.ts';
 import { isCompletedGraph, isRunning, shownRole, startedAt, type Root } from '../lib/roots.ts';
@@ -59,7 +59,12 @@ function runningText(count: number, language: Language): string {
   return language === 'ja' ? `${count} ${t.agentsRunning}` : `${count} ${count === 1 ? t.agentRunning : t.agentsRunning}`;
 }
 function RootElapsed({ state, root, now, language }: { state?: ScreenState; root: Root; now: number; language: Language }) {
-  const turn = useWorkingTurn(state ? resolveActivity(state, root.conversation_ids).run : undefined);
+  const run = state ? resolveActivity(state, root.conversation_ids).run : undefined;
+  const messages = useMemo(() => {
+    const ids = new Set((state?.projection.message_memberships ?? []).filter(row => row.active && row.conversation_id === run?.conversation_id).map(row => row.message_id));
+    return (state?.projection.messages ?? []).filter(row => ids.has(row.id));
+  }, [state, run?.conversation_id]);
+  const turn = useWorkingTurn(run, messages);
   return <span className="root-elapsed numeric" aria-label={language === 'ja' ? '経過時間' : 'Elapsed time'}>{workingElapsed(turn, now) || '—'}</span>;
 }
 

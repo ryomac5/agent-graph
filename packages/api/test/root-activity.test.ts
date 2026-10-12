@@ -59,7 +59,7 @@ test('hook の根の状態と開始時刻を snapshot と patch に配り、旧 
     ledger.close(); ledger = openLedger(path);
     feed = new ProjectionFeed(path, () => applyIncremental(readLedgerDatabase(ledger), 0));
     assert.deepEqual(feed.snapshot().projection, projected);
-    assert.equal(readLedgerDatabase(ledger).prepare('SELECT version FROM runner_projection_version').get()?.version, 10);
+    assert.equal(readLedgerDatabase(ledger).prepare('SELECT version FROM runner_projection_version').get()?.version, 11);
     const before = feed.snapshot().generation;
     rebuild(readLedgerDatabase(ledger));
     assert.equal(feed.refresh(), 'resync');
@@ -142,7 +142,7 @@ test('本番の根と審査役の別名の並びを分離し、子の再開の�
     ledger.close(); ledger = openLedger(path);
     feed = new ProjectionFeed(path, () => applyIncremental(readLedgerDatabase(ledger), 0));
     assert.deepEqual(feed.snapshot().projection, snapshot);
-    assert.equal(readLedgerDatabase(ledger).prepare('SELECT version FROM runner_projection_version').get()?.version, 10);
+    assert.equal(readLedgerDatabase(ledger).prepare('SELECT version FROM runner_projection_version').get()?.version, 11);
     rebuild(readLedgerDatabase(ledger));
     assert.equal(feed.refresh(), 'resync');
     assert.deepEqual(feed.snapshot().projection, snapshot);

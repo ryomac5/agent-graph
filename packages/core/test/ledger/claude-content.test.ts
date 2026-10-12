@@ -34,6 +34,13 @@ test("子の報告を user から分け、包みと定型の注意書きを残�
     { role: "agent_report", body: "作業が完了しました。", content_normalized: true });
 });
 
+test("queued_command の peer の報告にも通常の子の報告と同じ正規化を使う", () => {
+  const body = '<agent-message from="child">\n  子の報告\n</agent-message>';
+  const peer = normalizeClaudeContent({ provider: "claude", role: "agent_report", body });
+  assert.deepEqual(peer, { role: "agent_report", body: "子の報告", content_normalized: true });
+  assert.deepEqual(peer, normalize(`Another Claude session sent a message:\n${body}`));
+});
+
 test("テキストブロックだけを正規化し、画像と道具の結果と他の provider は保つ", () => {
   const image = { type: "image", source: { data: "sample" } };
   const tool = { type: "tool_result", content: wrap("道具の結果") };

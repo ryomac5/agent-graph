@@ -114,7 +114,7 @@ it.each([START, undefined])('omits tools from an earlier turn with start evidenc
   await act(async () => {});
   expect(screen.getByRole('status', { name: 'Working' }).querySelector('.working-tool')).toBeNull();
   act(() => appendMessage(target, { id: 'current', role: 'assistant', source_ts: '2026-10-11T00:01:00Z', body: [{ type: 'tool_use', name: 'Current tool', input: {} }] }));
-  if (!start) expect(screen.getByRole('status', { name: 'Working' }).querySelector('.working-tool')).toBeNull();
+  expect(screen.getByRole('status', { name: 'Working' }).querySelector('.working-tool')?.textContent).toBe('Current tool');
   act(() => {
     const state = target.getSnapshot();
     target.setSnapshot({ ...state, projection: { ...state.projection, runs: [run()] } });
@@ -396,4 +396,25 @@ it.each(['running', 'idle'])('suppresses reply cues for pending input and preser
   if (stateName === 'running') expect(screen.getByText('Queued — Claude will read this after the current step')).toBeTruthy();
   expect(screen.queryByText('Needs your answer')).toBeNull();
   expect(screen.queryByText('Waiting for your reply')).toBeNull();
+});
+
+it.each([undefined, 'invalid'])('uses the latest user timestamp when start is %s, without showing a previous turn tool', async start => {
+  const target = setup('running');
+  const snapshot = target.getSnapshot();
+  target.setSnapshot({ ...snapshot, projection: { ...snapshot.projection, runs: [run('running', { turn_started_ts: start })] } });
+  appendMessage(target, { id: 'old-tool', role: 'assistant', source_ts: '2026-10-10T23:59:00Z', body: [{ type: 'tool_use', name: 'Previous tool', input: {} }] });
+  appendMessage(target, { id: 'result', role: 'user', source_ts: '2026-10-11T00:01:00Z', body: [{ type: 'tool_result', content: 'Done', tool_use_id: 'old-tool' }] });
+  appendMessage(target, { id: 'report', role: 'agent_report', source_ts: '2026-10-11T00:02:00Z', body: '## Done' });
+  const state = target.getSnapshot();
+  render(<MemoryRouter><RootList roots={selectRoots(state)} state={state}/><ConversationPage conversationId="c" target={target} client={client}/></MemoryRouter>);
+  await act(async () => {});
+  const indicator = screen.getByRole('status', { name: 'Working' });
+  expect(indicator.closest('.composer')).toBeTruthy();
+  expect(indicator.textContent).toContain('3m 12s');
+  expect(indicator.querySelector('.working-tool')).toBeNull();
+  expect(screen.getByLabelText('Elapsed time').textContent).toBe('3m 12s');
+});
+it('uses UserPromptSubmit evidence for a missing clock even before messages arrive', () => {
+  const turn = resolveWorkingTurn(run('running', { turn_started_ts: undefined, last_evidence: { hook_event_name: 'UserPromptSubmit' } }));
+  expect(workingElapsed(turn, NOW)).toBe('3m 12s');
 });

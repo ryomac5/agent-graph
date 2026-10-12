@@ -66,6 +66,41 @@ it('marks an optimistic input as sending until enqueue is observed', async () =>
   expect(screen.getByText('Queued — Claude will read this after the current step')).toBeTruthy();
 });
 
+it('reconciles two midturn inputs with enqueue and keeps the recorded input after a new generation and remount', async () => {
+  const first = 'First line\nSecond line';
+  const second = 'Another request';
+  const target = setup([], { runs: [{ id: 'r', conversation_id: 'c', state: 'running', generation: 1 }] });
+  const view = render(<MemoryRouter><ConversationPage conversationId="c" target={target} client={client} language="en"/></MemoryRouter>);
+  await act(async () => {});
+  for (const text of [first, second]) {
+    fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: text } });
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Message' }), { key: 'Enter', metaKey: true });
+    await act(async () => {});
+  }
+  expect(screen.getAllByText('Sending…')).toHaveLength(2);
+  const conversation = { id: 'c', provider: 'claude', origin: 'managed', pending_inputs: [
+    { id: 'q1', body: first, state: 'queued' }, { id: 'q2', body: second, state: 'queued' },
+  ] };
+  await act(async () => { target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: {
+    conversations: { upsert: [conversation], remove: [] },
+  } }); });
+  expect(screen.queryByText('Sending…')).toBeNull();
+  expect(screen.getAllByText('Queued — Claude will read this after the current step')).toHaveLength(2);
+  const snapshot = target.getSnapshot();
+  const recorded = [{ id: 'a1', role: 'user', body: first }, { id: 'a2', role: 'user', body: second }];
+  await act(async () => { target.setSnapshot({ seq: 3, generation: 1, projection: { ...snapshot.projection,
+    conversations: [{ ...conversation, pending_inputs: [] }], messages: recorded,
+    message_memberships: recorded.map(row => ({ id: row.id, message_id: row.id, conversation_id: 'c', active: 1 })),
+  } }); });
+  view.unmount();
+  render(<MemoryRouter><ConversationPage conversationId="c" target={target} client={client} language="en"/></MemoryRouter>);
+  await act(async () => {});
+  expect(screen.queryByText('Sending…')).toBeNull();
+  expect(screen.queryByText('Queued — Claude will read this after the current step')).toBeNull();
+  expect(screen.getAllByText('Another request')).toHaveLength(1);
+  expect(screen.getAllByText(/First line\s+Second line/)).toHaveLength(1);
+});
+
 it.each(['Agent', 'Task', 'mcp__agent-graph__delegate', 'runner.delegate', 'planner.delegate'])('keeps %s requests outside tool folds and navigates to the same child as the tree', async name => {
   const target = setup([{ id: 'm', role: 'assistant', body: [
     { type: 'tool_use', id: 'bash', name: 'Bash', input: { command: 'pwd' } },

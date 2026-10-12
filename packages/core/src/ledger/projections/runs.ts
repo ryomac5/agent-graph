@@ -132,7 +132,10 @@ export function projectRuns(facts: readonly Fact[]): RunProjection[] {
       } else {
         const startsTurn = turnEvidence?.kind === "turn_started" || turnEvidence?.hook_event_name === "UserPromptSubmit";
         if (startsTurn) {
-          run.turn_started_ts = payload.last_evidence_ts ?? fact.source_ts;
+          // 作業中の追加入力の hook は、進行中のターンの時計を戻さない。
+          if (!hookTurn || !["running", "waiting_approval", "waiting_input"].includes(run.state) || !run.turn_started_ts) {
+            run.turn_started_ts = payload.last_evidence_ts ?? fact.source_ts;
+          }
         } else if (payload.state === "running" && (fact.source.startsWith("host-") || isTurnEvidence(payload.last_evidence)) && !["running", "waiting_approval", "waiting_input"].includes(run.state)) {
           run.turn_started_ts ??= payload.last_evidence_ts ?? fact.source_ts;
         }

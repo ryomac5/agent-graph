@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 
-// 版を上げると、次の反映で全投影を台帳から作り直す。10 で Claude の包みと子の報告を正規化した。
-export const RUNNER_PROJECTION_VERSION = 10;
+// 11 で待ち行列の native ID を旧い会話の subject に結び直す。
+export const RUNNER_PROJECTION_VERSION = 11;
 export const RECORD_ENTITIES = ["run", "conversation", "delegation", "artifact", "approval", "finding", "relation", "message", "message_membership"] as const;
 
 const PROJECTION_VERSION_DDL = "CREATE TABLE IF NOT EXISTS runner_projection_version (id INTEGER PRIMARY KEY, version INTEGER NOT NULL)";

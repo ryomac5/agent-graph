@@ -208,3 +208,124 @@ node scripts/perf/browser.mjs
 | 実行前提 | Node 24 / sqlite3 / 既存の node_modules / smoke の Playwright |
 | API と runner | 再起動なし / 製品コード変更なし / コミットなし |
 | ブラウザの残作業 | 本番へ接続できる環境で台本の実機検証と値の記入 |
+
+## 改善 1: 初回の読み込み
+
+前後とも同じ作業ツリー内へビルドを出力し、本番の配信ファイルに対する書き込みを避けた。
+
+```sh
+node scripts/perf/baseline.mjs --only=build
+```
+
+初回の対象は一覧画面から静的に参照する全チャンクとし、遅延読み込みの分は集計から除いた。
+
+| 対象 | 変更前 bytes | 変更後 bytes |
+| --- | ---: | ---: |
+| 初回 JS の圧縮前合計 | 1,994,001 | 763,923 |
+| 初回 JS の gzip 合計 | 643,525 | 240,524 |
+| 初回 JS の Brotli 合計 | 未測定 | 203,302 |
+| JS 全チャンクの圧縮前合計 | 2,326,384 | 2,327,366 |
+| CSS 全チャンクの圧縮前合計 | 134,288 | 134,290 |
+
+初回に読む JS の gzip 合計は、変更前の同じ圧縮条件と比べて 62.6% 減った。
+
+初回の転送量は本番の未圧縮値と比べて減るが、今回の値には通信路の見出しを含めていない。
+
+| 初回 JS の内訳 | 圧縮前 bytes | gzip bytes | Brotli bytes |
+| --- | ---: | ---: | ---: |
+| index | 650,829 | 200,935 | 168,348 |
+| settings 共有部 | 58,454 | 20,349 | 17,851 |
+| Icon 共有部 | 44,364 | 15,263 | 13,562 |
+| preload-helper 共有部 | 10,276 | 3,977 | 3,541 |
+| 合計 | 763,923 | 240,524 | 203,302 |
+
+モジュールの内訳はビルドの集計を使い、最小化前の大きさとして配信ファイルと区別した。
+
+| 変更前の index に含む主なモジュール | 集計 bytes | 読み込みの変更 |
+| --- | ---: | --- |
+| CodeMirror と Lezer の言語解析器 | 1,052,215 | コードタブを開く時に読む |
+| Tiptap と ProseMirror と marked と linkifyjs | 890,669 | Markdown ファイルを表示する時に読む |
+| react-dom | 537,035 | 初回に読む |
+| @codemirror/view | 326,955 | CodeMirror 集計の内数 |
+| prosemirror-view | 171,569 | Tiptap 集計の内数 |
+| @tiptap/core | 171,143 | Tiptap 集計の内数 |
+
+解析結果はビルド出力の専用ファイルへ保存し、各チャンクに含むモジュールと依存を記録した。
+
+| ビルド出力 | 用途 |
+| --- | --- |
+| .vite/bundle-analysis.json | モジュールの renderedLength とチャンクの依存 |
+| .vite/manifest.json | 初回 JS の静的な依存を重複なく集計 |
+| assets/*.br と assets/*.gz | 最終出力と一致する配信用の圧縮版 |
+| .perf/baseline.json の build.initialJs | 初回 JS の対象と各圧縮形式の合計 |
+
+設定画面とコード編集と Markdown 編集を分割し、使う部分にだけ軽い待機表示を出す。
+
+会話の描画は従来の同期読み込みを保ち、初回の一覧と共通の枠は追加の待機なしで表示する。
+
+端末本体は既存の遅延読み込みを保ち、会話が使う Markdown の拡張は今回は変更しない。
+
+圧縮ファイルは最終出力からビルド時に生成し、配信の要求ごとに圧縮する処理を追加しない。
+
+圧縮の選択は利用者の許容値に従い、同じ優先度では Brotli を gzip より先に使う。
+
+HTML は毎回トークンと nonce を埋め込むため、圧縮済みのファイルによる配信から除いた。
+
+HTML は毎回の確認を要求する設定とし、ハッシュ付きの資産だけを一年間のキャッシュで返す。
+
+| 配信対象 | 見出し |
+| --- | --- |
+| 圧縮版 | Content-Encoding: br または gzip |
+| HTML 以外の静的ファイル | Vary: Accept-Encoding |
+| ハッシュ付きの /assets/ | Cache-Control: public, max-age=31536000, immutable |
+| index.html と画面の経路 | Cache-Control: no-store |
+
+配信時には毎回ファイルを読み直し、古い圧縮版は避けてビルド後の内容を再起動なしで返す。
+
+圧縮形式とキャッシュの見出しはソケットなしの試験を通し、更新時の再読み込みも確かめた。
+
+生成した全 JS と CSS の圧縮版を展開し、最終出力と内容が一致することを確認した。
+
+| 受け入れのコマンド | 結果 |
+| --- | --- |
+| builtin cd packages/dashboard && node --run test:app | 56 ファイルと 724 試験が成功 |
+| builtin cd packages/dashboard && node --run build:app | 成功 |
+| builtin cd packages/api && node --run test | 380 成功 / 1 失敗 / 21 省略 |
+| node --run typecheck | 既存の packages/daemon/src/http/views.ts:83 の TS2322 のみ |
+| 後続パッケージと scripts と app の個別型検査 | すべて成功 |
+
+直下の型検査は既存の daemon の誤りで止まり、後続の対象は個別の型検査で確認した。
+
+主スレッドの遅れの試験は基準を超えたため、全試験の実行で得た最大遅延を下の表に示した。
+
+| 主スレッドの試験 | 値 |
+| --- | ---: |
+| 最大主スレッド遅延 | 185.6 ms |
+| 許容値 | 100 ms |
+| 最大投影配信更新 | 67.7 ms |
+| 全試験の実行時間 | 225,377 ms |
+
+API の全試験とビルドの実行時間は一部重なり、単独実行による主スレッドの遅延は未測定である。
+
+ソケットを使う二十一件は環境の制限で省略され、圧縮配信はソケットなしの実装経路で確認した。
+
+本番の API と runner の再起動は行わず、ブラウザでの表示時間は今回計測していない。
+
+### 初回読み込みのレビュー修正
+
+- `main.tsx` で `vite:preloadError` の回復処理を登録した。自動再読み込みは sessionStorage に時刻を保存し、ページを読み直しても30秒に1回までに制限する。保存できない場合や制限中は import の失敗を境界へ渡す。
+- SettingsLayout、SettingsPage、CodeTab、MarkdownEditor を囲む各 Suspense の外側に ErrorBoundary を置いた。失敗した領域に英語の “A new version is available.” と Reload ボタンを表示する。遅延 import の拒否を注入する試験で、ナビゲーション、設定の見出し、別の会話ペイン、Markdown の周囲が残ることを確認した。
+- `immediatelyRender: false` の削除は試したが、`document-preview.test.tsx` の “preserves every source character when preview is opened, selected and saved with Cmd+S” が失敗した。Suspense の待機中に Tiptap のエディターが破棄され、MarkdownBlocks の初期化で `Cannot read properties of null (reading 'nodeFromJSON')` が発生するため指定を残した。editor が null の間は Markdown 本文を表示し、空の surface を防ぐ。待機中の本文表示も試験に追加した。
+- 静的配信で `/.vite` とその配下を404にした。解析資料の生成先は維持し、manifest と絶対パスを含む bundle-analysis の配信を防ぐ。URL エンコードされた指定も試験した。
+
+修正後の検証:
+
+| コマンド | 結果 |
+| --- | --- |
+| builtin cd packages/dashboard && node --run test:app | 60 ファイル、731 試験が成功 |
+| builtin cd packages/dashboard && node --run build:app | 成功（この作業ツリー内の dist に出力） |
+| builtin cd packages/api && node --test --import ./test/setup.ts test/static.test.ts | 1 成功、3 件はソケット制限で省略、失敗なし |
+| node --run typecheck | 既存の packages/daemon/src/http/views.ts:83 の TS2322 のみ |
+| daemon より後の dashboard、adapters、planner、scripts、app の個別型検査 | すべて成功 |
+
+本番の API と runner は再起動していない。本番の配信先には出力していない。

@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'n
 import { homedir, platform, arch, cpus } from 'node:os';
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { gzipSync } from 'node:zlib';
+import { brotliCompressSync, gzipSync } from 'node:zlib';
 import { createRequire } from 'node:module';
 
 export const ROOT = fileURLToPath(new URL('../../', import.meta.url));
@@ -39,9 +39,21 @@ function build() {
     command = '既存の Vite で build:app と同じ引数を直接実行';
   }
   if (result.status !== 0) throw new Error(`build failed: ${result.stderr.slice(-1000)}`);
-  const assets = files(join(PERF, 'build')).map(path => ({ path: path.slice(PERF.length + 1), bytes: statSync(path).size, gzipBytes: gzipSync(readFileSync(path)).length }));
+  const assets = files(join(PERF, 'build')).filter(path => !path.includes('/.vite/') && !/\.(br|gz)$/.test(path)).map(path => ({ path: path.slice(PERF.length + 1), bytes: statSync(path).size, gzipBytes: gzipSync(readFileSync(path)).length, brotliBytes: brotliCompressSync(readFileSync(path)).length }));
   const total = extension => assets.filter(a => !extension || a.path.endsWith(extension)).reduce((sum, a) => sum + a.bytes, 0);
-  return { n: 1, command, msIncludingLauncher: performance.now() - start, totalBytes: total(), jsBytes: total('.js'), cssBytes: total('.css'), assets };
+  const manifest = JSON.parse(readFileSync(join(PERF, 'build/.vite/manifest.json'), 'utf8'));
+  const initialFiles = new Set();
+  function visit(key) {
+    const chunk = manifest[key];
+    if (initialFiles.has(chunk.file)) return;
+    initialFiles.add(chunk.file);
+    for (const dependency of chunk.imports ?? []) visit(dependency);
+  }
+  for (const [key, chunk] of Object.entries(manifest)) if (chunk.isEntry) visit(key);
+  const initialAssets = assets.filter(asset => asset.path.endsWith('.js') && initialFiles.has(asset.path.slice('build/'.length)));
+  const initialJs = { files: initialAssets.map(asset => asset.path), bytes: initialAssets.reduce((sum, asset) => sum + asset.bytes, 0),
+    gzipBytes: initialAssets.reduce((sum, asset) => sum + asset.gzipBytes, 0), brotliBytes: initialAssets.reduce((sum, asset) => sum + asset.brotliBytes, 0) };
+  return { n: 1, command, msIncludingLauncher: performance.now() - start, totalBytes: total(), jsBytes: total('.js'), cssBytes: total('.css'), initialJs, assets };
 }
 function tests() {
   const runs = [];

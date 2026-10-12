@@ -100,9 +100,9 @@ it('renders navigation, projects, pending approvals, connection state and bell',
   fireEvent.click(screen.getByRole('button', { name: 'Notifications' }));
   expect(screen.getByRole('heading', { name: 'Approval pending' })).toBeTruthy();
 });
-it('uses the OS theme, reacts to changes, allows explicit overrides and Japanese', () => {
+it('uses the OS theme, reacts to changes, allows explicit overrides and Japanese', async () => {
   render(<MemoryRouter initialEntries={['/settings']}><App/></MemoryRouter>);
-  expect(screen.getByLabelText('Theme').closest('.settings-row')?.querySelector('small')).toBeNull();
+  expect((await screen.findByLabelText('Theme')).closest('.settings-row')?.querySelector('small')).toBeNull();
   expect(screen.getByLabelText('Language').closest('.settings-row')?.querySelector('small')).toBeNull();
   expect(document.documentElement.dataset.theme).toBe('light');
   dark = true; change?.(); expect(document.documentElement.dataset.theme).toBe('dark');

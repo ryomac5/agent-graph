@@ -37,12 +37,12 @@ function mapText(body: JsonValue | undefined, transform: (text: string) => strin
 
 /** 台帳は原文を保ち、発言・依頼の抜粋・検索には同じ本文を渡す。 */
 export function normalizeClaudeContent(message: { provider?: string; role?: string; body?: JsonValue }) {
-  if (message.provider !== "claude" || message.role !== "user") return {};
-  let role = "user";
+  if (message.provider !== "claude" || !["user", "agent_report"].includes(message.role ?? "")) return {};
+  let role = message.role!;
   let hasUserText = Array.isArray(message.body) && message.body.some(block => block && typeof block === "object"
     && !Array.isArray(block) && block.type && block.type !== "text" && block.type !== "input_text");
   const body = mapText(message.body, text => {
-    if (REPORT_PREFIX.test(text)) {
+    if (message.role === "agent_report" || REPORT_PREFIX.test(text)) {
       role = "agent_report";
       const rest = text.replace(REPORT_PREFIX, "");
       const report = /^<agent-message\b[^>]*>([\s\S]*?)<\/agent-message>/u.exec(rest)?.[1]

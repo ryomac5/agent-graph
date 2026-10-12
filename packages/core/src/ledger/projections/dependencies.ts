@@ -60,7 +60,7 @@ export function collectProjectionDependencies(fact: Fact): ProjectionDependency[
       // provider が部分訂正で省略されても、候補を取りこぼさない。
       if (typeof payload.native_id === "string") share(`${entity}-native:${payload.native_id}`);
     }
-    if (fact.kind === "conversation.renamed") {
+    if (fact.kind === "conversation.renamed" || fact.kind === "conversation.input_queue_changed") {
       const native = readNativeReference(id);
       if (native !== undefined) share(`conversation-native:${native}`);
     }

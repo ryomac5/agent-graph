@@ -136,6 +136,45 @@ function createClaudeMessage(id: string) {
   return JSON.stringify({ type: "user", uuid: id, timestamp: TS, version: "2.1.291",
     message: { role: "user", content: `Fictional ${id}` } }) + "\n";
 }
+
+test("旧い cursor より前の queued_command だけを一度補完し、再起動と再構築で保持する", t => {
+  const f = createFixture(t);
+  const directory = join(f.home, ".claude", "projects", "fixture");
+  mkdirSync(directory, { recursive: true });
+  const path = join(directory, "session.jsonl");
+  writeFileSync(path, createClaudeMessage("before") + JSON.stringify({ type: "attachment", uuid: "midturn", timestamp: TS,
+    attachment: { type: "queued_command", commandMode: "prompt", origin: { kind: "human" }, timestamp: TS, prompt: "During work" },
+  }) + "\n" + createClaudeMessage("after"));
+  let service = openObservationService({ home: f.home, env: f.env });
+  service.ingestOnce();
+  // 旧版が attachment を捨てて末尾まで読んだ台帳と checkpoint を再現する。
+  const db = new DatabaseSync(f.dbPath);
+  db.prepare("DELETE FROM facts WHERE source_event_id LIKE 'queued-command%'").run();
+  for (const row of db.prepare("SELECT path, state FROM api_observation_cursors").all()) {
+    const state = JSON.parse(String(row.state)); delete state.cursor.claudeQueuedCommandsVersion;
+    db.prepare("UPDATE api_observation_cursors SET state=? WHERE path=?").run(JSON.stringify(state), row.path);
+  }
+  rebuild(db);
+  service.close(); db.close();
+  service = openObservationService({ home: f.home, env: f.env });
+  t.after(() => service.close());
+  const original = service.ledger.readSince(0, Number.MAX_SAFE_INTEGER);
+  assert.equal(service.ingestOnce().appended, 2);
+  const facts = service.ledger.readSince(0, Number.MAX_SAFE_INTEGER);
+  assert.deepEqual(facts.slice(0, original.length), original);
+  assert.equal(project(facts).messages.filter(row => row.body === "During work").length, 1);
+  assert.equal(service.ingestOnce().appended, 0);
+  service.close();
+  service = openObservationService({ home: f.home, env: f.env });
+  assert.equal(service.ingestOnce().appended, 0);
+  service.rebuild();
+  assert.deepEqual(service.ledger.readSince(0, Number.MAX_SAFE_INTEGER), facts);
+  const feed = new ProjectionFeed(f.dbPath, service.catchUp);
+  t.after(() => feed.close());
+  const restored = feed.conversation(createNativeId("claude", "session")).projection.messages.filter(row => row.native_id === "midturn");
+  assert.equal(restored.length, 1);
+  assert.equal(JSON.parse(String(restored[0].body)), "During work");
+});
 function createCodexMessage(id: string) {
   return JSON.stringify({ timestamp: TS, type: "response_item", payload: {
     type: "message", id, role: "user", content: [{ type: "input_text", text: `Fictional ${id}` }] } }) + "\n";

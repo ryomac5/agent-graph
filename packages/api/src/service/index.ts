@@ -14,6 +14,7 @@ import { observeClaudeHistories } from "./claude-reader.ts";
 import { codexLocationEventId, observeCodex, observeCodexLocations } from "../observe/codex/index.ts";
 import { claudeConversationId, claudeLocationEventId } from "../observe/claude/context.ts";
 import { claudeTitleBackfillEventId } from "../observe/claude/titles.ts";
+import { CLAUDE_QUEUED_COMMANDS_VERSION } from "../observe/claude/index.ts";
 import { registerLedgerDatabase } from "../../../core/src/ledger/repository.ts";
 import { createSessionQuery } from "../observe/session-query.ts";
 import { createClaudeSessionObserver } from "../observe/claude/sessions.ts";
@@ -421,7 +422,8 @@ export function openObservationService(options: ObservationOptions = {}) {
         const remoteFiles = changes ? cachedRemoteFiles : list(remoteProjects, name => name.endsWith(".jsonl"));
         const claudeFiles = changes ? cachedClaudeFiles : [...remoteFiles.filter(path => !path.includes("/codex/")), ...list(claudeProjects, (name) => name.endsWith(".jsonl"))];
         const claudePaths = claudeFiles.filter((path) => changes
-          ? changes.has(path) && hasChanged(path) : hasChanged(path) || needsClaudeContext(path));
+          ? changes.has(path) && hasChanged(path) : hasChanged(path) || needsClaudeContext(path)
+            || checkpoints.get(path)?.claudeQueuedCommandsVersion !== CLAUDE_QUEUED_COMMANDS_VERSION);
         const codexHome = env.CODEX_HOME ?? join(home, ".codex");
         const codexFiles = changes ? cachedCodexFiles : [...remoteFiles.filter(path => path.includes("/codex/")), ...codex.reader.list(join(codexHome, "sessions")), ...codex.reader.list(join(codexHome, "archived_sessions"))];
         if (!changes) {

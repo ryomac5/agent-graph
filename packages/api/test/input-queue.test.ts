@@ -7,6 +7,32 @@ import { applyIncremental, openLedger, readLedgerDatabase, rebuild } from "../..
 import { observeClaudeFile } from "../src/observe/claude/index.ts";
 import { ProjectionFeed } from "../src/service/projection-feed.ts";
 
+test("旧い subject の会話へ native ID の enqueue を結び、snapshot と patch に配る", t => {
+  const directory = mkdtempSync(join(tmpdir(), "input-queue-legacy-"));
+  const path = join(directory, "ledger.db");
+  const ledger = openLedger(path);
+  const db = readLedgerDatabase(ledger);
+  const timestamp = "2026-10-13T00:00:00Z";
+  const id = '["claude","session"]';
+  ledger.append({ source: "hook", source_event_id: "legacy", subject: "conversation:claude:session",
+    kind: "conversation.created", confidence: "confirmed", source_ts: timestamp,
+    payload: { provider: "claude", native_id: "session", origin: "observed", type: "interactive", history_format: "jsonl" } });
+  const feed = new ProjectionFeed(path, () => applyIncremental(db, 0));
+  t.after(() => { feed.close(); ledger.close(); rmSync(directory, { recursive: true, force: true }); });
+  ledger.append({ source: "transcript-claude", source_event_id: "input-queue:session:0001",
+    subject: `conversation:${id}`, kind: "conversation.input_queue_changed", confidence: "confirmed", source_ts: timestamp,
+    payload: { input_queue_event: { operation: "enqueue", body: "First line\nSecond line" } } });
+  const patch = feed.refresh();
+  assert.ok(patch && patch !== "resync");
+  const rows = patch.changes.conversations.upsert;
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].id, id);
+  assert.deepEqual(rows[0].pending_inputs, [{ id: "input-queue:session:0001", body: "First line\nSecond line", source_ts: timestamp, state: "queued" }]);
+  const before = feed.snapshot().projection.conversations;
+  rebuild(db); feed.refresh();
+  assert.deepEqual(feed.snapshot().projection.conversations, before);
+});
+
 test("待ち行列を snapshot と patch に配り、再構築でも一致する", t => {
   const directory = mkdtempSync(join(tmpdir(), "input-queue-"));
   const path = join(directory, "ledger.db");

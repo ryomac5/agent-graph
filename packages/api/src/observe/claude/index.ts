@@ -4,7 +4,9 @@ import { homedir } from "node:os";
 import { createNativeId, projectConversations, serializeValue } from "../../../../core/src/ledger/index.ts";
 import type { AppendResult, ConversationPayload, FactInput, JsonValue, Ledger, UnsupportedObservationPayload } from "../../../../core/src/ledger/index.ts";
 import { readAppendOnlyFile } from "../files.ts";
-import type { FileCursor, FileRead } from "../files.ts";
+import type { FileCursor, FileLine, FileRead } from "../files.ts";
+
+export const CLAUDE_QUEUED_COMMANDS_VERSION = 1;
 
 const HEADLESS_ENTRYPOINTS = new Set(["sdk-cli", "sdk-ts", "sdk-py"]);
 const IGNORED_TYPES = new Set(["file-history-snapshot", "progress", "summary",
@@ -81,6 +83,11 @@ export function observeClaudeFile(ledger: Ledger, path: string, options: ClaudeO
     }
   }
   const result: ClaudeObservation = { ...readAppendOnlyFile(absolutePath, cursor), appended: 0, duplicates: 0, conflicts: [] };
+  // 旧い cursor より前の attachment だけを一度拾い直し、既存行の事実は再生成しない。
+  const queuedBackfill = cursor && !result.reset && cursor.claudeQueuedCommandsVersion !== CLAUDE_QUEUED_COMMANDS_VERSION
+    ? readAppendOnlyFile(absolutePath).lines.filter(line => line.cursor.offset <= cursor.offset) : [];
+  result.cursor = { ...result.cursor, claudeQueuedCommandsVersion: CLAUDE_QUEUED_COMMANDS_VERSION };
+  for (const line of result.lines) line.cursor = { ...line.cursor, claudeQueuedCommandsVersion: CLAUDE_QUEUED_COMMANDS_VERSION };
   const observedTs = options.observedTs ?? new Date().toISOString();
   const nativeId = basename(path, ".jsonl");
   // 子の行の sessionId は親を指すため、ファイルの agent ID を会話の識別に使う。
@@ -104,6 +111,30 @@ export function observeClaudeFile(ledger: Ledger, path: string, options: ClaudeO
     else if (appended.status === "duplicate") result.duplicates += 1;
     else result.conflicts.push(appended);
   }
+  function appendQueuedCommand(line: FileLine, checkpoint: string | null): void {
+    const row = parseRow(line.text);
+    const attachment = readObject(row?.attachment);
+    const origin = readObject(attachment?.origin);
+    if (row?.type !== "attachment" || attachment?.type !== "queued_command"
+      || attachment.commandMode !== "prompt" || !readString(row.uuid)
+      || !(typeof attachment.prompt === "string" || Array.isArray(attachment.prompt))
+      || !Number.isFinite(Date.parse(String(attachment.timestamp)))) return;
+    const human = origin?.kind === "human" || attachment.origin === undefined && attachment.humanTurn === true;
+    if (!human && origin?.kind !== "peer") return;
+    const messageId = createNativeId("claude", String(row.uuid));
+    const common = { source: "transcript-claude" as const, confidence: "confirmed" as const,
+      source_ts: String(attachment.timestamp), observed_ts: observedTs, cursor: null };
+    // 通常の user 行と識別を共有し、出所の識別は分けて既存の payload と衝突させない。
+    append({ ...common, kind: "message.created", subject: `message:${messageId}`,
+      source_event_id: `queued-command:${messageId}`, payload: { provider: "claude", native_id: String(row.uuid),
+        version: 1, role: human ? "user" : "agent_report", body: attachment.prompt,
+        body_state: "stored" } });
+    const membershipId = JSON.stringify([messageId, id]);
+    append({ ...common, kind: "message_membership.created", subject: `message_membership:${membershipId}`,
+      source_event_id: `queued-command-membership:${membershipId}`,
+      payload: { message_id: messageId, conversation_id: id, active: true }, cursor: checkpoint });
+  }
+  for (const line of queuedBackfill) appendQueuedCommand(line, null);
   // 親は行の sessionId ではなく、子の記録を置いたディレクトリから確定する。
   if (subagent && basename(dirname(absolutePath)) === "subagents") {
     const parent = createNativeId("claude", basename(dirname(dirname(absolutePath))));
@@ -164,6 +195,7 @@ export function observeClaudeFile(ledger: Ledger, path: string, options: ClaudeO
       continue;
     }
     if (!row) continue;
+    if (row.type === "attachment") appendQueuedCommand(line, common.cursor);
     const queueEventId = `input-queue:${id}:${String(line.cursor.offset).padStart(16, "0")}:${line.cursor.hash}`;
     if (row.type === "queue-operation") {
       const eventId = queueEventId;

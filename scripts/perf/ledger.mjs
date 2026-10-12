@@ -3,6 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { mkdirSync, statSync, renameSync } from 'node:fs';
+import { LATEST_MESSAGE_SQL } from '../../packages/api/src/service/summary-index.ts';
 import { ProjectionFeed } from '../../packages/api/src/service/projection-feed.ts';
 import { loadConversationWindow } from '../../packages/dashboard/app/src/lib/projection-client.ts';
 import { PERF, measure, summarize, REPEATS } from './baseline.mjs';
@@ -20,19 +21,20 @@ const selected = db.prepare('SELECT conversation_id AS id, count(*) AS count FRO
 const long = selected[0];
 const short = selected.find(row => row.count >= 5 && row.count <= 20) ?? selected.at(-1);
 const state = db.prepare('SELECT last_seq,generation FROM projection_state WHERE id=1').get();
+const start = performance.now();
+const feed = new ProjectionFeed(path, () => state);
+const initializationMs = performance.now() - start;
 const sqls = [
   ['last_seq', 'SELECT max(seq) AS seq FROM facts', []],
   ['tail_1024', 'SELECT * FROM facts WHERE seq > ? ORDER BY seq LIMIT 1024', [Math.max(0, Number(state.last_seq) - 1024)]],
   ['observation_context', `SELECT * FROM facts WHERE seq > ? AND seq <= ? AND kind NOT LIKE 'message_membership.%' AND (kind NOT LIKE 'message.%' OR subject LIKE '%history-unavailable%') ORDER BY seq LIMIT 1024`, [0, state.last_seq]],
   ['subject_history', 'SELECT * FROM facts WHERE subject = ? ORDER BY seq', ['conversation:' + long.id]],
   ...[long, short].map((row, i) => [i ? 'conversation_short_200' : 'conversation_long_200', 'SELECT m.*, mm.id AS membership_id FROM message_memberships mm JOIN messages m ON m.id = mm.message_id WHERE mm.conversation_id = ? AND mm.active = 1 AND m.id > ? ORDER BY m.id LIMIT ?', [row.id, '', 200]]),
-  ['message_summary_long', `SELECT m.id, m.source_ts, m.source_event_id FROM message_memberships mm JOIN messages m ON m.id = mm.message_id
-    WHERE mm.conversation_id = ? AND mm.active = 1 AND julianday(m.source_ts) = (SELECT max(julianday(m2.source_ts))
-      FROM message_memberships mm2 JOIN messages m2 ON m2.id = mm2.message_id WHERE mm2.conversation_id = ? AND mm2.active = 1)`, [long.id, long.id]],
+  ['message_summary_long', LATEST_MESSAGE_SQL, [long.id, long.id]],
   ['identity_startup', `SELECT seq, fact_id, source, source_event_id, kind, subject, source_ts, observed_ts, confidence, supersedes,
     json_patch('{}', json_object('provider', json_extract(payload, '$.provider'), 'native_id', json_extract(payload, '$.native_id'),
       'conversation_id', json_extract(payload, '$.conversation_id'), 'generation', json_extract(payload, '$.generation'))) AS payload
-    FROM facts WHERE seq <= ? AND (kind LIKE 'conversation.%' OR kind = 'run.created') ORDER BY subject, seq`, [state.last_seq]],
+    FROM facts WHERE seq <= ? AND (kind GLOB 'conversation.*' OR kind = 'run.created') ORDER BY subject, seq`, [state.last_seq]],
   ['active_observed_runs', `SELECT c.id,r.generation FROM runs r JOIN conversations c ON r.conversation_id IN (c.id,c.provider || ':' || c.native_id) WHERE c.provider=? AND c.origin='observed' AND r.state IN ('running','waiting_approval','waiting_input') AND NOT EXISTS (SELECT 1 FROM runs newer WHERE newer.conversation_id IN (c.id,c.provider || ':' || c.native_id) AND newer.generation>r.generation)`, ['codex']],
 ];
 const queries = sqls.map(([name, sql, parameters]) => {
@@ -40,9 +42,6 @@ const queries = sqls.map(([name, sql, parameters]) => {
   const timing = measure(() => statement.all(...parameters));
   return { name, sql, parameters, ...timing, value: undefined, rows: timing.value.length, plan: db.prepare('EXPLAIN QUERY PLAN ' + sql).all(...parameters).map(row => row.detail) };
 });
-const start = performance.now();
-const feed = new ProjectionFeed(path, () => state);
-const initializationMs = performance.now() - start;
 const snapshot = measure(() => feed.snapshot());
 const snapshotSerialize = measure(() => JSON.stringify(snapshot.value));
 const idleRefresh = measure(() => feed.refresh());

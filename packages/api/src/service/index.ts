@@ -39,6 +39,8 @@ const SNAPSHOT_READ_FACTS = 1024;
 const INITIAL_PROJECTION_FACTS = 4096;
 export const PROJECTION_POLL_MS = 500;
 export const OBSERVATION_POLL_MS = 1000;
+export const WATCH_FILE_LIMIT = 128;
+const WATCH_ACTIVITY_MS = 10 * 60 * 1000;
 export type UiFactInput = FactInput & { source: "ui" };
 export type UiAppender = (input: UiFactInput) => AppendResult | Promise<AppendResult>;
 export interface ObservationOptions {
@@ -48,6 +50,7 @@ export interface ObservationOptions {
   live?: boolean;
   writerOnly?: boolean;
   readerOnly?: boolean;
+  projectInWorker?: boolean;
   codexProcessReader?: CodexProcessReader;
   onProgress?: (progress: { processed: number; total: number }) => void;
 }
@@ -117,7 +120,7 @@ export function openObservationService(options: ObservationOptions = {}) {
   const buffered = options.readerOnly ? openReadLedger(dbPath) : openBatchLedger(dbPath);
   const ledger = buffered.ledger;
   const projectionDb = new DatabaseSync(dbPath);
-  // worker の接続は文脈の逐次読み出しだけに使い、投影用のキャッシュを持たせない。
+  // worker は観測と投影を逐次反映し、大きなページキャッシュを持たせない。
   projectionDb.exec(`PRAGMA busy_timeout = ${options.readerOnly ? 0 : 5000};
     PRAGMA cache_size = -${options.writerOnly ? OBSERVATION_CONTEXT_CACHE_KIB : PROJECTION_CACHE_KIB}`);
   // 再構築できる投影は WAL にまとめ、耐久台帳の fsync と checkpoint は書き手が担う。
@@ -132,17 +135,19 @@ export function openObservationService(options: ObservationOptions = {}) {
   let projectedSeq = Number(projectionDb.prepare("SELECT last_seq FROM projection_state WHERE id = 1").get()!.last_seq);
   let publishedSeq = projectedSeq;
   let generation = Number(projectionDb.prepare("SELECT generation FROM projection_state WHERE id = 1").get()!.generation);
+  const projectionListeners = new Set<() => void>();
   let observation: ObservationProgress = { state: "idle" };
+  let externalProjection = false;
   let projectionTimer: ReturnType<typeof setImmediate> | undefined;
-  // 主スレッドの投影は小さな範囲に区切り、HTTP の間に処理できるようにする。
-  const projectionConnection = options.readerOnly ? new Proxy(projectionDb, { get(target, key) {
+  // 投影は小さな範囲に区切り、観測と UI の要求の間に反映する。
+  const projectionConnection = options.readerOnly || options.projectInWorker ? new Proxy(projectionDb, { get(target, key) {
     if (key === "prepare") return (sql: string) => target.prepare(sql === "SELECT * FROM facts WHERE seq > ? ORDER BY seq"
       ? `${sql} LIMIT ${PROJECTION_BATCH_FACTS}` : sql);
     const value = Reflect.get(target, key, target);
     return typeof value === "function" ? value.bind(target) : value;
   } }) : projectionDb;
   function applyProjection() {
-    if (!options.writerOnly) {
+    if (!options.writerOnly || options.projectInWorker) {
       const stored = readProjectionState.get()!;
       if (Number(stored.generation) !== generation) {
         generation = Number(stored.generation);
@@ -150,14 +155,14 @@ export function openObservationService(options: ObservationOptions = {}) {
         publishedSeq = projectedSeq;
       }
     }
-    if (options.writerOnly || observation.state === "running"
+    if ((options.writerOnly && !options.projectInWorker) || observation.state === "running"
       || projectedSeq === Number(readLastSeq.get()!.seq ?? 0)) {
       return { last_seq: projectedSeq, generation, observation };
     }
     let state;
     try {
       // 空の投影には既存の依存先がない。初回の同期取り込みは純粋な全体投影で作る。
-      state = !options.readerOnly && projectedSeq === 0 && Number(readLastSeq.get()!.seq ?? 0) >= INITIAL_PROJECTION_FACTS
+      state = !options.readerOnly && !options.projectInWorker && projectedSeq === 0 && Number(readLastSeq.get()!.seq ?? 0) >= INITIAL_PROJECTION_FACTS
         ? rebuildInitialProjection(projectionDb) : applyIncremental(projectionConnection, projectedSeq);
     }
     catch (error) {
@@ -170,6 +175,7 @@ export function openObservationService(options: ObservationOptions = {}) {
     generation = state.generation;
     // 配信は変更した行だけを読むため、各取引の反映位置をそのまま公開する。
     publishedSeq = projectedSeq;
+    for (const listener of projectionListeners) listener();
     if (options.readerOnly && projectedSeq < Number(readLastSeq.get()!.seq ?? 0)) scheduleProjection();
     return { ...state, observation };
   }
@@ -177,7 +183,7 @@ export function openObservationService(options: ObservationOptions = {}) {
     // HTTP と WebSocket は確定済みの投影を読む。反映は要求の外で進める。
     if (options.readerOnly) {
       const stored = readProjectionState.get()!;
-      if (Number(stored.generation) !== generation) {
+      if (externalProjection || Number(stored.generation) !== generation) {
         generation = Number(stored.generation);
         projectedSeq = Number(stored.last_seq);
         publishedSeq = projectedSeq;
@@ -189,7 +195,7 @@ export function openObservationService(options: ObservationOptions = {}) {
   }
   if (!options.writerOnly) catchUp();
   function scheduleProjection(): void {
-    if (!options.readerOnly || projectionTimer || observation.state === "running"
+    if (externalProjection || !options.readerOnly || projectionTimer || observation.state === "running"
       || projectedSeq === Number(readLastSeq.get()!.seq ?? 0)) return;
     projectionTimer = setImmediate(() => {
       projectionTimer = undefined;
@@ -249,7 +255,19 @@ export function openObservationService(options: ObservationOptions = {}) {
   const saveCheckpoint = projectionDb.prepare("INSERT OR REPLACE INTO api_observation_cursors VALUES (?, ?)");
   const directCodex = createDirectCodexObserver(scanLedger, projectionDb);
   let directSeq = 0;
+  let directFiles: string[] = [];
+  let historyFiles = new Set<string>();
+  let cachedClaudeFiles: string[] = [];
+  let cachedCodexFiles: string[] = [];
+  let cachedRemoteFiles: string[] = [];
+  let changedHistoryPaths: ReadonlySet<string> | undefined;
   const readDirectFacts = prepareDirectFacts(projectionDb);
+  const readDirectLocations = projectionDb.prepare("SELECT 1 FROM facts WHERE seq > ? AND seq <= ? AND kind GLOB 'conversation.*' AND json_type(payload, '$.cwd') = 'text' LIMIT 1");
+  const readWatchConversations = projectionDb.prepare(`SELECT c.provider, c.native_id FROM runs r
+    JOIN conversations c ON r.conversation_id IN (c.id, c.provider || ':' || c.native_id)
+    WHERE r.state IN ('running', 'waiting_approval', 'waiting_input') AND NOT EXISTS (
+      SELECT 1 FROM runs newer WHERE newer.conversation_id IN (c.id, c.provider || ':' || c.native_id)
+        AND newer.generation > r.generation)`);
   const list = createDirectoryReader();
   const listOutbox = createDirectoryReader(false);
   const kit = createKitObserver(scanLedger, checkpoints, refreshSnapshot);
@@ -333,29 +351,72 @@ export function openObservationService(options: ObservationOptions = {}) {
     },
     setUiAppender(append: UiAppender) { appendUi = append; },
     checkpoint: buffered.checkpoint,
+    watchPaths() {
+      const active = new Set(readWatchConversations.all().map(row => `${row.provider}:${row.native_id}`));
+      const activePaths = new Set<string>();
+      if (active.size) for (const path of historyFiles) {
+        const meta = rollouts.get(path)?.context[0]?.value as { type?: string; id?: string; payload?: { id?: string } } | undefined;
+        const nativeId = meta?.type === "session_meta" ? meta.payload?.id : meta?.id;
+        const key = nativeId ? `codex:${nativeId}` : `claude:${basename(path, ".jsonl")}`;
+        if (active.has(key)) activePaths.add(path);
+      }
+      return [...checkpoints].filter(([path, cursor]) => historyFiles.has(path)
+        && !path.includes("/archived_sessions/")
+        && (activePaths.has(path) || (cursor.mtimeMs ?? 0) >= Date.now() - WATCH_ACTIVITY_MS))
+        .sort((a, b) => Number(activePaths.has(b[0])) - Number(activePaths.has(a[0]))
+          || (b[1].mtimeMs ?? 0) - (a[1].mtimeMs ?? 0)).slice(0, WATCH_FILE_LIMIT).map(([path]) => path);
+    },
+    useWorkerProjection() {
+      if (!options.readerOnly) return;
+      externalProjection = true;
+      clearImmediate(projectionTimer);
+      projectionTimer = undefined;
+      projectionDb.exec(`PRAGMA cache_size = -${OBSERVATION_CONTEXT_CACHE_KIB}`);
+    },
+    notifyProjection() {
+      catchUp();
+      for (const listener of projectionListeners) listener();
+    },
+    onProjection(listener: () => void) {
+      projectionListeners.add(listener);
+      return () => { projectionListeners.delete(listener); };
+    },
     setObservation(progress: ObservationProgress) { observation = { ...observation, ...progress }; scheduleProjection(); },
     getObservation() { return observation; },
     lastSeq() { return Number(readLastSeq.get()!.seq ?? 0); },
+    projectionSeq() { return Number(readProjectionState.get()!.last_seq); },
     notifyAppend(seq: number) { observation = { ...observation, seq }; scheduleProjection(); },
     rebuild() { const state = rebuild(projectionDb); projectedSeq = state.last_seq; publishedSeq = state.last_seq; generation = state.generation; return state; },
+    ingestChanged(paths: ReadonlySet<string>): IngestionReport {
+      changedHistoryPaths = paths;
+      try { return this.ingestOnce(); }
+      finally { changedHistoryPaths = undefined; }
+    },
     ingestOnce(): IngestionReport {
       if (options.readerOnly) throw new Error("Observation belongs to the worker");
       if (ingesting) throw new Error("Observation already running");
       ingesting = true;
       const previousCheckpoints = new Map(checkpoints);
       try {
+        const changes = historyFiles.size ? changedHistoryPaths : undefined;
         refreshSnapshot();
         const codex = rollout ??= createIncrementalRolloutReader(scanLedger, rollouts);
         decorate = codex.decorate;
         const start = Number(readLastSeq.get()!.seq ?? 0);
         const claudeProjects = join(env.CLAUDE_CONFIG_DIR ?? join(home, ".claude"), "projects");
         const remoteProjects = join(cacheRoot(env, home), "remote");
-        const remoteFiles = list(remoteProjects, name => name.endsWith(".jsonl"));
-        const claudePaths = [...list(remoteProjects, (name) => name.endsWith(".jsonl")).filter(path => !path.includes("/codex/")), ...list(claudeProjects, (name) => name.endsWith(".jsonl"))].filter((path) => hasChanged(path) || needsClaudeContext(path));
+        const remoteFiles = changes ? cachedRemoteFiles : list(remoteProjects, name => name.endsWith(".jsonl"));
+        const claudeFiles = changes ? cachedClaudeFiles : [...remoteFiles.filter(path => !path.includes("/codex/")), ...list(claudeProjects, (name) => name.endsWith(".jsonl"))];
+        const claudePaths = claudeFiles.filter((path) => changes
+          ? changes.has(path) && hasChanged(path) : hasChanged(path) || needsClaudeContext(path));
         const codexHome = env.CODEX_HOME ?? join(home, ".codex");
-        const codexFiles = [...list(remoteProjects, name => name.endsWith(".jsonl")).filter(path => path.includes("/codex/")), ...codex.reader.list(join(codexHome, "sessions")), ...codex.reader.list(join(codexHome, "archived_sessions"))];
-        const codexPaths = new Set(codexFiles.filter(hasChanged));
-        const codexLocations = codexFiles.filter((path) => codexPaths.has(path) || needsCodexLocation(path));
+        const codexFiles = changes ? cachedCodexFiles : [...remoteFiles.filter(path => path.includes("/codex/")), ...codex.reader.list(join(codexHome, "sessions")), ...codex.reader.list(join(codexHome, "archived_sessions"))];
+        if (!changes) {
+          historyFiles = new Set([...claudeFiles, ...codexFiles]);
+          cachedClaudeFiles = claudeFiles; cachedCodexFiles = codexFiles; cachedRemoteFiles = remoteFiles;
+        }
+        const codexPaths = new Set(codexFiles.filter(path => (!changes || changes.has(path)) && hasChanged(path)));
+        const codexLocations = codexFiles.filter((path) => codexPaths.has(path) || !changes && needsCodexLocation(path));
         let processed = 0;
         const total = claudePaths.length + codexPaths.size;
         options.onProgress?.({ processed, total });
@@ -401,7 +462,15 @@ export function openObservationService(options: ObservationOptions = {}) {
             payload: row.payload === null ? null : JSON.parse(String(row.payload)),
           } as Fact;
         }
-        buffered.batch(() => directCodex(readLaunchFacts(), codexFiles.filter(path => !path.startsWith(remoteProjects + "/"))));
+        const localDirectFiles = codexFiles.filter(path => !path.startsWith(remoteProjects + "/"));
+        const changedDirectFacts = directSeq !== directThrough
+          && (readDirectFacts.get(directSeq, directThrough) || readDirectLocations.get(directSeq, directThrough));
+        if (changedDirectFacts || claudePaths.length || codexPaths.size
+          || localDirectFiles.length !== directFiles.length || localDirectFiles.some((path, index) => path !== directFiles[index])
+          || directCodex.hasChangedPrompts()) {
+          buffered.batch(() => directCodex(readLaunchFacts(), localDirectFiles, new Date().toISOString(), codexPaths));
+          directFiles = localDirectFiles;
+        }
         directSeq = directThrough;
         refreshSnapshot();
         ingestOutbox(scanLedger, listOutbox(hookOutboxPath(env, home),

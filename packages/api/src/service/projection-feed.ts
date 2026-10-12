@@ -9,6 +9,8 @@ import { resolveProjectLocation } from "../../../core/src/ledger/repository.ts";
 import { createScreenIdentities, type ScreenIdentities } from './screen-identities.ts';
 import type { ObservationProgress } from "./index.ts";
 
+import { initializeSummaryIndex, LATEST_MESSAGE_SQL, FALLBACK_MESSAGE_SQL } from "./summary-index.ts";
+
 export type ProjectionRows = Record<string, Record<string, unknown>[]>;
 export interface ProjectionPatch {
   type: "patch"; from_seq: number; seq: number; generation: number;
@@ -19,6 +21,7 @@ export interface ProjectionPatch {
     membership_conversations: Record<string, string[]> };
 }
 const PATCH_RETENTION = 1000;
+const PATCH_RETENTION_BYTES = 16 * 1024 * 1024;
 const LIST_PAGE_SIZE = 1000;
 const EXCERPT_LENGTH = 120;
 const DETAIL_PAGE_SIZE = 200;
@@ -43,6 +46,8 @@ export class ProjectionFeed {
   private catchUp: () => ProjectionState;
   private state: ProjectionState;
   private history: ProjectionPatch[] = [];
+  private historyBytes = 0;
+  private historySizes: number[] = [];
   private floor: number;
   private limit: number;
   private cursor = 0;
@@ -63,7 +68,7 @@ export class ProjectionFeed {
     this.observation = (this.state as ProjectionState & { observation?: ObservationProgress }).observation;
     this.requiresGeneration = this.state.generation > 0;
     this.db = new DatabaseSync(path);
-    this.db.exec(`PRAGMA busy_timeout = 5000; PRAGMA synchronous = NORMAL; PRAGMA cache_size = -${SCREEN_CACHE_KIB}`);
+    this.db.exec(`PRAGMA busy_timeout = 5000; PRAGMA synchronous = NORMAL; PRAGMA wal_autocheckpoint = 0; PRAGMA cache_size = -${SCREEN_CACHE_KIB}`);
     this.catchUp = catchUp;
     this.limit = limit;
     this.db.exec(`CREATE TABLE IF NOT EXISTS api_projection_changes (
@@ -84,24 +89,30 @@ export class ProjectionFeed {
     }
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      const stored = this.prepare("SELECT last_seq, generation FROM projection_state WHERE id = 1").get()!;
+      this.state = { ...this.state, last_seq: Number(stored.last_seq), generation: Number(stored.generation) };
+      this.requiresGeneration = this.state.generation > 0;
+      this.db.exec("CREATE INDEX IF NOT EXISTS api_identity_subject_seq ON facts(subject, seq) WHERE kind GLOB 'conversation.*' OR kind = 'run.created'");
+      initializeSummaryIndex(this.db);
       this.updateIdentities();
       this.updateProjects();
       this.db.exec("DELETE FROM api_conversation_summaries");
       for (const row of this.prepare("SELECT id FROM conversations").iterate()) this.updateSummary(String(row.id));
+      this.cursor = Number(this.prepare("SELECT coalesce(max(cursor), 0) AS cursor FROM api_projection_changes").get()!.cursor);
+      this.prepare("DELETE FROM api_projection_changes WHERE cursor <= ?").run(this.cursor);
+      this.roots = this.readRoots();
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); this.db.close(); throw error; }
-    this.cursor = Number(this.prepare("SELECT coalesce(max(cursor), 0) AS cursor FROM api_projection_changes").get()!.cursor);
-    this.prepare("DELETE FROM api_projection_changes WHERE cursor <= ?").run(this.cursor);
     this.floor = this.state.last_seq;
-    this.roots = this.readRoots();
+    this.db.exec("PRAGMA busy_timeout = 0");
   }
   private updateIdentities(sinceSeq?: number): ScreenIdentities {
     const subset = sinceSeq === undefined ? "" : `AND subject IN (SELECT subject FROM facts WHERE seq > ? AND seq <= ?
-      AND (kind LIKE 'conversation.%' OR kind = 'run.created'))`;
+      AND (kind GLOB 'conversation.*' OR kind = 'run.created'))`;
     const rows = this.prepare(`SELECT seq, fact_id, source, source_event_id, kind, subject, source_ts, observed_ts, confidence, supersedes,
         json_patch('{}', json_object('provider', json_extract(payload, '$.provider'), 'native_id', json_extract(payload, '$.native_id'),
           'conversation_id', json_extract(payload, '$.conversation_id'), 'generation', json_extract(payload, '$.generation'))) AS payload
-      FROM facts WHERE seq <= ? AND (kind LIKE 'conversation.%' OR kind = 'run.created') ${subset} ORDER BY subject, seq`)
+      FROM facts WHERE seq <= ? AND (kind GLOB 'conversation.*' OR kind = 'run.created') ${subset} ORDER BY subject, seq`)
       .iterate(...(sinceSeq === undefined ? [this.state.last_seq] : [this.state.last_seq, sinceSeq, this.state.last_seq]));
     const next: ScreenIdentities = { conversations: {}, runs: {} };
     const createdRuns: { conversation_id: string; generation: number; subject_id: string }[] = [];
@@ -194,13 +205,12 @@ export class ProjectionFeed {
     }
   }
   private updateSummary(id: string): void {
-    const count = Number(this.prepare(`SELECT count(*) AS count FROM message_memberships WHERE conversation_id = ? AND active = 1`).get(id)!.count);
+    const count = Number(this.prepare(`SELECT count(*) AS count FROM api_message_order WHERE conversation_id = ? AND active = 1`).get(id)!.count);
     // 同じ時刻の発言は core の順序で最後を選ぶ。旧い Codex の行の位置は数として比べる。
-    const latest = this.prepare(`SELECT m.id, m.source_ts, m.source_event_id FROM message_memberships mm JOIN messages m ON m.id = mm.message_id
-      WHERE mm.conversation_id = ? AND mm.active = 1 AND julianday(m.source_ts) = (SELECT max(julianday(m2.source_ts))
-        FROM message_memberships mm2 JOIN messages m2 ON m2.id = mm2.message_id WHERE mm2.conversation_id = ? AND mm2.active = 1)`)
-      .all(id, id).reduce<Record<string, SQLOutputValue> | undefined>((best, row) => !best
-        || (compareEventOrder(String(row.source_event_id ?? ""), String(best.source_event_id ?? "")) || compareEventOrder(String(row.id), String(best.id))) > 0
+    const candidates = this.prepare(LATEST_MESSAGE_SQL).all(id, id);
+    const latest = (candidates.length ? candidates : this.prepare(FALLBACK_MESSAGE_SQL).all(id, id)).reduce<Record<string, SQLOutputValue> | undefined>((best, row) => !best
+        || (Number(row.source_time) - Number(best.source_time)
+          || compareEventOrder(String(row.source_event_id ?? ""), String(best.source_event_id ?? "")) || compareEventOrder(String(row.id), String(best.id))) > 0
         ? row : best, undefined);
     const last = latest && { source_ts: latest.source_ts, body: this.prepare("SELECT body FROM messages WHERE id = ?").get(latest.id!)?.body };
     const excerpt = last?.body ? getMessageText(JSON.parse(String(last.body))).slice(0, EXCERPT_LENGTH) : "";
@@ -240,6 +250,27 @@ export class ProjectionFeed {
     const state = this.catchUp();
     this.observation = (state as ProjectionState & { observation?: ObservationProgress }).observation;
     if (state.generation === this.state.generation && state.last_seq === this.state.last_seq) return;
+    // 書き手が持つロックは待たず、次の通知か見回りで同じ差分を再試行する。
+    try { this.db.exec("BEGIN IMMEDIATE"); }
+    catch (error) {
+      if (error instanceof Error && "errcode" in error && Number(error.errcode) === 5) return;
+      throw error;
+    }
+    const previous = this.state;
+    const cursor = this.cursor;
+    try {
+      const stored = this.prepare("SELECT last_seq, generation FROM projection_state WHERE id = 1").get()!;
+      const patch = this.refreshProjection({ ...state, last_seq: Number(stored.last_seq), generation: Number(stored.generation) });
+      this.db.exec("COMMIT");
+      return patch;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      this.state = previous;
+      this.cursor = cursor;
+      throw error;
+    }
+  }
+  private refreshProjection(state: ProjectionState): ProjectionPatch | "resync" {
     const previous = this.state;
     this.state = state;
     const changes = this.prepare("SELECT * FROM api_projection_changes WHERE cursor > ? ORDER BY cursor").all(this.cursor);
@@ -260,7 +291,7 @@ export class ProjectionFeed {
     for (const row of this.prepare(`SELECT DISTINCT conversation_id FROM message_memberships
       WHERE message_id IN (SELECT value FROM json_each(?))`).all(JSON.stringify(messages))) conversations.add(String(row.conversation_id));
     for (const id of conversations) this.updateSummary(id);
-    const identityChanged = !!this.prepare("SELECT 1 FROM facts WHERE seq > ? AND seq <= ? AND (kind LIKE 'conversation.%' OR kind = 'run.created') LIMIT 1").get(previous.last_seq, state.last_seq);
+    const identityChanged = !!this.prepare("SELECT 1 FROM facts WHERE seq > ? AND seq <= ? AND (kind GLOB 'conversation.*' OR kind = 'run.created') LIMIT 1").get(previous.last_seq, state.last_seq);
     const identities = identityChanged || state.generation !== previous.generation
       ? this.updateIdentities(state.generation === previous.generation ? previous.last_seq : undefined) : undefined;
     const projectFactsChanged = !!this.prepare("SELECT 1 FROM facts WHERE seq > ? AND seq <= ? AND kind LIKE 'project.%' LIMIT 1").get(previous.last_seq, state.last_seq);
@@ -301,7 +332,7 @@ export class ProjectionFeed {
     }
     groups.set("conversations", ids);
     if (state.generation !== previous.generation || state.last_seq < previous.last_seq) {
-      this.history = []; this.requiresGeneration = true; this.floor = state.last_seq;
+      this.history = []; this.historySizes = []; this.historyBytes = 0; this.requiresGeneration = true; this.floor = state.last_seq;
       this.roots = this.readRoots();
       return "resync";
     }
@@ -341,8 +372,14 @@ export class ProjectionFeed {
       }
     }
     if (patch.changes.delegations) patch.changes.delegations.upsert = this.rootDelegations(patch.changes.delegations.upsert);
+    const bytes = Buffer.byteLength(JSON.stringify(patch));
     this.history.push(patch);
-    if (this.history.length > this.limit) this.floor = this.history.shift()!.seq;
+    this.historySizes.push(bytes);
+    this.historyBytes += bytes;
+    while (this.history.length > this.limit || this.historyBytes > PATCH_RETENTION_BYTES) {
+      this.floor = this.history.shift()!.seq;
+      this.historyBytes -= this.historySizes.shift()!;
+    }
     // 配信済みの変更は patch の識別子だけに置き換える。
     this.prepare("DELETE FROM api_projection_changes WHERE cursor <= ?").run(this.cursor);
     return patch;

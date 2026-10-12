@@ -4,7 +4,8 @@ import { BUSY_TIMEOUT_MS, openLedger } from "../../../core/src/ledger/index.ts";
 import type { AppendResult, Fact, FactInput, Ledger } from "../../../core/src/ledger/index.ts";
 
 const STAGING_FACT_LIMIT = 4096;
-const BATCH_CACHE_KIB = 64 * 1024;
+const STAGING_BYTE_LIMIT = 16 * 1024 * 1024;
+const BATCH_CACHE_KIB = 16 * 1024;
 export interface BatchLedger extends Ledger {
   batch<T>(operation: () => T): T;
 }
@@ -35,13 +36,14 @@ export function openBatchLedger(path: string) {
     .map((row) => String(row.name)).filter((name) => name !== "seq");
   const quotedColumns = columns.map((name) => `"${name.replaceAll('"', '""')}"`);
   const existing = db.prepare("SELECT seq, fact_id, payload_hash FROM main.facts WHERE source = ? AND source_event_id = ?");
-  const preparedHash = stagingDb.prepare("SELECT payload_hash FROM facts WHERE seq = ?");
+  const preparedHash = stagingDb.prepare("SELECT payload_hash, length(CAST(payload AS BLOB)) AS payload_bytes FROM facts WHERE seq = ?");
   const read = db.prepare("SELECT * FROM facts WHERE seq > ? ORDER BY seq LIMIT ?");
   db.exec(`CREATE TEMP TABLE pending_facts (staging_seq INTEGER PRIMARY KEY, seq INTEGER NOT NULL);
     PRAGMA read_uncommitted = ON`);
   const reserve = db.prepare("INSERT INTO pending_facts VALUES (?, ?)");
   const pending = new Map<string, { seq: number; payloadHash: string }>();
   let stagedCount = 0;
+  let stagedBytes = 0;
   let nextSeq = 0;
   let batching = false;
   let buildIndexes = false;
@@ -85,6 +87,7 @@ export function openBatchLedger(path: string) {
     db.exec("DELETE FROM pending_facts");
     pending.clear();
     stagedCount = 0;
+    stagedBytes = 0;
   }
   function persist(): void {
     if (pending.size === 0) { resetStaging(); return; }
@@ -140,11 +143,13 @@ export function openBatchLedger(path: string) {
     batch,
     append(input: FactInput): AppendResult {
       return batch(() => {
-        if (stagedCount >= STAGING_FACT_LIMIT) persist();
+        if (stagedCount >= STAGING_FACT_LIMIT || stagedBytes >= STAGING_BYTE_LIMIT) persist();
         const prepared = staging.append(input);
         stagedCount += 1;
+        const preparedRow = prepared.status === "conflict" ? undefined : preparedHash.get(prepared.seq)!;
+        if (prepared.status === "appended") stagedBytes += Number(preparedRow!.payload_bytes ?? 0);
         const payloadHash = prepared.status === "conflict" ? prepared.incoming_payload_hash
-          : String(preparedHash.get(prepared.seq)!.payload_hash);
+          : String(preparedRow!.payload_hash);
         const buffered = pending.get(prepared.fact_id);
         const stored = existing.get(input.source, input.source_event_id);
         const row = buffered ?? stored;

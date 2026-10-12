@@ -22,6 +22,7 @@ import { createUsageService, type UsageOptions } from "../usage/index.ts";
 
 export const DEFAULT_WS_PORT = 7421;
 const MAX_OPEN_CONVERSATIONS = 10;
+const PROJECTION_DELIVERY_MS = 25;
 const MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
 const MAX_SESSION_COMMANDS = 256;
 export interface WebSocketOptions {
@@ -223,6 +224,11 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
   } catch (error) { sessionHosts.close(); runner.close(); feed?.close(); files.close(); searchDb.close(); wss.close(); server.close(); throw error; }
   port = (server.address() as { port: number }).port;
   searchOptions.port = port;
+  let deliveryTimer: ReturnType<typeof setTimeout> | undefined;
+  const unsubscribeProjection = service.onProjection(() => {
+    if (deliveryTimer) return;
+    deliveryTimer = setTimeout(() => { deliveryTimer = undefined; pollObservation(refresh); }, PROJECTION_DELIVERY_MS);
+  });
   const timer = setInterval(() => pollObservation(refresh), PROJECTION_POLL_MS);
   return {
     url: `http://127.0.0.1:${port}`, wsUrl: `ws://127.0.0.1:${port}/ws`, token, runner, feed, previews: files,
@@ -232,6 +238,8 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
     },
     close: async () => {
       clearInterval(timer);
+      unsubscribeProjection();
+      clearTimeout(deliveryTimer);
       sessionHosts.close();
       files.clearPreviews();
       files.close();

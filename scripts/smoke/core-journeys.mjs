@@ -313,6 +313,14 @@ async function main() {
       await waitFor(async () => await bubble().count() === 1 && !(await bubble().innerText()).includes('Sending…'),
         'second bubble survives reload');
       await waitReply(marker);
+      const deliveredRows = (await readFile(transcript, 'utf8')).split('\n').filter(Boolean).map(JSON.parse);
+      const attachments = deliveredRows.filter(row => row.type === 'attachment' && row.attachment?.type === 'queued_command'
+        && typeof row.attachment.prompt === 'string' && row.attachment.prompt.includes(second));
+      const removals = deliveredRows.filter(row => row.type === 'queue-operation' && row.operation === 'remove'
+        && row.reason === 'absorbed_mid_turn' && row.content === second);
+      if (attachments.length !== 1 || removals.length !== 1) {
+        throw new Error(`midturn delivery evidence: queued_command=${attachments.length}, absorbed_mid_turn=${removals.length}`);
+      }
       await waitFor(async () => !(await bubble().innerText()).includes('Queued'), 'second bubble recorded', REPLY_TIMEOUT_MS);
       await page.reload();
       await waitFor(async () => await bubble().count() === 1 && !/Sending…|Queued/.test(await bubble().innerText()),

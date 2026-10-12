@@ -52,7 +52,7 @@ function RenderMessage({ row, sender, showName = true, language = 'en', streamin
     const time = readText(row.source_ts);
     return <details className="message message-report" id={`message-${encodeURIComponent(String(row.id))}`} aria-label={t('agentReport')}>
       <summary><strong className="message-sender">{t('agentReport')}</strong>
-        <span className="message-report-lead">{report.split('\n').find(line => line.trim()) ?? ''}</span>
+        <span className="message-report-lead">{(report.split('\n').find(line => line.trim()) ?? '').trim().replace(/^#{1,6}\s+/, '').replace(/\s+#+\s*$/, '')}</span>
         {time && <time dateTime={time} title={time}>{formatClock(time, language)}</time>}</summary>
       <div className="message-bubble"><Markdown text={report}/></div>
     </details>;

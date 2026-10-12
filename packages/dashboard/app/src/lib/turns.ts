@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react';
-import { readText } from '../components/conversation/model.ts';
+import { readObject, readText } from '../components/conversation/model.ts';
+import { senderOf } from '../components/conversation/participants.ts';
 import { formatSeconds } from './format.ts';
 import type { Row, ScreenState } from './store.ts';
 import { isRunning, selectRoots, type Root } from './roots.ts';
@@ -10,14 +11,20 @@ export const READY_KEY = 'agent-graph-ready-turns';
 export const RECENT_KEY = 'agent-graph-recent-conversations';
 export const RECENT_LIMIT = 10;
 export interface WorkingTurn { runKey: string; state: string; started: number; startEvidence: string }
-export function resolveWorkingTurn(run: Row | undefined): WorkingTurn | undefined {
+export function resolveWorkingTurn(run: Row | undefined, messages: Row[] = []): WorkingTurn | undefined {
   const state = readText(run?.state);
   if (!['starting', 'running', 'waiting_approval', 'waiting_input'].includes(state)) return undefined;
-  const startEvidence = readText(run?.turn_started_ts);
+  const projected = readText(run?.turn_started_ts);
+  const hook = readObject(run?.last_evidence);
+  // 道具の時刻や実行世代の開始は、前のターンを含むため代用しない。
+  const promptTime = hook.hook_event_name === 'UserPromptSubmit' ? readText(run?.last_evidence_ts) : '';
+  const knownStart = [projected, promptTime].find(time => Number.isFinite(Date.parse(time)));
+  const startEvidence = knownStart ?? messages.filter(row => !row.delivery_state && senderOf(row, { child: false, parent: '', self: '' }).side === 'end')
+    .map(row => readText(row.source_ts)).filter(time => Number.isFinite(Date.parse(time))).sort().at(-1) ?? '';
   return { runKey: JSON.stringify([run?.id, run?.generation]), state, started: Date.parse(startEvidence), startEvidence };
 }
-export function useWorkingTurn(run: Row | undefined): WorkingTurn | undefined {
-  return resolveWorkingTurn(run);
+export function useWorkingTurn(run: Row | undefined, messages: Row[] = []): WorkingTurn | undefined {
+  return resolveWorkingTurn(run, messages);
 }
 export function isWorkingTurn(turn: WorkingTurn | undefined): boolean { return turn?.state === 'running' || turn?.state === 'starting'; }
 export function workingElapsed(turn: WorkingTurn | undefined, now: number): string {

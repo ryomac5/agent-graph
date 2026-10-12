@@ -354,7 +354,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   // 系列の古い会話が動いている場合も、その会話の時計と道具を使う。子の実行は親の終了を上書きしない。
   const activityRun = activity.run ?? run;
   const activityMessages = messageEntries.filter(entry => owner.get(entry.key) === activityRun?.conversation_id);
-  const workingTurn = useWorkingTurn(activityRun && { ...activityRun, state: rawStatus });
+  const workingTurn = useWorkingTurn(activityRun && { ...activityRun, state: rawStatus }, activityMessages.map(entry => ({ ...entry.row, source_ts: entry.time })));
   const lastToolBlock = [...activityMessages].reverse().filter(entry => workingTurn && Date.parse(entry.time) >= workingTurn.started)
     .flatMap(entry => Array.isArray(entry.row.body) ? entry.row.body.map(readObject).filter(block => block.type === 'tool_use').reverse() : [])[0];
   const toolDescription = describeTool(lastToolBlock);

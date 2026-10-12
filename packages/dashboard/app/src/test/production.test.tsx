@@ -215,3 +215,12 @@ it('正規化済みの依頼は本文内の札や報告の接頭辞をそのま�
   expect(shown.container.textContent).toContain('<system-reminder>本文</system-reminder>');
   expect(shown.container.textContent).toContain('<pasted_content id="a">本文</pasted_content id="a">');
 });
+
+it.each([false, true])('子の報告の札は Markdown 見出しの記号を除く（正規化済み=%s）', normalized => {
+  const body = '## 再レビューの結果\n\n問題はありません。';
+  const row = { id: 'heading-report', role: normalized ? 'agent_report' : 'user', content_normalized: normalized,
+    body: normalized ? body : `Another Claude session sent a message: The report follows:\n${body}` };
+  const shown = render(<Message row={row} sender={senderOf(row, { child: false, parent: 'User', self: 'Claude' })}/>);
+  expect(shown.container.querySelector('.message-report-lead')?.textContent).toBe('再レビューの結果');
+  expect(shown.container.querySelector('.message-bubble')?.textContent).toContain('再レビューの結果');
+});

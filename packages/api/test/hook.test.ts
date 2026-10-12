@@ -233,3 +233,21 @@ test("根は子の終了を待つ間も hook のターンを保ち、Stop でだ
   await post({ ...EVENT, event_id: "next", hook_event_name: "UserPromptSubmit", source_ts: "2026-01-01T00:13:00.000Z" });
   assert.equal(projectRuns(ledger.readSince(0, 100))[0].turn_started_ts, "2026-01-01T00:13:00.000Z");
 });
+
+test('SessionStart のない UserPromptSubmit でも開始時刻が入り、受け口の再起動で消えない', async (t) => {
+  const ledger = openLedger(':memory:');
+  t.after(() => ledger.close());
+  const event: HookEvent = { ...EVENT, event_id: 'prompt-only', hook_event_name: 'UserPromptSubmit' };
+  const post = (receiver: ReturnType<typeof createReceiver>, input: HookEvent) => receiver.post(receiver.url, {
+    method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${receiver.token}` },
+    body: JSON.stringify(input),
+  });
+  assert.equal((await post(createReceiver(ledger), event)).status, 200);
+  const before = ledger.readSince(0, 100);
+  assert.equal(projectRuns(before)[0].turn_started_ts, event.source_ts);
+  const restarted = createReceiver(ledger);
+  assert.equal((await post(restarted, event)).status, 200);
+  assert.deepEqual(ledger.readSince(0, 100), before);
+  assert.equal((await post(restarted, { ...event, event_id: 'additional', source_ts: '2026-01-01T00:01:00.000Z' })).status, 200);
+  assert.equal(projectRuns(ledger.readSince(0, 100))[0].turn_started_ts, event.source_ts);
+});

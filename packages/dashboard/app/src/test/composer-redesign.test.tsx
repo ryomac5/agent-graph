@@ -15,10 +15,11 @@ it('resolves actual executor candidates before config, including legacy role arr
   expect(readRecommendedModel({ config: { agents: { codex: { model: 'gpt-6.1-sol' } } } }, 'codex')).toBe('gpt-6.1-sol');
   expect(readRecommendedModel({}, 'claude')).toBe('');
 });
-it('folds older versions per family while retaining assigned and latest models', () => {
+it('folds older versions per family while retaining assigned models', () => {
   const models = ['Opus 5.5', 'Opus 5', 'Sonnet 5.5', 'Sonnet 4.6', 'GPT-6.1-Sol', 'GPT-6-Sol', 'Gemini 3.8 Flash', 'Gemini 3 Flash', 'GPT-Reserve'].map(displayName => ({ model: displayName, displayName }));
-  const visible = readVisibleModels({ policy: { roles: { implement: { heavy: [{ model: 'Sonnet 4.6' }] } }, modelNotes: [{ model: 'GPT-6-Sol', latest: true }] } });
-  expect(findOlderModels(models, visible)).toEqual(new Set(['Opus 5', 'Gemini 3 Flash']));
+  const visible = readVisibleModels({ policy: { roles: { implement: { heavy: [{ model: 'Sonnet 4.6' }] } } } });
+  expect(visible).toEqual(['Sonnet 4.6']);
+  expect(findOlderModels(models, visible)).toEqual(new Set(['Opus 5', 'GPT-6-Sol', 'Gemini 3 Flash']));
 });
 it('focuses the selected menu row and supports arrows, Enter, Escape and older versions', () => {
   const choose = vi.fn();

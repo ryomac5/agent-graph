@@ -60,12 +60,12 @@ it.each(['en', 'ja'] as const)('orders five sections, folds rules and keys, and 
   expect(container.textContent).not.toMatch(/デフォルト|標準モデルを使用|On limits or errors/);
   await screen.findByRole('button', { name: language === 'ja' ? '接続先を追加' : 'Add connection', hidden: true });
 });
-it('keeps used and latest older models visible while folding only obsolete versions', () => {
+it('keeps used older models visible while folding only obsolete versions', () => {
   const names = ['Opus 5.5', 'Opus 5', 'Opus 4.6', 'GPT-6.1-Sol', 'GPT-6-Sol', 'Gemini 3.8 Flash', 'Gemini 3.5 Flash', 'GPT-Reserve'];
   const catalog = names.map(model => ({ model, displayName: model }));
-  const result = partitionModels(catalog, new Set(['Opus 5']), new Set(['Gemini 3.5 Flash']));
-  expect(result.current.map(model => model.model)).toEqual(['Opus 5.5', 'Opus 5', 'GPT-6.1-Sol', 'Gemini 3.8 Flash', 'Gemini 3.5 Flash', 'GPT-Reserve']);
-  expect(result.older.map(model => model.model)).toEqual(['Opus 4.6', 'GPT-6-Sol']);
+  const result = partitionModels(catalog, new Set(['Opus 5']));
+  expect(result.current.map(model => model.model)).toEqual(['Opus 5.5', 'Opus 5', 'GPT-6.1-Sol', 'Gemini 3.8 Flash', 'GPT-Reserve']);
+  expect(result.older.map(model => model.model)).toEqual(['Opus 4.6', 'GPT-6-Sol', 'Gemini 3.5 Flash']);
 });
 it('searches catalog names and leaves Antigravity without effort controls', () => {
   function Editor() { const [policy, setPolicy] = useState(defaultPolicy()); return <ModelAssignments policy={policy} onChange={setPolicy} language="ja" models={{ antigravity: { state: 'known', models: [{ model: 'gemini-3.8-flash-high', displayName: 'Gemini 3.8 Flash' }] } }}/>; }
@@ -80,7 +80,6 @@ it('searches catalog names and leaves Antigravity without effort controls', () =
   expect(within(list).queryByRole('button', { name: 'opus' })).toBeNull();
   fireEvent.click(within(list).getByRole('button', { name: 'Gemini 3.8 Flash' }));
   expect(within(dialog).queryByRole('group', { name: '実装 ふつうの作業 1 思考量' })).toBeNull();
-  expect(within(dialog).queryByText('モデルのメモを編集')).toBeNull();
 });
 it('focuses the selected menu row, navigates with arrows and returns focus after selection', () => {
   const change = vi.fn();

@@ -28,7 +28,7 @@ it.each(['ja', 'en'] as const)('explains each preset and the required save witho
   const change = setup(defaultPolicy(), language);
   const ja = language === 'ja';
   const presets = [
-    [ja ? '性能重視' : 'Performance', ja ? '各役割でメモの強みが最大の候補を選び、同点ならモデルランクと候補順で決めます。' : 'Choose the strongest noted candidate for each role, breaking ties by model tier and candidate order.'],
+    [ja ? '性能重視' : 'Performance', ja ? '各役割で、いちばん上位のモデルを選びます。' : 'Choose the highest-tier candidate for each role.'],
     [ja ? 'バランス' : 'Balanced', ja ? '初期設定の組み合わせに戻します。' : 'Restore the default combination.'],
     [ja ? '節約' : 'Economy', ja ? '軽量モデルを標準の負荷にも使います。' : 'Use light models for standard workloads too.'],
   ];
@@ -77,13 +77,11 @@ it.each(['ja', 'en'] as const)('shows ordered fallback models with catalog names
   expect(screen.queryByText(/\+\d+ 候補|\+\d+ candidates/)).toBeNull();
 });
 
-it('selects grouped catalog rows, preserves family and shows official provider marks with notes', () => {
-  const policy = defaultPolicy(); policy.modelNotes[0].latest = true;
+it('selects grouped catalog rows, preserves family and shows official provider marks', () => {
+  const policy = defaultPolicy();
   const change = setup(policy); edit();
   const list = screen.getByRole('list', { name: '実装 ふつうの作業 1 モデルの一覧' });
   for (const provider of ['Claude', 'Codex', 'Antigravity']) expect(within(list).getByText(provider)).toBeTruthy();
-  expect(within(list).getByText('最新 · SWE-bench で最上位。')).toBeTruthy();
-  expect(within(list).getByText('日本語の性能が高い。')).toBeTruthy();
   const row = within(list).getByRole('button', { name: 'Claude Sonnet' });
   expect(row.querySelector('img')?.getAttribute('src')).toBe('/brand/claude.svg');
   expect(screen.getByLabelText('実装 ふつうの作業 1 モデル').closest('details')).toHaveProperty('open', false);
@@ -145,22 +143,25 @@ it.each(['性能重視', 'バランス', '節約'])('previews changed cells, all
   fireEvent.click(screen.getByRole('button', { name }));
   fireEvent.click(screen.getByRole('button', { name: '表に反映' }));
   const next = change.mock.lastCall![0] as Policy;
-  expect(next.quota).toEqual(original.quota); expect(next.modelNotes).toEqual(original.modelNotes);
+  expect(next.quota).toEqual(original.quota); expect(next.performance).toEqual(original.performance);
   if (name === '節約') expect(readCandidates(next, 'implement', 'standard')).toEqual(readCandidates(original, 'implement', 'light'));
   if (name === 'バランス') expect(next.roles).toEqual(defaultPolicy().roles);
   if (name === '性能重視') {
-    expect(readCandidates(next, 'implement', 'light')[0].model).toBe('gpt-6-astra');
-    expect(readCandidates(next, 'implement', 'heavy')[0].effort).toBe('xhigh');
+    expect(readCandidates(next, 'implement', 'light')[0].model).toBe('opus');
+    expect(readCandidates(next, 'implement', 'heavy')[0].model).toBe('opus');
   }
   expect(screen.queryByRole('dialog')).toBeNull();
 });
 
-it('keeps the balanced preset aligned with core defaults and compares explicit numeric strengths', () => {
+it('keeps the balanced preset aligned with core defaults and ranks tiers before candidate order', () => {
   const policy = defaultPolicy();
   expect(createBalancedRoles()).toEqual(policy.roles);
-  policy.modelNotes = [{ model: 'opus', strength: '95', latest: false, specialties: '' }, { model: 'gpt-6-astra', strength: '80', latest: true, specialties: '' }];
+  const candidate = (model: string, tier: 'high' | 'mid' | 'low') => ({ executor: 'claude' as const, family: 'anthropic' as const, model, tier });
+  policy.roles.implement = { light: [candidate('low-first', 'low'), candidate('mid-first', 'mid')], standard: [candidate('high-first', 'high'), candidate('high-second', 'high')], heavy: [candidate('high-third', 'high')] };
   const next = createPreset(policy, 'performance');
-  expect(readCandidates(next, 'implement', 'standard')[0].model).toBe('opus');
+  for (const weight of ['light', 'standard', 'heavy'] as const) expect(readCandidates(next, 'implement', weight)[0].model).toBe('high-first');
+  expect(readCandidates(next, 'implement', 'light').slice(1).map(candidate => candidate.model)).toEqual(['low-first', 'mid-first']);
+  expect(readCandidates(next, 'implement', 'standard')[1].model).toBe('high-second');
 });
 
 it('hides raw primary, inherited and backup IDs until each provider catalog has arrived', () => {

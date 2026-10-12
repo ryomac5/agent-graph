@@ -28,6 +28,5 @@ export function findOlderModels(models: ComposerModel[], keep: string[]): Set<st
 export function readVisibleModels(settings: unknown): string[] {
   const policy = readObject(readObject(settings).policy);
   const assigned = Object.values(readObject(policy.roles)).flatMap(role => Array.isArray(role) ? role : Object.values(readObject(role)).flatMap(band => Array.isArray(band) ? band : [])).map(item => readText(readObject(item).model));
-  const latest = (Array.isArray(policy.modelNotes) ? policy.modelNotes : []).map(readObject).filter(note => note.latest === true).map(note => readText(note.model));
-  return [...assigned, ...latest];
+  return assigned;
 }

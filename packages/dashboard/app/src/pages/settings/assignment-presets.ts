@@ -12,10 +12,6 @@ export function readCandidates(policy: Policy, role: Role, weight: Weight): Cand
   const bands = readBands(policy, role);
   return bands[weight] ?? bands.standard ?? [];
 }
-export function findModelNote(policy: Policy, model: string) {
-  return policy.modelNotes.find(note => note.model === model) ?? policy.modelNotes
-    .filter(note => model.startsWith(note.model + '-')).sort((a, b) => b.model.length - a.model.length)[0];
-}
 const claude = (model: string): Candidate => ({ executor: 'claude', model, family: 'anthropic', tier: model === 'sonnet' ? 'mid' : 'high' });
 const codex = (model: string, effort: string): Candidate => ({ executor: 'codex', model, effort, family: 'openai', tier: model === 'gpt-6-astra' ? 'high' : 'mid' });
 // ブラウザから Node に依存する policy.ts を読み込まないため、既定の割り当てだけを持つ。
@@ -30,13 +26,7 @@ export function createBalancedRoles(): Policy['roles'] {
     proofread: { standard: [{ executor: 'antigravity', model: 'gemini-3.8-flash-high', family: 'google', tier: 'high' }] },
   };
 }
-function scoreCandidate(policy: Policy, candidate: Candidate): number {
-  const note = findModelNote(policy, candidate.model);
-  const strength = note?.strength.trim() ?? '';
-  // 数字で書かれた評価を優先する。文章の最上位評価と水準も比較に使う。
-  const numeric = /^\d+(?:\.\d+)?$/.test(strength) ? Number(strength) : undefined;
-  return numeric ?? ((/最上位|最高|最強|top|best|strongest/i.test(strength) ? 100 : strength ? 10 : 0) + ({ high: 3, mid: 2, low: 1 })[candidate.tier]);
-}
+const TIER_RANK = { high: 3, mid: 2, low: 1 };
 export function createPreset(policy: Policy, preset: Preset): Policy {
   if (preset === 'balanced') return { ...policy, roles: createBalancedRoles() };
   const roles = { ...policy.roles };
@@ -46,7 +36,7 @@ export function createPreset(policy: Policy, preset: Preset): Policy {
       roles[role] = { ...bands, standard: structuredClone(readCandidates(policy, role, 'light')) };
     } else {
       const pool = WEIGHTS.flatMap(weight => readCandidates(policy, role, weight));
-      const best = [...pool].sort((a, b) => scoreCandidate(policy, b) - scoreCandidate(policy, a))[0];
+      const best = [...pool].sort((a, b) => TIER_RANK[b.tier] - TIER_RANK[a.tier])[0];
       roles[role] = Object.fromEntries(WEIGHTS.map(weight => {
         const current = readCandidates(policy, role, weight);
         const primary = best ? current.find(entry => entry.executor === best.executor && entry.model === best.model) ?? best : undefined;

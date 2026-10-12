@@ -488,7 +488,6 @@ test("weighted policy edits migrate legacy role tables and round-trip through bo
     const patch = structuredClone(f.service.read("policy"));
     patch.roles.implement = { standard: getCandidates(patch, "implement"), light: [{ executor: "codex", model: "gpt-6.1-sol", effort: "low", family: "openai", tier: "mid" }], heavy: [{ executor: "codex", model: "gpt-6-astra", effort: "max", family: "openai", tier: "high" }] };
     patch.criteria.implement = { ...patch.criteria.implement, heavy: '安全と "設計"\n長い差分 # 基準' };
-    patch.modelNotes = [{ model: "gpt-6-astra", latest: true, strength: "Strong", specialties: "Implementation" }];
     patch.quota = { softLimitPercent: 60, hardLimitPercent: 85 };
     const preview = f.service.previewPolicy(patch);
     await f.service.write("policy", patch, { previewToken: preview.token });

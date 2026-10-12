@@ -7,14 +7,12 @@ import type { Candidate, Role, Tier, Weight } from "../delegate/types.ts";
 export const ROLES: Role[] = ["orchestrate", "advisor", "research", "implement", "document", "review", "verify", "proofread"];
 export const WEIGHTS: Weight[] = ["light", "standard", "heavy"];
 export type RoleModels = Candidate[] | Partial<Record<Weight, Candidate[]>>;
-export interface ModelNote { model: string; latest: boolean; strength: string; specialties: string }
 export type Constraint = { kind: "reviewerDifferentFamily" } | { kind: "implementerNotOrchestrator" }
   | { kind: "minTierForRole"; role: Role; tier: Tier };
 export interface Policy {
   maxRoundTrips: number;
   roles: Record<Role, RoleModels>;
   criteria: Partial<Record<Role, Partial<Record<Weight, string>>>>;
-  modelNotes: ModelNote[];
   quota: { softLimitPercent: number; hardLimitPercent: number };
   performance: { minSamples: number; weights: { acceptRate: number; reviewApprove: number; roundTrips: number; tokens: number } };
   constraints: Constraint[];
@@ -37,10 +35,6 @@ export function defaultPolicy(): Policy {
       review: { light: "見た目や文言の差分。", standard: "ふつうの差分。", heavy: "台帳、権限、安全に触る差分。" },
       document: { light: "150 行以下の 1 ファイル。", heavy: "長い文書や設計書。" },
     },
-    modelNotes: [
-      { model: "gpt-6-astra", latest: false, strength: "SWE-bench で最上位。", specialties: "" },
-      { model: "gemini-3.8-flash", latest: false, strength: "", specialties: "日本語の性能が高い。" },
-    ],
     quota: { softLimitPercent: 70, hardLimitPercent: 90 },
     performance: { minSamples: 20, weights: { acceptRate: 0.4, reviewApprove: 0.3, roundTrips: 0.2, tokens: 0.1 } },
     constraints: [{ kind: "reviewerDifferentFamily" }, { kind: "implementerNotOrchestrator" }],
@@ -60,6 +54,7 @@ function readObject(value: unknown, name: string): Record<string, unknown> {
 }
 export function validatePolicyOverride(value: unknown): Partial<Policy> {
   const object = structuredClone(readObject(value, "policy"));
+  delete object.modelNotes;
   for (const field of ["roles", "criteria"]) {
     if (object[field] === undefined) continue;
     const entries = readObject(object[field], field);
@@ -92,15 +87,6 @@ export function validatePolicyOverride(value: unknown): Partial<Policy> {
   if (object.criteria !== undefined) for (const [role, bands] of Object.entries(readObject(object.criteria, "criteria"))) {
     choice(role, ROLES, "role");
     for (const [weight, text] of Object.entries(readObject(bands, "criteria"))) { choice(weight, WEIGHTS, "weight"); if (typeof text !== "string") throw new TypeError("Invalid criteria"); }
-  }
-  if (object.modelNotes !== undefined) {
-    if (!Array.isArray(object.modelNotes)) throw new TypeError("Invalid modelNotes");
-    const models = new Set<string>();
-    for (const value of object.modelNotes) {
-      const n = readObject(value, "model note");
-      if (Object.keys(n).some(key => !["model", "latest", "strength", "specialties"].includes(key)) || typeof n.model !== "string" || !n.model.trim() || typeof n.latest !== "boolean" || typeof n.strength !== "string" || typeof n.specialties !== "string" || models.has(n.model)) throw new TypeError("Invalid model note");
-      models.add(n.model);
-    }
   }
   for (const key of ["quota", "performance"] as const) if (object[key] !== undefined) {
     const section = readObject(object[key], key);

@@ -33,6 +33,5 @@ export function modelNotice(policy: Policy): string {
   return `割り当て: 実装 重=${describe("implement", "heavy")} / 標準=${describe("implement")} / 軽=${describe("implement", "light")}。\n` +
     `レビュー 重=${describe("review", "heavy")} / 標準=${describe("review")} / 軽=${describe("review", "light")}。文書 重=${describe("document", "heavy")} / 標準=${describe("document")} / 軽=${describe("document", "light")}。\n` +
     `校正=${describe("proofread")}。助言=${describe("advisor")}。検証=${describe("verify")}。調査=${describe("research")}。根=${describe("orchestrate")}。\n` +
-    `重さの基準: ${Object.entries(policy.criteria).flatMap(([role, bands]) => Object.entries(bands ?? {}).map(([weight, text]) => `${role}.${weight}: ${text}`)).join(" / ")}\n` +
-    `モデルの覚え書き: ${policy.modelNotes.map(n => `${n.model}: ${[n.latest ? "最新" : "", n.strength, n.specialties].filter(Boolean).join("、")}`).join(" / ")}。最新と強さは別の判断材料です。`;
+    `重さの基準: ${Object.entries(policy.criteria).flatMap(([role, bands]) => Object.entries(bands ?? {}).map(([weight, text]) => `${role}.${weight}: ${text}`)).join(" / ")}`;
 }

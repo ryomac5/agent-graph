@@ -8,7 +8,7 @@ import { useEscapeLayer } from '../../lib/escape-layers.ts';
 import type { Policy } from '../../lib/settings.ts';
 import type { Candidate, Role, Weight } from '../../../../../core/src/delegate/types.ts';
 
-import { ROLES, WEIGHTS, readBands, createPreset, listPresetChanges, findModelNote, type Preset } from './assignment-presets.ts';
+import { ROLES, WEIGHTS, readBands, createPreset, listPresetChanges, type Preset } from './assignment-presets.ts';
 const NAMES: Record<Role, [string, string]> = { orchestrate: ['Main agent', 'メインエージェント'], implement: ['Implementation', '実装'], research: ['Research', 'リサーチ'], document: ['Documentation', 'ドキュメント'], review: ['Code review', 'コードレビュー'], advisor: ['Advisor', 'アドバイザー'], verify: ['Verification', '動作検証'], proofread: ['Proofreading', '校正'] };
 const BUILTIN_TEXT: Record<string, string> = {
   '1 ファイルの小さな直しや、名前の置き換え。': 'Small changes or renaming in one file.',
@@ -19,8 +19,6 @@ const BUILTIN_TEXT: Record<string, string> = {
   '台帳、権限、安全に触る差分。': 'Changes to the ledger, permissions or safety.',
   '150 行以下の 1 ファイル。': 'One file of 150 lines or fewer.',
   '長い文書や設計書。': 'Long documents or design specifications.',
-  'SWE-bench で最上位。': 'Top performance on SWE-bench.',
-  '日本語の性能が高い。': 'Strong Japanese language performance.',
 };
 const FAMILY = { claude: 'anthropic', codex: 'openai', antigravity: 'google' } as const;
 const DEPTHS = { claude: ['low', 'medium', 'high', 'xhigh', 'max'], codex: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'], antigravity: [] } as const;
@@ -63,10 +61,6 @@ export function ModelAssignments({ policy, onChange, language, models, onRefresh
   function bands(role: Role) { return readBands(policy, role); }
   function displayName(candidate: Candidate) { return formatModelName(candidate.model, models[candidate.executor]?.models); }
   function renderName(candidate: Candidate) { return models[candidate.executor] ? displayName(candidate) : <span className="assignment-name-loading" aria-hidden="true"/>; }
-  function describeNote(model: string) {
-    const note = findModelNote(policy, model);
-    return note ? [note.latest ? text('Latest', '最新') : '', displayText(note.strength), displayText(note.specialties)].filter(Boolean).join(' · ') : '';
-  }
   function update(role: Role, weight: Weight, candidates?: Candidate[]) {
     const next = { ...bands(role) };
     if (candidates === undefined) delete next[weight]; else next[weight] = candidates;
@@ -82,7 +76,7 @@ export function ModelAssignments({ policy, onChange, language, models, onRefresh
     <span id={headingId} className="sr-only">{text('Models by role', '役割別のモデル')}</span>
     {preset && <CommandDialog title={text('Changes', '変更の内容')} language={language} onClose={() => setPreset(undefined)}>
       <table><thead><tr><th>{text('Assignment', '割り当て')}</th><th>{text('Before', '変更前')}</th><th>{text('After', '変更後')}</th></tr></thead><tbody>{presetChanges.map(change => <tr key={change.role + change.weight}><th>{NAMES[change.role][ja ? 1 : 0]} {weightName(change.weight)}</th>{(['before', 'after'] as const).map(side => <td key={side}>{change[side].map(candidate => displayName(candidate) + (candidate.effort ? ' · ' + candidate.effort : '')).join(' → ')}{change[side === 'before' ? 'inheritedBefore' : 'inheritedAfter'] && ' · ' + text('Same as standard', 'ふつうと同じ')}</td>)}</tr>)}</tbody></table>
-      <p className="assignment-note">{({ performance: text('Choose the strongest noted candidate for each role, breaking ties by model tier and candidate order.', '各役割でメモの強みが最大の候補を選び、同点ならモデルランクと候補順で決めます。'), balanced: text('Restore the default combination.', '初期設定の組み合わせに戻します。'), economy: text('Use light models for standard workloads too.', '軽量モデルを標準の負荷にも使います。') })[preset]}</p>
+      <p className="assignment-note">{({ performance: text('Choose the highest-tier candidate for each role.', '各役割で、いちばん上位のモデルを選びます。'), balanced: text('Restore the default combination.', '初期設定の組み合わせに戻します。'), economy: text('Use light models for standard workloads too.', '軽量モデルを標準の負荷にも使います。') })[preset]}</p>
       {!presetChanges.length && <p>{text('No changes', '変更はありません')}</p>}
       <div className="button-row"><button className="btn btn-primary" onClick={() => { if (presetPolicy) onChange(presetPolicy); setPreset(undefined); }}>{text('Apply to table', '表に反映')}</button><button className="btn btn-ghost" onClick={() => setPreset(undefined)}>{text('Cancel', 'やめる')}</button></div>
       <p className="assignment-note">{text('After applying, use Save in this section', '表に反映したら、節の「保存」で保存する')}</p>
@@ -127,7 +121,7 @@ export function ModelAssignments({ policy, onChange, language, models, onRefresh
                 {(Object.keys(PROVIDERS) as Candidate['executor'][]).map(executor => {
                   const catalog = [...new Map([...(models[executor]?.models ?? []), ...ROLES.flatMap(role => WEIGHTS.flatMap(weight => bands(role)[weight] ?? [])).filter(candidate => candidate.executor === executor).map(candidate => ({ model: candidate.model, displayName: displayName(candidate) }))].map(model => [model.model, model])).values()];
                   const used = new Set(ROLES.flatMap(role => WEIGHTS.flatMap(weight => bands(role)[weight] ?? [])).filter(c => c.executor === executor).map(c => c.model));
-                  const groups = partitionModels(catalog, used, new Set(policy.modelNotes.filter(n => n.latest).map(n => n.model)));
+                  const groups = partitionModels(catalog, used);
                   const matches = (model: typeof catalog[number]) => model.displayName.toLowerCase().includes(query.toLowerCase());
                   const renderModel = (model: typeof catalog[number]) => <button key={model.model} aria-label={model.displayName || model.model} className="btn btn-ghost" aria-pressed={candidates[selecting]?.executor === executor && candidates[selecting]?.model === model.model} onClick={() => {
                       const existing = candidates[selecting];
@@ -135,7 +129,7 @@ export function ModelAssignments({ policy, onChange, language, models, onRefresh
                       const next: Candidate = { executor, family: FAMILY[executor], model: model.model, tier: known?.tier ?? 'mid' };
                       if (existing?.executor === executor && existing.effort && ([...DEPTHS[executor], ...models[executor]?.models.flatMap(model => model.effort ? [model.effort] : []) ?? []] as string[]).includes(existing.effort)) next.effort = existing.effort;
                       const entries = [...candidates]; entries[selecting] = next; update(role, weight, entries);
-                    }}><ProviderMark provider={executor}/><span>{model.displayName || model.model}</span>{describeNote(model.model) && <small>{describeNote(model.model)}</small>}</button>;
+                    }}><ProviderMark provider={executor}/><span>{model.displayName || model.model}</span></button>;
                   return <li key={executor}><div className="assignment-provider"><span>{PROVIDERS[executor]}</span><button className="btn btn-ghost assignment-icon" aria-label={prefix + ' ' + text('Refresh ' + executor + ' models', PROVIDERS[executor] + ' のモデルを読み直す')} onClick={() => onRefresh?.(executor)}>↻</button></div>
                     {groups.current.filter(matches).map(renderModel)}
                     {groups.older.length > 0 && <details><summary>{text(groups.older.length + ' older versions', '古いバージョン ' + groups.older.length + ' 件')}</summary>{groups.older.filter(matches).map(renderModel)}</details>}
@@ -162,11 +156,11 @@ export function ModelAssignments({ policy, onChange, language, models, onRefresh
   </section>;
 }
 
-export function partitionModels<T extends { model: string; displayName: string }>(catalog: T[], used: Set<string>, latest: Set<string>) {
+export function partitionModels<T extends { model: string; displayName: string }>(catalog: T[], used: Set<string>) {
   const parse = (name: string) => { const match = /^(.*?)[ -]?(\d+(?:\.\d+)?)(?:[ -](.+))?$/.exec(name); return match ? { key: match[1].replace(/[- ]$/, '') + '/' + (match[3] ?? ''), version: Number(match[2]) } : undefined; };
   const maximum = new Map<string, number>();
   for (const model of catalog) { const p = parse(model.displayName); if (p) maximum.set(p.key, Math.max(maximum.get(p.key) ?? 0, p.version)); }
   const current: T[] = [], older: T[] = [];
-  for (const model of catalog) { const p = parse(model.displayName); (used.has(model.model) || latest.has(model.model) || !p || p.version === maximum.get(p.key) ? current : older).push(model); }
+  for (const model of catalog) { const p = parse(model.displayName); (used.has(model.model) || !p || p.version === maximum.get(p.key) ? current : older).push(model); }
   return { current, older };
 }

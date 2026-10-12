@@ -273,13 +273,12 @@ it('discards a policy preview if the policy changes before its response', async 
   expect(screen.getByRole('button', { name: 'Save policy' })).toHaveProperty('disabled', true);
 });
 
-it('edits weighted assignments, candidate order, criteria and model notes then saves the previewed policy', async () => {
+it('edits weighted assignments, candidate order and criteria then saves the previewed policy', async () => {
   const f = createFixture(); render(<SettingsPage client={f.client} policyOnly/>); await openRules();
   await openRules();
   const assignments = await screen.findByRole('region', { name: 'Models by role' });
   expect(within(assignments).getAllByText(/Backup /)).toHaveLength(6);
   fireEvent.click(screen.getByRole('button', { name: 'Implementation Heavy Edit assignment' }));
-  expect(within(assignments).getByText('Top performance on SWE-bench.')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Edit workload criteria for Implementation' }));
   fireEvent.click(within(screen.getByRole('group', { name: 'Implementation Heavy 1 Effort' })).getByRole('button', { name: 'max' }));
   fireEvent.change(screen.getByLabelText('Implementation Heavy Weight criteria'), { target: { value: 'Changes across packages' } });
@@ -289,8 +288,6 @@ it('edits weighted assignments, candidate order, criteria and model notes then s
   fireEvent.click(within(screen.getByRole('group', { name: 'Implementation Heavy 3 Provider' })).getByRole('button', { name: 'Antigravity' }));
   fireEvent.change(screen.getByLabelText('Implementation Heavy 3 Model'), { target: { value: 'manual-gemini' } });
   fireEvent.click(screen.getByLabelText('Implementation Heavy 2 Remove'));
-  fireEvent.change(screen.getByLabelText('Model note 1 strength'), { target: { value: 'Strong implementation' } });
-  fireEvent.click(screen.getByLabelText('Model note 1 latest'));
   fireEvent.click(screen.getByRole('button', { name: 'Advisor Light Edit assignment' }));
   fireEvent.change(screen.getByLabelText('Advisor Light 1 Model'), { target: { value: 'sonnet' } });
   fireEvent.click(screen.getAllByRole('button', { name: 'Save' }).at(-1)!); await screen.findByText('claude · after-model');
@@ -300,7 +297,6 @@ it('edits weighted assignments, candidate order, criteria and model notes then s
   expect(roles.implement).toMatchObject({ heavy: [{ executor: 'claude', model: 'opus' }, { executor: 'antigravity', model: 'manual-gemini', family: 'google' }] });
   expect(roles.advisor).toMatchObject({ light: [{ model: 'sonnet' }] });
   expect(save.patch.criteria.implement?.heavy).toBe('Changes across packages');
-  expect(save.patch.modelNotes[0]).toMatchObject({ latest: true, strength: 'Strong implementation' });
 });
 it('supports drag reordering and standard inheritance with Japanese labels and provider catalogs', async () => {
   const f = createFixture(); const original = f.command.getMockImplementation()!;
@@ -438,17 +434,15 @@ it('omits weight criteria summaries and keeps each band editable', async () => {
   expect(save.patch.criteria.implement).toEqual({ light: '小さな変更', standard: '機能の追加', heavy: '設計の変更' });
 });
 
-it('selects catalog models with latest and strength notes', async () => {
+it('selects catalog models', async () => {
   const f = createFixture();
   const original = f.command.getMockImplementation()!;
-  f.value.policy.modelNotes[0].latest = true;
   f.command.mockImplementation(async (name, payload) => name === 'settings.models' && (payload as { provider: string }).provider === 'codex' ? { type: 'ack', cmd_id: name, ok: true, result: { state: 'known', models: [{ model: 'gpt-6-astra', displayName: 'GPT-6 Astra' }, { model: 'gpt-6.1-sol', displayName: 'GPT-6.1 Sol' }] } } : original(name, payload));
   render(<SettingsPage client={f.client}/>);
   await screen.findByRole('button', { name: 'Implementation Standard Edit assignment' });
   fireEvent.click(screen.getByRole('button', { name: 'Implementation Standard Edit assignment' }));
   const choices = await screen.findByRole('list', { name: 'Implementation Standard 1 Available models' });
-  const astra = within(choices).getByRole('button', { name: 'GPT-6 Astra' });
-  expect(astra.querySelector('small')?.textContent).toBe('Latest · Top performance on SWE-bench.');
+  expect(within(choices).getByRole('button', { name: 'GPT-6 Astra' }).querySelector('small')).toBeNull();
   fireEvent.click(within(choices).getByRole('button', { name: 'GPT-6.1 Sol' }));
   expect(screen.getByLabelText('Implementation Standard 1 Model')).toHaveProperty('value', 'gpt-6.1-sol');
   fireEvent.keyDown(document, { key: 'Escape' });
@@ -476,7 +470,7 @@ it.each(['Performance', 'Balanced', 'Economy'])('keeps %s preset changes unsaved
   const patch = (f.command.mock.calls.find(([name]) => name === 'settings.write')![1] as { patch: SettingsSnapshot['policy'] }).patch;
   const role = patch.roles.implement;
   expect(Array.isArray(role)).toBe(false);
-  if (!Array.isArray(role)) expect(role.standard?.[0].model).toBe(preset === 'Economy' ? 'gpt-6.1-sol' : 'gpt-6-astra');
+  if (!Array.isArray(role)) expect(role.standard?.[0].model).toBe(({ Economy: 'gpt-6.1-sol', Performance: 'custom-opus', Balanced: 'gpt-6-astra' })[preset]);
 });
 
 it('shows the exact Japanese confirmation after loading all three provider diffs', async () => {

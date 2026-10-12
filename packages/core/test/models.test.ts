@@ -7,6 +7,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const LEGACY = '[[roles.implement]]\nexecutor = "claude"\nmodel = "custom-opus"\nfamily = "anthropic"\ntier = "high"\n';
+test("古い modelNotes を含む保存済み設定は検証せずに捨てる", t => {
+  const root = mkdtempSync(join(tmpdir(), "models-policy-")); t.after(() => rmSync(root, { recursive: true, force: true }));
+  const path = join(root, "policy.toml"), jsonPath = join(root, "policy.json");
+  writeFileSync(path, LEGACY + '[[modelNotes]]\nmodel = "old-model"\nlatest = true\nstrength = "95"\nspecialties = "implementation"\n');
+  const policy = loadPolicy({ path, env: {} });
+  assert.equal(resolveModel(policy, "implement").model, "custom-opus");
+  assert.equal(Object.hasOwn(policy, "modelNotes"), false);
+  assert.equal(Object.hasOwn(parsePolicyToml('modelNotes = "obsolete"\n'), "modelNotes"), false);
+  writeFileSync(jsonPath, JSON.stringify({ modelNotes: { invalid: true }, maxRoundTrips: 3 }));
+  const overridden = loadPolicy({ path, env: { AGENT_GRAPH_POLICY_JSON: jsonPath } });
+  assert.equal(overridden.maxRoundTrips, 3);
+  assert.equal(Object.hasOwn(overridden, "modelNotes"), false);
+});
 test("旧い TOML は standard の候補として読み、重さ別の既定を残す", t => {
   const root = mkdtempSync(join(tmpdir(), "models-policy-")); t.after(() => rmSync(root, { recursive: true, force: true }));
   const path = join(root, "policy.toml"); writeFileSync(path, LEGACY);
@@ -43,7 +56,7 @@ test("実装者と根の分離、レビューの系統、役割の最低水準�
   p.constraints.push({ kind: "minTierForRole", role: "document", tier: "high" });
   assert.throws(() => resolveModel(p, "document", "light"), /minTierForRole/);
 });
-test("重さ別 TOML と覚え書きと基準の日本語とエスケープを読む", () => {
+test("重さ別 TOML と基準の日本語とエスケープを読む", () => {
   const patch = parsePolicyToml(`[[roles.proofread.standard]]
 executor = "antigravity"
 model = "gemini-3.8-flash-high"
@@ -51,25 +64,18 @@ family = "google"
 tier = "high"
 effort = "high"
 [criteria.implement]
-heavy = "設計と # 安全の変更。"
-[[modelNotes]]
-model = "gpt-6-astra"
-latest = false
-strength = "SWE-bench で最上位。"
-specialties = "実装と\\n設計"
+heavy = "設計と # 安全の変更。\\n実装"
 `);
   const policy = mergePolicy(defaultPolicy(), patch);
   assert.equal(resolveModel(policy, "proofread").effort, "high");
-  assert.equal(policy.criteria.implement?.heavy, "設計と # 安全の変更。");
-  assert.equal(policy.modelNotes[0].specialties, "実装と\n設計");
+  assert.equal(policy.criteria.implement?.heavy, "設計と # 安全の変更。\n実装");
   assert.equal(getCandidates(policy, "proofread", "heavy").length, 1);
 });
-test("notice は選択順、モデルと深さ、基準と強さの覚え書きを伝える", () => {
+test("notice は選択順、モデルと深さ、基準を伝える", () => {
   const notice = modelNotice(defaultPolicy());
   assert.match(notice, /実装 重=codex gpt-6-astra xhigh \/ 標準=codex gpt-6-astra high \/ 軽=codex gpt-6.1-sol low/);
   assert.match(notice, /校正=antigravity gemini-3.8-flash-high。助言=claude fable/);
-  assert.match(notice, /SWE-bench で最上位/); assert.match(notice, /日本語の性能が高い/);
-  assert.match(notice, /複数のパッケージ/); assert.match(notice, /最新と強さは別/);
+  assert.match(notice, /複数のパッケージ/);
 });
 test("不正な役割、重さ、quota、系統と候補の不整合を拒否する", () => {
   const p = defaultPolicy();

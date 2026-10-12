@@ -95,7 +95,7 @@ export function GraphOutline(props: OutlineProps) {
       const subagents = language === 'ja' ? 'サブエージェント ' + descendants : descendants + ' sub-agents';
       const who = row.group ? groupWords : [roleWord(row.role!, language), row.role === 'main' ? target.replace(/^Claude\s+/, '') : target,
         row.role === 'main' && descendants ? subagents : '', node?.inferred ? t.inferred : '', (node?.attempts.length ?? 0) > 1 ? '×' + node!.attempts.length : ''].filter(Boolean).join(' · ');
-      const title = row.group?.more ? t.showMore : row.group ? `${row.group.kind === 'today' ? t.today : t.earlier} ${row.group.count}${language === 'ja' ? ' 件' : ''}` : node!.label;
+      const title = row.group?.more ? t.showMore : row.group ? `${row.group.kind === 'today' ? t.today : t.earlier} ${row.group.count}${language === 'ja' ? ' 件' : ''}` : node!.label || (row.role === 'planner' ? roleWord('planner', language) : '');
       const kit = readObject(node?.delegation?.kit ?? readObject(node?.delegation?.payload).kit);
       const task = readText(node?.delegation?.task_id ?? kit.node_id);
       const taskNumber = /^T?\d+$/.test(task) ? `T${task.replace(/^T/, '')}` : '';
@@ -103,7 +103,7 @@ export function GraphOutline(props: OutlineProps) {
         <span className="graph-indent" style={{ width: `calc(${row.depth} * var(--space-4))` }} aria-hidden="true"/>
         {row.group ? <Icon name={row.group.shown ? 'chevronDown' : 'chevronRight'}/> : row.role === 'planner' ? <span aria-hidden="true"/> : <StatusDot state={row.role === 'main' && row.runningBelow && state === 'idle' ? 'running' : node!.state} dotOnly dotLabel={row.role === 'main' && row.runningBelow ? t.running : undefined}/>}
         {!row.group && <span className="graph-role" data-role={row.role} data-icon={ROLE_ICONS[row.role!]}><Icon name={ROLE_ICONS[row.role!]}/></span>}
-        <span className="graph-row-title" title={title}>{Boolean(taskNumber) && <span className="graph-task-number">{taskNumber} </span>}{title}</span>
+        <span className="graph-row-title" title={node?.title || title}>{Boolean(taskNumber) && <span className="graph-task-number">{taskNumber} </span>}{title}</span>
         <span className="graph-row-who" title={who}>{who}</span>
         {node && <span className={`graph-row-end state-${state}`} title={rowEnd(row, language, now)}>{rowEnd(row, language, now)}</span>}
       </>;

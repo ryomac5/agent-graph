@@ -3,12 +3,13 @@ import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rena
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
-import { createRequestId } from "../../../core/src/intake/index.ts";
+import { createRequestId, fingerprintRequest } from "../../../core/src/intake/index.ts";
 import { openLedger, projectConversations, projectDelegations, projectRelations } from "../../../core/src/ledger/index.ts";
 import { FakeHost } from "../../../runner/src/host/contract.ts";
 import { Intake } from "../../../runner/src/intake/index.ts";
 import { RunnerRuntime } from "../../../runner/src/runtime.ts";
 import { createKitDelegationObserver, createKitObserver, kitEventsPath, observeKitDelegationsFile } from "../../src/observe/kit/index.ts";
+import { readAppendOnlyFile } from "../../src/observe/files.ts";
 
 const TS = "2026-01-01T00:00:00Z";
 const SESSION = "sample-repo-001";
@@ -275,4 +276,81 @@ test("キットの記録がない周期は台帳の文脈を読み直さない",
   const f = createFixture(t);
   t.mock.method(f.ledger, "readSince", () => { throw new Error("Missing kit file must not scan facts"); });
   assert.deepEqual(observeKitDelegationsFile(f.ledger, f.path), []);
+});
+
+for (const [nodeId, origin, expected] of [
+  ['codex-41', undefined, undefined], ['D1', undefined, undefined], ['codex-task', undefined, undefined],
+  ['codex-42', 'graph', 'graph'], ['T1', 'single', 'single'],
+] as const) test(`キットの種別は元の行にある場合だけ保持する: ${nodeId}/${origin}`, t => {
+  const f = createFixture(t);
+  writeFileSync(f.path, encode(start(nodeId, { origin, goal: '表示を改善する' }), done(nodeId)));
+  f.observer.observe();
+  const delegation = projectDelegations(f.facts())[0];
+  const kit = delegation.kit as { origin: string; goal: string };
+  assert.equal(kit.origin, expected);
+  assert.equal(Object.hasOwn(kit, 'origin'), origin !== undefined);
+  assert.equal(kit.goal, '表示を改善する');
+  assert.deepEqual(projectDelegations(f.facts().reverse()), [delegation]);
+});
+
+for (const missingStart of [false, true]) test(`古い payload を保存後に全行を再読込しても衝突しない: missing_start=${missingStart}`, t => {
+  const f = createFixture(t);
+  const row = missingStart ? done() : start();
+  const content = encode(row);
+  writeFileSync(f.path, content);
+  const requestId = createRequestId({ source: "kit", file: f.path, position: 0 });
+  const request = { requestId, source: "kit" as const, role: "implement" as const,
+    title: "架空の依頼", task: "架空の変更", accept: ["fixture-check"] };
+  // 変更前の形を固定し、新しい観測処理から期待値を作らない。
+  const payload = missingStart
+    ? { request_id: requestId, role: "implement", title: "codex-01", attempt: 1, state: "done" as const,
+      kit: { file: f.path, position: 0, session: SESSION, node_id: "codex-01", missing_start: true } }
+    : { request_id: requestId, role: request.role, title: request.title, task: request.task, accept: request.accept,
+      request, request_hash: fingerprintRequest(request), state: "running" as const, attempt: 1, origin: undefined,
+      kit: { file: f.path, position: 0, session: SESSION, node_id: "codex-01", parent: "root",
+        parent_native_id: null, parent_provider: null, child_native_id: null, model: "fixture-model" } };
+  f.ledger.append({ source: "kit", source_event_id: `${requestId}:request`, source_ts: row.ts,
+    confidence: missingStart ? "unknown" : "confirmed", kind: "delegation.created", subject: `delegation:${requestId}`, payload });
+  f.ledger.append({ source: "kit", source_event_id: "legacy-cursor", source_ts: row.ts, confidence: "confirmed",
+    kind: "delegation.updated", subject: `delegation:${requestId}`, payload: {},
+    cursor: JSON.stringify(readAppendOnlyFile(f.path).cursor) });
+  const replacement = join(f.state, "replacement.jsonl");
+  writeFileSync(replacement, content);
+  renameSync(replacement, f.path);
+  const append = t.mock.method(f.ledger, "append");
+  const results = f.observer.observe();
+  const replay = append.mock.calls.find(call => call.arguments[0].source_event_id === `${requestId}:request`)!;
+  assert.equal(JSON.stringify(replay.arguments[0].payload), JSON.stringify(payload));
+  assert.equal(replay.result!.status, "duplicate");
+  assert.ok(results.every(result => result.status !== "conflict"));
+  assert.equal(f.facts().filter(fact => fact.kind === "delegation.created").length, 1);
+  assert.equal(f.facts().filter(fact => fact.kind === "observation.unsupported").length, 0);
+  assert.deepEqual(f.observer.observe(), []);
+});
+
+for (const missingStart of [false, true]) test(`origin だけある行には goal の鍵を足さない: missing_start=${missingStart}`, t => {
+  const f = createFixture(t);
+  writeFileSync(f.path, encode(missingStart ? done("T1", { origin: "single" }) : start("T1", { origin: "single" })));
+  f.observer.observe();
+  const kit = projectDelegations(f.facts())[0].kit as { origin: string; goal?: string };
+  assert.equal(kit.origin, "single");
+  assert.equal(Object.hasOwn(kit, "goal"), false);
+});
+
+test("開始欠落の goal だけある行には origin の鍵を足さない", t => {
+  const f = createFixture(t);
+  writeFileSync(f.path, encode(done("D1", { goal: "グラフの目標" })));
+  f.observer.observe();
+  const kit = projectDelegations(f.facts())[0].kit as { origin?: string; goal: string };
+  assert.equal(Object.hasOwn(kit, "origin"), false);
+  assert.equal(kit.goal, "グラフの目標");
+});
+
+test('開始欠落の終了にも種別と目標を保持する', t => {
+  const f = createFixture(t);
+  writeFileSync(f.path, encode(done('D1', { origin: 'graph', goal: '欠落したグラフ' })));
+  f.observer.observe();
+  const kit = projectDelegations(f.facts())[0].kit as { origin: string; goal: string };
+  assert.equal(kit.origin, 'graph');
+  assert.equal(kit.goal, '欠落したグラフ');
 });

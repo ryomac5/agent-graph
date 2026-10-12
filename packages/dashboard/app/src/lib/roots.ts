@@ -194,6 +194,14 @@ export function nodeLine(node: TreeNode): string {
 }
 /** 依頼の題から、依頼のファイルの Markdown の見出しの印を外す。「# グラフを直す」は「グラフを直す」と出す。 */
 export function requestTitle(title: string): string { return title.replace(/^\s*#{1,6}\s+/, '').trim(); }
+/** 子孫も含め、終了が確認できた束だけを畳む。 */
+export function isCompletedGraph(node: TreeNode, byId: Map<string, TreeNode>, ancestors = new Set<string>()): boolean {
+  if (ancestors.has(node.id)) return false;
+  const next = new Set([...ancestors, node.id]);
+  return (node.role === 'planner' && !node.conversationId || ['done', 'ended', 'idle', 'failed', 'interrupted', 'denied'].includes(node.state))
+    && (node.role !== 'planner' || node.children.length > 0)
+    && node.children.every(id => { const child = byId.get(id); return Boolean(child && isCompletedGraph(child, byId, next)); });
+}
 export function buildRootTree(root: Root, index: RootIndex): DelegationTree {
   const nodes: TreeNode[] = [];
   const edges: DelegationTree['edges'] = [];
@@ -236,14 +244,18 @@ export function buildRootTree(root: Root, index: RootIndex): DelegationTree {
     const kit = readObject(readObject(delegation.payload).kit ?? delegation.kit);
     const origin = readObject(delegation.origin);
     const assignment = readObject(attempt?.assignment);
+    // 古い記録の種別は、台帳の payload を補完せず表示時に判別する。
+    const single = kit.origin === 'single' || kit.origin === undefined && /^codex-\d+$/.test(readText(kit.node_id));
+    const goal = requestTitle(readText(delegation.goal ?? kit.goal).split('\n')[0]);
     const graphName = readText(delegation.graph_name ?? delegation.graph_id ?? kit.graph ?? kit.session ?? origin.session) || 'Planner graph';
-    const planner = Boolean(delegation.graph_id || delegation.graph_name || Object.keys(kit).length || origin.source === 'planner' || delegation.source === 'planner');
+    const planner = !single && Boolean(delegation.graph_id || delegation.graph_name || Object.keys(kit).length || origin.source === 'planner' || delegation.source === 'planner');
     let group = planner ? groups.get(graphName) : rootNode;
     if (!group) {
-      group = { id: `graph:${graphName}`, kind: 'delegation', label: graphName, role: 'planner', provider: '', model: '', state: '', children: [], attempts: [] };
+      group = { id: `graph:${graphName}`, kind: 'delegation', label: goal, title: readText(kit.session) || graphName, role: 'planner', provider: '', model: '', state: '', children: [], attempts: [] };
       groups.set(graphName, group); nodes.push(group); rootNode.children.push(group.id);
       edges.push({ id: group.id, source: root.id, target: group.id, title: '', confidence: 'confirmed', kind: 'delegated' });
     }
+    if (planner && goal && !group.label) group.label = goal;
     const existing = nodes.find(node => node.conversationId === conversationId && conversationId);
     const node: TreeNode = existing ?? { id: `delegation:${readText(delegation.id)}`, kind: 'delegation', conversationId: conversationId || undefined,
       run, delegation, label: '', role: resolveChildRole({}, delegation), provider: readText(index.conversations.get(conversationId)?.provider ?? delegation.provider ?? assignment.executor),
@@ -262,7 +274,7 @@ export function buildRootTree(root: Root, index: RootIndex): DelegationTree {
       for (let i = edges.length - 1; i >= 0; i--) if (edges[i].target === prior.id) edges.splice(i, 1);
       nodes.splice(nodes.indexOf(prior), 1);
     }
-    if (existing && !planner) {
+    if (existing && !planner && !single) {
       const edge = edges.find(edge => edge.target === node.id);
       if (edge) edge.title ||= delegatedTitle({}, delegation);
       continue;
@@ -275,7 +287,7 @@ export function buildRootTree(root: Root, index: RootIndex): DelegationTree {
     } else nodes.push(node);
     group.children.push(node.id);
     edges.push({ id: `task:${readText(delegation.id)}`, source: group.id, target: node.id,
-      title: priorTitle || delegatedTitle({}, delegation), confidence: 'confirmed', kind: 'delegated' });
+      title: single ? delegatedTitle({}, delegation) || priorTitle || '' : priorTitle || delegatedTitle({}, delegation), confidence: 'confirmed', kind: 'delegated' });
     if (!existing && conversationId) addChildren(node, conversationId);
   }
   return { nodes, edges, roots: [root.id], unresolved: [] };

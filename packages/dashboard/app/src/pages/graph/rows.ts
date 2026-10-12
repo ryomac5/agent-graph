@@ -1,7 +1,7 @@
 import type { DelegationTree, TreeNode } from '../tree/model.ts';
 import { toDisplayState } from '../../components/StateBadge.tsx';
 import { decodeStoredValue, readBody, readObject, readText } from '../../components/conversation/model.ts';
-import { resolveChildRole, type ChildRole } from '../../lib/roots.ts';
+import { isCompletedGraph, resolveChildRole, type ChildRole } from '../../lib/roots.ts';
 import type { Row, ScreenState } from '../../lib/store.ts';
 import type { Language } from '../../lib/i18n.ts';
 import type { IconName } from '../../components/Icon.tsx';
@@ -118,11 +118,12 @@ export function buildRows(tree: GraphTree, options: { now: number; expanded?: Re
     rows.push(parent);
     const children = all.filter(row => row.parent === parent.id && (!role || matches.has(row.id)));
     if (role) { children.forEach(emit); return; }
-    const recent = children.filter(row => !protectedIds.has(row.id) && ['ended', 'idle'].includes(toDisplayState(row.node!.state)) && Date.parse(row.node!.activity ?? '') >= now - RECENT_MS).slice(0, RECENT_LIMIT);
+    const completedGraph = parent.role === 'planner' && isCompletedGraph(parent.node!, byId);
+    const recent = children.filter(row => !completedGraph && !protectedIds.has(row.id) && ['ended', 'idle'].includes(toDisplayState(row.node!.state)) && Date.parse(row.node!.activity ?? '') >= now - RECENT_MS).slice(0, RECENT_LIMIT);
     const groups = new Map<'today' | 'earlier', GraphRow[]>();
     for (const child of children) {
-      if (protectedIds.has(child.id) || recent.includes(child)) { emit(child); continue; }
-      const kind = Date.parse(child.node!.activity ?? '') >= today.getTime() ? 'today' : 'earlier';
+      if (!completedGraph && (protectedIds.has(child.id) || recent.includes(child))) { emit(child); continue; }
+      const kind = !completedGraph && Date.parse(child.node!.activity ?? '') >= today.getTime() ? 'today' : 'earlier';
       groups.set(kind, [...groups.get(kind) ?? [], child]);
     }
     for (const kind of ['today', 'earlier'] as const) {

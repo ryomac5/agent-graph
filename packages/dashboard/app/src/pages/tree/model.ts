@@ -5,6 +5,7 @@ import { createProjectMatcher } from '../../lib/projects.ts';
 import type { Row, ScreenState } from '../../lib/store.ts';
 
 export interface TreeNode {
+  title?: string;
   id: string; kind: 'conversation' | 'run' | 'delegation'; label: string;
   conversationId?: string; run?: Row; delegation?: Row; attempts: Row[];
   role: string; provider: string; model: string; state: string; cost?: number; children: string[];

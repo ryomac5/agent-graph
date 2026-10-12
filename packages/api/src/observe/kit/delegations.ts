@@ -92,6 +92,10 @@ export function observeKitDelegationsFile(ledger: Ledger, path: string, checkpoi
     const nodeId = readText(row.node_id);
     if (!session || !nodeId || !["codex_start", "codex_done"].includes(String(row.event))
       || !readText(row.ts) || !Number.isFinite(Date.parse(String(row.ts)))) continue;
+    const kitOrigin = row.origin === "single" || row.origin === "graph" ? row.origin : undefined;
+    const goal = readText(row.goal);
+    // 古い行の再導出では、保存済みの payload に鍵を増やさない。
+    const kitMetadata = { ...(kitOrigin !== undefined ? { origin: kitOrigin } : {}), ...(goal !== undefined ? { goal } : {}) };
     const key = JSON.stringify([session, nodeId]);
     const base = { source: "kit" as const, source_ts: String(row.ts), confidence: "confirmed" as const };
     const identity = identifyRow(row);
@@ -118,7 +122,7 @@ export function observeKitDelegationsFile(ledger: Ledger, path: string, checkpoi
           payload: { request_id: eventId, role: request.role, title: request.title, task: request.task, accept: request.accept,
             request, request_hash: fingerprintRequest(request), state: "running", attempt: 1,
             origin: request.origin && { provider: request.origin.provider, native_id: request.origin.nativeId },
-            kit: { file: path, position: originalPosition, session, node_id: nodeId, parent: row.parent ?? null,
+            kit: { file: path, position: originalPosition, session, node_id: nodeId, ...kitMetadata, parent: row.parent ?? null,
               parent_native_id: row.parent_native_id ?? null, parent_provider: row.parent_provider ?? null,
               child_native_id: row.native_id ?? null, model: row.model ?? null } } });
         // 観測の試行 ID を持たせ、runner の復旧が未起動の依頼として起動しないようにする。
@@ -135,7 +139,7 @@ export function observeKitDelegationsFile(ledger: Ledger, path: string, checkpoi
         if (!start) append({ ...base, confidence: "unknown", source_event_id: `${eventId}:request`,
           kind: "delegation.created", subject: `delegation:${requestId}`,
           payload: { request_id: requestId, role: "implement", title: nodeId, attempt: 1, state,
-            kit: { file: path, position: originalPosition, session, node_id: nodeId, missing_start: true } } });
+            kit: { file: path, position: originalPosition, session, node_id: nodeId, ...kitMetadata, missing_start: true } } });
         append({ ...base, source_event_id: `${eventId}:done`, kind: "delegation.state_changed", subject: `delegation:${requestId}`,
           payload: { attempt: 1, state, result: { status: row.status ?? null, exit_code: row.exit_code ?? null,
             verify: row.verify ?? null }, kit: { file: path, position: originalPosition, session, node_id: nodeId } } });

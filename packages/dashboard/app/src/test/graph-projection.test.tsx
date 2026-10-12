@@ -2,7 +2,8 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { cleanup, render, renderHook, screen, fireEvent } from '@testing-library/react';
 import { Link, MemoryRouter } from 'react-router';
 import { createStore } from '../lib/store.ts';
-import { buildRootTree, selectRoots, useRootIndex } from '../lib/roots.ts';
+import { buildRootTree, isCompletedGraph, selectRoots, useRootIndex } from '../lib/roots.ts';
+import { RootTree } from '../components/RootViews.tsx';
 import { GraphPage } from '../pages/graph/GraphPage.tsx';
 import { buildRows, readCurrentWork, readReport, readSegments } from '../pages/graph/rows.ts';
 const NOW = Date.parse('2026-10-08T12:00:00Z');
@@ -60,12 +61,12 @@ function createProjectionFixture() {
 
 beforeEach(() => vi.spyOn(Date, 'now').mockReturnValue(NOW));
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
-it('projects the complete root series without duplicate children and preserves named planner groups', () => {
+it('projects the complete root series without duplicate children and preserves planner groups without exposing identifiers', () => {
   const target = createProjectionFixture(); const state = target.getSnapshot();
   const { result } = renderHook(() => useRootIndex(state));
   const built = buildRootTree(selectRoots(state, 'repo')[0], result.current);
   expect(built.nodes.filter(node => node.id === 'old-a')).toHaveLength(1);
-  expect(built.nodes.find(node => node.role === 'planner')?.label).toBe('batch');
+  expect(built.nodes.find(node => node.role === 'planner')?.label).toBe('');
   const rows = buildRows(built, { now: NOW });
   expect(rows.all.filter(row => row.role === 'implement')).toHaveLength(14);
   expect(rows.rows.some(row => row.id === 'graph:batch')).toBe(true);
@@ -73,7 +74,7 @@ it('projects the complete root series without duplicate children and preserves n
 it('selects hidden old children from the URL and leaves undated planner times blank', () => {
   render(<MemoryRouter initialEntries={['/p/repo/graph?root=root&child=old-a']}><GraphPage embedded project="repo" target={createProjectionFixture()} client={{ command: vi.fn() }}/></MemoryRouter>);
   expect(screen.getByRole('treeitem', { name: /old-a/ }).getAttribute('aria-selected')).toBe('true');
-  const batch = screen.getByRole('treeitem', { name: /batch/ });
+  const batch = screen.getByRole('treeitem', { name: 'Task graph · Task graph' });
   expect(batch.querySelector('.graph-row-end')?.textContent).toBe('');
   expect(screen.queryByText('Unknown time')).toBeNull();
 });
@@ -158,7 +159,7 @@ it.each([
 it('renders planner batches as task graphs without inventing an advisor, model or execution state', () => {
   const target = createProjectionFixture();
   render(<MemoryRouter><GraphPage embedded project="repo" target={target} client={{ command: vi.fn() }}/></MemoryRouter>);
-  const batch = screen.getByRole('treeitem', { name: 'batch · Task graph' });
+  const batch = screen.getByRole('treeitem', { name: 'Task graph · Task graph' });
   expect(batch.querySelector('.graph-row-who')?.textContent).toBe('Task graph');
   expect(batch.querySelector('.graph-row-end')?.textContent).toBe('');
   expect(batch.getAttribute('aria-label')).not.toContain(' ·  · ');
@@ -191,4 +192,68 @@ it('uses the same catalog spelling in the graph row and right detail panel', () 
   expect(row.querySelector('.graph-row-who')?.textContent).toBe('Implementation · Codex GPT-6.1-Sol');
   fireEvent.click(row);
   expect(screen.getByRole('complementary', { name: 'Request' }).querySelector('.graph-detail-provider')?.textContent).toBe('GPT-6.1-Sol');
+});
+
+it.each([
+  { node_id: 'codex-41' }, { node_id: 'codex-001' }, { node_id: 'T1', origin: 'single' },
+])('places single requests directly under the root: %j', kit => {
+  const state = createProjectionFixture().getSnapshot();
+  state.projection.delegations = [{ id: 'single', root_id: 'root', kit: { ...kit, session: 'repo-027' },
+    title: '単発の依頼の説明', state: 'running' }];
+  const { result } = renderHook(() => useRootIndex(state));
+  const tree = buildRootTree(selectRoots(state)[0], result.current);
+  expect(tree.nodes.some(node => node.role === 'planner')).toBe(false);
+  expect(tree.nodes[0].children).toContain('delegation:single');
+  expect(tree.edges.find(edge => edge.target === 'delegation:single')).toMatchObject({ source: 'root', title: '単発の依頼の説明' });
+});
+
+it('renders a legacy single request from serialized kit evidence directly under the root', () => {
+  const target = createProjectionFixture();
+  target.getSnapshot().projection.delegations = [{ id: 'legacy-single', root_id: 'root',
+    kit: JSON.stringify({ session: 'repo-027', node_id: 'codex-41' }),
+    title: 'Legacy single request', state: 'running' }];
+  render(<MemoryRouter><GraphPage embedded project="repo" target={target} client={{ command: vi.fn() }}/></MemoryRouter>);
+  const row = screen.getByRole('treeitem', { name: /^Legacy single request/ });
+  expect(row.closest('[data-node-id]')?.getAttribute('data-node-id')).toBe('delegation:legacy-single');
+  expect(document.querySelector('[data-child="delegation:legacy-single"][data-parent="root"]')).toBeTruthy();
+  expect(screen.queryByRole('treeitem', { name: /Task graph/ })).toBeNull();
+});
+
+it.each([{ node_id: 'D1' }, { node_id: 'codex-41', origin: 'graph' }])('names graph batches from the goal and collapses finished children immediately: %j', kit => {
+  const target = createProjectionFixture();
+  target.getSnapshot().projection.delegations = ['done', 'failed', 'interrupted', 'denied'].map((state, index) => ({
+    id: 'graph-task-' + index, root_id: 'root', kit: { ...kit, session: 'repo-027', goal: '画面の改善\n詳細な目標' },
+    title: 'Task ' + index, state, completed_ts: new Date(NOW).toISOString(),
+  }));
+  render(<MemoryRouter><GraphPage embedded project="repo" target={target} client={{ command: vi.fn() }}/></MemoryRouter>);
+  const group = screen.getByRole('treeitem', { name: '画面の改善 · Task graph' });
+  expect(group.querySelector('.graph-row-title')?.getAttribute('title')).toBe('repo-027');
+  expect(screen.queryByRole('treeitem', { name: /^Task 0/ })).toBeNull();
+  const earlier = document.querySelector('[data-node-id="earlier:graph:repo-027"] button')!;
+  expect(earlier.getAttribute('aria-expanded')).toBe('false');
+  fireEvent.click(earlier);
+  expect(screen.getByRole('treeitem', { name: /^Task 0/ })).toBeTruthy();
+});
+
+it.each(['running', 'waiting_approval', 'waiting_input', 'received', 'unknown'])('keeps graph batches open while a child is %s', status => {
+  const state = createProjectionFixture().getSnapshot();
+  state.projection.delegations![0].state = status;
+  const { result } = renderHook(() => useRootIndex(state));
+  const tree = buildRootTree(selectRoots(state)[0], result.current);
+  const graph = tree.nodes.find(node => node.role === 'planner')!;
+  expect(isCompletedGraph(graph, new Map(tree.nodes.map(node => [node.id, node])))).toBe(false);
+  expect(buildRows(tree, { now: NOW }).rows.some(row => row.id === 'delegation:kit-a')).toBe(true);
+});
+
+it('collapses completed graphs in the root request view and allows opening them', () => {
+  const state = createProjectionFixture().getSnapshot();
+  state.projection.relations = [];
+  state.projection.delegations!.forEach(row => { row.kit = { session: 'repo-027', goal: '完了した目標' }; row.completed_ts = new Date(NOW).toISOString(); });
+  const { result } = renderHook(() => useRootIndex(state));
+  const tree = buildRootTree(selectRoots(state)[0], result.current);
+  render(<RootTree tree={tree} onSelect={vi.fn()}/>);
+  expect(screen.queryByRole('heading', { name: /完了した目標/ })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: /Earlier/ }));
+  expect(screen.getByRole('heading', { name: /完了した目標/ })).toBeTruthy();
+  expect(screen.getByRole('button', { name: /^Finished task A/ })).toBeTruthy();
 });

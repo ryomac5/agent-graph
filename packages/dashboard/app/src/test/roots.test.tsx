@@ -34,7 +34,7 @@ function fixture() {
       { id: 'unattended', type: 'unattended', name: 'Orphan run' },
     ],
     runs: [{ id: 'child-run', conversation_id: 'child', model: 'gpt-6.1-sol', state: 'running' }, { id: 'grandchild-run', conversation_id: 'grandchild', state: 'ended' }],
-    delegations: [{ id: 'kit-task', root_id: 'root', graph_name: 'Screen graph', payload: { kit: { session: 'agent-graph-001' } }, role: 'implement', title: 'Build the screen', provider: 'codex', model: 'gpt-6.1-sol', state: 'running', attempts: [{ attempt: 1, run_id: 'child-run', state: 'running' }] }],
+    delegations: [{ id: 'kit-task', root_id: 'root', graph_name: 'Screen graph', payload: { kit: { session: 'agent-graph-001', goal: 'Screen graph' } }, role: 'implement', title: 'Build the screen', provider: 'codex', model: 'gpt-6.1-sol', state: 'running', attempts: [{ attempt: 1, run_id: 'child-run', state: 'running' }] }],
     relations: [
       { id: 'continued', type: 'continued', from_id: 'root', to_id: 'continuation', active: 1 },
       { id: 'delegated', type: 'delegated', from_id: 'continuation', to_id: 'child', evidence: { agentType: 'implement', description: 'Build the screen', toolUseId: 'tool-1' } },

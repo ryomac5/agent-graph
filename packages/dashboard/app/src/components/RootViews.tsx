@@ -2,7 +2,7 @@ import { SessionName, type RenameClient } from './SessionName.tsx';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { rootHref, useTurnConversations, useWorkingTurn, workingElapsed } from '../lib/turns.ts';
-import { isRunning, shownRole, startedAt, type Root } from '../lib/roots.ts';
+import { isCompletedGraph, isRunning, shownRole, startedAt, type Root } from '../lib/roots.ts';
 import { agentName, formatStartedAt, formatWhen, summarizeApproval } from '../lib/format.ts';
 import { readText } from './conversation/model.ts';
 import { resolveActivity } from '../lib/activity.ts';
@@ -128,11 +128,12 @@ export function RootTree({ tree, selected, onSelect, runningOnly = false, langua
   function isEarlier(id: string, ancestors = new Set<string>()): boolean {
     const node = byId.get(id);
     if (!node || ancestors.has(id)) return false;
+    if (node.role === 'planner' && !node.conversationId) return isCompletedGraph(node, byId);
     const next = new Set([...ancestors, id]);
     if (ACTIVE.includes(node.state) || WAITING.includes(node.state)) return false;
     const time = Date.parse(lastActivity(node));
     const childrenOld = node.children.every(child => isEarlier(child, next));
-    return childrenOld && (node.role === 'planner' && !node.conversationId ? node.children.length > 0 : Number.isFinite(time) && time < Date.now() - EARLIER_MS);
+    return childrenOld && Number.isFinite(time) && time < Date.now() - EARLIER_MS;
   }
   const descriptions = new Map(tree.edges.map(edge => [edge.target, edge]));
   function branch(id: string, ancestors = new Set<string>()): React.ReactNode {
@@ -154,7 +155,7 @@ export function RootTree({ tree, selected, onSelect, runningOnly = false, langua
     const isSelected = selected === id || Boolean(selected) && node.conversationId === selected;
 
     return <li key={id}>{(shown || group && children.some(Boolean)) && (group
-      ? <h3 className="request-group"><span>{node.label}</span><time dateTime={activity || undefined}>{when}</time></h3>
+      ? <h3 className="request-group"><span title={node.title}>{node.label || (language === 'ja' ? 'タスクグラフ' : 'Task graph')}</span><time dateTime={activity || undefined}>{when}</time></h3>
       : <div className={`request-row${isSelected ? ' selected' : ''}`} onClick={event => { if (!(event.target as Element).closest('.request-main')) onSelect(node); }}>
         <ProviderMark provider={node.provider}/>
         <button className="request-main delegation-select" title={title} aria-label={[edge?.title, [who, shownRole(node.role)].filter(Boolean).join(' · '), stateLabel(node.state, language)].filter(Boolean).join(' · ')} aria-pressed={isSelected} onClick={() => onSelect(node)}>

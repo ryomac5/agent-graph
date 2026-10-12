@@ -27,6 +27,34 @@ const MIME: Record<string, string> = {
   '.pdf': 'application/pdf', '.txt': 'text/plain; charset=utf-8',
 };
 
+async function readStaticAsset(file: string, root: string, acceptEncoding = '') {
+  const qualities = new Map(acceptEncoding.toLowerCase().split(',').map(value => {
+    const [name, ...parameters] = value.trim().split(';');
+    const parameter = parameters.map(value => value.trim()).find(value => value.startsWith('q='));
+    const quality = parameter === undefined ? 1 : Number(parameter.slice(2));
+    return [name, Number.isFinite(quality) && quality >= 0 && quality <= 1 ? quality : 0] as const;
+  }));
+  const encodings = (['br', 'gzip'] as const)
+    .map(encoding => ({ encoding, quality: qualities.get(encoding) ?? qualities.get('*') ?? 0 }))
+    .filter(item => item.quality > 0)
+    .sort((a, b) => b.quality - a.quality);
+  const original = await stat(file);
+  for (const { encoding } of encodings) {
+    try {
+      const compressed = await realpath(file + (encoding === 'br' ? '.br' : '.gz'));
+      if (!compressed.startsWith(root + sep)) continue;
+      const metadata = await stat(compressed);
+      // 古い圧縮版は使わず、ビルド中の更新も要求ごとに確かめる。
+      if (!metadata.isFile() || metadata.mtimeMs < original.mtimeMs) continue;
+      return { content: await readFile(compressed), encoding };
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+    }
+  }
+  if ((qualities.get('identity') ?? (qualities.get('*') === 0 ? 0 : 1)) === 0) return undefined;
+  return { content: await readFile(file), encoding: undefined };
+}
+
 const BRAND_SOURCES = {
   claude: '/Applications/Claude.app/Contents/Resources/electron.icns',
   chatgpt: '/Applications/ChatGPT.app/Contents/Resources/electron.icns',
@@ -155,19 +183,33 @@ export async function startStaticServer(options: StaticOptions) {
       const pathname = decodeURIComponent(url.pathname);
       let file = resolve(root, `.${pathname}`);
       if (file !== root && !file.startsWith(root + sep)) { response.writeHead(403).end(); return; }
+      if (file === resolve(root, '.vite') || file.startsWith(resolve(root, '.vite') + sep)) {
+        response.writeHead(404).end(); return;
+      }
       const isRoute = url.pathname === '/' || /^\/(?:p|c)\/[^/]+(?:\/[a-z][a-z-]*)?$/.test(url.pathname)
         || ['/inbox', '/search', '/settings'].includes(url.pathname);
       if (isRoute) file = resolve(root, 'index.html');
       const actual = await realpath(file);
       const actualRoot = await realpath(root);
       if (!actual.startsWith(actualRoot + sep) || !(await stat(actual)).isFile()) { response.writeHead(403).end(); return; }
-      let content: Buffer | string = await readFile(actual);
+      let content: Buffer | string;
       if (extname(actual) === '.html') {
+        content = await readFile(actual);
         const nonce = randomBytes(32).toString('base64');
         content = content.toString().replaceAll('__AGENT_GRAPH_TOKEN__', upstream.token)
           .replace('</head>', `<meta name="agent-graph-style-nonce" content="${nonce}"></head>`);
         response.setHeader('Content-Security-Policy', `default-src 'self'; script-src 'self'; style-src 'self' 'nonce-${nonce}'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`);
+      } else {
+        response.setHeader('Vary', 'Accept-Encoding');
+        const asset = await readStaticAsset(actual, actualRoot, request.headers['accept-encoding']);
+        if (!asset) { response.writeHead(406).end(); return; }
+        content = asset.content;
+        if (asset.encoding) response.setHeader('Content-Encoding', asset.encoding);
+        if (/^\/assets\/(?:[^/]+\/)*[^/]+-[A-Za-z0-9_-]{8,}\.[^.]+$/.test(pathname)) {
+          response.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        }
       }
+      response.setHeader('Content-Length', Buffer.byteLength(content));
       response.writeHead(200, { 'Content-Type': MIME[extname(actual)] ?? 'application/octet-stream' });
       response.end(content);
     } catch (error) {

@@ -3,3 +3,4 @@ node_modules
 .claude/
 .agents-shots/
 *.log
+.perf/

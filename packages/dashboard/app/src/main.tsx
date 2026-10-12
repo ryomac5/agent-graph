@@ -3,7 +3,9 @@ import { Dashboard } from './App.tsx';
 import { createSearchClient } from './pages/search/model.ts';
 import { createClient } from './lib/client.ts';
 import { installStyleNonce } from './lib/style-nonce.ts';
+import { installPreloadRecovery } from './lib/preload-recovery.ts';
 
+installPreloadRecovery();
 installStyleNonce();
 
 const injectedToken = document.querySelector<HTMLMetaElement>('meta[name="agent-graph-token"]')?.content ?? '';

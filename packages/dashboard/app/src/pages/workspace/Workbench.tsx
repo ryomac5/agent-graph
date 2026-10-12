@@ -1,7 +1,8 @@
+import { FeatureErrorBoundary } from '../../components/FeatureErrorBoundary.tsx';
 import { StatusDot } from '../../components/StateBadge.tsx';
 import { Icon } from '../../components/Icon.tsx';
 import { ResizeDivider } from '../../components/ResizeDivider.tsx';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react';
 import { type CodeDocument } from '../../lib/code-document.ts';
 import { getFileDocument } from '../../lib/file-documents.ts';
 import { DEFAULT_KEYS, createKeyHandler, type KeyBindings } from '../../lib/keys.ts';
@@ -10,10 +11,11 @@ import { OpenWorkspaceConversation, OpenWorkspaceFile, OpenWorkspaceTerminal, Wo
 import { dictionaries, type Language } from '../../lib/i18n.ts';
 import { useTabDrag } from './useTabDrag.ts';
 import type { ConversationClient } from '../conversation/ConversationPage.tsx';
-import { CodeTab } from './CodeTab.tsx';
+import { LoadingFeature } from '../../components/LoadingFeature.tsx';
 import { TerminalTab, createTerminalSession, type TerminalSession } from './TerminalTab.tsx';
 import { FilePicker } from './FilePicker.tsx';
 import './workbench.css';
+const CodeTab = lazy(() => import('./CodeTab.tsx').then(module => ({ default: module.CodeTab })));
 const WHEEL_LINE_HEIGHT = 16;
 const id = () => crypto.randomUUID();
 function fileKey(tab: Extract<WorkspaceTab, { kind: 'code' }>) { return JSON.stringify([tab.worktree ?? '', tab.path]); }
@@ -279,7 +281,7 @@ export function Workbench({ project, session, conversationId, client, language, 
         </div>
       </div></div>}
       {node.tabs.map(tab => <div key={tab.id} role="tabpanel" id={`workspace-body-${tab.id}`} aria-labelledby={`workspace-tab-${tab.id}`} hidden={tab.id !== node.active} className="workbench-body">
-        {tab.kind === 'conversation' ? <WorkspaceConversationHeader.Provider value={{ tabId: tab.id, report: reportConversation }}><OpenWorkspaceTerminal.Provider value={terminalId => openTerminal(terminalId, node.id)}>{renderConversation(tab.conversationId, conversationId => replaceConversation(node.id, tab.id, conversationId))}</OpenWorkspaceTerminal.Provider></WorkspaceConversationHeader.Provider> : tab.kind === 'code' ? <CodeTab path={tab.path} document={getDocument(tab)} language={language}/> : <TerminalTab key={`${tab.id}:${restart}`} session={getTerminal(tab)} language={language} reopen={() => { terminals.current.get(tab.id)?.dispose(); terminals.current.delete(tab.id); setRestart(value => value + 1); }}/>}</div>)}
+        {tab.kind === 'conversation' ? <WorkspaceConversationHeader.Provider value={{ tabId: tab.id, report: reportConversation }}><OpenWorkspaceTerminal.Provider value={terminalId => openTerminal(terminalId, node.id)}>{renderConversation(tab.conversationId, conversationId => replaceConversation(node.id, tab.id, conversationId))}</OpenWorkspaceTerminal.Provider></WorkspaceConversationHeader.Provider> : tab.kind === 'code' ? <FeatureErrorBoundary><Suspense fallback={<LoadingFeature language={language}/>}><CodeTab path={tab.path} document={getDocument(tab)} language={language}/></Suspense></FeatureErrorBoundary> : <TerminalTab key={`${tab.id}:${restart}`} session={getTerminal(tab)} language={language} reopen={() => { terminals.current.get(tab.id)?.dispose(); terminals.current.delete(tab.id); setRestart(value => value + 1); }}/>}</div>)}
       {tabDrag.preview?.pane === node.id && !tabDrag.preview.tablist && <div className={`workbench-drop-preview ${tabDrag.preview.edge ?? 'center'}`} aria-hidden="true"/>}
     </section>;
   }

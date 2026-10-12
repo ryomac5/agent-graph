@@ -4,7 +4,7 @@ import type { Fact } from "../../../core/src/ledger/facts.ts";
 import { PROJECTION_TABLES, type ProjectionState } from "../../../core/src/ledger/rebuild.ts";
 import { projectProjects } from "../../../core/src/ledger/projections/projects.ts";
 import { getMessageText } from "../../../core/src/ledger/projections/messages.ts";
-import { compareEventOrder } from "../../../core/src/ledger/event-order.ts";
+import { compareEventOrder, encodeEventOrder } from "../../../core/src/ledger/event-order.ts";
 import { resolveProjectLocation } from "../../../core/src/ledger/repository.ts";
 import { createScreenIdentities, type ScreenIdentities } from './screen-identities.ts';
 import type { ObservationProgress } from "./index.ts";
@@ -22,6 +22,21 @@ const PATCH_RETENTION = 1000;
 const LIST_PAGE_SIZE = 1000;
 const EXCERPT_LENGTH = 120;
 const DETAIL_PAGE_SIZE = 200;
+export interface MessageCursor { source_ts: string; source_event_id: string; id: string }
+function compareMessageCursors(a: MessageCursor, b: MessageCursor): number {
+  return a.source_ts.localeCompare(b.source_ts)
+    || compareEventOrder(a.source_event_id, b.source_event_id) || compareEventOrder(a.id, b.id);
+}
+function readMessageCursor(value: string | MessageCursor): string | MessageCursor {
+  if (typeof value !== 'string') return value;
+  // HTTP の before には組を JSON で載せる。旧い ID（JSON 配列を含む）も受ける。
+  try {
+    const cursor = JSON.parse(value);
+    if (cursor && typeof cursor.source_ts === 'string' && typeof cursor.source_event_id === 'string'
+      && typeof cursor.id === 'string') return cursor;
+  } catch { /* 旧い ID はそのまま使う。 */ }
+  return value;
+}
 const NAME_LENGTH = 160;
 const SCREEN_CACHE_KIB = 16 * 1024;
 const IDENTITY_BATCH_FACTS = 256;
@@ -446,15 +461,49 @@ export class ProjectionFeed {
     return { seq: this.state.last_seq, generation: this.state.generation, rows,
       next: rows.length === LIST_PAGE_SIZE ? rows.at(-1)!.id : null };
   }
-  conversation(id: string, after = "") {
+  conversation(id: string, after = "", window?: { latest?: boolean; before?: string | MessageCursor; message?: string; edits?: boolean }) {
     id = this.conversationId(id);
-    const messages = this.prepare(`SELECT m.*, mm.id AS membership_id FROM message_memberships mm JOIN messages m ON m.id = mm.message_id
-      WHERE mm.conversation_id = ? AND mm.active = 1 AND m.id > ? ORDER BY m.id LIMIT ?`).all(id, after, DETAIL_PAGE_SIZE);
+    let hasOlder = false;
+    let olderCursor: MessageCursor | null = null;
+    let messages;
+    if (window?.latest || window?.before || window?.message) {
+      // 並べるのは識別子と時刻だけ。本文は選んだ窓だけを読む。
+      const ordered = this.prepare(`SELECT m.id, m.source_ts, m.source_event_id FROM message_memberships mm JOIN messages m ON m.id = mm.message_id
+        WHERE mm.conversation_id = ? AND mm.active = 1`).all(id).map(row => ({ id: String(row.id), source_ts: String(row.source_ts ?? ''), source_event_id: String(row.source_event_id ?? ''),
+          eventOrder: encodeEventOrder(String(row.source_event_id ?? '')), idOrder: encodeEventOrder(String(row.id)),
+        })).sort((a, b) =>
+        String(a.source_ts ?? '').localeCompare(String(b.source_ts ?? ''))
+        || (a.eventOrder < b.eventOrder ? -1 : a.eventOrder > b.eventOrder ? 1 : 0)
+        || (a.idOrder < b.idOrder ? -1 : a.idOrder > b.idOrder ? 1 : 0));
+      const anchor = window.before ? readMessageCursor(window.before) : window.message;
+      // 旧形式も所属から切り離して位置を解決する。新形式は取得時の位置を保持する。
+      const cursor = typeof anchor === 'string' ? this.prepare(`SELECT id, source_ts, source_event_id FROM messages WHERE id = ?`).get(anchor) as MessageCursor | undefined : anchor;
+      const index = cursor ? ordered.findIndex(row => window.message
+        ? compareMessageCursors(row, cursor) > 0 : compareMessageCursors(row, cursor) >= 0) : -1;
+      const end = index < 0 ? ordered.length : index;
+      const start = Math.max(0, end - DETAIL_PAGE_SIZE);
+      hasOlder = start > 0;
+      const first = ordered[start];
+      if (first && start < end) olderCursor = { source_ts: first.source_ts, source_event_id: first.source_event_id, id: first.id };
+      const ids = ordered.slice(start, end).map(row => row.id);
+      messages = this.prepare(`SELECT m.*, mm.id AS membership_id FROM json_each(?) selected JOIN messages m ON m.id = selected.value
+        JOIN message_memberships mm ON mm.message_id = m.id AND mm.conversation_id = ? AND mm.active = 1
+        ORDER BY CAST(selected.key AS INTEGER)`).all(JSON.stringify(ids), id);
+    } else {
+      messages = this.prepare(`SELECT m.*, mm.id AS membership_id FROM message_memberships mm JOIN messages m ON m.id = mm.message_id
+        WHERE mm.conversation_id = ? AND mm.active = 1 AND m.id > ?
+        ${window?.edits ? `AND EXISTS (SELECT 1 FROM json_each(
+          CASE WHEN json_valid(m.body) AND json_type(m.body) = 'array' THEN m.body ELSE '[]' END) block
+          WHERE json_extract(CASE WHEN block.type = 'object' THEN block.value ELSE '{}' END, '$.type') = 'tool_use'
+          AND (json_extract(block.value, '$.name') IN ('Edit', 'Write', 'MultiEdit')
+            OR json_extract(block.value, '$.input') LIKE '%*** Begin Patch%'))` : ''}
+        ORDER BY m.id LIMIT ?`).all(id, after, DETAIL_PAGE_SIZE);
+    }
     const memberships = messages.map(row => ({ id: row.membership_id, message_id: row.id, conversation_id: id, active: 1 }));
     return { seq: this.state.last_seq, generation: this.state.generation,
       projection: { conversations: this.readList("conversations", [id]),
         messages: messages.map(({ membership_id, ...row }) => row), message_memberships: memberships },
-      next: messages.length === DETAIL_PAGE_SIZE ? messages.at(-1)!.id : null };
+      hasOlder, olderCursor, next: window?.latest || window?.before || window?.message ? null : messages.length === DETAIL_PAGE_SIZE ? messages.at(-1)!.id : null };
   }
   conversationId(id: string): string { return this.identities.conversations[id] ?? id; }
   scopePatch(patch: ProjectionPatch, opened: Set<string>): ProjectionPatch {

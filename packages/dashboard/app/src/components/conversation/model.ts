@@ -24,6 +24,18 @@ export const PENDING_APPROVALS = ['pending', 'requested', 'waiting', 'waiting_ap
 export const PREVIEW_LINES = 8;
 
 export interface TimelineEntry { kind: 'message' | 'approval' | 'boundary' | 'gap'; row: Row; time: string; key: string }
+// 投影行は更新時に置き換わる。同じ行の JSON 展開は一度だけ行う。
+const decodedRows = new WeakMap<Row, Row>();
+function decodeTimelineRow(row: Row): Row {
+  const cached = decodedRows.get(row);
+  if (cached) return cached;
+  const decoded = { ...row };
+  for (const field of ['body', 'tool_output', 'request', 'available_decisions']) {
+    if (field in decoded) decoded[field] = decodeStoredValue(decoded[field]);
+  }
+  decodedRows.set(row, decoded);
+  return decoded;
+}
 export function selectTimeline(state: ScreenState, conversationId: string): TimelineEntry[] {
   const p = state.projection;
   const ids = new Set((p.message_memberships ?? []).filter(row => row.conversation_id === conversationId && isActive(row.active)).map(row => row.message_id));
@@ -31,10 +43,7 @@ export function selectTimeline(state: ScreenState, conversationId: string): Time
   const entries: TimelineEntry[] = [];
   function append(kind: TimelineEntry['kind'], row: Row) {
     const evidence = readObject(row.evidence);
-    const decoded = { ...row };
-    for (const field of ['body', 'tool_output', 'request', 'available_decisions']) {
-      if (field in decoded) decoded[field] = decodeStoredValue(decoded[field]);
-    }
+    const decoded = decodeTimelineRow(row);
     entries.push({ kind, row: decoded, key: `${kind}:${row.id}`, time: readText(row.source_ts ?? row.requested_ts ?? row.created_ts ?? evidence.source_ts ?? evidence.timestamp) });
   }
   for (const row of p.messages ?? []) if (ids.has(row.id)) {

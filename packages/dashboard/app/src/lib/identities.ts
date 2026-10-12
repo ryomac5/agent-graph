@@ -18,7 +18,7 @@ export function resolveRow(table: string, row: Row, identities?: ScreenIdentitie
     const attempts = decodeStoredValue(row.attempts);
     if (Array.isArray(attempts)) result.attempts = attempts.map(attempt => ({ ...attempt, run_id: run(attempt.run_id) }));
   }
-  return result;
+  return Object.keys(result).every(key => result[key] === row[key]) ? row : result;
 }
 export function resolveProjection(projection: Record<string, Row[]>, identities?: ScreenIdentities) {
   return Object.fromEntries(Object.entries(projection).map(([table, rows]) => [table, rows.map(row => resolveRow(table, row, identities))]));

@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { mkdirSync, statSync, renameSync } from 'node:fs';
 import { ProjectionFeed } from '../../packages/api/src/service/projection-feed.ts';
-import { loadConversationWindow } from '../../packages/dashboard/app/src/lib/projection-client.ts';
+import { loadConversationEdits, loadConversationWindow } from '../../packages/dashboard/app/src/lib/projection-client.ts';
 import { PERF, measure, summarize, REPEATS } from './baseline.mjs';
 
 mkdirSync(PERF, { recursive: true });
@@ -59,7 +59,7 @@ for (const [kind, row] of [['long', long], ['short', short]]) {
     const value = await loadConversationWindow(row.id, new AbortController().signal, undefined, undefined, async route => {
       const url = new URL(route, 'http://localhost');
       const beginSql = performance.now();
-      const result = feed.conversation(url.searchParams.get('id'), url.searchParams.get('after') ?? '');
+      const result = feed.conversation(url.searchParams.get('id'), url.searchParams.get('after') ?? '', { latest: url.searchParams.get('latest') === '1', before: url.searchParams.get('before') ?? undefined, message: url.searchParams.get('message') ?? undefined });
       sqlMs += performance.now() - beginSql;
       const encoded = JSON.stringify(result);
       pages++; bytes += Buffer.byteLength(encoded);
@@ -67,7 +67,36 @@ for (const [kind, row] of [['long', long], ['short', short]]) {
     });
     windowTimes.push(performance.now() - began); sqlTimes.push(sqlMs); messageCount = value.projection.messages.length;
   }
-  conversations.push({ kind, ...row, firstPage: { ...first, value: undefined, bytes: Buffer.byteLength(JSON.stringify(first.value)) }, window: summarize(windowTimes), sql: summarize(sqlTimes), pages, bytes, retainedMessages: messageCount });
+  const extras = {};
+  for (const operation of ['older', 'edits']) {
+    const times = [];
+    let requests = 0, responseBytes = 0, retained = 0;
+    for (let i = 0; i < REPEATS; i++) {
+      requests = 0; responseBytes = 0;
+      const fetchPage = async route => {
+        const url = new URL(route, 'http://localhost');
+        const result = feed.conversation(row.id, url.searchParams.get('after') ?? '', {
+          latest: url.searchParams.get('latest') === '1', before: url.searchParams.get('before') ?? undefined,
+          edits: url.searchParams.get('edits') === '1',
+        });
+        const encoded = JSON.stringify(result);
+        requests++; responseBytes += Buffer.byteLength(encoded);
+        return JSON.parse(encoded);
+      };
+      const latest = feed.conversation(row.id, '', { latest: true });
+      const began = performance.now();
+      if (operation === 'older') {
+        const value = await loadConversationWindow(row.id, new AbortController().signal, latest.projection.messages[0], undefined, fetchPage);
+        retained = value.projection.messages.length;
+      } else {
+        const value = await loadConversationEdits(row.id, new AbortController().signal, fetchPage);
+        retained = value.length;
+      }
+      times.push(performance.now() - began);
+    }
+    extras[operation] = { ...summarize(times), pages: requests, bytes: responseBytes, retainedMessages: retained };
+  }
+  conversations.push({ kind, ...extras, ...row, firstPage: { ...first, value: undefined, bytes: Buffer.byteLength(JSON.stringify(first.value)) }, window: summarize(windowTimes), sql: summarize(sqlTimes), pages, bytes, retainedMessages: messageCount });
 }
 console.log(JSON.stringify({ counts, databaseBytes: statSync(path).size, selected: { long, short }, queries, feed: { initializationMs, initializationN: 1, snapshot: { ...snapshot, value: undefined, bytes: Buffer.byteLength(snapshotSerialize.value) }, snapshotSerialize: { ...snapshotSerialize, value: undefined }, idleRefresh: { ...idleRefresh, value: undefined } }, conversations }));
 feed.close(); db.close();

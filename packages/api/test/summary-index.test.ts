@@ -1,0 +1,38 @@
+import assert from "node:assert/strict";
+import { DatabaseSync } from "node:sqlite";
+import test from "node:test";
+import { initializeSummaryIndex, LATEST_MESSAGE_SQL } from "../src/service/summary-index.ts";
+
+const TS = "2026-10-13T00:00:00.000Z";
+test("要約の時刻索引は所属の先着、時刻の訂正、移動、解除と削除に追従する", t => {
+  const db = new DatabaseSync(":memory:");
+  t.after(() => db.close());
+  db.exec(`CREATE TABLE messages (id TEXT PRIMARY KEY, source_ts TEXT, source_event_id TEXT);
+    CREATE TABLE message_memberships (id TEXT PRIMARY KEY, message_id TEXT, conversation_id TEXT, active INTEGER);
+    CREATE TABLE message_name_inputs (id TEXT PRIMARY KEY, source_time REAL);
+    INSERT INTO messages VALUES ('first', '${TS}', 'first');
+    INSERT INTO message_name_inputs VALUES ('first', ${Date.parse(TS)});
+    INSERT INTO message_memberships VALUES ('first-member', 'first', 'a', 1)`);
+  initializeSummaryIndex(db);
+  const latest = (id: string) => db.prepare(LATEST_MESSAGE_SQL).all(id, id).map(row => row.id);
+  assert.deepEqual(latest("a"), ["first"]);
+  db.exec("INSERT INTO message_memberships VALUES ('late-member', 'late', 'a', 1)");
+  assert.deepEqual(latest("a"), ["first"]);
+  db.prepare("INSERT INTO messages VALUES ('late', ?, 'late')").run("2026-10-13T10:00:01+09:00");
+  assert.deepEqual(latest("a"), ["late"]);
+  db.prepare("UPDATE messages SET source_ts = ? WHERE id = 'late'").run("2026-10-13T09:00:00+09:00");
+  assert.deepEqual(latest("a").toSorted(), ["first", "late"]);
+  db.exec("UPDATE message_memberships SET conversation_id = 'b' WHERE id = 'late-member'");
+  assert.deepEqual(latest("a"), ["first"]);
+  assert.deepEqual(latest("b"), ["late"]);
+  db.exec("UPDATE message_memberships SET active = 0 WHERE id = 'late-member'");
+  assert.deepEqual(latest("b"), []);
+  db.exec("UPDATE message_memberships SET active = 1 WHERE id = 'late-member'; DELETE FROM messages WHERE id = 'late'");
+  assert.deepEqual(latest("b"), []);
+  db.exec("DELETE FROM message_memberships WHERE id = 'late-member'");
+  assert.equal(db.prepare("SELECT count(*) AS n FROM api_message_order").get()!.n, 1);
+  initializeSummaryIndex(db);
+  assert.deepEqual(latest("a"), ["first"]);
+  const plan = db.prepare("EXPLAIN QUERY PLAN " + LATEST_MESSAGE_SQL).all("a", "a").map(row => row.detail);
+  assert.ok(plan.every(detail => !String(detail).startsWith("SCAN")), JSON.stringify(plan));
+});

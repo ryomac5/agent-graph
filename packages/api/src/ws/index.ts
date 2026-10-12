@@ -22,6 +22,7 @@ import { createUsageService, type UsageOptions } from "../usage/index.ts";
 
 export const DEFAULT_WS_PORT = 7421;
 const MAX_OPEN_CONVERSATIONS = 10;
+const PROJECTION_DELIVERY_MS = 25;
 const MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
 const MAX_SESSION_COMMANDS = 256;
 export interface WebSocketOptions {
@@ -39,21 +40,30 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
   const token = createToken();
   const clients = new Map<WebSocket, { tables?: Set<string>; conversations: Set<string> }>();
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
-  function send(socket: WebSocket, message: unknown): void {
+  function send(socket: WebSocket, message: unknown, serialized?: string): void {
     if (socket.readyState !== WebSocket.OPEN) return;
     if (socket.bufferedAmount > MAX_BUFFERED_BYTES) { socket.terminate(); return; }
-    socket.send(JSON.stringify(message));
+    socket.send(serialized ?? JSON.stringify(message));
   }
   function sendPatch(socket: WebSocket, patch: ProjectionPatch): void {
     const subscription = clients.get(socket)!;
+    if (!subscription.tables && !subscription.conversations.size) {
+      send(socket, patch, feed.serializePatch(patch));
+      return;
+    }
     const scoped = feed.scopePatch(patch, subscription.conversations);
-    send(socket, subscription.tables ? { ...scoped, changes: Object.fromEntries(Object.entries(scoped.changes)
-      .filter(([table]) => subscription.tables!.has(table))) } : scoped);
+    const message = subscription.tables ? { ...scoped, changes: Object.fromEntries(Object.entries(scoped.changes)
+      .filter(([table]) => subscription.tables!.has(table))) } : scoped;
+    const text = JSON.stringify(message);
+    feed.recordPatchBytes(patch, text);
+    send(socket, message, text);
   }
   function refresh(): void {
     if (!feed) return;
     const update = feed.refresh();
     if (!update) return;
+    // 接続がない間も、再接続用の履歴の保持量を制限する。
+    if (update !== "resync" && !clients.size) feed.serializePatch(update);
     for (const socket of clients.keys()) {
       if (update === "resync") {
         clients.delete(socket);
@@ -226,6 +236,11 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
   } catch (error) { sessionHosts.close(); runner.close(); feed?.close(); files.close(); searchDb.close(); wss.close(); server.close(); throw error; }
   port = (server.address() as { port: number }).port;
   searchOptions.port = port;
+  let deliveryTimer: ReturnType<typeof setTimeout> | undefined;
+  const unsubscribeProjection = service.onProjection(() => {
+    if (deliveryTimer) return;
+    deliveryTimer = setTimeout(() => { deliveryTimer = undefined; pollObservation(refresh); }, PROJECTION_DELIVERY_MS);
+  });
   const timer = setInterval(() => pollObservation(refresh), PROJECTION_POLL_MS);
   return {
     url: `http://127.0.0.1:${port}`, wsUrl: `ws://127.0.0.1:${port}/ws`, token, runner, feed, previews: files,
@@ -235,6 +250,8 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
     },
     close: async () => {
       clearInterval(timer);
+      unsubscribeProjection();
+      clearTimeout(deliveryTimer);
       sessionHosts.close();
       files.clearPreviews();
       files.close();

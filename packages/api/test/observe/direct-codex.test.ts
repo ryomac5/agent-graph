@@ -1,9 +1,11 @@
+import { syncBuiltinESMExports } from "node:module";
+
 import { readSessionMeta } from '../../src/observe/codex/files.ts';
 import { collectProjectionDependencies } from '../../../core/src/ledger/projections/dependencies.ts';
 import { DatabaseSync } from 'node:sqlite';
 import { readLedgerDatabase } from '../../../core/src/ledger/repository.ts';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, appendFileSync, statSync, utimesSync } from 'node:fs';
+import fs, { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, appendFileSync, statSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
@@ -229,4 +231,33 @@ test('a relation arriving from another observer removes the pending launch on th
       evidence: { launchKey: key }, active: true, confidence: 'inferred' } });
   assert.equal(f.observer([], [f.childPath]).detected, 0);
   assert.deepEqual(f.reads, { meta: 0, request: 0 });
+});
+
+test('pending prompt changes invalidate matching even when no history file changes', t => {
+  const f = createPendingObserver(t);
+  const other = join(f.home, '.codex/sessions/rollout-other.jsonl');
+  writeFileSync(other, f.original.replaceAll('child', 'other'));
+  f.observer(f.facts, [f.childPath, other]);
+  assert.equal(f.observer.hasChangedPrompts(), false);
+  const prompt = f.promptPath;
+  writeFileSync(prompt, 'changed request');
+  assert.equal(f.observer.hasChangedPrompts(), true);
+});
+
+test('idle service checks each rollout once and skips the second matching scan', t => {
+  const f = createPendingObserver(t);
+  const other = join(f.home, '.codex/sessions/rollout-other.jsonl');
+  writeFileSync(other, f.original.replaceAll('child', 'other'));
+  f.service.ingestOnce();
+  f.service.ingestOnce();
+  let checks = 0;
+  const original = fs.statSync;
+  t.mock.method(fs, 'statSync', (...args: Parameters<typeof fs.statSync>) => {
+    if (args[0] === f.childPath) checks++;
+    return original(...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  assert.equal(f.service.ingestOnce().appended, 0);
+  assert.equal(checks, 1);
 });

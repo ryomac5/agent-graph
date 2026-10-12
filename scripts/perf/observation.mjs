@@ -58,7 +58,7 @@ try {
     globalThis.__perfMark('finish');
     const ms = performance.now() - begin;
     const usage = process.cpuUsage(cpu);
-    cycles.push({ kind: i === 0 ? 'warmup' : 'steady', ms, breakdown, report, cpuMs: (usage.user + usage.system) / 1000, rssBytes: process.memoryUsage().rss, reads: Object.fromEntries(Object.keys(reads).map(key => [key, fileReadMetrics[key] - reads[key]])) });
+    cycles.push({ kind: i === 0 ? 'warmup' : 'steady', ms, breakdown, report, cpuMs: (usage.user + usage.system) / 1000, rssBytes: process.memoryUsage().rss, memory: process.memoryUsage(), reads: Object.fromEntries(Object.keys(reads).map(key => [key, fileReadMetrics[key] - reads[key]])) });
     if (i < REPEATS) await delay(1000);
   }
 } finally { service.close(); }

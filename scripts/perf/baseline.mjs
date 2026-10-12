@@ -7,7 +7,7 @@ import { brotliCompressSync, gzipSync } from 'node:zlib';
 import { createRequire } from 'node:module';
 
 export const ROOT = fileURLToPath(new URL('../../', import.meta.url));
-export const PERF = join(ROOT, '.perf');
+export const PERF = resolve(process.env.AGENT_GRAPH_PERF_DIR ?? join(ROOT, '.perf'));
 export const REPEATS = 5;
 export function summarize(values) {
   const sorted = values.toSorted((a, b) => a - b);

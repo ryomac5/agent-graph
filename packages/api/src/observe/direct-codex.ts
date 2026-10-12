@@ -148,7 +148,15 @@ export function createDirectCodexObserver(ledger: Ledger, db: DatabaseSync = rea
       });
     }
   }
-  return function observe(facts: Iterable<Fact>, paths: string[], observedTs = new Date().toISOString()) {
+  const promptStamps = new Map<string, string>();
+  function readStamp(path: string): string {
+    try { const stat = statSync(path); return `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`; }
+    catch (error) {
+      if (error instanceof Error && "code" in error && ["ENOENT", "EACCES", "EPERM", "ENOTDIR"].includes(String(error.code))) return "missing";
+      throw error;
+    }
+  }
+  const observe = function observe(facts: Iterable<Fact>, paths: string[], observedTs = new Date().toISOString(), changedPaths?: ReadonlySet<string>) {
     for (const fact of facts) {
       if (fact.seq <= through) continue;
       through = Math.max(through, fact.seq);
@@ -171,7 +179,7 @@ export function createDirectCodexObserver(ledger: Ledger, db: DatabaseSync = rea
         promptPath: launch.promptPath ? resolve(cwd ?? '.', launch.promptPath) : undefined,
         cwd: launch.cwd ? resolve(cwd ?? '.', launch.cwd) : cwd });
     }
-    if (!pendingLaunches.length) return { detected: 0, matched: 0, appended: 0 };
+    if (!pendingLaunches.length) { promptStamps.clear(); return { detected: 0, matched: 0, appended: 0 }; }
     const contexts = new Map<string, number[]>();
     for (const launch of pendingLaunches) {
       if (!launch.cwd) continue;
@@ -187,13 +195,15 @@ export function createDirectCodexObserver(ledger: Ledger, db: DatabaseSync = rea
     for (const path of requests.keys()) if (!cacheable.has(path)) requests.delete(path);
     for (const path of paths) {
       try {
-        const stat = statSync(path);
-        const stamp = `${stat.ino}:${stat.size}:${stat.mtimeMs}`;
         let cached = requests.get(path);
-        if (!cached || cached.stamp !== stamp) {
-          const meta = readMeta(path);
-          cached = { stamp, meta, started: Date.parse(meta?.timestamp ?? ''), cwd: meta?.cwd ? resolve(meta.cwd) : '', requestRead: false };
-          if (cacheable.has(path)) requests.set(path, cached);
+        if (!cached || !changedPaths || changedPaths.has(path)) {
+          const stat = statSync(path);
+          const stamp = `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+          if (!cached || cached.stamp !== stamp) {
+            const meta = readMeta(path);
+            cached = { stamp, meta, started: Date.parse(meta?.timestamp ?? ''), cwd: meta?.cwd ? resolve(meta.cwd) : '', requestRead: false };
+            if (cacheable.has(path)) requests.set(path, cached);
+          }
         }
         const meta = cached.meta;
         if (!meta?.id || !meta.timestamp || !meta.cwd
@@ -214,7 +224,9 @@ export function createDirectCodexObserver(ledger: Ledger, db: DatabaseSync = rea
       }
     }
     const rollouts = [...rolloutIndex.values()];
+    promptStamps.clear();
     const candidates = pendingLaunches.map(launch => {
+      if (launch.promptPath) promptStamps.set(launch.promptPath, readStamp(launch.promptPath));
       const prompt = readPrompt(launch.promptPath, launch.cwd);
       return { launch, prompt, matches: rollouts.filter(rollout => matchesCodexExec(launch, rollout, prompt)) };
     });
@@ -239,4 +251,8 @@ export function createDirectCodexObserver(ledger: Ledger, db: DatabaseSync = rea
     }
     return { detected: candidates.length, matched, appended };
   };
+  return Object.assign(observe, { hasChangedPrompts() {
+    for (const [path, stamp] of promptStamps) if (readStamp(path) !== stamp) return true;
+    return false;
+  } });
 }

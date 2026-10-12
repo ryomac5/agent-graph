@@ -7,8 +7,18 @@ export function orderActiveFacts(facts: readonly Fact[]): Fact[] {
   const superseded = new Set(facts.flatMap((fact) => fact.supersedes ? [fact.supersedes] : []));
   return facts.filter((fact) => !superseded.has(fact.fact_id)).sort((left, right) =>
     Date.parse(left.source_ts) - Date.parse(right.source_ts)
+    || compareStateVersion(left, right)
     || compareText(left.source_event_id, right.source_event_id)
     || compareText(left.source, right.source));
+}
+
+// 同じ Codex 状態の再導出は版の数値で並べ、追記済みの ID は変えない。
+function compareStateVersion(left: Fact, right: Fact): number {
+  if (left.source !== "rollout-codex" || right.source !== "rollout-codex"
+    || left.kind !== "run.state_changed" || right.kind !== "run.state_changed") return 0;
+  const a = /^(.*:state)(?::v(\d+))?$/.exec(left.source_event_id);
+  const b = /^(.*:state)(?::v(\d+))?$/.exec(right.source_event_id);
+  return a && b && a[1] === b[1] ? Number(a[2] ?? 0) - Number(b[2] ?? 0) : 0;
 }
 
 function compareText(left: string, right: string): number {

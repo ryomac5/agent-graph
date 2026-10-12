@@ -170,27 +170,10 @@ function observeFile(ledger: Ledger, path: string, options: CodexObservationOpti
   const supported = format === "legacy" || format === "paginated";
   const boundaries = new Map<string, RunBoundary[]>();
 
-  // ファイルの隔離では、次のファイルが使う文脈も保存前へ戻す。
-  const undoIndex: (() => void)[] = [];
-  function retainIndexEntry<T>(map: Map<string, T>, key: string): void {
-    const previous = map.get(key);
-    undoIndex.push(() => { if (previous === undefined) map.delete(key); else map.set(key, previous); });
-  }
   function append(input: FactInput): void {
     const result = ledger.append(input);
     results.push(result);
     if (result.status === "appended") {
-      if (options.fileBatch) {
-        if (!index.subjects.has(input.subject)) undoIndex.push(() => { index.subjects.delete(input.subject); });
-        if (input.kind === "observation.unsupported") retainIndexEntry(index.unsupported, input.subject);
-        if (input.kind === "conversation.created") retainIndexEntry(index.placeholders, input.subject);
-        if (input.kind === "run.state_changed") {
-          retainIndexEntry(index.stateGenerations, input.source_event_id);
-          retainIndexEntry(index.archivedRuns, input.subject);
-        }
-        if (input.kind === "run.created") retainIndexEntry(index.runs, input.payload.conversation_id);
-        if (input.kind === "run.updated") retainIndexEntry(index.models, input.subject);
-      }
       indexFact(index, input, result.fact_id);
     }
   }
@@ -339,8 +322,6 @@ function observeFile(ledger: Ledger, path: string, options: CodexObservationOpti
         if (index.models.get(subject) !== signature) {
           append({ ...createBase(`${fileId}:${line.offset}:${line.hash}:${id}:model`, timestamp, line), kind: "run.updated", subject,
             payload: { conversation_id: identifyConversation(id), generation, ...observed } });
-          if (options.fileBatch) retainIndexEntry(index.models, subject);
-          index.models.set(subject, signature);
         }
       }
       continue;
@@ -406,9 +387,6 @@ function observeFile(ledger: Ledger, path: string, options: CodexObservationOpti
       subject: `run:${identifyConversation(nativeId)}:${generation}`, payload: { generation, state: "ended", ended_ts: timestamp,
         end_evidence: { kind: "archived", location: "archived_sessions" },
         last_evidence: { file_id: fileId, complete_bytes: file.completeBytes } } });
-  }
-  if (options.fileBatch && results.some(result => result.status === "conflict")) {
-    for (const undo of undoIndex.reverse()) undo();
   }
   return results;
 }

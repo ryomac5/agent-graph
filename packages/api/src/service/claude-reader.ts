@@ -80,7 +80,6 @@ export function observeClaudeHistories(ledger: Ledger, directory: string, facts:
     };
     const remote = readRemoteMetadata(file);
     const readLocation = remote ? () => ({ cwd: remote!.cwd, repository_id: remote!.projectId }) : locate;
-    const historyLength = history.length;
     let result;
     const start = saved?.get(resolve(file)) ?? cursors.get(resolve(file));
     try {
@@ -98,7 +97,6 @@ export function observeClaudeHistories(ledger: Ledger, directory: string, facts:
       if (error instanceof Error && "code" in error && error.code === "ENOENT") return;
       throw error;
     }
-    if (fileBatch && result.conflicts.length) history.length = historyLength;
     results.push(result);
     saved?.set(resolve(file), result.cursor);
   }

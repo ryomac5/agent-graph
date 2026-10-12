@@ -214,3 +214,16 @@ test("保持整理済みの null payload を安全に無視する", () => {
   assert.deepEqual(projectRuns([purged, createRun()]), projectRuns([createRun()]));
   assert.deepEqual(projectConnections([purged]), []);
 });
+
+test("Codex の同じ状態の版は v3・v9・v10 の数値順で投影し、入力順に依存しない", () => {
+  const states = [
+    createState({ generation: 1, state: "unknown", reason: "legacy" }, "rollout-codex", "file:42:hash:thread:state"),
+    ...[3, 9, 10].map(version => createState({ generation: 1, state: "unknown", reason: `rule-${version}` },
+      "rollout-codex", `file:42:hash:thread:state:v${version}`)),
+  ];
+  const facts = [createRun(), ...states];
+  for (let iteration = 0; iteration < SHUFFLE_REPETITIONS; iteration += 1) {
+    assert.equal(projectRuns(shuffleFacts(facts, SHUFFLE_SEED + iteration))[0].reason, "rule-10");
+  }
+  assert.equal(states[1].source_event_id, "file:42:hash:thread:state:v3");
+});

@@ -135,29 +135,6 @@ export function openBatchLedger(path: string) {
       finally { batching = false; }
     }
   }
-  function isolate<T>(operation: () => T, accept: (result: T) => boolean): T {
-    return batch(() => {
-      persist();
-      const sequence = nextSeq;
-      db.exec("SAVEPOINT observation_file");
-      try {
-        const result = operation();
-        if (accept(result)) persist();
-        else {
-          db.exec("ROLLBACK TO observation_file");
-          resetStaging();
-          nextSeq = sequence;
-        }
-        db.exec("RELEASE observation_file");
-        return result;
-      } catch (error) {
-        // 衝突以外の中断は従来どおり成功した接頭辞を確定し、再読で残りを補う。
-        persist();
-        db.exec("RELEASE observation_file");
-        throw error;
-      }
-    });
-  }
   const ledger: BatchLedger = {
     ...base,
     batch,
@@ -193,5 +170,5 @@ export function openBatchLedger(path: string) {
     },
     close() { stagingDb.close(); db.close(); staging.close(); base.close(); },
   };
-  return { ledger, batch, isolate, flush, checkpoint() { db.exec("PRAGMA wal_checkpoint(PASSIVE)"); } };
+  return { ledger, batch, flush, checkpoint() { db.exec("PRAGMA wal_checkpoint(PASSIVE)"); } };
 }

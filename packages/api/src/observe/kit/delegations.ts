@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { createRequestId, fingerprintRequest, validateRequest, type IntakeRequest } from "../../../../core/src/intake/index.ts";
 import type { AppendResult, Confidence, Fact, FactInput, JsonValue, Ledger } from "../../../../core/src/ledger/index.ts";
 import { projectConversations, projectNames, projectProjects, searchNames } from "../../../../core/src/ledger/index.ts";
-import { readAppendOnlyFile, type FileCursor } from "../files.ts";
+import { readInode, readAppendOnlyFile, type FileCursor } from "../files.ts";
 
 type Row = { [key: string]: JsonValue };
 class KitConflict extends Error {}
@@ -37,7 +37,7 @@ export function observeKitDelegationsFile(ledger: Ledger, path: string, checkpoi
   // 記録がない周期は、台帳の文脈を走査する前に終える。
   try {
     const stat = statSync(path);
-    if (checkpoint && checkpoint.identity === `${stat.dev}:${stat.ino}` && checkpoint.size === stat.size
+    if (checkpoint && readInode(checkpoint.identity) === String(stat.ino) && checkpoint.size === stat.size
       && checkpoint.mtimeMs === stat.mtimeMs && checkpoint.ctimeMs === stat.ctimeMs) return [];
   } catch (error) {
     if (error instanceof Error && "code" in error && ["ENOENT", "EACCES", "EPERM"].includes(String(error.code))) return [];

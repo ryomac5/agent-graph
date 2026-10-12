@@ -305,22 +305,21 @@ export function openObservationService(options: ObservationOptions = {}) {
     contextAttempted.add(path);
     return !readLocated().has(`rollout-codex:${codexLocationEventId(nativeId)}`);
   }
-  const quarantined = new Set<string>();
-  let readQuarantines = false;
-  function isolateFile<T>(path: string, source: "rollout-codex" | "transcript-claude",
+  const recordedConflicts = new Set<string>();
+  function observeFileBatch<T>(path: string, source: "rollout-codex" | "transcript-claude",
     operation: () => T, readConflicts: (result: T) => AppendResult[]): T {
-    if (!("isolate" in buffered)) throw new Error("Observation belongs to the worker");
-    const result = buffered.isolate(operation, value => readConflicts(value).length === 0);
+    // 衝突した事実は台帳が拒否する。同じファイルの成功した追記は保持する。
+    const result = buffered.batch(operation);
     const conflicts = readConflicts(result);
-    if (conflicts.length && !quarantined.has(path)) {
+    if (conflicts.length && !recordedConflicts.has(path)) {
       const input: Extract<FactInput, { kind: "observation.unsupported" }> & { payload: { count: number } } = {
         source, source_event_id: JSON.stringify(["history-conflict", path]), kind: "observation.unsupported",
         subject: `observation:history-conflict:${path}`, source_ts: new Date().toISOString(), confidence: "confirmed",
         payload: { source_kind: source, file_path: path, format_name: "jsonl", format_version: "unknown",
-          reason: "Conflicting history; file quarantined", count: conflicts.length },
+          reason: "Conflicting history; existing facts retained", count: conflicts.length },
       };
       ledger.append(input);
-      quarantined.add(path);
+      recordedConflicts.add(path);
     }
     return result;
   }
@@ -346,15 +345,6 @@ export function openObservationService(options: ObservationOptions = {}) {
       const previousCheckpoints = new Map(checkpoints);
       try {
         refreshSnapshot();
-        if (!readQuarantines) {
-          for (const fact of snapshot) {
-            if (fact.kind === "observation.unsupported" && fact.payload?.reason === "Conflicting history; file quarantined"
-              && typeof fact.payload.file_path === "string") {
-              quarantined.add(fact.payload.file_path);
-            }
-          }
-          readQuarantines = true;
-        }
         const codex = rollout ??= createIncrementalRolloutReader(scanLedger, rollouts);
         decorate = codex.decorate;
         const start = Number(readLastSeq.get()!.seq ?? 0);
@@ -378,11 +368,11 @@ export function openObservationService(options: ObservationOptions = {}) {
           if (total) buffered.batch(() => {
             if (claudePaths.length) {
               observeClaudeHistories(scanLedger, claudeProjects, snapshot, trackBatch, claudePaths, checkpoints, locate,
-                (path, operation) => isolateFile(path, "transcript-claude", () => trackBatch(operation), result => result.conflicts));
+                (path, operation) => observeFileBatch(path, "transcript-claude", () => trackBatch(operation), result => result.conflicts));
             }
             if (codexPaths.size) observeCodex(scanLedger,
               { codexHome, reader: codex.reader, paths: codexPaths, titleCursors: checkpoints,
-                fileBatch: (path, operation) => isolateFile(path, "rollout-codex", () => trackBatch(operation),
+                fileBatch: (path, operation) => observeFileBatch(path, "rollout-codex", () => trackBatch(operation),
                   results => results.filter(result => result.status === "conflict")) });
           });
           if (!codexPaths.size) {
@@ -396,10 +386,9 @@ export function openObservationService(options: ObservationOptions = {}) {
           }
         } catch (error) { codex.discard(); throw error; }
         refreshSnapshot();
-        const acceptedLocations = codexLocations.filter(path => !quarantined.has(path));
-        if (acceptedLocations.length) {
-          const localLocations = acceptedLocations.filter(path => !path.startsWith(remoteProjects + "/"));
-          const located = buffered.batch(() => [...observeCodexLocations(scanLedger, localLocations, { facts: snapshot, locate }), ...acceptedLocations.filter(path => path.startsWith(remoteProjects + "/")).flatMap(path => {
+        if (codexLocations.length) {
+          const localLocations = codexLocations.filter(path => !path.startsWith(remoteProjects + "/"));
+          const located = buffered.batch(() => [...observeCodexLocations(scanLedger, localLocations, { facts: snapshot, locate }), ...codexLocations.filter(path => path.startsWith(remoteProjects + "/")).flatMap(path => {
             const remote = readRemoteMetadata(path);
             return observeCodexLocations(scanLedger, [path], { facts: snapshot, locate: remote ? () => ({ cwd: remote.cwd, repository_id: remote.projectId }) : locate });
           })]);
@@ -412,7 +401,7 @@ export function openObservationService(options: ObservationOptions = {}) {
             payload: row.payload === null ? null : JSON.parse(String(row.payload)),
           } as Fact;
         }
-        buffered.batch(() => directCodex(readLaunchFacts(), codexFiles.filter(path => !quarantined.has(path) && !path.startsWith(remoteProjects + "/"))));
+        buffered.batch(() => directCodex(readLaunchFacts(), codexFiles.filter(path => !path.startsWith(remoteProjects + "/"))));
         directSeq = directThrough;
         refreshSnapshot();
         ingestOutbox(scanLedger, listOutbox(hookOutboxPath(env, home),
@@ -420,7 +409,7 @@ export function openObservationService(options: ObservationOptions = {}) {
         refreshSnapshot();
         const aliases = kit.observe();
         refreshSnapshot();
-        remoteConversations = buffered.batch(() => observeRemoteStatus(scanLedger, remoteFiles.filter(path => !quarantined.has(path)), snapshot));
+        remoteConversations = buffered.batch(() => observeRemoteStatus(scanLedger, remoteFiles, snapshot));
         if (existsSync(claudeSessionsDirectory)) buffered.batch(() => observeClaudeSessions());
         refreshSnapshot();
         buffered.batch(() => observeCodexSessions());

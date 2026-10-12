@@ -25,7 +25,7 @@ export function createKitReader() {
       let snapshot: KitSnapshot;
       try {
         const stat = statSync(path);
-        const stamp = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+        const stamp = `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
         if (stamps.get(path) === stamp) return snapshots.get(path)!;
         const sourceTs = stat.mtime.toISOString();
         const data: unknown = JSON.parse(readFileSync(path, "utf8"));

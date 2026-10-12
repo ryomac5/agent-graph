@@ -51,7 +51,7 @@ for (const provider of ["claude", "codex"]) {
 }
 
 for (const provider of ["claude", "codex"]) {
-  test(`${provider}: 衝突したファイルだけを隔離し、他の事実と cursor を確定する`, t => {
+  test(`${provider}: 衝突した事実だけを捨て、同じ周期の発言と cursor を確定する`, t => {
     const home = mkdtempSync(join(tmpdir(), "observation-conflict-"));
     const claude = join(home, ".claude/projects/test");
     const codex = join(home, ".codex/sessions");
@@ -65,13 +65,14 @@ for (const provider of ["claude", "codex"]) {
     const text = (body: string) => provider === "claude" ? claudeMessage("bad", body) : codexMeta("bad") + codexMessage("bad", body);
     writeFileSync(bad, text("old"));
     service.ingestOnce();
-    // 同じ発言 ID に別の本文を与え、同ファイル内の新しい事実も隔離されることを確かめる。
+    // 同じ発言 ID の本文は既存を残し、同じ周期の新しい発言は保存する。
     writeFileSync(bad, text("new") + (provider === "claude" ? claudeMessage("quarantined") : codexMessage("quarantined")));
     writeFileSync(good, provider === "claude" ? codexMeta("good") + codexMessage("good") : claudeMessage("good"));
     assert.ok(service.ingestOnce().appended > 0);
     const facts = service.ledger.readSince(0, Number.MAX_SAFE_INTEGER);
     assert.ok(facts.some(f => f.kind === "message.created" && f.payload?.native_id === "good"));
-    assert.ok(!facts.some(f => f.kind === "message.created" && f.payload?.native_id === "quarantined"));
+    assert.ok(facts.some(f => f.kind === "message.created" && f.payload?.native_id === "quarantined"));
+    assert.equal((facts.find(f => f.kind === "message.created" && f.payload?.native_id === "bad")!.payload as { body: string }).body, "old");
     const records = facts.filter(f => f.kind === "observation.unsupported" && f.payload?.file_path === bad);
     assert.equal(records.length, 1);
     assert.equal((records[0].payload as { count: number }).count, 1);
@@ -112,7 +113,7 @@ test("Codex の中断導出は観測時刻・再送・既存の旧規則によ�
   assert.ok(observeCodexFile(ledger, path, { codexHome: home, observedTs: "2030-01-01T00:00:00Z" }).every(r => r.status === "duplicate"));
 });
 
-test("大きなファイルの衝突は保存済みの準備分と索引も戻し、同じ会話の別ファイルは取り込む", t => {
+test("大きなファイルの衝突でも準備上限前後の正しい発言と実行を保持する", t => {
   const home = mkdtempSync(join(tmpdir(), "observation-large-conflict-"));
   const directory = join(home, ".codex/sessions");
   mkdirSync(directory, { recursive: true });
@@ -122,14 +123,14 @@ test("大きなファイルの衝突は保存済みの準備分と索引も戻�
     subject: 'message:["codex","collision"]', source_ts: TS, confidence: "confirmed",
     payload: { provider: "codex", native_id: "collision", role: "assistant", version: 1, body: "old", body_state: "stored" } });
   const bad = join(directory, "rollout-a.jsonl");
-  // 4096 件の準備上限を越えても、ファイル全体を保存から外す。
+  // 4096 件の準備上限を越えた後の衝突でも、成功した発言をすべて保持する。
   writeFileSync(bad, codexMeta("shared") + Array.from({ length: 2100 }, (_, index) => codexMessage(`discard-${index}`)).join("")
     + codexMessage("collision", "new"));
   writeFileSync(join(directory, "rollout-b.jsonl"), codexMeta("shared") + codexMessage("retained")
     + JSON.stringify({ type: "event_msg", timestamp: TS, payload: { type: "task_started", turn_id: "next" } }) + "\n");
   service.ingestOnce();
   const facts = service.ledger.readSince(0, Number.MAX_SAFE_INTEGER);
-  assert.ok(!facts.some(f => f.kind === "message.created" && f.payload?.native_id?.startsWith("discard-")));
+  assert.equal(facts.filter(f => f.kind === "message.created" && f.payload?.native_id?.startsWith("discard-")).length, 2100);
   assert.ok(facts.some(f => f.kind === "message.created" && f.payload?.native_id === "retained"));
   assert.equal(facts.filter(f => f.kind === "run.created").length, 1);
   assert.equal(facts.filter(f => f.kind === "run.state_changed").length, 1);
@@ -138,7 +139,7 @@ test("大きなファイルの衝突は保存済みの準備分と索引も戻�
   assert.equal(service.ingestOnce().appended, 0);
 });
 
-test("Claude の隔離で会話の文脈も戻し、同じ native ID の別ファイルに未保存の実行を渡さない", t => {
+test("Claude の衝突でも保存した実行の文脈を同じ native ID の別ファイルへ渡す", t => {
   const home = mkdtempSync(join(tmpdir(), "observation-claude-shared-"));
   const a = join(home, ".claude/projects/a");
   const b = join(home, ".claude/projects/b");
@@ -174,4 +175,35 @@ test("Codex の入力時刻が欠けても、状態の根拠に観測時刻を�
   assert.deepEqual(readState(0, "2026-10-07T00:00:00Z"), readState(1, "2030-01-01T00:00:00Z"));
   assert.ok(observeCodexFile(ledgers[0], path, { codexHome: home, observedTs: "2035-01-01T00:00:00Z" })
     .every(result => result.status === "duplicate"));
+});
+
+test("Codex の衝突記録と旧い隔離記録があっても、後の周期に同じファイルの cwd を観測する", t => {
+  const home = mkdtempSync(join(tmpdir(), "observation-conflict-location-"));
+  const directory = join(home, ".codex/sessions");
+  mkdirSync(directory, { recursive: true });
+  const path = join(directory, "rollout-test.jsonl");
+  const options = { home, env: { HOME: home }, dbPath: join(home, "ledger.db") };
+  let service = openObservationService(options);
+  t.after(() => { service.close(); rmSync(home, { recursive: true, force: true }); });
+  service.ledger.append({ source: "rollout-codex", source_event_id: "message:collision:1", kind: "message.created",
+    subject: 'message:["codex","collision"]', source_ts: TS, confidence: "confirmed",
+    payload: { provider: "codex", native_id: "collision", role: "assistant", version: 1, body: "old", body_state: "stored" } });
+  writeFileSync(path, codexMeta("before") + codexMessage("collision", "new"));
+  service.ingestOnce();
+  // 旧版が保存した隔離記録も解除操作なしに読み越す。
+  service.ledger.append({ source: "rollout-codex", source_event_id: "old-quarantine", kind: "observation.unsupported",
+    subject: "observation:old-quarantine", source_ts: TS, confidence: "confirmed",
+    payload: { source_kind: "rollout-codex", file_path: path, format_name: "jsonl", format_version: "unknown",
+      reason: "Conflicting history; file quarantined" } });
+  service.close();
+  service = openObservationService(options);
+  const cwd = join(home, "work");
+  mkdirSync(cwd);
+  writeFileSync(path, JSON.stringify({ type: "session_meta", timestamp: TS,
+    payload: { id: "after", timestamp: TS, source: "cli", cwd, history_mode: "legacy" } }) + "\n" + codexMessage("after"));
+  service.ingestOnce();
+  const facts = service.ledger.readSince(0, Number.MAX_SAFE_INTEGER);
+  assert.ok(facts.some(f => f.source_event_id === "conversation:after:location" && (f.payload as { cwd?: string } | null)?.cwd === cwd));
+  assert.ok(facts.some(f => f.kind === "message.created" && f.payload?.native_id === "after"));
+  assert.ok(facts.some(f => (f.payload as { reason?: string } | null)?.reason === "Conflicting history; file quarantined"));
 });

@@ -12,7 +12,7 @@ export function createDirectoryReader(recursive = true) {
         if (error instanceof Error && "code" in error && error.code === "ENOENT") { directories.delete(path); return; }
         throw error;
       }
-      const stamp = `${stat.dev}:${stat.ino}:${stat.mtimeMs}:${stat.ctimeMs}`;
+      const stamp = `${stat.ino}:${stat.mtimeMs}:${stat.ctimeMs}`;
       let cached = directories.get(path);
       if (cached?.stamp !== stamp) {
         cached = { stamp, children: readdirSync(path, { withFileTypes: true })

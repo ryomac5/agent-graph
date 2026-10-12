@@ -354,3 +354,14 @@ test('開始欠落の終了にも種別と目標を保持する', t => {
   assert.equal(kit.origin, 'graph');
   assert.equal(kit.goal, '欠落したグラフ');
 });
+
+for (const legacy of [false, true]) test(`無変更の kit 周期は台帳を全件走査しない: legacy=${legacy}`, t => {
+  const f = createFixture(t);
+  writeFileSync(f.path, encode(start(), done()));
+  const checkpoints = new Map<string, import("../../src/observe/files.ts").FileCursor>();
+  observeKitDelegationsFile(f.ledger, f.path, checkpoints);
+  const cursor = checkpoints.get(f.path)!;
+  if (legacy) checkpoints.set(f.path, { ...cursor, identity: `999:${cursor.identity}` });
+  t.mock.method(f.ledger, "readSince", () => { throw new Error("Unchanged kit file must not scan facts"); });
+  for (let cycle = 0; cycle < 3; cycle += 1) assert.deepEqual(observeKitDelegationsFile(f.ledger, f.path, checkpoints), []);
+});

@@ -188,7 +188,7 @@ export function createDirectCodexObserver(ledger: Ledger, db: DatabaseSync = rea
     for (const path of paths) {
       try {
         const stat = statSync(path);
-        const stamp = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+        const stamp = `${stat.ino}:${stat.size}:${stat.mtimeMs}`;
         let cached = requests.get(path);
         if (!cached || cached.stamp !== stamp) {
           const meta = readMeta(path);

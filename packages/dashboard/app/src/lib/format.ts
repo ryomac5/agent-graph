@@ -125,9 +125,23 @@ export function isProvisionalName(conversation: Row | undefined): boolean {
   return Boolean(readTitle(conversation?.name)) && (conversation?.name_is_provisional === true || conversation?.name_is_provisional === 1);
 }
 
+/** 子の仕事は観測した説明、委譲の説明、従来の題の順に呼ぶ。 */
+export function delegatedTitle(evidence: Row = {}, delegation?: Row): string {
+  return (text(evidence.description) || text(delegation?.description) || text(object(delegation?.request).description)
+    || text(delegation?.title) || text(object(delegation?.request).title)).replace(/^\s*#{1,6}\s+/, '').trim();
+}
+
 export function conversationName(state: ScreenState, conversationId: string, visited = new Set<string>()): string {
   if (visited.has(conversationId)) return '';
   visited.add(conversationId);
+  const relation = state.projection.relations?.find(row => row.type === 'delegated' && row.to_id === conversationId && row.active !== 0 && row.active !== false);
+  const evidence = object(relation?.evidence);
+  const runs = new Set((state.projection.runs ?? []).filter(row => row.conversation_id === conversationId).map(row => row.id));
+  const delegation = state.projection.delegations?.find(row => row.request_id === evidence.request_id && evidence.request_id
+    || row.conversation_id === conversationId || runs.has(row.run_id)
+    || Array.isArray(row.attempts) && row.attempts.some(attempt => runs.has(object(attempt).run_id)));
+  const task = delegatedTitle(evidence, delegation);
+  if (task) return task;
   const review = state.projection.relations?.find(row => row.type === 'review_of' && row.from_id === conversationId
     && (row.active === true || row.active === 1) && row.confidence === 'confirmed');
   if (review) {
@@ -136,6 +150,15 @@ export function conversationName(state: ScreenState, conversationId: string, vis
   }
   const conversation = state.projection.conversations?.find(row => row.id === conversationId);
   return conversation ? conversationTitle(conversation, conversationStart(state, conversationId)) : '';
+}
+
+export function formatStartedAt(value: number, now = Date.now()): string {
+  const date = new Date(value), today = new Date(now);
+  if (!Number.isFinite(date.getTime())) return '';
+  const pad = (part: number) => String(part).padStart(2, '0');
+  if (date.toDateString() === today.toDateString()) return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  const day = `${pad(date.getMonth() + 1)}/${pad(date.getDate())}`;
+  return date.getFullYear() === today.getFullYear() ? day : `${date.getFullYear()}/${day}`;
 }
 
 /** 実行は会話の名前と世代で呼ぶ。 */

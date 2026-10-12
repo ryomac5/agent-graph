@@ -72,7 +72,7 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
     <div className="workspace-columns">
       {/* アプリの画面では、会話の一覧は左のサイドバーのプロジェクトの下に置き、作業場は会話とサブエージェントに広さを渡す。 */}
       {showRootList && <section className="workspace-roots" aria-label={t.conversations}><header className="column-header"><h2>{t.conversations}</h2><span className="column-count numeric">{roots.length}</span></header>
-        <div className="column-scroll"><RootList client={client} roots={roots} selected={selected?.id} language={language} onSelect={root => {
+        <div className="column-scroll"><RootList state={state} client={client} roots={roots} selected={selected?.id} language={language} onSelect={root => {
           const next = new URLSearchParams(search); next.set('root', root.id); next.delete('path'); next.delete('child'); next.delete('session'); setSearch(next);
         }}/></div></section>}
       {(conversationId || newSession) ? <Workbench key={`${project}:${workspaceSession}`} project={project} session={workspaceSession} conversationId={conversationId ?? ''} openConversationId={search.get('conversation') ?? undefined} newSession={newSession} client={client} language={language} bindings={bindings} registerOpenFile={openFile}

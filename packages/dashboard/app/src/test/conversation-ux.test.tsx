@@ -283,7 +283,7 @@ it('opens a conversation card in the focused empty pane and keeps the original c
   fireEvent.click(currentCard);
   expect(panes[1].dataset.focused).toBe('true');
   expect(within(panes[0]).getByRole('button', { name: /Build parser/ })).toBeTruthy();
-  expect(within(panes[1]).getByRole('tab', { name: 'Claude' })).toBeTruthy();
+  expect(within(panes[1]).getByRole('tab', { name: 'Build parser' })).toBeTruthy();
   expect(screen.getByTestId('url').textContent).toBe('?root=root');
   const saved = JSON.parse(localStorage.getItem('agent-graph-workspace:["p","root"]')!);
   expect(saved.first.tabs[0].conversationId).toBe('c');

@@ -7,7 +7,7 @@ import { buildRootTree, currentRootConversation, selectRoots, useRootIndex, type
 import { getProjectName, resolveProjectId } from '../../lib/projects.ts';
 import { ProjectHeader } from '../workspace/WorkspacePage.tsx';
 import type { ConversationClient } from '../conversation/ConversationPage.tsx';
-import { readObject, readText } from '../../components/conversation/model.ts';
+import { readText } from '../../components/conversation/model.ts';
 import { answerApproval, getConversation, isPending } from '../inbox/model.ts';
 import { buildRows, readCurrentWork, readExpanded, readReport, PAGE_SIZE, GRAPH_COMPACT_WIDTH, type GraphRow, type GraphTree } from './rows.ts';
 import { GraphOutline, GraphSummary, type OutlineProps } from './GraphOutline.tsx';
@@ -43,7 +43,7 @@ export function GraphPage({ project: suppliedProject, target = store, client, la
       const review = (state.projection.relations ?? []).find(row => row.type === 'review_of' && row.from_id === conversationId && row.active !== 0 && row.active !== false);
       return { ...node, conversationId, run, role: review ? 'review' : node.role,
         provider: node.provider || String(conversation?.provider ?? ''), model: node.model || readModel(run).model || readText(run?.model) || readText(conversation?.model),
-        label: node.id === root.id ? root.name : readText(node.delegation?.description ?? readObject(node.delegation?.request).description) || edge?.title || conversationName(state, conversationId ?? '') || (node.role === 'planner' ? node.label : agentName(node.provider, node.model) || 'Agent'),
+        label: node.id === root.id ? root.name : edge?.title || conversationName(state, conversationId ?? '') || (node.role === 'planner' ? node.label : agentName(node.provider, node.model) || 'Agent'),
         state: approvals.length ? 'waiting_approval' : node.state, approvals,
         currentWork: readCurrentWork(state, conversationId ?? '', language), report: readReport(state, conversationId ?? ''),
         inferred: edge?.confidence === 'inferred' || node.role === 'review' && !review,

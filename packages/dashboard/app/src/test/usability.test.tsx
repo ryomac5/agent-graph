@@ -121,10 +121,11 @@ it('3: preserves recorded roles and makes retry available after opening the fail
   await waitFor(() => expect(client.command).toHaveBeenCalledWith('intake.retry', { requestId: 'request' }));
 });
 
-it('4: list, tree and detail time wrappers use the same Japanese timestamp without conflicting rounding', () => {
+it('4: detail time wrappers retain Japanese timestamps and root dates use compact numbers', () => {
   expect(formatAgo(RECENT, 'ja', NOW)).toBe(formatWhen(RECENT, 'ja', NOW));
-  render(<MemoryRouter><RootList roots={[root]} language="ja"/><RelativeTime value={RECENT} now={NOW} language="ja"/></MemoryRouter>);
+  render(<MemoryRouter><RootList roots={[root]} state={state({ conversations: [{ id: root.conversation_ids[0], created_ts: RECENT }] })} language="ja"/><RelativeTime value={RECENT} now={NOW} language="ja"/></MemoryRouter>);
   expect(screen.getAllByText(formatWhen(RECENT, 'ja', NOW))).toHaveLength(2);
+  expect(document.querySelector('.root-time')?.textContent).toBe('14:00');
   expect(formatWhen(new Date(2026, 9, 7, 15, 30), 'ja', NOW)).toBe('昨日 15:30');
   expect(formatWhen(new Date(2026, 8, 30, 6, 4), 'ja', NOW)).toBe('9月30日 6:04');
   document.documentElement.lang = 'ja';

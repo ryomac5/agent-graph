@@ -3,14 +3,14 @@ import { useMemo } from 'react';
 import type { Row, ScreenState } from './store.ts';
 import { readObject, readText } from '../components/conversation/model.ts';
 import { getRegisteredProjects, OTHER_PROJECT } from './projects.ts';
-import { agentName, conversationName, conversationTitle, readModel, readTitle } from './format.ts';
+import { agentName, conversationName, conversationTitle, delegatedTitle, readModel, readTitle } from './format.ts';
 import { readAttempts, type DelegationTree, type TreeNode } from '../pages/tree/model.ts';
 
 export interface Root {
   id: string; name: string; project: string | null; state: string; last_activity_ts: string | null;
   current_conversation_id?: string;
   conversation_ids: string[]; running_children: number; total_children: number;
-  /** キットが付けた番号の名前。画面ではプロジェクト名と始めた日の名前で呼び、番号は補足に出す。 */
+  /** キットが付けた番号の名前。識別子として補足に残す。 */
   kit_name?: string;
   user_name?: string | null;
   auto_name?: string;
@@ -51,11 +51,12 @@ export function startedAt(state: ScreenState, root: Root, times = readConversati
   const starts = root.conversation_ids.map(id => times.get(id)?.first).filter((value): value is number => value !== undefined);
   return starts.length ? Math.min(...starts) : undefined;
 }
-/** キットの番号の名前を、プロジェクト名と始めた日の名前に置き換える。同じ日に複数あれば、始めた順に -2 から付ける。 */
+/** 最初の依頼を題に使う。依頼がなければキット名から日付の題を作り、識別子を残す。 */
 function renameKitRoots(state: ScreenState, roots: Root[], times: Map<string, ConversationTimes>): Root[] {
   const groups = new Map<string, { root: Root; start: number }[]>();
   for (const root of roots) {
     const kit = /^(.+)-\d{3,}$/.exec(root.name);
+    if (kit) root.kit_name ??= root.name;
     const start = kit ? startedAt(state, root, times) : undefined;
     if (!kit || start === undefined) continue;
     const day = new Date(start);
@@ -65,6 +66,11 @@ function renameKitRoots(state: ScreenState, roots: Root[], times: Map<string, Co
   }
   for (const [base, group] of groups) group.toSorted((a, b) => a.start - b.start || a.root.id.localeCompare(b.root.id))
     .forEach(({ root }, index) => { root.kit_name = root.name; root.name = index === 0 ? base : `${base}-${index + 1}`; });
+  for (const root of roots) {
+    const first = root.conversation_ids.toSorted((a, b) => (times.get(a)?.first ?? Number.NEGATIVE_INFINITY) - (times.get(b)?.first ?? Number.NEGATIVE_INFINITY))[0];
+    const excerpt = readText(state.projection.conversations?.find(row => row.id === first)?.first_request_excerpt);
+    if (excerpt) root.name = excerpt;
+  }
   return roots;
 }
 export const isRunning = (state: string) => ['starting', 'running', 'assigned', 'verifying', 'reviewing'].includes(state);
@@ -213,7 +219,7 @@ export function buildRootTree(root: Root, index: RootIndex): DelegationTree {
       node.label = nodeLine(node);
       nodes.push(node); parent.children.push(id);
       // 頼んだ内容は、子のエージェントの説明か、runner の委譲の題から取る。
-      edges.push({ id: `relation:${readText(relation.id) || id}`, source: parent.id, target: id, title: requestTitle(readText(evidence.description) || readText(delegation?.title)),
+      edges.push({ id: `relation:${readText(relation.id) || id}`, source: parent.id, target: id, title: delegatedTitle(evidence, delegation),
         confidence: readText(relation.confidence) || 'confirmed', kind: 'delegated' });
       addChildren(node, id);
     }
@@ -257,9 +263,10 @@ export function buildRootTree(root: Root, index: RootIndex): DelegationTree {
     }
     if (existing && !planner) {
       const edge = edges.find(edge => edge.target === node.id);
-      if (edge) edge.title ||= readText(delegation.title ?? delegation.description);
+      if (edge) edge.title ||= delegatedTitle({}, delegation);
       continue;
     }
+    const priorTitle = edges.find(edge => edge.target === node.id)?.title;
     if (existing) {
       for (const parent of nodes) parent.children = parent.children.filter(id => id !== node.id);
       const edgeIndex = edges.findIndex(edge => edge.target === node.id);
@@ -267,7 +274,7 @@ export function buildRootTree(root: Root, index: RootIndex): DelegationTree {
     } else nodes.push(node);
     group.children.push(node.id);
     edges.push({ id: `task:${readText(delegation.id)}`, source: group.id, target: node.id,
-      title: readText(delegation.title ?? delegation.description), confidence: 'confirmed', kind: 'delegated' });
+      title: priorTitle || delegatedTitle({}, delegation), confidence: 'confirmed', kind: 'delegated' });
     if (!existing && conversationId) addChildren(node, conversationId);
   }
   return { nodes, edges, roots: [root.id], unresolved: [] };

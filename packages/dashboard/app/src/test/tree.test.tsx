@@ -231,5 +231,5 @@ it('nests review_of in the original execution direction with a readable reviewer
   state.projection.delegations = [state.projection.delegations[0]];
   const tree = buildDelegationTree(state, PROJECT);
   expect(tree.nodes.find(node => node.id === 'run:codex:1')!.children).toEqual(['run:claude:1']);
-  expect(tree.nodes.find(node => node.id === 'run:claude:1')).toMatchObject({ label: 'Review of Terminal task graph', role: 'Reviewer' });
+  expect(tree.nodes.find(node => node.id === 'run:claude:1')).toMatchObject({ label: 'Review of Implement code', role: 'Reviewer' });
 });

@@ -31,7 +31,7 @@ export function HomePage({ target = store, language = 'en', backAction, client }
     .map(root => [root.id, buildRootTree(root, index)])), [groups, index]);
   const [otherOpen, setOtherOpen] = useState(false);
   const other = groups.get(OTHER_PROJECT) ?? [];
-  const renderRoot = (project: string, root: (typeof roots)[number]) => <div className="root-block" key={root.id}><RootList client={client} roots={[root]} language={language}/><RootTree tree={trees.get(root.id) ?? buildRootTree(root, index)} runningOnly language={language} onSelect={node => {
+  const renderRoot = (project: string, root: (typeof roots)[number]) => <div className="root-block" key={root.id}><RootList state={state} client={client} roots={[root]} language={language}/><RootTree tree={trees.get(root.id) ?? buildRootTree(root, index)} runningOnly language={language} onSelect={node => {
     if (node.conversationId) navigate(`/p/${encodeURIComponent(project)}?root=${encodeURIComponent(root.id)}&child=${encodeURIComponent(node.conversationId)}`);
   }}/></div>;
   return <div className="page home-page"><header className="page-header">{backAction}<h1>{t.overview}</h1></header>

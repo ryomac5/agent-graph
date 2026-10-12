@@ -36,6 +36,7 @@ export interface TaskPayload {
   state: string;
 }
 export interface ConversationPayload {
+  input_queue_event?: { operation: string; body?: JsonValue; delivery_id?: string };
   user_name?: string | null;
   ai_title?: string | null;
   provider: Provider;
@@ -203,6 +204,7 @@ export type FactPayloads = {
   "task.state_changed": Pick<TaskPayload, "state">;
   "conversation.renamed": { user_name: string | null };
   "conversation.task_changed": { task_id: string | null };
+  "conversation.input_queue_changed": Pick<ConversationPayload, "input_queue_event">;
   "relation.state_changed": Pick<RelationPayload, "active">;
   "run.state_changed": Pick<RunPayload, "state"> & Partial<RunPayload>;
   "run.interrupt_requested": { turn_id: string };

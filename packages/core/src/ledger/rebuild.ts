@@ -209,6 +209,8 @@ function applyAffected(ledger: DatabaseSync, added: readonly Fact[], lastSeq: nu
   const throughSeq = added.at(-1)!.seq;
   const changed = new Set(added.map((fact) => fact.kind.split(".")[0]));
   const nameConversations = new Set<string>();
+  const runSubjects = new Set(added.filter(fact => fact.kind.startsWith("run.")).map(fact => fact.subject));
+  for (const run of projectRuns(readSubjectFacts(ledger, runSubjects, throughSeq))) nameConversations.add(run.conversation_id);
   const order = ["messages", "message_memberships", ...PROJECTION_TABLES.filter((table) => table !== "messages" && table !== "message_memberships")] as const;
   for (const table of order) {
     const entities: readonly string[] = PROJECTION_ENTITIES[table];
@@ -230,6 +232,13 @@ function applyAffected(ledger: DatabaseSync, added: readonly Fact[], lastSeq: nu
     const entity = PROJECTION_ENTITIES[table][0];
     if (![...affected].some((subject) => subject.startsWith(`${entity}:`))) continue;
     let subjects = expandSubjects(ledger, table, affected, "needs", throughSeq);
+    if (table === "conversations") {
+      const identities = projectConversationIds(readSubjectFacts(ledger, subjects, throughSeq));
+      const ids = [...new Set([...identities.keys(), ...identities.values()])];
+      for (const row of prepare(ledger, `SELECT subject_id FROM run_subjects
+        WHERE conversation_id IN (SELECT value FROM json_each(?))`).all(JSON.stringify(ids))) subjects.add(`run:${row.subject_id}`);
+      for (const subject of runSubjects) subjects.add(subject);
+    }
     let facts = readSubjectFacts(ledger, subjects, throughSeq);
     if (table === "relations") {
       subjects = includeRelationPeers(ledger, subjects, facts, lastSeq, throughSeq);

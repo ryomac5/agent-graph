@@ -52,6 +52,7 @@ export class ProjectionFeed {
   private observation?: ObservationProgress;
   private registeredRepositories = new Map<string, string[]>();
   private statements = new Map<string, StatementSync>();
+  private inputQueues = new Map<string, unknown[]>();
   private prepare(sql: string): StatementSync {
     let statement = this.statements.get(sql);
     if (!statement) { statement = this.db.prepare(sql); this.statements.set(sql, statement); }
@@ -66,6 +67,10 @@ export class ProjectionFeed {
     this.db.exec(`PRAGMA busy_timeout = 5000; PRAGMA synchronous = NORMAL; PRAGMA cache_size = -${SCREEN_CACHE_KIB}`);
     this.catchUp = catchUp;
     this.limit = limit;
+    // 前の実装が残した全レコード用の trigger は、起動時に外す。
+    for (const operation of ["INSERT", "UPDATE", "DELETE"]) {
+      this.db.exec(`DROP TRIGGER IF EXISTS api_change_conversation_record_${operation}`);
+    }
     this.db.exec(`CREATE TABLE IF NOT EXISTS api_projection_changes (
       cursor INTEGER PRIMARY KEY AUTOINCREMENT, table_name TEXT NOT NULL, id TEXT NOT NULL, conversation_id TEXT);
       CREATE TABLE IF NOT EXISTS api_conversation_summaries (id TEXT PRIMARY KEY, message_count INTEGER NOT NULL,
@@ -93,15 +98,29 @@ export class ProjectionFeed {
     this.cursor = Number(this.prepare("SELECT coalesce(max(cursor), 0) AS cursor FROM api_projection_changes").get()!.cursor);
     this.prepare("DELETE FROM api_projection_changes WHERE cursor <= ?").run(this.cursor);
     this.floor = this.state.last_seq;
+    this.updateInputQueues();
     this.roots = this.readRoots();
+  }
+  private updateInputQueues(ids?: string[]): void {
+    if (ids?.length === 0) return;
+    if (ids === undefined) this.inputQueues.clear();
+    else for (const id of ids) this.inputQueues.delete(id);
+    const where = ids === undefined ? "" : "AND entity_id IN (SELECT value FROM json_each(?))";
+    const statement = this.prepare(`SELECT entity_id, json_extract(data, '$.pending_inputs') AS inputs
+      FROM projection_records WHERE projection = 'conversations' ${where}`);
+    const rows = ids === undefined ? statement.iterate() : statement.iterate(JSON.stringify(ids));
+    for (const row of rows) {
+      const inputs = row.inputs ? JSON.parse(String(row.inputs)) : [];
+      if (inputs.length) this.inputQueues.set(String(row.entity_id), inputs);
+    }
   }
   private updateIdentities(sinceSeq?: number): ScreenIdentities {
     const subset = sinceSeq === undefined ? "" : `AND subject IN (SELECT subject FROM facts WHERE seq > ? AND seq <= ?
-      AND (kind LIKE 'conversation.%' OR kind = 'run.created'))`;
+      AND ((kind LIKE 'conversation.%' AND kind != 'conversation.input_queue_changed') OR kind = 'run.created'))`;
     const rows = this.prepare(`SELECT seq, fact_id, source, source_event_id, kind, subject, source_ts, observed_ts, confidence, supersedes,
         json_patch('{}', json_object('provider', json_extract(payload, '$.provider'), 'native_id', json_extract(payload, '$.native_id'),
           'conversation_id', json_extract(payload, '$.conversation_id'), 'generation', json_extract(payload, '$.generation'))) AS payload
-      FROM facts WHERE seq <= ? AND (kind LIKE 'conversation.%' OR kind = 'run.created') ${subset} ORDER BY subject, seq`)
+      FROM facts WHERE seq <= ? AND ((kind LIKE 'conversation.%' AND kind != 'conversation.input_queue_changed') OR kind = 'run.created') ${subset} ORDER BY subject, seq`)
       .iterate(...(sinceSeq === undefined ? [this.state.last_seq] : [this.state.last_seq, sinceSeq, this.state.last_seq]));
     const next: ScreenIdentities = { conversations: {}, runs: {} };
     const createdRuns: { conversation_id: string; generation: number; subject_id: string }[] = [];
@@ -212,7 +231,8 @@ export class ProjectionFeed {
     const limit = ids ? "" : `LIMIT ${LIST_PAGE_SIZE}`;
     // 会話の名前と依頼の抜粋は core の投影の値をそのまま配る。画面は本文から名前を導かない。
     // プロジェクトは作業、会話の開始の場所、実行の場所の順に結ぶ。
-    if (table === "conversations") return this.prepare(`SELECT t.id, t.provider, t.origin, t.type, t.task_id, t.kit_name, t.user_name, t.created_ts, substr(t.name, 1, ${NAME_LENGTH}) AS name,
+    if (table === "conversations") {
+      const rows = this.prepare(`SELECT t.id, t.provider, t.origin, t.type, t.task_id, t.kit_name, t.user_name, t.created_ts, substr(t.name, 1, ${NAME_LENGTH}) AS name,
       t.name_is_provisional, substr(t.ai_title, 1, ${NAME_LENGTH}) AS ai_title, substr(t.first_request_excerpt, 1, ${NAME_LENGTH}) AS first_request_excerpt, t.cwd,
       r.project_id AS project, coalesce(r.state, 'unregistered') AS project_state,
       coalesce(s.message_count, 0) AS message_count, s.last_message_ts, coalesce(s.last_message_excerpt, '') AS last_message_excerpt
@@ -220,8 +240,9 @@ export class ProjectionFeed {
       LEFT JOIN api_project_resolution r ON r.id = coalesce(task.project, t.repository_id,
         (SELECT repository_id FROM runs WHERE (conversation_id = t.id OR conversation_id IN (
           SELECT id FROM api_conversation_ids WHERE canonical_id = t.id)) AND repository_id IS NOT NULL ORDER BY generation DESC LIMIT 1))
-      LEFT JOIN api_conversation_summaries s ON s.id = t.id ${where} ORDER BY t.id ${limit}`).all(parameter)
-      .map(row => ({ ...row, name_is_provisional: row.name_is_provisional === 1 }));
+      LEFT JOIN api_conversation_summaries s ON s.id = t.id ${where} ORDER BY t.id ${limit}`).all(parameter);
+      return rows.map(row => ({ ...row, pending_inputs: this.inputQueues.get(String(row.id)) ?? [], name_is_provisional: row.name_is_provisional === 1 }));
+    }
     // 試行は画面が木と 1 行の要約に使う欄だけを配り、受け入れの出力や報告の本文は配らない。
     if (table === "delegations") return this.prepare(`SELECT t.id, t.request_id, t.kit, t.parent_run_id, t.role, t.title, t.attempt, t.state,
       t.cwd, t.origin, t.parent, t.repository_id, t.provider, t.model, r.project_id AS project,
@@ -260,7 +281,7 @@ export class ProjectionFeed {
     for (const row of this.prepare(`SELECT DISTINCT conversation_id FROM message_memberships
       WHERE message_id IN (SELECT value FROM json_each(?))`).all(JSON.stringify(messages))) conversations.add(String(row.conversation_id));
     for (const id of conversations) this.updateSummary(id);
-    const identityChanged = !!this.prepare("SELECT 1 FROM facts WHERE seq > ? AND seq <= ? AND (kind LIKE 'conversation.%' OR kind = 'run.created') LIMIT 1").get(previous.last_seq, state.last_seq);
+    const identityChanged = !!this.prepare("SELECT 1 FROM facts WHERE seq > ? AND seq <= ? AND ((kind LIKE 'conversation.%' AND kind != 'conversation.input_queue_changed') OR kind = 'run.created') LIMIT 1").get(previous.last_seq, state.last_seq);
     const identities = identityChanged || state.generation !== previous.generation
       ? this.updateIdentities(state.generation === previous.generation ? previous.last_seq : undefined) : undefined;
     const projectFactsChanged = !!this.prepare("SELECT 1 FROM facts WHERE seq > ? AND seq <= ? AND kind LIKE 'project.%' LIMIT 1").get(previous.last_seq, state.last_seq);
@@ -299,6 +320,17 @@ export class ProjectionFeed {
         .all(JSON.stringify(projectChanges.resolved))) delegations.add(String(row.id));
       if (delegations.size) groups.set("delegations", delegations);
     }
+    const queueIds = new Set<string>();
+    for (const row of this.prepare(`SELECT DISTINCT substr(subject, 14) AS id FROM facts
+      WHERE seq > ? AND seq <= ? AND kind = 'conversation.input_queue_changed'`).all(previous.last_seq, state.last_seq)) {
+      const id = this.conversationId(String(row.id));
+      ids.add(id); queueIds.add(id);
+    }
+    // 待ち行列が変わった会話だけ読み直し、通常の一覧取得にはレコード表を持ち込まない。
+    for (const id of ids) if (this.inputQueues.has(id)) queueIds.add(id);
+    const resetQueues = state.generation !== previous.generation || state.last_seq < previous.last_seq
+      || Object.keys(identities?.conversations ?? {}).length > 0;
+    this.updateInputQueues(resetQueues ? undefined : [...queueIds]);
     groups.set("conversations", ids);
     if (state.generation !== previous.generation || state.last_seq < previous.last_seq) {
       this.history = []; this.requiresGeneration = true; this.floor = state.last_seq;

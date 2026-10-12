@@ -7,7 +7,7 @@ import { readAppendOnlyFile } from "../files.ts";
 import type { FileCursor, FileRead } from "../files.ts";
 
 const HEADLESS_ENTRYPOINTS = new Set(["sdk-cli", "sdk-ts", "sdk-py"]);
-const IGNORED_TYPES = new Set(["file-history-snapshot", "queue-operation", "progress", "summary",
+const IGNORED_TYPES = new Set(["file-history-snapshot", "progress", "summary",
   "custom-title", "agent-name", "last-prompt", "pr-link", "attachment", "ai-title",
   "permission-mode", "mode", "atis-latch", "cost-state", "file-history-delta", "bridge-session",
   "agent-setting", "relocated", "worktree-state"]);
@@ -54,6 +54,8 @@ export function findUnsupportedReason(row: Row | undefined): string | undefined 
     if (!readString(row.uuid) || !message || !(typeof message.content === "string" || Array.isArray(message.content))) {
       return "Unsupported message structure";
     }
+  } else if (row.type === "queue-operation") {
+    if (!readString(row.operation)) return "Missing queue operation";
   } else if (row.type === "continued-in") {
     if (!readString(row.continuedInSessionId)) return "Missing continuation native ID";
   } else if (row.type === "system" && row.subtype === "compact_boundary") {
@@ -84,6 +86,8 @@ export function observeClaudeFile(ledger: Ledger, path: string, options: ClaudeO
   // 子の行の sessionId は親を指すため、ファイルの agent ID を会話の識別に使う。
   const subagent = absolutePath.split(sep).includes("subagents");
   const id = createNativeId("claude", nativeId);
+  const queueEventIds = new Set(existing.filter(fact => fact.kind === "conversation.input_queue_changed" && fact.subject === `conversation:${id}`)
+    .map(fact => fact.source_event_id));
   const rows = result.lines.filter((line) => line.text.trim()).map((line) => ({ line, row: parseRow(line.text) }));
   // 起源だけを読むため、名前の候補のために本文を投影しない。
   const previous = projectConversations(existing, new Map()).conversations.find((conversation) => conversation.id === id);
@@ -160,6 +164,19 @@ export function observeClaudeFile(ledger: Ledger, path: string, options: ClaudeO
       continue;
     }
     if (!row) continue;
+    const queueEventId = `input-queue:${id}:${String(line.cursor.offset).padStart(16, "0")}:${line.cursor.hash}`;
+    if (row.type === "queue-operation") {
+      const eventId = queueEventId;
+      if (!queueEventIds.has(eventId)) {
+        append({ ...common, kind: "conversation.input_queue_changed", subject: `conversation:${id}`,
+          source_event_id: eventId, payload: { input_queue_event: {
+            operation: String(row.operation),
+            body: row.content,
+            ...(readString(row.deliveryId) ? { delivery_id: String(row.deliveryId) } : {}),
+          } }, cursor: common.cursor });
+        queueEventIds.add(eventId);
+      }
+    }
     if (row.type === "user" || row.type === "assistant") {
       const message = readObject(row.message)!;
       const messageId = createNativeId("claude", String(row.uuid));

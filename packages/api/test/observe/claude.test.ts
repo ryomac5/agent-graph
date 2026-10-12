@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import type { TestContext } from "node:test";
-import { createNativeId, openLedger, project } from "../../../core/src/ledger/index.ts";
+import { applyIncremental, createNativeId, openLedger, project, readLedgerDatabase } from "../../../core/src/ledger/index.ts";
 import type { FactInput, Ledger, LedgerOptions } from "../../../core/src/ledger/index.ts";
 import { observeClaudeFile, observeClaudeProjects } from "../../src/observe/claude/index.ts";
 import type { ClaudeUnsupportedPayload } from "../../src/observe/claude/index.ts";
@@ -322,4 +322,27 @@ test("ai-title は最後の題名を記録し、同じ題名と再読で増殖�
   observeClaudeFile(ledger, path, { cursor: { ...first.cursor, identity: "replay" }, observedTs: TS });
   assert.deepEqual(readFacts(ledger), facts);
   assert.deepEqual(project([...facts].reverse()), project(facts));
+});
+
+test("jsonl の包みと自動挿入を投影で正規化し、最初の依頼だけを名前にする", t => {
+  const { ledger, directory } = createFixture(t);
+  const path = join(directory, "wrapped.jsonl");
+  const bodies = ['<task-notification>終了</task-notification>',
+    'Another Claude session sent a message:\n<agent-message from="a4dc">子の報告</agent-message>\n\nThat "other Claude session" is an agent working inside this same session.',
+    '\n\n<pasted_content id="d49b">\n最初の依頼。\n</pasted_content id="d49b">\n\n外の文\n<pasted_content id="b">\n次の本文\n</pasted_content id="b">'];
+  writeFileSync(path, bodies.map((body, index) => createMessage(`wrapped-${index}`, body)).join("\n") + "\n");
+  observeClaudeFile(ledger, path, { observedTs: TS });
+  const facts = readFacts(ledger);
+  const projection = project(facts);
+  assert.deepEqual(projection.messages.map(message => [message.role, message.body]),
+    [["notification", ""], ["agent_report", "子の報告"], ["user", "最初の依頼。\n\n外の文\n次の本文"]]);
+  assert.equal(projection.conversations[0].first_request_excerpt, "最初の依頼。");
+  assert.equal(projection.conversations[0].name, "最初の依頼。");
+  const db = readLedgerDatabase(ledger);
+  applyIncremental(db, 0);
+  assert.deepEqual(db.prepare("SELECT role, content_normalized FROM messages ORDER BY native_id").all().map(row => [row.role, row.content_normalized]),
+    [["notification", 1], ["agent_report", 1], ["user", 1]]);
+  assert.deepEqual(project([...facts].reverse()), projection);
+  observeClaudeFile(ledger, path, { observedTs: TS });
+  assert.deepEqual(readFacts(ledger), facts);
 });

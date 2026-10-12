@@ -3,6 +3,7 @@ import type { Fact, JsonValue } from './facts.ts';
 import { projectArtifacts } from './projections/artifacts.ts';
 import { projectConversations } from './projections/conversations.ts';
 import { getMessageText, projectMessages } from './projections/messages.ts';
+import { normalizeClaudeContent } from './projections/claude-content.ts';
 import { projectRuns } from './projections/runs.ts';
 import { createNativeId, projectConversationIds } from './projections/relations.ts';
 import { prepareProjectionFacts } from './projections/delegations.ts';
@@ -409,7 +410,11 @@ export function refreshSearch(db: DatabaseSync, added?: readonly Fact[], allFact
       ?? (typeof meta.repository_id === 'string' ? meta.repository_id : null);
     const provider = conversation?.provider ?? (typeof meta.provider === 'string' ? meta.provider : null);
     // 発言から実行を推定すると、再開した会話で誤帰属する。明示の参照だけを採用する。
-    const message = splitMessage(payload.body);
+    const normalized = entity === 'message' ? normalizeClaudeContent({
+      provider: typeof meta.provider === 'string' ? meta.provider : undefined,
+      role: typeof meta.role === 'string' ? meta.role : undefined, body: payload.body,
+    }) : {};
+    const message = splitMessage(normalized.body ?? payload.body);
     const entries: [SearchKind, string][] = entity === 'message'
       ? meta.role === 'tool' ? [['tool_output', [message.message, message.tool, readText(payload.tool_output)].filter(Boolean).join('\n')]]
         : [['message', message.message], ...((message.tool || payload.tool_output !== undefined || meta.has_tool_output) ? [['tool_output', [message.tool, readText(payload.tool_output)].filter(Boolean).join('\n')] as [SearchKind, string]] : [])]

@@ -1,7 +1,8 @@
 // hook やハーネスが利用者の行に差し込む札。人が書いた本文ではないので画面に出さない。
 const INJECTED_BLOCKS = /<(system-reminder|local-command-caveat|local-command-stdout|local-command-stderr|command-message|user-prompt-submit-hook|task-notification)>[\s\S]*?<\/\1>/g;
 /** 本文から差し込まれた札を外し、人が読む文だけを残す。コマンドの札は中の語だけを残す。 */
-export function visibleText(text: string): string {
+export function visibleText(text: string, normalized = false): string {
+  if (normalized) return text.trim();
   return text.replace(INJECTED_BLOCKS, '').replace(/<\/?(command-name|command-args)>/g, ' ').replace(/[ \t]+\n/g, '\n').trim();
 }
 /**

@@ -22,7 +22,7 @@ export function groupToolRuns(entries: TimelineEntry[]): DisplayEntry[] {
       const signature = messageSignature(entry.row, entry.time);
       if (seen.has(signature)) continue;
       seen.add(signature);
-      if (isBlank(entry.row) || harnessKind(readBody(entry.row.body)) === 'notification') continue;
+      if (isBlank(entry.row) || entry.row.role === 'notification' || !entry.row.content_normalized && harnessKind(readBody(entry.row.body)) === 'notification') continue;
       if (isToolOnly(entry.row) && Array.isArray(entry.row.body) && entry.row.body.map(readObject).every(block => block.type === 'tool_result' && calls.has(block.tool_use_id))) continue;
       const instruction = instructionKind(entry.row);
       if (instruction) {

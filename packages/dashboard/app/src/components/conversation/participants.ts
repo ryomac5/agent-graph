@@ -82,9 +82,11 @@ function userAuthored(row: Row): boolean {
 
 export function senderOf(row: Row, participants: Participants): Sender {
   const role = readText(row.role) || 'assistant';
+  if (role === 'agent_report') return { key: 'agent_report', name: 'Agent report', side: 'start' };
+  if (role === 'notification') return { key: 'notification', name: 'Notification', side: 'start' };
   if (role === 'user' && userAuthored(row)) {
     // 子の報告と裏の作業の通知は、利用者の行として届くが人の発言ではない。エージェントの側に別の形で置く。
-    const kind = harnessKind(readBody(row.body));
+    const kind = row.content_normalized ? 'user' : harnessKind(readBody(row.body));
     if (kind === 'agent_report') return { key: 'agent_report', name: 'Agent report', side: 'start' };
     if (kind === 'notification') return { key: 'notification', name: 'Notification', side: 'start' };
     return { key: 'end', name: participants.parent, side: 'end' };

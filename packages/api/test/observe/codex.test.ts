@@ -8,6 +8,8 @@ import type { TestContext } from "node:test";
 import { openLedger, project } from "../../../core/src/ledger/index.ts";
 import { observeCodex, observeCodexFile } from "../../src/observe/codex/index.ts";
 import { openObservationService } from "../../src/service/index.ts";
+import { observeCodexTitles } from "../../src/observe/codex/titles.ts";
+import { fileReadMetrics } from "../../src/observe/files.ts";
 
 const OBSERVED = "2026-10-08T00:00:00.000Z";
 const samples = fileURLToPath(new URL("../samples/", import.meta.url));
@@ -605,6 +607,11 @@ test("session_index の最新の題名を取り込み、同じ題名と古い更
   const readTitle = () => project(f.read()).conversations.find(row => row.native_id === nativeId)!.ai_title;
   assert.equal(readTitle(), "URLを教える");
   const count = f.read().length;
+  const reads = { ...fileReadMetrics };
+  const readFacts = t.mock.method(f.ledger, "readSince");
+  assert.deepEqual(observeCodexTitles(f.ledger, f.home, OBSERVED), []);
+  assert.deepEqual(fileReadMetrics, reads);
+  assert.equal(readFacts.mock.callCount(), 0);
   f.observe();
   assert.equal(f.read().length, count);
   writeFileSync(path, title("URLを教える", "2026-10-09T00:00:00Z"));
@@ -617,4 +624,25 @@ test("session_index の最新の題名を取り込み、同じ題名と古い更
   f.observe();
   assert.equal(readTitle(), "New");
   assert.deepEqual(project([...f.read()].reverse()), project(f.read()));
+});
+
+test("サービスの未変更周期は題名索引の本文を読まず、追記分だけを取り込む", t => {
+  const f = createFixture(t, "S6");
+  const service = openFixtureService(f);
+  t.after(() => service.close());
+  service.ingestOnce();
+  const nativeId = project(service.ledger.readSince(0, Number.MAX_SAFE_INTEGER)).conversations[0].native_id!;
+  const path = join(f.home, "session_index.jsonl");
+  const title = (thread_name: string) => JSON.stringify({ id: nativeId, thread_name, updated_at: OBSERVED }) + "\n";
+  writeFileSync(path, title("First"));
+  assert.equal(service.ingestOnce().appended, 1);
+  const facts = service.ledger.readSince(0, Number.MAX_SAFE_INTEGER);
+  const reads = { ...fileReadMetrics };
+  assert.equal(service.ingestOnce().appended, 0);
+  assert.deepEqual(fileReadMetrics, reads);
+  assert.deepEqual(service.ledger.readSince(0, Number.MAX_SAFE_INTEGER), facts);
+  appendFileSync(path, title("Second"));
+  assert.equal(service.ingestOnce().appended, 1);
+  assert.equal(fileReadMetrics.contentBytes - reads.contentBytes, Buffer.byteLength(title("Second")));
+  assert.equal(project(service.ledger.readSince(0, Number.MAX_SAFE_INTEGER)).conversations.find(row => row.native_id === nativeId)!.ai_title, "Second");
 });

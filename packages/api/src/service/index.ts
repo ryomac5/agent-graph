@@ -352,11 +352,11 @@ export function openObservationService(options: ObservationOptions = {}) {
               if (observations.some((result) => result.conflicts.length > 0)) throw new Error("Conflicting Claude history");
             }
             const results = codexPaths.size ? observeCodex(scanLedger,
-              { codexHome, reader: codex.reader, paths: codexPaths, batch: trackBatch }) : [];
+              { codexHome, reader: codex.reader, paths: codexPaths, batch: trackBatch, titleCursors: checkpoints }) : [];
             if (results.some((result) => result.status === "conflict")) throw new Error("Conflicting Codex history");
           });
           if (!codexPaths.size) {
-            const titles = buffered.batch(() => observeCodexTitles(scanLedger, codexHome, new Date().toISOString()));
+            const titles = buffered.batch(() => observeCodexTitles(scanLedger, codexHome, new Date().toISOString(), undefined, checkpoints));
             if (titles.some(result => result.status === "conflict")) throw new Error("Conflicting Codex title");
           }
           codex.commit();

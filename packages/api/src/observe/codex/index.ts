@@ -7,6 +7,7 @@ import type { AppendResult, Fact, FactInput, JsonValue, Ledger, RunState } from 
 import { readSessionMeta, rolloutReader } from "./files.ts";
 import { defaultLocationResolver, type LocationResolver } from "../location.ts";
 import type { RolloutLine, RolloutReader } from "./files.ts";
+import type { FileCursor } from "../files.ts";
 
 export interface CodexObservationOptions {
   codexHome?: string;
@@ -15,6 +16,7 @@ export interface CodexObservationOptions {
   batch?: <T>(operation: () => T) => T;
   paths?: Set<string>;
   locate?: LocationResolver;
+  titleCursors?: Map<string, FileCursor>;
 }
 /** 会話の場所の事実の識別。これがあれば、場所を読み終えている。 */
 export function codexLocationEventId(nativeId: string): string {
@@ -120,7 +122,7 @@ export function observeCodex(ledger: Ledger, options: CodexObservationOptions = 
     .filter((path) => !options.paths || options.paths.has(path))
     .flatMap((path) => (options.batch ?? ((operation) => operation()))(
       () => observeFile(ledger, path, { ...options, reader }, index, archivedFileIds)));
-  return [...results, ...observeCodexTitles(ledger, home, options.observedTs ?? new Date().toISOString(), index.subjects)];
+  return [...results, ...observeCodexTitles(ledger, home, options.observedTs ?? new Date().toISOString(), index.subjects, options.titleCursors)];
 }
 
 export function observeCodexFile(ledger: Ledger, path: string, options: CodexObservationOptions = {}): AppendResult[] {
@@ -128,7 +130,7 @@ export function observeCodexFile(ledger: Ledger, path: string, options: CodexObs
   const archivedFileIds = new Set(reader.list(join(resolveCodexHome(options), "archived_sessions"))
     .map((archivedPath) => basename(archivedPath)));
   const results = observeFile(ledger, path, options, readIndex(ledger), archivedFileIds);
-  return [...results, ...observeCodexTitles(ledger, resolveCodexHome(options), options.observedTs ?? new Date().toISOString())];
+  return [...results, ...observeCodexTitles(ledger, resolveCodexHome(options), options.observedTs ?? new Date().toISOString(), undefined, options.titleCursors)];
 }
 
 function observeFile(ledger: Ledger, path: string, options: CodexObservationOptions, index: ObservationIndex,

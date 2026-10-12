@@ -16,6 +16,22 @@ const createTitle = (aiTitle: string) => JSON.stringify({ type: "ai-title", aiTi
 const createMessage = (uuid: string) => JSON.stringify({ type: "user", uuid, timestamp: TS,
   sessionId: "session", cwd: "/fictional/project", message: { role: "user", content: "Fictional body." } });
 
+for (const titleFirst of [true, false]) {
+  test(`新しいファイルでは会話を作成してから題名を更新する（題名が先頭: ${titleFirst}）`, t => {
+    const directory = mkdtempSync(join(tmpdir(), "agent-graph-claude-title-order-"));
+    const path = join(directory, "session.jsonl");
+    const ledger = openLedger(":memory:");
+    t.after(() => { ledger.close(); rmSync(directory, { recursive: true, force: true }); });
+    const rows = [createTitle("Title"), createMessage("first")];
+    writeFileSync(path, (titleFirst ? rows : rows.reverse()).join("\n") + "\n");
+    observeClaudeFile(ledger, path, { observedTs: TS });
+    const facts = ledger.readSince(0, Number.MAX_SAFE_INTEGER);
+    assert.deepEqual(facts.filter(fact => fact.kind.startsWith("conversation.")).map(fact => fact.kind),
+      ["conversation.created", "conversation.updated"]);
+    assert.equal(project(facts).conversations[0].ai_title, "Title");
+  });
+}
+
 for (const withTitle of [true, false]) {
   test(`既読末尾の題名を一度だけ補完し、再起動後も全体を読み直さない（題名: ${withTitle}）`, t => {
     const directory = mkdtempSync(join(tmpdir(), "agent-graph-claude-titles-"));

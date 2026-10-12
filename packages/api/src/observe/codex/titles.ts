@@ -3,15 +3,27 @@ import { join } from "node:path";
 import { createNativeId, compareFacts } from "../../../../core/src/ledger/index.ts";
 import type { AppendResult, Ledger } from "../../../../core/src/ledger/index.ts";
 import { readAppendOnlyFile } from "../files.ts";
+import type { FileCursor } from "../files.ts";
+
+const titleCursors = new WeakMap<Ledger, Map<string, FileCursor>>();
+
+function readTitleCursors(ledger: Ledger): Map<string, FileCursor> {
+  let cursors = titleCursors.get(ledger);
+  if (!cursors) { cursors = new Map(); titleCursors.set(ledger, cursors); }
+  return cursors;
+}
 
 /** 題名索引は rollout の更新がなくても読む。未観測のスレッドは会話を作らない。 */
-export function observeCodexTitles(ledger: Ledger, home: string, observedTs: string, knownSubjects?: ReadonlySet<string>): AppendResult[] {
+export function observeCodexTitles(ledger: Ledger, home: string, observedTs: string, knownSubjects?: ReadonlySet<string>,
+  cursors = readTitleCursors(ledger)): AppendResult[] {
+  const path = join(home, "session_index.jsonl");
   let file;
-  try { file = readAppendOnlyFile(join(home, "session_index.jsonl")); }
+  try { file = readAppendOnlyFile(path, cursors.get(path)); }
   catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") return [];
     throw error;
   }
+  if (!file.lines.length) { cursors.set(path, file.cursor); return []; }
   const titles = new Map<string, { title: string; timestamp: string; offset: number }>();
   for (const line of file.lines) {
     let row;
@@ -42,5 +54,6 @@ export function observeCodexTitles(ledger: Ledger, home: string, observedTs: str
       source_ts: timestamp, observed_ts: observedTs, confidence: "confirmed",
       kind: "conversation.updated", subject, payload: { ai_title: title } }));
   }
+  if (!results.some(result => result.status === "conflict")) cursors.set(path, file.cursor);
   return results;
 }

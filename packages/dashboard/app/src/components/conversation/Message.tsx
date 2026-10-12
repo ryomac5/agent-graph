@@ -1,3 +1,4 @@
+import { describeTool } from './tool-activity.ts';
 import { memo, useState } from 'react';
 import type { Language } from '../../lib/i18n.ts';
 import type { Row } from '../../lib/store.ts';
@@ -133,11 +134,12 @@ function RenderToolRun({ rows, toolResults, language = 'en' }: { rows: Row[]; to
   const [open, setOpen] = useState(false);
   const tools = rows.flatMap(row => Array.isArray(row.body) ? row.body.map(readObject).filter(block => block.type === 'tool_use') : []);
   const names = [...new Set(tools.map(tool => readText(tool.name) || 'Tool'))].slice(0, 3);
+  const description = describeTool(tools.at(-1));
   const failed = tools.filter(tool => readObject(toolResults?.get(readText(tool.id))).is_error === true).length;
   return <details className="tool-run" open={open} onToggle={event => setOpen(event.currentTarget.open)}>
     <summary onClick={event => { event.preventDefault(); setOpen(value => !value); }}><Icon name="chevronRight" size={16} className="caret"/><span>{toolsLabel(tools.length, language)}</span>
       {failed > 0 && <span className="tool-failed">{language === 'ja' ? '失敗' : 'Failed'} {failed}</span>}
-      {names.length > 0 && <span className="truncate tool-run-names">· {names.join(' · ')}</span>}</summary>
+      {names.length > 0 && <span className="truncate tool-run-names">· {names.join(' · ')}</span>}{description && <span className="truncate tool-run-description" title={description}>· {description}</span>}</summary>
     {open && <div className="tool-run-body">{rows.flatMap(row => Array.isArray(row.body) ? row.body.map(readObject) : []).map((block, index) => <ToolCall key={readText(block.id) || index} language={language} name={readText(block.name) || translate(language, 'toolOutput')} input={block.input} result={block.type === 'tool_result' ? block : toolResults?.get(readText(block.id))}/>)}</div>}
   </details>;
 }

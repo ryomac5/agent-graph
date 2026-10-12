@@ -1,3 +1,5 @@
+import { resolveReplyStatus } from '../lib/reply-status.ts';
+import { translate } from './conversation/text.ts';
 import { SessionName, type RenameClient } from './SessionName.tsx';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
@@ -70,7 +72,8 @@ export function RootList({ roots, selected, onSelect, project, language = 'en', 
   const turns = useTurnConversations();
   const [now, setNow] = useState(Date.now);
   useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 1_000); return () => clearInterval(timer); }, []);
-  const activity = (root: Root) => resolveActivity(state, root.conversation_ids, root.state, turns).state;
+  const reply = (root: Root) => state ? resolveReplyStatus(state, root.conversation_ids, root.state) : undefined;
+  const activity = (root: Root) => reply(root) ? 'waiting_input' : resolveActivity(state, root.conversation_ids, root.state, turns).state;
   const yourTurn = (root: Root) => WAITING.includes(activity(root));
   const group = (root: Root) => yourTurn(root) ? 0 : isRunning(activity(root)) ? 1 : !root.last_activity_ts || Date.parse(root.last_activity_ts) >= now - EARLIER_MS ? 2 : 3;
   const groups = [0, 1, 2, 3].map(value => roots.filter(root => group(root) === value).toSorted((a, b) => (b.last_activity_ts ?? '').localeCompare(a.last_activity_ts ?? '')));
@@ -79,9 +82,9 @@ export function RootList({ roots, selected, onSelect, project, language = 'en', 
     const start = state ? startedAt(state, root) : undefined;
     const startIso = start === undefined ? undefined : new Date(start).toISOString();
     const shownState = activity(root);
-    const content = <><StatusDot className="root-state" dotOnly activity dotLabel={root.conversation_ids.some(id => turns.has(id)) ? language === 'ja' ? '自分の番' : 'Your turn' : stateLabel(shownState, language)} state={shownState} language={language}/>
+    const content = <><StatusDot className="root-state" yourTurn={Boolean(reply(root))} dotOnly activity dotLabel={reply(root) || root.conversation_ids.some(id => turns.has(id)) ? translate(language, 'yourTurn') : stateLabel(shownState, language)} state={shownState} language={language}/>
       <span className="root-row-line"><span className="root-name" title={root.name}>{root.name}</span></span>
-      <span className="root-row-meta"><StatusDot state={shownState} language={language} activity/>
+      <span className="root-row-meta"><StatusDot state={shownState} yourTurn={Boolean(reply(root))} language={language} activity/>
         {isRunning(shownState) && <RootElapsed state={state} root={root} now={now} language={language}/>}
         {!isRunning(shownState) && start !== undefined && <time className="root-time" dateTime={startIso} title={formatWhen(startIso, language)}>{formatStartedAt(start, now)}</time>}</span></>;
     if (editing === root.id && client) return <div key={root.id} className="root-row"><SessionName key={root.id} root={root} client={client} language={language} editing onFinish={() => setEditing(undefined)}/></div>;

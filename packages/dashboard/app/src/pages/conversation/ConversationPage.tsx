@@ -37,6 +37,8 @@ import { ChangedFiles } from './ChangedFiles.tsx';
 import { groupToolRuns, instructionKind } from '../../components/conversation/timeline.ts';
 import { isDelegationTool, resolveDelegationNode } from '../../components/conversation/DelegationCard.tsx';
 import { currentRootConversation, selectRoots, useRootIndex } from '../../lib/roots.ts';
+import { resolveReplyStatus } from '../../lib/reply-status.ts';
+import { describeTool, waitsOnBackground } from '../../components/conversation/tool-activity.ts';
 import { resolveActivity } from '../../lib/activity.ts';
 import { isWorkingTurn, useTurnConversations, useWorkingTurn, workingElapsed } from '../../lib/turns.ts';
 import { useAttachments, MAX_ATTACHMENTS } from './useAttachments.ts';
@@ -144,7 +146,7 @@ function ConversationTabHeader({ metadata, breadcrumb, actions }: { metadata: Co
     const actions = document.getElementById(`workspace-actions-${header.tabId}`);
     if (back && actions) setSlots({ back, actions });
   }, [header?.tabId]);
-  useLayoutEffect(() => { if (header) header.report(header.tabId, metadata); }, [header?.tabId, header?.report, metadata.name, metadata.state, metadata.title, metadata.autoName, metadata.startedAt]);
+  useLayoutEffect(() => { if (header) header.report(header.tabId, metadata); }, [header?.tabId, header?.report, metadata.name, metadata.state, metadata.yourTurn, metadata.title, metadata.autoName, metadata.startedAt]);
   return slots ? <>{breadcrumb && createPortal(<div className="conv-breadcrumb">{breadcrumb}</div>, slots.back)}{createPortal(actions, slots.actions)}</> : null;
 }
 export function ConversationPage({ client, conversationId: explicitId, target = store, language = 'en', embedded = false, seriesIds, seriesState, displayName, breadcrumb, onConversation, newSession }: ConversationPageProps) {
@@ -273,7 +275,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const combine = (table: string) => [...new Map([...(local[table] ?? []), ...(state.projection[table] ?? [])].map(row => [readText(row.id), row])).values()];
   const historyMessages = useMemo(() => combine('messages'), [local.messages, state.projection.messages]);
   const historyMemberships = useMemo(() => combine('message_memberships'), [local.message_memberships, state.projection.message_memberships]);
-  const historyState = { ...state, projection: { ...state.projection, messages: historyMessages, message_memberships: historyMemberships } };
+  const historyState = useMemo(() => ({ ...state, projection: { ...state.projection, messages: historyMessages, message_memberships: historyMemberships } }), [state, historyMessages, historyMemberships]);
   const historyIds = seriesIds?.length ? seriesIds.map(resolveConversation) : [conversationId];
   const seriesKey = historyIds.join('|');
   const timelineRuns = (state.projection.runs ?? []).filter(row => historyIds.includes(readText(row.conversation_id))).map(row => row.id).join('|');
@@ -355,8 +357,10 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const workingTurn = useWorkingTurn(activityRun && { ...activityRun, state: rawStatus });
   const lastToolBlock = [...activityMessages].reverse().filter(entry => workingTurn && Date.parse(entry.time) >= workingTurn.started)
     .flatMap(entry => Array.isArray(entry.row.body) ? entry.row.body.map(readObject).filter(block => block.type === 'tool_use').reverse() : [])[0];
-  const lastToolInput = readObject(lastToolBlock?.input);
-  const lastTool = lastToolBlock && (isDelegationTool(lastToolBlock) ? readText(lastToolInput.description ?? lastToolInput.title) || readText(lastToolBlock.name) : readText(lastToolBlock.name));
+  const toolDescription = describeTool(lastToolBlock);
+  const lastTool = lastToolBlock && [readText(lastToolBlock.name), toolDescription].filter(Boolean).join(' · ');
+  const backgroundWait = waitsOnBackground(lastToolBlock);
+
   // 巻き戻し中は窓の先頭を保持し、新着で読んでいる発言を押し出さない。
   if (firstShown.current.conversationId !== conversationId || firstShown.current.limit !== messageLimit
     || !firstShown.current.key || following.current && !scrollAnchor.current) {
@@ -427,6 +431,8 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const displayEntries = useMemo(() => groupToolRuns(entries), [entries]);
   const toolResults = useMemo(() => collectToolResults(entries.filter(entry => entry.kind === 'message').map(entry => entry.row)), [entries]);
   const deltas = Object.entries(state.deltas).filter(([, delta]) => historyIds.includes(delta.conversationId ?? '') || !delta.conversationId && delta.runId === run?.id);
+  const replyStatus = !pending && !sentMessages.some(message => resolveConversation(message.conversationId) === conversationId) && !deltas.length
+    ? resolveReplyStatus(historyState, activityIds, readText(activityRun?.state) || seriesState) : undefined;
   const streamLength = deltas.reduce((total, [, delta]) => total + delta.text.length, 0);
 
   useEffect(() => {
@@ -676,14 +682,14 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
       </div>
     </div>;
   return <section className={`conversation-page${embedded ? ' embedded' : ''}`} aria-label={t('conversation')}>
-    {workspaceHeader ? <ConversationTabHeader metadata={{ autoName: nameRoot?.auto_name, startedAt: conversationStart(state, conversationId), name: nameRoot?.user_name || nameRoot?.name || title, state: status, title: [nameRoot?.name || title, dictionaries[language][status], elapsed ? `${t(status.startsWith('waiting') ? 'waiting' : 'elapsed')} ${elapsed}` : '', shownModel].filter(Boolean).join(' · ') }} breadcrumb={back} actions={headerActions}/> : <header className="conv-header">
+    {workspaceHeader ? <ConversationTabHeader metadata={{ autoName: nameRoot?.auto_name, startedAt: conversationStart(state, conversationId), name: nameRoot?.user_name || nameRoot?.name || title, state: status, yourTurn: Boolean(replyStatus), title: [nameRoot?.name || title, replyStatus ? t('yourTurn') : dictionaries[language][status], elapsed ? `${t(status.startsWith('waiting') ? 'waiting' : 'elapsed')} ${elapsed}` : '', shownModel].filter(Boolean).join(' · ') }} breadcrumb={back} actions={headerActions}/> : <header className="conv-header">
       <div className="conv-title-row" onClick={event => {
         if (!(event.target instanceof Element) || !event.target.closest('.state-badge')) return;
         event.preventDefault(); setDetailsOpen(true);
       }}>
         {breadcrumb && <div className="conv-breadcrumb">{breadcrumb}</div>}
         <Heading className="conv-title truncate" aria-label={nameRoot?.name ?? title} title={nameRoot?.user_name ? nameRoot.auto_name : title}>{nameRoot ? <SessionName key={nameRoot.id} root={nameRoot} client={client} language={language}/> : title}</Heading>
-        <StateBadge state={status} language={language} evidenceUrl="#conversation-details"
+        <StateBadge state={status} yourTurn={Boolean(replyStatus)} language={language} evidenceUrl="#conversation-details"
           evidence={evidenceLabel(evidence) || undefined}
           reason={readText(run?.cause ?? run?.reason) || undefined} elapsed={elapsed ? `${t(status.startsWith('waiting') ? 'waiting' : 'elapsed')} ${elapsed}` : undefined}/>
         {provider && <span className="conv-agent truncate" title={[providerName(provider), shownModel].filter(Boolean).join(' · ')}>{agentName(provider, shownModel)}</span>}
@@ -739,10 +745,11 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     </div></div>
     {/* 外の会話には、runner が応答できる続きを用意する。 */}
     <footer className="composer" onFocusCapture={() => setEngaged(true)} onPointerDownCapture={() => setEngaged(true)}>
+      {replyStatus && <p className={`reply-line${replyStatus === 'answer' ? ' reply-required' : ''}`} role="status"><Icon name={replyStatus === 'answer' ? 'alert' : 'message'} size={16}/>{t(replyStatus === 'answer' ? 'needsAnswer' : 'waitingReply')}</p>}
       {isWorkingTurn(workingTurn) && <div className="working-line" role="status" aria-label={t('working')}>
         <div className="working-summary"><span className="working-spinner" aria-hidden="true"/>{t('working')}
           {turnElapsed && <span role="timer" aria-live="off"> · {turnElapsed}</span>}</div>
-        {lastTool && <span className="working-tool" title={lastTool}>{lastTool}</span>}
+        {lastTool && <span className="working-tool" title={lastTool}>{backgroundWait ? `${t('backgroundWait')}: ${toolDescription || readText(lastToolBlock?.name)}` : lastTool}</span>}
       </div>}
       {(host?.disconnected || run?.reason === 'disconnected') && <p role="status" className="status-line">{language === 'ja' ? '接続が切れました' : 'Connection lost'}</p>}
       {terminalConversation && !starting && !host && !stopped && <p className="status-line">{language === 'ja' ? 'この会話は別の場所で動いています。ここで送ると、別の続きになります。' : 'This conversation is running elsewhere. Sending here will start a separate continuation.'}</p>}

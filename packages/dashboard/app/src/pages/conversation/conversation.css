@@ -79,9 +79,9 @@
 .tool-run > summary::-webkit-details-marker { display: none; }
 .tool-run > summary:hover { background: var(--bg-2); color: var(--fg-2); }
 .tool-run[open] > summary { color: var(--fg-2); }
-.working-line { display: flex; flex-direction: column; gap: var(--space-1); margin: 0 0 var(--space-3); color: var(--state-running); font: var(--type-ui); font-variant-numeric: tabular-nums; }
-.working-summary { display: flex; align-items: center; gap: var(--space-1); }
-.working-tool { color: var(--fg-3); padding-left: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font: var(--type-meta); }
+.working-line { display: flex; align-items: center; gap: var(--space-2); margin: 0 0 var(--space-3); color: var(--state-running); font: var(--type-ui); font-variant-numeric: tabular-nums; }
+.working-summary { flex: none; white-space: nowrap; display: flex; align-items: center; gap: var(--space-1); }
+.working-tool { min-width: 0; color: var(--fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font: var(--type-meta); }
 .working-spinner { width: 10px; height: 10px; flex: none; border: 1px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: working-spin 2400ms linear infinite; }
 .conv-changed-files { flex: none; max-height: 40vh; overflow: auto; padding: var(--space-3) var(--space-6); border-bottom: var(--border); }
 .conv-changed-file > summary { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2); cursor: pointer; background: var(--bg-1); }
@@ -224,3 +224,7 @@
 .composer-provider-mark { display: inline-flex; width: 16px; height: 16px; color: var(--fg-3); }
 .composer-provider-mark.provider-claude { color: var(--provider-claude); }
 .composer-provider-mark.provider-codex { color: var(--provider-codex); }
+
+.reply-line { display: flex; align-items: center; gap: var(--space-2); margin: 0 0 var(--space-3); padding: var(--space-3); color: var(--state-reply); background: var(--bg-3); border: 1px solid var(--state-reply); font: var(--type-ui); font-weight: 600; }
+.reply-required { color: var(--state-approval); border-color: var(--state-approval); font-weight: 600; }
+.tool-run-description { min-width: 0; color: var(--fg-2); }

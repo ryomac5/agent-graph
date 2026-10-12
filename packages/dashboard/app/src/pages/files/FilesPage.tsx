@@ -7,7 +7,7 @@ import type { CodeDocument } from '../../lib/code-document.ts';
 import { OpenWorkspaceFile } from '../../lib/workspace-context.ts';
 import { FileTreeRow } from '../../components/FileTreeRow.tsx';
 import { callGit, FileGitDiff, type GitChange } from '../changes/GitChanges.tsx';
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router';
 import { AppLink } from '../../components/AppLink.tsx';
 import { Icon } from '../../components/Icon.tsx';
@@ -392,8 +392,10 @@ export function FileViewerPanel({ explorer, actions, language: displayLanguage =
   const [change, setChange] = useState<GitChange>();
   const [diffError, setDiffError] = useState('');
   const changed = selectedEntry?.kind === 'file' && selectedEntry.changed;
+  // ボタンを操作できる前に初期化し、直後の File 選択を上書きしない。
+  useLayoutEffect(() => { setView('diff'); }, [explorer.client, explorer.projectId, explorer.worktree, explorer.revision, selectedPath, changed]);
   useEffect(() => {
-    let cancelled = false; setView('diff'); setChange(undefined); setDiffError('');
+    let cancelled = false; setChange(undefined); setDiffError('');
     if (changed) callGit<{ entries: GitChange[] }>(explorer.client, 'files.changes', { projectId: explorer.projectId, ...(explorer.worktree ? { worktree: explorer.worktree } : {}) }).then(result => {
       if (!cancelled) setChange(result.entries.find(entry => entry.path === selectedPath));
     }, error => { if (!cancelled) setDiffError(String(error.message ?? error)); });

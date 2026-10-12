@@ -5,12 +5,13 @@ import { loadProjectList, moveProject, PROJECT_LIST_KEY, reconcileProjectList } 
 const DRAG_THRESHOLD = 3;
 const CLICK_SUPPRESSION_MS = 250;
 export interface SidebarProject { id: string; name: string; full: string; detail: string }
-export function ProjectList({ projects, language, renderProject }: {
-  projects: SidebarProject[]; language: Language;
+export function ProjectList({ projects, language, revealProject, renderProject }: {
+  projects: SidebarProject[]; language: Language; revealProject?: string;
   renderProject: (row: SidebarProject, attributes: HTMLAttributes<HTMLDivElement>, actions: ReactNode) => ReactNode;
 }) {
   const t = dictionaries[language];
   const [saved, setSaved] = useState(loadProjectList);
+  useEffect(() => { if (revealProject) setSaved(value => ({ ...value, hidden: value.hidden.filter(id => id !== revealProject) })); }, [revealProject]);
   const preferences = reconcileProjectList(saved, projects.map(row => row.id));
   const serialized = JSON.stringify(preferences);
   useEffect(() => {

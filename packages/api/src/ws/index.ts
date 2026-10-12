@@ -1,3 +1,4 @@
+import { addProject, listDirectories } from './projects.ts';
 import { renameSession } from './session-rename.ts';
 import { createServer } from "node:http";
 import { DatabaseSync } from "node:sqlite";
@@ -137,6 +138,14 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
         for (const patch of patches) sendPatch(socket, patch);
       } else if (message.type === "cmd" && clients.has(socket) && typeof message.cmd_id === "string"
         && message.cmd_id.length > 0 && typeof message.command === "string" && message.command.length > 0) {
+        if (message.command === 'project.add' || message.command === 'fs.directories') {
+          try {
+            const result = message.command === 'project.add' ? await addProject(service.appendUi, message) : listDirectories(message.payload);
+            refresh();
+            send(socket, { type: 'ack', cmd_id: message.cmd_id, ok: true, result });
+          } catch (error) { send(socket, { type: 'ack', cmd_id: message.cmd_id, ok: false, error: error instanceof Error ? error.message : 'Request failed' }); }
+          return;
+        }
         if (message.command === 'session.rename') {
           try {
             refresh();

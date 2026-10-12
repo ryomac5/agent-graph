@@ -82,7 +82,7 @@ it.each(['input', 'textarea', 'select', 'editable', 'textbox'])('leaves characte
   press('k', field, { metaKey: true }); expect(screen.getByRole('combobox', { name: 'Search commands' })).toBeTruthy();
   field.remove();
 });
-it('searches and executes commands with keyboard and opens conversations and creation', async () => {
+it('searches and executes commands with keyboard and opens conversations without task creation', async () => {
   mount(); await act(async () => {});
   press('k', document, { metaKey: true });
   const input = screen.getByRole('combobox', { name: 'Search commands' }); expect(document.activeElement).toBe(input);
@@ -90,7 +90,8 @@ it('searches and executes commands with keyboard and opens conversations and cre
   expect(screen.getByTestId('location').textContent).toBe('/p/demo'); expect(screen.queryByRole('dialog')).toBeNull();
   press('k', document, { metaKey: true });
   fireEvent.change(screen.getByRole('combobox', { name: 'Search commands' }), { target: { value: 'new task' } }); press('Enter', screen.getByRole('combobox', { name: 'Search commands' }));
-  expect(screen.getByRole('form', { name: 'New task' })).toBeTruthy();
+  expect(screen.getByText('No commands')).toBeTruthy();
+  expect(screen.queryByRole('form')).toBeNull();
 });
 it('handles no matches, arrow selection and focus wrapping in the palette', async () => {
   mount(); await act(async () => {}); press('k', document, { metaKey: true });

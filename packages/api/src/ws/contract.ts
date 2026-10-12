@@ -57,3 +57,8 @@ export type { ExecutionTarget, SshConnection } from "../remote/index.ts";
 
 /** session.rename: {rootId, name}。名前は 80 文字まで。空欄で自動の名前に戻す。 */
 export interface SessionRenameRequest { rootId: string; name: string }
+
+/** project.add: {path} → {projectId}。~ は home に展開し、Git の本体を登録する。 */
+export interface ProjectAddRequest { path: string }
+/** fs.directories: {path} → {paths: string[]}。home 配下の隠れていないディレクトリだけを返す。 */
+export interface DirectoryCandidatesRequest { path: string }

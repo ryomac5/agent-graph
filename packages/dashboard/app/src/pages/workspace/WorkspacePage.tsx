@@ -7,7 +7,6 @@ import type { ConversationClient } from '../conversation/ConversationPage.tsx';
 import { ConversationPage } from '../conversation/ConversationPage.tsx';
 import { selectRoots, useRootIndex, buildRootTree, currentRootConversation, orderSeries } from '../../lib/roots.ts';
 import { RootList } from '../../components/RootViews.tsx';
-import { CreateTaskForm } from '../../components/CreateTaskForm.tsx';
 import { Icon } from '../../components/Icon.tsx';
 import { WorkspacePanel } from './WorkspacePanel.tsx';
 import { OpenWorkspaceFile } from '../../lib/workspace-context.ts';
@@ -43,11 +42,9 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
   const roots = useMemo(() => selectRoots(state, project), [state.projection.roots, state.projection.conversations, project]);
   const index = useRootIndex(state);
   const selected = roots.find(root => suppliedConversation && (root.conversation_ids.includes(suppliedConversation) || buildRootTree(root, index).nodes.some(node => node.conversationId === suppliedConversation))) ?? roots.find(root => root.id === search.get('root')) ?? roots[0];
-  const creating = search.get('create') === '1';
   const newSession = search.get('session') ?? undefined;
   const draftWorkspace = useRef<{ token: string; session: string }>(undefined);
   if (newSession && draftWorkspace.current?.token !== newSession) draftWorkspace.current = { token: newSession, session: selected?.id ?? newSession };
-  function setCreating(open: boolean) { const next = new URLSearchParams(search); if (open) next.set('create', '1'); else next.delete('create'); setSearch(next); }
   const [retryError, setRetryError] = useState('');
   async function retry(node: { delegation?: Record<string, unknown> }) {
     if (!node.delegation) return;
@@ -68,7 +65,6 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
   const breadcrumb = <>{childId && <button className="btn btn-ghost btn-sm root-back" aria-label={`${language === 'ja' ? '戻る:' : 'Back to'} ${selected?.name ?? ""}`} onClick={() => { const next = new URLSearchParams(search); next.delete('child'); if (selected) next.set('root', selected.id); if (suppliedConversation) navigate(`/p/${encodeURIComponent(project)}?${next}`); else setSearch(next); }}><Icon name="chevronLeft"/><span className="truncate">{selected?.name}</span></button>}</>;
   const workspaceSession = newSession ? draftWorkspace.current!.session : childId ?? selected?.id ?? conversationId ?? '';
   return <OpenWorkspaceFile.Provider value={(path, worktree) => openFile.current(path, worktree)}><div className={`workspace root-workspace three-workspace${showRootList ? ' with-roots' : ''}`}>
-    {creating && <div className="workspace-notices"><CreateTaskForm project={project} root={String(state.projection.projects?.find(row => row.id === project)?.root_path ?? '')} client={client} disabled={state.connection !== 'connected'} language={language} onCancel={() => setCreating(false)}/></div>}
     <div className="workspace-columns">
       {/* アプリの画面では、会話の一覧は左のサイドバーのプロジェクトの下に置き、作業場は会話とサブエージェントに広さを渡す。 */}
       {showRootList && <section className="workspace-roots" aria-label={t.conversations}><header className="column-header"><h2>{t.conversations}</h2><span className="column-count numeric">{roots.length}</span></header>

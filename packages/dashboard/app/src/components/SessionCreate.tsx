@@ -4,14 +4,9 @@ import type { Row } from '../lib/store.ts';
 import { ProviderMark } from './RootViews.tsx';
 import { CommandDialog } from './command/Commands.tsx';
 import './session-create.css';
-const START_TIMEOUT_MS = 30000;
-const DISCOVERY_POLL_MS = 500;
+import { request, startSession, readSessionProvider, SESSION_PROVIDER_KEY } from '../lib/session-start.ts';
+export { request } from '../lib/session-start.ts';
 export interface SshConnection { id: string; name: string; destination: string; projects: { projectId: string; path: string }[] }
-export async function request<T>(client: ConversationClient, command: string, payload: object = {}): Promise<T> {
-  const ack = await client.command(command, payload);
-  if (!ack.ok) throw new Error(ack.error || 'Request failed');
-  return ack.result as T;
-}
 export function SessionCreate({ client, projects, initialProject, language = 'en', onClose, onCreated }: {
   client: ConversationClient; projects: Row[]; initialProject?: string; language?: 'ja' | 'en'; onClose(): void; onCreated(project: string, conversation: string): void;
 }) {
@@ -22,7 +17,7 @@ export function SessionCreate({ client, projects, initialProject, language = 'en
   const [base, setBase] = useState('origin/main');
   const [branches, setBranches] = useState<string[]>([]);
   const [name, setName] = useState('');
-  const [provider, setProvider] = useState('claude');
+  const [provider, setProvider] = useState(readSessionProvider);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [pendingTerminal, setPendingTerminal] = useState<string>();
@@ -42,24 +37,17 @@ export function SessionCreate({ client, projects, initialProject, language = 'en
     if (inFlight.current || !projectId || !path) return;
     inFlight.current = true; setBusy(true); setError('');
     try {
-      let terminalId = pendingTerminal;
-      if (!terminalId) {
+      let worktree: { path: string } | undefined;
+      if (!pendingTerminal && name) {
         const key = JSON.stringify([projectId, target, base, name]);
-        const worktree = name ? createdTree.current?.key === key ? createdTree.current : await request<{ path: string }>(client, 'worktree.create', { projectId, target, base, name }) : undefined;
-        if (worktree) createdTree.current = { key, path: worktree.path };
-        const launch = await request<{ terminalId: string }>(client, 'session.launch', { projectId, target, provider, ...(worktree ? { worktree: worktree.path } : {}) });
-        terminalId = launch.terminalId; setPendingTerminal(terminalId);
+        worktree = createdTree.current?.key === key ? createdTree.current : await request<{ path: string }>(client, 'worktree.create', { projectId, target, base, name });
+        createdTree.current = { key, path: worktree.path };
       }
-      const deadline = Date.now() + START_TIMEOUT_MS;
-      while (mounted.current) {
-        const result = await request<{ hosts: { terminalId: string; conversationId: string; disconnected?: boolean }[] }>(client, 'session.hosts');
-        const host = result.hosts.find(row => row.terminalId === terminalId);
-        if (host?.disconnected) throw new Error(text('Connection lost', '接続が切れました'));
-        if (host) { onCreated(projectId, host.conversationId); return; }
-        if (Date.now() >= deadline) throw new Error(text('Unable to confirm the session start. Try again to check.', '会話の開始を確認できません。もう一度確かめてください。'));
-        await new Promise(resolve => setTimeout(resolve, DISCOVERY_POLL_MS));
-      }
-    } catch (cause) { if (mounted.current) setError(language === 'ja' ? '作成できませんでした。もう一度確かめてください。' : String(cause)); }
+      const conversation = await startSession(client, { projectId, target, provider, ...(worktree ? { worktree: worktree.path } : {}) }, {
+        terminalId: pendingTerminal, onLaunched: setPendingTerminal, active: () => mounted.current,
+      });
+      if (conversation) onCreated(projectId, conversation);
+    } catch { if (mounted.current) setError(text('Unable to start conversation', '会話を始められません')); }
     finally { inFlight.current = false; if (mounted.current) setBusy(false); }
   }
   return <CommandDialog language={language} title={text('Create session', 'セッションを作成')} onClose={onClose}>
@@ -68,7 +56,7 @@ export function SessionCreate({ client, projects, initialProject, language = 'en
       <label>{text('Run on', '実行先')}<div className="session-target"><select aria-label={text('Run on', '実行先')} disabled={busy || Boolean(pendingTerminal)} value={destination} onChange={event => setDestination(event.target.value)}><option value="local">{text('This Mac', 'この Mac')}</option>{connections.map(row => <option key={row.id} value={row.id}>{row.name}</option>)}</select><span title={path}>{path || text('Project path is not configured', 'プロジェクトのパスが未設定です')}</span></div></label>
       <label>{text('Create from', '作成元')}<select disabled={busy || Boolean(pendingTerminal)} value={base} onChange={event => setBase(event.target.value)}>{[...new Set(['origin/main', ...branches])].map(branch => <option key={branch}>{branch}</option>)}</select></label>
       <label>{text('Worktree name', 'ワークツリー名')}<input aria-label={text('Worktree name', 'ワークツリー名')} disabled={busy || Boolean(pendingTerminal)} value={name} pattern="[a-zA-Z0-9_][a-zA-Z0-9._-]*" onChange={event => setName(event.target.value)}/></label>
-      <fieldset disabled={busy || Boolean(pendingTerminal)}><legend>{text('Agent', 'エージェント')}</legend><div className="session-agents">{['claude', 'codex'].map(value => <button type="button" key={value} className="btn btn-secondary" aria-pressed={provider === value} onClick={() => setProvider(value)}><ProviderMark provider={value}/>{value === 'claude' ? 'Claude' : 'Codex'}</button>)}</div></fieldset>
+      <fieldset disabled={busy || Boolean(pendingTerminal)}><legend>{text('Agent', 'エージェント')}</legend><div className="session-agents">{['claude', 'codex'].map(value => <button type="button" key={value} className="btn btn-secondary" aria-pressed={provider === value} onClick={() => { setProvider(value); localStorage.setItem(SESSION_PROVIDER_KEY, value); }}><ProviderMark provider={value}/>{value === 'claude' ? 'Claude' : 'Codex'}</button>)}</div></fieldset>
       {error && <p role="alert">{error}</p>}<div className="session-create-actions"><button className="btn btn-primary" disabled={busy || !projectId || !path}>{busy ? text('Creating…', '作成中…') : text('Create', '作成')} <kbd>⌘ ↵</kbd></button></div>
     </form>
   </CommandDialog>;

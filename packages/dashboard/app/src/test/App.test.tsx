@@ -149,7 +149,7 @@ it('shares live activity, approval counts, commands and notices across all stage
   expect(screen.getByRole('heading', { name: 'Approval pending' })).toBeTruthy();
   fireEvent.click(within(screen.getByRole('complementary')).getByRole('link', { name: 'demo' }));
   expect(document.querySelector('.workspace-header')).toBeNull();
-  expect(screen.getByRole('button', { name: 'New task: demo' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Start conversation: demo' })).toBeTruthy();
   expect(screen.getByRole('tab', { name: 'Graph' })).toBeTruthy();
   expect(screen.getByRole('textbox', { name: 'Message' })).toBeTruthy();
   fireEvent.click(within(screen.getByRole('region', { name: 'demo sessions' })).getByRole('link', { name: /Console conversation/ }));

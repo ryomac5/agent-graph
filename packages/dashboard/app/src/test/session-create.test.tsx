@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from 'vitest';
+import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { SessionCreate } from '../components/SessionCreate.tsx';
 import { SshSettings } from '../components/SshSettings.tsx';
@@ -13,6 +13,7 @@ function fixture() {
       : name === 'ssh.test' ? { connected: true } : {} }));
   return { command, client: { command } as ConversationClient, onCreated: vi.fn(), onClose: vi.fn() };
 }
+beforeEach(() => localStorage.clear());
 afterEach(cleanup);
 it.each(['en', 'ja'] as const)('shows creation fields and creates a worktree on the selected destination in %s', async language => {
   const f = fixture(); const ja = language === 'ja';

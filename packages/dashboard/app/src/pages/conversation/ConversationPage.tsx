@@ -1,3 +1,4 @@
+import { readSessionProvider, SESSION_PROVIDER_KEY } from '../../lib/session-start.ts';
 import { createPortal } from 'react-dom';
 import { SessionName } from '../../components/SessionName.tsx';
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -187,7 +188,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const detailRef = useRef(detail);
   detailRef.current = detail;
   const t = (key: ConversationText) => translate(language, key);
-  const [sessionProvider, setSessionProvider] = useState('claude');
+  const [sessionProvider, setSessionProvider] = useState(readSessionProvider);
   const openTerminal = useContext(OpenWorkspaceTerminal);
   const [hosts, setHosts] = useState<SessionHost[]>([]);
   const [pendingHost, setPendingHost] = useState<SessionHost>();
@@ -738,7 +739,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
           }}/>
         <div className="composer-toolbar">
           <div className="composer-controls">
-            {starting && <div className="composer-provider" role="group" aria-label={language === 'ja' ? '提供元' : 'Provider'}>{['claude', 'codex'].map(value => <button type="button" key={value} aria-pressed={sessionProvider === value} disabled={pending} onClick={() => { setSessionProvider(value); setModel(''); setEffort(''); setEdited(false); }}>{value === 'claude' ? 'Claude' : 'Codex'}</button>)}</div>}
+            {starting && <div className="composer-provider" role="group" aria-label={language === 'ja' ? '提供元' : 'Provider'}>{['claude', 'codex'].map(value => <button type="button" key={value} aria-pressed={sessionProvider === value} disabled={pending} onClick={() => { setSessionProvider(value); localStorage.setItem(SESSION_PROVIDER_KEY, value); setModel(''); setEffort(''); setEdited(false); }}>{value === 'claude' ? 'Claude' : 'Codex'}</button>)}</div>}
             <ChoiceMenu name={t('model') + ' · ' + modelLabel} label={<><span className={"composer-provider-mark provider-" + provider} aria-hidden="true"><Icon name={provider === "claude" ? "sparkle" : "terminal"} size={16}/></span><span className="truncate" title={!shownModel && usesDefault ? modelSource : undefined}>{modelLabel}</span>{usesDefault && !shownModel && <span className="muted-text" style={{ font: "var(--type-meta)" }}>{t('recommended')}</span>}</>} width={320} value={selectedModel} choices={modelChoices} disabled={!connected || pending} olderLabel={language === 'ja' ? '古いバージョン ' + olderModels.size + ' 件' : olderModels.size + ' older versions'}
               note={codexActive ? t('activeCodex') : models.length ? undefined : t('noModels')} onChange={value => { setEdited(true); setModel(value); if (provider === 'codex') setEffort(models.find(item => item.model === value)?.effort ?? ''); }}
               footer={<button className="btn btn-primary btn-sm" disabled={codexActive || !dirty || model === 'default' && !recommendedModel || (!external && !writable)} onClick={() => { if (!external) void applyModel(); }}>{t('applyShort')}</button>}/>

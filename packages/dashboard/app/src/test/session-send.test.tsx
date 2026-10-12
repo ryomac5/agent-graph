@@ -99,7 +99,7 @@ it('replaces optimistic input with the recorded message without duplicating it',
   expect(screen.getAllByText('Recorded input')).toHaveLength(1);
 });
 
-it.each(['claude', 'codex'])('creates a %s session from the project menu, opens its tab and sends through the terminal', async provider => {
+it.each(['claude', 'codex'])('creates a %s session from the project plus, opens its tab and sends through the terminal', async provider => {
   const f = fixture();
   const conversationId = JSON.stringify([provider, '12345678-1234-1234-1234-123456789abc']);
   let launched = false;
@@ -113,11 +113,9 @@ it.each(['claude', 'codex'])('creates a %s session from the project menu, opens 
     return ack();
   });
   render(<MemoryRouter initialEntries={['/p/p']}><App target={f.target} client={f.client}/></MemoryRouter>);
-  fireEvent.click(screen.getByRole('button', { name: 'New task: Project' }));
-  fireEvent.click(screen.getByRole('menuitem', { name: 'New session' }));
-  expect(screen.getByRole('dialog', { name: 'Create session' })).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: provider === 'claude' ? 'Claude' : 'Codex' }));
-  fireEvent.click(screen.getByRole('button', { name: /^Create / }));
+  localStorage.setItem('agent-graph-session-provider', provider);
+  fireEvent.click(screen.getByRole('button', { name: 'Start conversation: Project' }));
+  expect(screen.queryByRole('dialog')).toBeNull();
   await vi.waitFor(() => expect(f.command).toHaveBeenCalledWith('session.launch', { projectId: 'p', provider, target: { kind: 'local' } }));
   await vi.waitFor(() => {
     const saved = restoreWorkspace(localStorage.getItem(workspaceKey('p', 'root')), 'c')!;

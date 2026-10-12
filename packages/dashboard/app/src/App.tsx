@@ -7,7 +7,8 @@ import { SIDEBAR_WIDTH_KEY, SIDEBAR_COLLAPSED_KEY, SIDEBAR_MIN_WIDTH, SIDEBAR_MA
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createKeyHandler, isTextInput, keyLabel, type KeyAction } from './lib/keys.ts';
 import { CommandDialog, CommandPalette, useKeySettings, type Command } from './components/command/Commands.tsx';
-import { CreateTaskForm } from './components/CreateTaskForm.tsx';
+import { ProjectAdd } from './components/ProjectAdd.tsx';
+import { request, startSession, readSessionProvider } from './lib/session-start.ts';
 import './components/command/command.css';
 import { BrowserRouter, Link, Navigate, NavLink, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import { dictionaries, type Language, type TextKey } from './lib/i18n.ts';
@@ -118,8 +119,27 @@ export function App({ target = store, client = unavailableClient, searchClient =
   }, [location.pathname, location.search, location.hash, auxiliaryPage]);
   const { bindings, setBindings } = useKeySettings(client);
   const [creatingSession, setCreatingSession] = useState<string>();
-  const [projectMenu, setProjectMenu] = useState<string>();
-  const [overlay, setOverlay] = useState<'commands' | 'help' | 'interrupt' | 'create'>();
+  const [overlay, setOverlay] = useState<'commands' | 'help' | 'interrupt'>();
+  const [addingProject, setAddingProject] = useState(false);
+  const [revealedProject, setRevealedProject] = useState<string>();
+  const [hasSsh, setHasSsh] = useState(false);
+  const [startingProjects, setStartingProjects] = useState<Set<string>>(new Set());
+  const launching = useRef(new Set<string>());
+  const pendingTerminals = useRef(new Map<string, string>());
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  useEffect(() => { let active = true; void request<{ connections?: unknown[] }>(client, 'ssh.read').then(result => { if (active) setHasSsh(Boolean(result?.connections?.length)); }, () => { if (active) setHasSsh(false); }); return () => { active = false; }; }, [client, location.pathname, overlay]);
+  async function beginConversation(id: string) {
+    if (launching.current.has(id)) return;
+    launching.current.add(id); setStartingProjects(new Set(launching.current)); setCommandError('');
+    try {
+      const conversation = await startSession(client, { projectId: id, target: { kind: 'local' }, provider: readSessionProvider() }, {
+        terminalId: pendingTerminals.current.get(id), onLaunched: terminal => pendingTerminals.current.set(id, terminal), active: () => mounted.current,
+      });
+      if (conversation && mounted.current) { pendingTerminals.current.delete(id); navigate('/p/' + encodeURIComponent(id) + '?conversation=' + encodeURIComponent(conversation)); setMobileView('conversation'); }
+    } catch { if (mounted.current) setCommandError(language === 'ja' ? '会話を始められません' : 'Unable to start conversation'); }
+    finally { launching.current.delete(id); if (mounted.current) setStartingProjects(new Set(launching.current)); }
+  }
   const [stopButton, setStopButton] = useState<HTMLButtonElement>();
   const [commandError, setCommandError] = useState('');
   const answered = useRef(new Set<string>());
@@ -156,7 +176,6 @@ export function App({ target = store, client = unavailableClient, searchClient =
   const rootQuery = search.get('root'); const childQuery = search.get('child');
   useEffect(() => { setMobileView('conversation'); }, [location.pathname, rootQuery, childQuery]);
   const explorer = useFileExplorer({ client, target, project: pathProject ? decodeURIComponent(pathProject) : project ?? '', enabled: location.pathname.endsWith('/files') });
-  const projectRoot = String(state.projection.projects?.find(row => row.id === project)?.root_path ?? '');
   const selectedRoot = roots.find(root => root.id === search.get('root')) ?? directRoot ?? roots.find(root => rootProject(root, registeredIds) === project);
   function moveRow(direction: number) {
     const rows = [...(mainRef.current?.querySelectorAll<HTMLElement>('.activity-name, [data-approval-id], .delegation-select, .graph-card-link, [role="treeitem"][tabindex]') ?? [])];
@@ -202,7 +221,7 @@ export function App({ target = store, client = unavailableClient, searchClient =
           || projectRow && event.altKey && ['ArrowUp', 'ArrowDown'].includes(event.key)
           || projectRow && event.key === 'Escape' && projectRow.querySelector('.project-actions[aria-expanded="true"]')) return;
       }
-      if (overlay || creatingSession || (event.key === 'Escape' && event.target instanceof HTMLElement && event.target.matches('.explorer-filter input'))) return;
+      if (overlay || creatingSession !== undefined || addingProject || (event.key === 'Escape' && event.target instanceof HTMLElement && event.target.matches('.explorer-filter input'))) return;
       if (auxiliaryPage && event.key === 'Escape' && !isTextInput(event.target)) { event.preventDefault(); event.stopPropagation(); goBack(); return; }
       contextFocus.current = event.target instanceof HTMLElement ? event.target : null;
       if (handleKey(event)) { event.preventDefault(); event.stopPropagation(); }
@@ -210,12 +229,12 @@ export function App({ target = store, client = unavailableClient, searchClient =
     }
     document.addEventListener('keydown', onKey, true);
     return () => document.removeEventListener('keydown', onKey, true);
-  }, [handleKey, overlay, creatingSession, auxiliaryPage, returnUrl, project]);
+  }, [handleKey, overlay, creatingSession, addingProject, auxiliaryPage, returnUrl, project]);
   const commands: Command[] = [
     ...(['home', 'workspace', 'inbox', 'tree', 'changes', 'help', 'interrupt', 'toggleSidebar'] as const).map(id => ({ id, name: keyLabel(id, language), run: () => executeKey(id), disabled: ['workspace', 'tree', 'changes'].includes(id) && !project })),
     { id: 'search', name: language === 'ja' ? '会話を検索' : 'Search conversations', run: () => navigate('/search') },
     { id: 'settings', name: language === 'ja' ? '設定を開く' : 'Open Settings', run: () => navigate('/settings') },
-    { id: 'create', name: t('newTask'), run: () => setOverlay('create') },
+    ...(hasSsh ? [{ id: 'ssh-session', name: language === 'ja' ? 'SSH 先で会話を始める' : 'Start conversation over SSH', run: () => setCreatingSession(project ?? String(projects[0]?.id ?? '')) }] : []),
     ...roots.map(root => ({ id: `conversation-${root.id}`, name: language === 'ja' ? `会話を開く: ${root.name}` : `Open ${isRunning(root.state) ? 'active ' : ''}conversation: ${root.name}`, run: () => navigate(`/p/${encodeURIComponent(root.project ?? OTHER_PROJECT)}?root=${encodeURIComponent(root.id)}`) })),
     ...getInbox(state).pending.flatMap(row => (['allow', 'deny'] as const).map(action => ({
       id: `${action}-${row.id}`, name: language === 'ja' ? `${action === 'allow' ? '許可' : '拒否'}: ${row.id}` : `${action === 'allow' ? 'Allow' : 'Deny'} approval: ${row.id}`,
@@ -237,9 +256,9 @@ export function App({ target = store, client = unavailableClient, searchClient =
     <nav aria-label={t('workspace')} className="nav-group">
       {(['overview', 'inbox', 'search'] as const).map(key => <NavLink key={key} end to={key === 'overview' ? '/' : `/${key}`}><Icon name={icons[key]} size={16}/><span className="nav-label">{t(key)}</span>
         {key === 'inbox' && approvals > 0 && <span className="nav-count numeric" aria-hidden="true">{approvals}</span>}</NavLink>)}
-    </nav><div className="projects"><p className="eyebrow">{t('projects')}<span className="numeric">{projects.length}</span></p>
+    </nav><div className="projects"><p className="eyebrow">{t('projects')}<span className="numeric">{projects.length}</span><button className="icon-button" aria-label={language === 'ja' ? 'プロジェクトを追加' : 'Add project'} onClick={() => { setRevealedProject(undefined); setAddingProject(true); }}><Icon name="plus" size={14}/></button></p>
       {projects.length === 0 && <p className="muted-text sidebar-empty">{t('noProjects')}</p>}
-      <ProjectList language={language} projects={[...projects, ...(hasOther ? [{ id: OTHER_PROJECT, name: t('other'), full: t('other'), detail: '' }] : [])]} renderProject={(row, attributes, actions) => {
+      <ProjectList revealProject={revealedProject} language={language} projects={[...projects, ...(hasOther ? [{ id: OTHER_PROJECT, name: t('other'), full: t('other'), detail: '' }] : [])]} renderProject={(row, attributes, actions) => {
         const items = roots.filter(root => rootProject(root, registeredIds) === row.id);
         const open = !(collapsedProjects[row.id] ?? row.id !== project);
         const runningCount = items.filter(root => isRunning(root.state)).length;
@@ -247,9 +266,8 @@ export function App({ target = store, client = unavailableClient, searchClient =
           <div className="sidebar-project-row" {...attributes}><button className="icon-button" aria-label={language === 'ja' ? row.name + ' のセッション' : 'Toggle sessions for ' + row.name} aria-expanded={open} onClick={() => setCollapsedProjects(value => ({ ...value, [row.id]: open }))}><Icon name={open ? 'chevronDown' : 'chevronRight'} size={16}/></button>
             <NavLink to={`/p/${encodeURIComponent(row.id)}`} title={row.full}><Icon name="folder" size={16}/><span className="truncate">{row.name}</span></NavLink>
             {runningCount > 0 && <span className="numeric project-running" aria-label={language === 'ja' ? '実行中のセッション' : 'Running sessions'}>{runningCount}</span>}
-            <button className="icon-button project-create" aria-label={t('newTask') + ': ' + row.name} aria-expanded={projectMenu === row.id} onClick={() => setProjectMenu(projectMenu === row.id ? undefined : row.id)}><Icon name="plus" size={14}/></button>{actions}</div>
-          {projectMenu === row.id && <div className="project-create-menu" role="menu">{['session', 'task'].map(kind => <button className="btn btn-ghost" role="menuitem" key={kind} onClick={() => { if (kind === 'session') setCreatingSession(row.id); else navigate(`/p/${encodeURIComponent(row.id)}?create=1`); setProjectMenu(undefined); setMobileView('conversation'); }}>{kind === 'session' ? language === 'ja' ? '新しいセッション' : 'New session' : language === 'ja' ? '新規タスク' : 'New task'}</button>)}</div>}
-          {open && <section className="sidebar-roots" aria-label={language === 'ja' ? row.name + ' のセッション' : row.name + ' sessions'}><RootList client={client} grouped state={state} roots={items} selected={selectedRoot?.id} language={language} onSelect={root => { const next = new URLSearchParams(search); next.set('root', root.id); next.delete('child'); next.delete('path'); next.delete('create'); next.delete('session'); next.delete('conversation'); navigate(`/p/${encodeURIComponent(row.id)}?${next}`); setMobileView('conversation'); }}/></section>}
+            {row.id !== OTHER_PROJECT && <button className="icon-button project-create" aria-label={(language === 'ja' ? '会話を始める' : 'Start conversation') + ': ' + row.name} disabled={state.connection !== 'connected' || startingProjects.has(row.id)} aria-busy={startingProjects.has(row.id)} onClick={() => void beginConversation(row.id)}>{startingProjects.has(row.id) ? <span className="project-start-spinner"/> : <Icon name="plus" size={14}/>}</button>}{actions}</div>
+          {open && <section className="sidebar-roots" aria-label={language === 'ja' ? row.name + ' のセッション' : row.name + ' sessions'}><RootList client={client} grouped state={state} roots={items} selected={selectedRoot?.id} language={language} onSelect={root => { const next = new URLSearchParams(search); next.set('root', root.id); next.delete('child'); next.delete('path'); next.delete('session'); next.delete('conversation'); navigate(`/p/${encodeURIComponent(row.id)}?${next}`); setMobileView('conversation'); }}/></section>}
         </>;
       }}/>
     </div><UsageBar client={client} language={language} visible={!sidebarCollapsed && (!compactScreen || mobileView === 'sessions')} connected={state.connection === 'connected' || state.connection === 'runner_unavailable'}/><NavLink className="settings-link" to="/settings"><Icon name="settings" size={16}/>{t('settings')}</NavLink></div><ResizeDivider className="sidebar-resize" label={language === 'ja' ? 'サイドバーの幅' : 'Sidebar width'} orientation="vertical" value={sidebarWidth} min={SIDEBAR_MIN_WIDTH} max={SIDEBAR_MAX_WIDTH} step={20}
@@ -268,11 +286,11 @@ export function App({ target = store, client = unavailableClient, searchClient =
       <Route path="/settings" element={<div className="page settings-page"><header className="page-header">{backAction}<h1>{t('settings')}</h1></header><SettingsLayout client={client} projects={getRegisteredProjects(state)} language={language} theme={theme} onTheme={setTheme} onLanguage={setLanguage} bindings={bindings} onKeys={setBindings}><SettingsPage client={client} language={language} policyOnly/></SettingsLayout></div>}/>
       <Route path="*" element={<EmptyView title="notFound" t={t}/>}/>
     </Routes>{commandError && <p role="alert" className="banner banner-danger">{commandError}</p>}</main></div>
-    {creatingSession && <SessionCreate client={client} projects={getRegisteredProjects(state)} initialProject={creatingSession} language={language} onClose={() => setCreatingSession(undefined)} onCreated={(project, conversation) => { setCreatingSession(undefined); navigate(`/p/${encodeURIComponent(project)}?conversation=${encodeURIComponent(conversation)}`); setMobileView('conversation'); }}/>}
+    {addingProject && <ProjectAdd client={client} language={language} onClose={() => setAddingProject(false)} onAdded={id => { setAddingProject(false); setRevealedProject(id); setCollapsedProjects(value => ({ ...value, [id]: false })); navigate('/p/' + encodeURIComponent(id)); }}/> }
+    {creatingSession !== undefined && <SessionCreate client={client} projects={getRegisteredProjects(state)} initialProject={creatingSession} language={language} onClose={() => setCreatingSession(undefined)} onCreated={(project, conversation) => { setCreatingSession(undefined); navigate(`/p/${encodeURIComponent(project)}?conversation=${encodeURIComponent(conversation)}`); setMobileView('conversation'); }}/>}
     {overlay === 'commands' && <CommandPalette language={language} commands={commands} onClose={() => setOverlay(undefined)}/>}
     {overlay === 'help' && <CommandDialog language={language} title={language === 'ja' ? 'キーボードショートカット' : 'Shortcuts'} onClose={() => setOverlay(undefined)}><dl>{Object.entries(bindings).map(([key, value]) => <div key={key}><dt>{keyLabel(key as KeyAction, language)}</dt><dd><kbd>{value}</kbd></dd></div>)}</dl></CommandDialog>}
     {overlay === 'interrupt' && <CommandDialog language={language} title={language === 'ja' ? '実行を中断しますか？' : 'Interrupt run?'} onClose={() => setOverlay(undefined)}><button className="btn btn-primary" onClick={() => { if (stopButton?.isConnected && !stopButton.disabled) stopButton.click(); setOverlay(undefined); }}>{language === 'ja' ? '中断' : 'Confirm interrupt'}</button><button className="btn btn-secondary" onClick={() => setOverlay(undefined)}>{language === 'ja' ? 'キャンセル' : 'Cancel'}</button></CommandDialog>}
-    {overlay === 'create' && <CommandDialog language={language} title={t('newTask')} onClose={() => setOverlay(undefined)}><CreateTaskForm project={project ?? ''} root={projectRoot} client={client} disabled={state.connection !== 'connected'} language={language} onCancel={() => setOverlay(undefined)}/></CommandDialog>}
     </div>;
 }
 export function Dashboard({ client, searchClient }: { client: ConversationClient; searchClient?: SearchClient }) { return <BrowserRouter><App client={client} searchClient={searchClient}/></BrowserRouter>; }

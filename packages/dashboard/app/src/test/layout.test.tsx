@@ -68,17 +68,15 @@ it('1: groups sessions by turns and the current 24-hour boundary, collapses proj
   fireEvent.click(within(sidebar).getByRole('button', { name: 'Toggle sessions for Project' }));
   expect(within(sidebar).queryByRole('region', { name: 'Project sessions' })).toBeNull();
 });
-it('2: keeps only the conversation header in the middle and starts tasks from the project plus', () => {
+it('2: keeps the conversation header and offers a direct start', () => {
   mount();
   expect(document.querySelector('.workspace-header')).toBeNull();
   expect(document.querySelector('.workspace-requests')).toBeNull();
   const middle = document.querySelector('.workspace-conversation') as HTMLElement;
   expect(within(middle).getByRole('tab', { name: 'Session active' })).toBeTruthy();
   expect(within(middle).getByRole('button', { name: 'Details' })).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: 'New task: Project' }));
-  fireEvent.click(screen.getByRole('menuitem', { name: 'New task' }));
-  expect(screen.getByRole('form', { name: 'New task' })).toBeTruthy();
-  expect(screen.getByTestId('route').textContent).toBe('/p/p?create=1');
+  expect(screen.getByRole('button', { name: 'Start conversation: Project' })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: /New task/ })).toBeNull();
 });
 it('3: stores tabs in the URL, clamps and remembers width, and remembers collapse', () => {
   const view = mount();

@@ -2,7 +2,7 @@ import { observeCodexTitles } from "./titles.ts";
 import { homedir } from "node:os";
 import { basename, join, normalize, sep } from "node:path";
 import { createNativeId } from "../../../../core/src/ledger/projections/relations.ts";
-import { classifyCodexRecord, readCodexTurnModel } from "../../../../core/src/ledger/turns.ts";
+import { classifyCodexRecord, readCodexTurnModel, TURN_RULE_VERSION } from "../../../../core/src/ledger/turns.ts";
 import type { AppendResult, Fact, FactInput, JsonValue, Ledger, RunState } from "../../../../core/src/ledger/index.ts";
 import { readSessionMeta, rolloutReader } from "./files.ts";
 import { defaultLocationResolver, type LocationResolver } from "../location.ts";
@@ -15,6 +15,7 @@ export interface CodexObservationOptions {
   observedTs?: string;
   batch?: <T>(operation: () => T) => T;
   paths?: Set<string>;
+  fileBatch?: (path: string, operation: () => AppendResult[]) => AppendResult[];
   locate?: LocationResolver;
   titleCursors?: Map<string, FileCursor>;
 }
@@ -34,6 +35,9 @@ function readTime(value: unknown, fallback: string): string {
   return text && Number.isFinite(Date.parse(text)) ? text : fallback;
 }
 function identifyConversation(id: string): string { return createNativeId("codex", id); }
+
+// 入力に時刻がない場合も、観測した壁時計を状態の根拠へ混ぜない。
+const UNKNOWN_SOURCE_TS = "1970-01-01T00:00:00.000Z";
 
 const IGNORED_ITEMS = new Set([
   "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output", "reasoning",
@@ -83,10 +87,9 @@ function indexFact(index: ObservationIndex, fact: Fact | FactInput, factId: stri
     index.stateGenerations.set(fact.source_event_id, fact.payload.generation);
   }
   if (fact.kind === "run.created" && fact.payload?.conversation_id) {
-    const starts = index.runs.get(fact.payload.conversation_id) ?? [];
     const evidence = readObject(fact.payload.last_evidence);
-    starts.push({ generation: fact.payload.generation ?? 1, offset: Number(evidence.start_offset ?? 0),
-      fileId: readText(evidence.file_id) });
+    const starts = [...(index.runs.get(fact.payload.conversation_id) ?? []),
+      { generation: fact.payload.generation ?? 1, offset: Number(evidence.start_offset ?? 0), fileId: readText(evidence.file_id) }];
     index.runs.set(fact.payload.conversation_id, starts);
   }
   if (fact.source === "rollout-codex" && fact.kind === "run.updated" && typeof fact.payload?.model === "string") {
@@ -120,8 +123,11 @@ export function observeCodex(ledger: Ledger, options: CodexObservationOptions = 
   const archivedFileIds = new Set(archivedPaths.map((path) => basename(path)));
   const results = [...reader.list(join(home, "sessions")), ...archivedPaths]
     .filter((path) => !options.paths || options.paths.has(path))
-    .flatMap((path) => (options.batch ?? ((operation) => operation()))(
-      () => observeFile(ledger, path, { ...options, reader }, index, archivedFileIds)));
+    .flatMap((path) => {
+      const operation = () => observeFile(ledger, path, { ...options, reader }, index, archivedFileIds);
+      return options.fileBatch ? options.fileBatch(path, operation)
+        : (options.batch ?? ((operation) => operation()))(operation);
+    });
   return [...results, ...observeCodexTitles(ledger, home, options.observedTs ?? new Date().toISOString(), index.subjects, options.titleCursors)];
 }
 
@@ -129,7 +135,8 @@ export function observeCodexFile(ledger: Ledger, path: string, options: CodexObs
   const reader = options.reader ?? rolloutReader;
   const archivedFileIds = new Set(reader.list(join(resolveCodexHome(options), "archived_sessions"))
     .map((archivedPath) => basename(archivedPath)));
-  const results = observeFile(ledger, path, options, readIndex(ledger), archivedFileIds);
+  const operation = () => observeFile(ledger, path, options, readIndex(ledger), archivedFileIds);
+  const results = options.fileBatch ? options.fileBatch(path, operation) : operation();
   return [...results, ...observeCodexTitles(ledger, resolveCodexHome(options), options.observedTs ?? new Date().toISOString(), undefined, options.titleCursors)];
 }
 
@@ -159,14 +166,33 @@ function observeFile(ledger: Ledger, path: string, options: CodexObservationOpti
   const nativeId = readText(meta.id)
     ?? /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i.exec(fileId)?.[1];
   const format = readText(meta.history_mode) ?? "legacy";
-  const createdTs = readTime(meta.timestamp, observedTs);
+  const createdTs = readTime(meta.timestamp, readTime(metaRow.timestamp, UNKNOWN_SOURCE_TS));
   const supported = format === "legacy" || format === "paginated";
   const boundaries = new Map<string, RunBoundary[]>();
 
+  // ファイルの隔離では、次のファイルが使う文脈も保存前へ戻す。
+  const undoIndex: (() => void)[] = [];
+  function retainIndexEntry<T>(map: Map<string, T>, key: string): void {
+    const previous = map.get(key);
+    undoIndex.push(() => { if (previous === undefined) map.delete(key); else map.set(key, previous); });
+  }
   function append(input: FactInput): void {
     const result = ledger.append(input);
     results.push(result);
-    if (result.status === "appended") indexFact(index, input, result.fact_id);
+    if (result.status === "appended") {
+      if (options.fileBatch) {
+        if (!index.subjects.has(input.subject)) undoIndex.push(() => { index.subjects.delete(input.subject); });
+        if (input.kind === "observation.unsupported") retainIndexEntry(index.unsupported, input.subject);
+        if (input.kind === "conversation.created") retainIndexEntry(index.placeholders, input.subject);
+        if (input.kind === "run.state_changed") {
+          retainIndexEntry(index.stateGenerations, input.source_event_id);
+          retainIndexEntry(index.archivedRuns, input.subject);
+        }
+        if (input.kind === "run.created") retainIndexEntry(index.runs, input.payload.conversation_id);
+        if (input.kind === "run.updated") retainIndexEntry(index.models, input.subject);
+      }
+      indexFact(index, input, result.fact_id);
+    }
   }
   function createBase(key: string, timestamp: string, line?: RolloutLine) {
     return {
@@ -238,16 +264,18 @@ function observeFile(ledger: Ledger, path: string, options: CodexObservationOpti
         subject: `run:${conversation}:${generation}`, payload: { conversation_id: conversation, generation,
           state: "unknown", reason: "archive_resume", last_evidence: { file_id: end.fileId ?? fileId, start_offset: end.offset } } });
     }
-    boundaries.set(id, indexedStarts);
+    boundaries.set(id, index.runs.get(conversation)!);
   }
   function changeState(id: string, state: RunState, timestamp: string, line: RolloutLine, evidence: ObjectValue): void {
     ensureConversation(id, timestamp);
     ensureRun(id, timestamp);
     const starts = boundaries.get(id)!;
     // 別のファイルの byte offset は比較せず、現在の世代へ結ぶ。
-    const key = `${fileId}:${line.offset}:${line.hash}:${id}:state`;
+    const legacyKey = `${fileId}:${line.offset}:${line.hash}:${id}:state`;
+    // 規則の変更は別の事実として追記し、古い根拠と世代を保持する。
+    const key = `${legacyKey}:v${TURN_RULE_VERSION}`;
     // 再読した過去の通知は、最初に結んだ世代を保持する。
-    const generation = index.stateGenerations.get(key)
+    const generation = index.stateGenerations.get(key) ?? index.stateGenerations.get(legacyKey)
       ?? starts.findLast((start) => start.fileId !== fileId || start.offset <= line.offset)!.generation;
     append({ ...createBase(key, timestamp, line), kind: "run.state_changed",
       subject: `run:${identifyConversation(id)}:${generation}`, payload: { generation, state,
@@ -311,6 +339,7 @@ function observeFile(ledger: Ledger, path: string, options: CodexObservationOpti
         if (index.models.get(subject) !== signature) {
           append({ ...createBase(`${fileId}:${line.offset}:${line.hash}:${id}:model`, timestamp, line), kind: "run.updated", subject,
             payload: { conversation_id: identifyConversation(id), generation, ...observed } });
+          if (options.fileBatch) retainIndexEntry(index.models, subject);
           index.models.set(subject, signature);
         }
       }
@@ -377,6 +406,9 @@ function observeFile(ledger: Ledger, path: string, options: CodexObservationOpti
       subject: `run:${identifyConversation(nativeId)}:${generation}`, payload: { generation, state: "ended", ended_ts: timestamp,
         end_evidence: { kind: "archived", location: "archived_sessions" },
         last_evidence: { file_id: fileId, complete_bytes: file.completeBytes } } });
+  }
+  if (options.fileBatch && results.some(result => result.status === "conflict")) {
+    for (const undo of undoIndex.reverse()) undo();
   }
   return results;
 }

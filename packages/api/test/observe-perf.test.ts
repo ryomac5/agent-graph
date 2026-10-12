@@ -90,7 +90,11 @@ test("worker の大量取り込み中も主スレッドの遅れは 100 ms 以�
     maximumLag = Math.max(maximumLag, now - lastTick - 10);
     lastTick = now;
   }, 10);
-  t.after(() => clearInterval(timer));
+  t.after(() => {
+    clearInterval(timer);
+    t.diagnostic(`maximum event-loop delay: ${maximumLag.toFixed(1)} ms`);
+    t.diagnostic(`maximum projection feed refresh: ${maximumFeedTime.toFixed(1)} ms`);
+  });
   worker.start();
   worker.start();
   await waitUntil(() => service.getObservation().total === CLAUDE_COUNT + CODEX_COUNT);
@@ -106,8 +110,6 @@ test("worker の大量取り込み中も主スレッドの遅れは 100 ms 以�
     return feed.snapshot().seq === report.appended;
   });
   clearInterval(timer);
-  t.diagnostic(`maximum event-loop delay: ${maximumLag.toFixed(1)} ms`);
-  t.diagnostic(`maximum projection feed refresh: ${maximumFeedTime.toFixed(1)} ms`);
   assert.ok(maximumLag <= LOOP_LIMIT_MS, `${maximumLag.toFixed(1)} ms > ${LOOP_LIMIT_MS} ms`);
   await worker.close();
   await waitUntil(() => service.catchUp().last_seq === report.appended);

@@ -12,7 +12,8 @@ import type { FileCursor } from "../observe/files.ts";
 
 export function observeClaudeHistories(ledger: Ledger, directory: string, facts: Fact[],
   batch: <T>(operation: () => T) => T = (operation) => operation(),
-  paths?: string[], saved?: Map<string, FileCursor>, locate?: LocationResolver): ClaudeObservation[] {
+  paths?: string[], saved?: Map<string, FileCursor>, locate?: LocationResolver,
+  fileBatch?: (path: string, operation: () => ClaudeObservation) => ClaudeObservation): ClaudeObservation[] {
   const cursors = new Map<string, FileCursor>();
   const conversations = new Map<string, Fact[]>();
   const identities = new Map(projectEntities(facts, "conversation").map((conversation) => [
@@ -79,10 +80,11 @@ export function observeClaudeHistories(ledger: Ledger, directory: string, facts:
     };
     const remote = readRemoteMetadata(file);
     const readLocation = remote ? () => ({ cwd: remote!.cwd, repository_id: remote!.projectId }) : locate;
+    const historyLength = history.length;
     let result;
     const start = saved?.get(resolve(file)) ?? cursors.get(resolve(file));
     try {
-      result = batch(() => {
+      result = (fileBatch ? (operation: () => ClaudeObservation) => fileBatch(file, operation) : batch)(() => {
         const observation = observeClaudeFile(fileLedger, file, { cursor: start });
         const titles = observeClaudeTitles(fileLedger, file, { lines: observation.lines,
           fromStart: !start || observation.reset || start.offset === 0 });
@@ -96,8 +98,9 @@ export function observeClaudeHistories(ledger: Ledger, directory: string, facts:
       if (error instanceof Error && "code" in error && error.code === "ENOENT") return;
       throw error;
     }
+    if (fileBatch && result.conflicts.length) history.length = historyLength;
     results.push(result);
-    if (!result.conflicts.length) saved?.set(resolve(file), result.cursor);
+    saved?.set(resolve(file), result.cursor);
   }
   function visit(path: string): void {
     for (const entry of readdirSync(path, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {

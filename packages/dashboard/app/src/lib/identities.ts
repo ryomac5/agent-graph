@@ -2,6 +2,10 @@ import type { Row } from './store.ts';
 import { decodeStoredValue } from '../components/activity.ts';
 
 export interface ScreenIdentities { conversations: Record<string, string>; runs: Record<string, string> }
+export function mergeIdentities(previous?: ScreenIdentities, incoming?: ScreenIdentities): ScreenIdentities | undefined {
+  if (!incoming || incoming === previous) return previous;
+  return { conversations: { ...previous?.conversations, ...incoming.conversations }, runs: { ...previous?.runs, ...incoming.runs } };
+}
 export function resolveRow(table: string, row: Row, identities?: ScreenIdentities): Row {
   if (!identities) return row;
   const result = { ...row };

@@ -471,6 +471,11 @@ export class ProjectionFeed {
       }
     }
     if (patch.changes.delegations) patch.changes.delegations.upsert = this.rootDelegations(patch.changes.delegations.upsert);
+    const referenced = this.readReferencedIdentities(Object.values(patch.changes).flatMap(change => change.upsert));
+    if (identities || Object.keys(referenced.conversations).length || Object.keys(referenced.runs).length) {
+      patch.identities = { conversations: { ...referenced.conversations, ...identities?.conversations },
+        runs: { ...referenced.runs, ...identities?.runs } };
+    }
     return patch;
   }
   replay(seq: number, generation?: number): ProjectionPatch[] | undefined {
@@ -510,6 +515,21 @@ export class ProjectionFeed {
       return { ...row, kit, root_id: linked.root_id };
     });
   }
+  private readReferencedIdentities(rows: Record<string, unknown>[]): ScreenIdentities {
+    const identities: ScreenIdentities = { conversations: {}, runs: {} };
+    const add = (id: unknown) => {
+      if (typeof id !== "string") return;
+      if (id in this.identities.conversations) identities.conversations[id] = this.identities.conversations[id];
+      if (id in this.identities.runs) identities.runs[id] = this.identities.runs[id];
+    };
+    for (const row of rows) {
+      for (const key of ["id", "conversation_id", "run_id", "parent_run_id", "from_id", "to_id", "current_conversation_id"]) add(row[key]);
+      for (const id of Array.isArray(row.conversation_ids) ? row.conversation_ids : []) add(id);
+      const attempts = typeof row.attempts === "string" ? JSON.parse(row.attempts) : row.attempts;
+      for (const attempt of Array.isArray(attempts) ? attempts : []) add(attempt.run_id);
+    }
+    return identities;
+  }
   snapshot() {
     const projection = Object.fromEntries(LIST_TABLES.map(table => [table, this.readList(table)]));
     projection.roots = this.roots.slice(0, LIST_PAGE_SIZE) as unknown as Record<string, unknown>[];
@@ -520,11 +540,9 @@ export class ProjectionFeed {
       next: projection[table].length === LIST_PAGE_SIZE ? projection[table].at(-1)!.id : null,
     }]));
     pages.roots = { total: this.roots.length, next: this.roots.length >= LIST_PAGE_SIZE ? this.roots[LIST_PAGE_SIZE - 1].id : null };
-    const references = new Set(Object.values(projection).flatMap(rows => rows.flatMap(row =>
-      [row.id, row.conversation_id, row.run_id, row.parent_run_id, row.from_id, row.to_id].filter((id): id is string => typeof id === "string"))));
     const identities = {
-      conversations: Object.fromEntries(Object.entries(this.identities.conversations).filter(([id]) => references.has(id))),
-      runs: Object.fromEntries(Object.entries(this.identities.runs).filter(([id]) => references.has(id))),
+      conversations: { ...this.identities.conversations },
+      runs: { ...this.identities.runs },
     };
     return { seq: this.state.last_seq, generation: this.state.generation, projection, pages, identities,
       ...(this.observation ? { observation: this.observation } : {}) };
@@ -532,12 +550,14 @@ export class ProjectionFeed {
   list(table: string, after = "") {
     if (table === "roots") {
       const rows = this.roots.filter(row => row.id > after).slice(0, LIST_PAGE_SIZE);
-      return { seq: this.state.last_seq, generation: this.state.generation, rows: rows as unknown as Record<string, unknown>[], next: rows.length === LIST_PAGE_SIZE ? rows.at(-1)!.id : null };
+      return { seq: this.state.last_seq, generation: this.state.generation, rows: rows as unknown as Record<string, unknown>[],
+        identities: this.readReferencedIdentities(rows as unknown as Record<string, unknown>[]), next: rows.length === LIST_PAGE_SIZE ? rows.at(-1)!.id : null };
     }
     if (!(LIST_TABLES as readonly string[]).includes(table)) throw new RangeError("Invalid list table");
     const page = this.readList(table, undefined, after);
     const rows = table === "delegations" ? this.rootDelegations(page) : page;
     return { seq: this.state.last_seq, generation: this.state.generation, rows,
+      identities: this.readReferencedIdentities(rows),
       next: rows.length === LIST_PAGE_SIZE ? rows.at(-1)!.id : null };
   }
   conversation(id: string, after = "", window?: { latest?: boolean; before?: string | MessageCursor; message?: string; edits?: boolean }) {
@@ -606,6 +626,11 @@ export class ProjectionFeed {
     const removedMemberships = detail.memberships.filter(id => !existing.has(id)
       && detail.membership_conversations[id]?.some(conversation => opened.has(this.conversationId(conversation))));
     if (memberships.length || removedMemberships.length) output.changes.message_memberships = { upsert: memberships, remove: removedMemberships };
+    const identities = this.readReferencedIdentities([...messages, ...memberships]);
+    if (Object.keys(identities.conversations).length || Object.keys(identities.runs).length) {
+      output.identities = { conversations: { ...output.identities?.conversations, ...identities.conversations },
+        runs: { ...output.identities?.runs, ...identities.runs } };
+    }
     return output;
   }
   runConversation(runId: string): string | undefined {

@@ -20,12 +20,16 @@ export interface FileRead { lines: FileLine[]; cursor: FileCursor; pendingBytes:
 export interface FileReadMetrics { opened: number; prefixBytes: number; contentBytes: number }
 export const fileReadMetrics: FileReadMetrics = { opened: 0, prefixBytes: 0, contentBytes: 0 };
 
+export function readInode(identity: string): string {
+  return identity.slice(identity.lastIndexOf(":") + 1);
+}
+
 // offset は完了した改行まで。未完了の UTF-8 は次回その位置から読み直す。
 export function readAppendOnlyFile(path: string, previous?: FileCursor): FileRead {
   const absolutePath = resolve(path);
   const before = statSync(absolutePath);
-  const identity = `${before.dev}:${before.ino}`;
-  if (previous?.path === absolutePath && previous.identity === identity && previous.size === before.size
+  const identity = String(before.ino);
+  if (previous?.path === absolutePath && readInode(previous.identity) === identity && previous.size === before.size
     && previous.mtimeMs === before.mtimeMs && previous.ctimeMs === before.ctimeMs) {
     return { lines: [], cursor: previous, pendingBytes: previous.size - previous.offset, reset: false };
   }
@@ -33,12 +37,12 @@ export function readAppendOnlyFile(path: string, previous?: FileCursor): FileRea
   fileReadMetrics.opened += 1;
   try {
     const stat = fstatSync(descriptor);
-    const currentIdentity = `${stat.dev}:${stat.ino}`;
+    const currentIdentity = String(stat.ino);
     const prefix = Buffer.alloc(Math.min(PREFIX_SIZE, stat.size));
     const prefixCount = readSync(descriptor, prefix, 0, prefix.length, 0);
     fileReadMetrics.prefixBytes += prefixCount;
     const prefixHash = createHash("sha256").update(prefix.subarray(0, prefixCount)).digest("hex");
-    let reset = previous !== undefined && (previous.path !== absolutePath || previous.identity !== currentIdentity
+    let reset = previous !== undefined && (previous.path !== absolutePath || readInode(previous.identity) !== currentIdentity
       || stat.size < previous.size
       || previous.prefixHash !== undefined &&
         createHash("sha256").update(prefix.subarray(0, previous.prefixBytes)).digest("hex") !== previous.prefixHash);

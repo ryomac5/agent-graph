@@ -235,14 +235,12 @@ async function main() {
     await step('1 send', async () => {
       if (!smoke.id) {
         smoke.phase = 'create';
+        // 前の提供元の設定によらず、従来どおり Claude の会話を確かめる。
+        await page.evaluate(() => localStorage.setItem('agent-graph-session-provider', 'claude'));
         // 「+」はプロジェクトの行に指を載せたときだけ見える。
         const projectRow = page.locator('.sidebar-project-row').filter({ has: page.getByRole('link', { name: project.display_name, exact: true }) });
         await projectRow.hover();
-        await projectRow.getByRole('button', { name: `New task: ${project.display_name}`, exact: true }).click();
-        await page.getByRole('menuitem', { name: 'New session', exact: true }).click();
-        const dialog = page.getByRole('dialog');
-        await dialog.getByRole('button', { name: 'Claude' }).click();
-        await dialog.getByRole('button', { name: /^Create/ }).click();
+        await projectRow.getByRole('button', { name: `Start conversation: ${project.display_name}`, exact: true }).click();
         await page.waitForURL(url => url.searchParams.has('conversation'), { timeout: 45_000 });
         smoke.id = new URL(page.url()).searchParams.get('conversation');
         smoke.native = nativeOf(smoke.id);
@@ -257,13 +255,27 @@ async function main() {
       const send = composer().getByRole('button', { name: 'Send', exact: true });
       await waitFor(() => send.isEnabled(), 'Send button enabled');
       const started = Date.now();
-      await send.click();
-      // 送った発言が画面に出る。
-      await active().locator('article.message[data-side="end"]', { hasText: marker }).first().waitFor({ timeout: 10_000 });
-      await waitReply(marker);
-      const alert = await composer().getByRole('alert').allTextContents();
-      if (alert.length) throw new Error(`composer alert: ${alert.join(' ')}`);
-      return `${smoke.created ? 'created' : 'reused'} ${smoke.id}, reply in ${((Date.now() - started) / 1000).toFixed(1)}s, launches=${smoke.launches.join(',') || 'none'}`;
+      let navigated = false;
+      const trackNavigation = frame => { if (frame === page.mainFrame()) navigated = true; };
+      page.on('framenavigated', trackNavigation);
+      try {
+        await send.click();
+        // 送った発言が画面に出る。
+        await active().locator('article.message[data-side="end"]', { hasText: marker }).first().waitFor({ timeout: 10_000 });
+        await step('1a sent text without tags', async () => {
+          const bubble = active().locator('article.message[data-side="end"]', { hasText: marker }).first().locator('.message-bubble');
+          await waitFor(async () => (await bubble.innerText()).trim() === text, 'sent text displayed verbatim');
+          return 'message bubble matches the sent text';
+        });
+        await step('1b reply without reload', async () => {
+          await waitReply(marker);
+          if (navigated) throw new Error('page navigated before the reply appeared');
+          return 'OK appeared without navigation or reload';
+        });
+        const alert = await composer().getByRole('alert').allTextContents();
+        if (alert.length) throw new Error(`composer alert: ${alert.join(' ')}`);
+        return `${smoke.created ? 'created' : 'reused'} ${smoke.id}, reply in ${((Date.now() - started) / 1000).toFixed(1)}s, launches=${smoke.launches.join(',') || 'none'}`;
+      } finally { page.off('framenavigated', trackNavigation); }
     });
 
     await step('2 send with image', async () => {

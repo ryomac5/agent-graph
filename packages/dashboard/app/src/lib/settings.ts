@@ -3,7 +3,7 @@ import type { Ack } from './client.ts';
 import type { ConfigSettings, ProjectSettings, SettingsStatus, Policy } from '../../../../api/src/ws/settings-contract.ts';
 export type { ConfigSettings, ProjectSettings, SettingsStatus, Policy };
 export type { ProviderDefaults, DefaultSource } from '../../../../api/src/ws/settings-contract.ts';
-export interface SettingsClient { command(command: string, payload?: unknown, cmdId?: string): Promise<Ack> }
+export interface SettingsClient { command(command: string, payload?: unknown, cmdId?: string): Promise<Ack>; subscribeConnected?(listener: () => void): () => void }
 export interface SettingsSnapshot { config: ConfigSettings; policy: Policy; project: ProjectSettings; errors: Record<string, string>; apiKeyConfigured: boolean }
 export interface PolicyPreview { token: string; rows: { id: string; before: Decision; after: Decision }[] }
 interface Decision { ok: boolean; assignment?: { executor: string; model: string }; reason?: string[] }

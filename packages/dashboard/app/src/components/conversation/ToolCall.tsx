@@ -1,3 +1,4 @@
+import { useMemo, useRef } from 'react';
 import type { Row } from '../../lib/store.ts';
 import type { Language } from '../../lib/i18n.ts';
 import { Fields } from '../Fields.tsx';
@@ -46,4 +47,13 @@ export function collectToolResults(rows: Row[]): Map<string, unknown> {
   const results = new Map<string, unknown>();
   for (const block of blocks) if (block.type === 'tool_result' && calls.has(block.tool_use_id)) results.set(String(block.tool_use_id), block);
   return results;
+}
+
+export function useToolResults(rows: Row[]): Map<string, unknown> {
+  const previous = useRef(new Map<string, unknown>());
+  return useMemo(() => {
+    const next = collectToolResults(rows);
+    if (next.size !== previous.current.size || [...next].some(([id, value]) => previous.current.get(id) !== value)) previous.current = next;
+    return previous.current;
+  }, [rows]);
 }

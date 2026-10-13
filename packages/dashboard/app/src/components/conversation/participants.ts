@@ -1,3 +1,4 @@
+import { memoizeProjection } from '../../lib/projection-cache.ts';
 import type { Row, ScreenState } from '../../lib/store.ts';
 import { providerName } from '../ActivityRow.tsx';
 import { decodeStoredValue, isActive, readBody, readObject, readText } from './model.ts';
@@ -9,14 +10,38 @@ export interface Sender { key: string; name: string; side: 'start' | 'end' }
 
 interface ParentLink { parentId?: string; role: string }
 
-function conversationOf(state: ScreenState, id: unknown): string | undefined {
+const readParticipantIndex = memoizeProjection(['conversations', 'runs', 'relations', 'delegations'], state => {
+  const conversations = new Map((state.projection.conversations ?? []).map(row => [row.id, row]));
+  const runs = new Map((state.projection.runs ?? []).map(row => [row.id, row]));
+  const conversationOf = (id: unknown) => resolveConversation(state, conversations, runs, id);
+  const to = new Map<string, Row[]>();
+  const from = new Map<string, Row[]>();
+  const order = new Map<Row, number>();
+  const relations = (state.projection.relations ?? []).filter(row => isActive(row.active) || row.active === undefined)
+    .toSorted((a, b) => Number(b.confidence === 'confirmed') - Number(a.confidence === 'confirmed'));
+  relations.forEach((row, index) => {
+    order.set(row, index);
+    for (const [map, id] of [[to, conversationOf(row.to_id)], [from, conversationOf(row.from_id)]] as const) {
+      if (!id) continue;
+      if (!map.has(id)) map.set(id, []);
+      map.get(id)!.push(row);
+    }
+  });
+  return { conversations, runs, to, from, order, parents: new Map<string, ParentLink | undefined>(), participants: new Map<string, Participants>() };
+});
+function resolveConversation(state: ScreenState, conversations: Map<unknown, Row>, runs: Map<unknown, Row>, id: unknown): string | undefined {
   const raw = readText(id);
   if (!raw) return;
   const value = state.identities?.conversations[raw] ?? raw;
-  if ((state.projection.conversations ?? []).some(row => row.id === value)) return value;
+  if (conversations.has(value)) return value;
   const runId = state.identities?.runs[raw] ?? raw;
-  const run = (state.projection.runs ?? []).find(row => row.id === runId);
+  const run = runs.get(runId);
   return run ? readText(run.conversation_id) || undefined : undefined;
+}
+
+function conversationOf(state: ScreenState, id: unknown): string | undefined {
+  const index = readParticipantIndex(state);
+  return resolveConversation(state, index.conversations, index.runs, id);
 }
 
 function attemptRuns(delegation: Row): string[] {
@@ -35,8 +60,14 @@ function delegationRole(state: ScreenState, conversationId: string, evidence: Ro
 
 /** 親の会話への結び付きを探す。確定した関係を推定より先に使う。 */
 function parentLink(state: ScreenState, conversationId: string): ParentLink | undefined {
-  const relations = (state.projection.relations ?? []).filter(row => isActive(row.active) || row.active === undefined)
-    .toSorted((a, b) => Number(b.confidence === 'confirmed') - Number(a.confidence === 'confirmed'));
+  const index = readParticipantIndex(state);
+  if (!index.parents.has(conversationId)) index.parents.set(conversationId, findParentLink(state, conversationId));
+  return index.parents.get(conversationId);
+}
+function findParentLink(state: ScreenState, conversationId: string): ParentLink | undefined {
+  const index = readParticipantIndex(state);
+  const relations = [...index.to.get(conversationId) ?? [], ...index.from.get(conversationId) ?? []]
+    .sort((a, b) => index.order.get(a)! - index.order.get(b)!);
   for (const relation of relations) {
     if (relation.type === 'delegated' && conversationOf(state, relation.to_id) === conversationId) {
       const parentId = conversationOf(state, relation.from_id);
@@ -58,13 +89,22 @@ function label(provider: string, role: string): string {
 }
 
 export function resolveParticipants(state: ScreenState, conversationId: string, labels: { user: string; assistant: string; parent: string }): Participants {
-  const conversations = state.projection.conversations ?? [];
-  const conversation = conversations.find(row => row.id === conversationId);
+  const index = readParticipantIndex(state);
+  const key = JSON.stringify([conversationId, labels.user, labels.assistant, labels.parent]);
+  const cached = index.participants.get(key);
+  if (cached) return cached;
+  const result = calculateParticipants(state, conversationId, labels);
+  index.participants.set(key, result);
+  return result;
+}
+function calculateParticipants(state: ScreenState, conversationId: string, labels: { user: string; assistant: string; parent: string }): Participants {
+  const conversations = readParticipantIndex(state).conversations;
+  const conversation = conversations.get(conversationId);
   const provider = readText(conversation?.provider);
   const link = parentLink(state, conversationId);
   const child = conversation?.type === 'subagent' || link !== undefined;
   if (!child) return { child, parent: labels.user, self: providerName(provider) || labels.assistant };
-  const parent = link?.parentId ? conversations.find(row => row.id === link.parentId) : undefined;
+  const parent = link?.parentId ? conversations.get(link.parentId) : undefined;
   // 親がさらに子なら、その役割を出す。辿れない親は根として扱う。
   const parentRole = link?.parentId ? parentLink(state, link.parentId)?.role ?? 'root' : '';
   return {

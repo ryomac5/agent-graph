@@ -5,7 +5,6 @@ import { orderCommands } from './navigation.ts';
 import type { SettingsClient, SettingsSnapshot } from '../../lib/settings.ts';
 import { useEscapeLayer } from '../../lib/escape-layers.ts';
 export interface Command { id: string; name: string; run(): void; disabled?: boolean }
-const KEY_REFRESH_MS = 1500;
 export function CommandDialog({ title, onClose, children, language = 'en' }: { title: string; onClose(): void; children: ReactNode; language?: 'en' | 'ja' }) {
   const ref = useRef<HTMLDivElement>(null);
   useEscapeLayer(true, onClose);
@@ -69,8 +68,11 @@ export function useKeySettings(client: SettingsClient) {
       finally { pending = false; }
     }
     void refresh();
-    const timer = setInterval(refresh, KEY_REFRESH_MS);
-    return () => { disposed = true; clearInterval(timer); };
+    const onVisible = () => { if (document.visibilityState === 'visible') void refresh(); };
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', onVisible);
+    const release = client.subscribeConnected?.(refresh);
+    return () => { disposed = true; window.removeEventListener('focus', refresh); document.removeEventListener('visibilitychange', onVisible); release?.(); };
   }, [client]);
   return { bindings, setBindings };
 }

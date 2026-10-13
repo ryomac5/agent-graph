@@ -282,7 +282,7 @@ function appendMessage(target: ReturnType<typeof createStore>, row: Row) {
     message_memberships: [...state.projection.message_memberships, { id: row.id, message_id: row.id, conversation_id: 'c', active: 1 }],
   } });
 }
-it('reuses reply and activity caches on every second tick and refreshes after a new message', async () => {
+it('does not recompute conversation activity on ticks and refreshes after a new message', async () => {
   const target = setup();
   appendMessage(target, { id: 'a', role: 'assistant', body: 'Ready.', source_ts: '2026-10-11T00:01:00Z' });
   const readGeneration = vi.fn(() => 2);
@@ -303,8 +303,7 @@ it('reuses reply and activity caches on every second tick and refreshes after a 
   for (let tick = 0; tick < 3; tick++) {
     selectTimeline.mockClear(); resolveActivity.mockClear(); readGeneration.mockClear();
     act(() => vi.advanceTimersByTime(1000));
-    expect(resolveActivity.mock.calls.some(([state]) => state === historyState)).toBe(true);
-    expect(resolveActivity.mock.calls.every(([state]) => state === historyState || state === target.getSnapshot())).toBe(true);
+    expect(resolveActivity).not.toHaveBeenCalled();
     expect(selectTimeline).not.toHaveBeenCalled();
     expect(readGeneration).not.toHaveBeenCalled();
     expect(screen.getByText('Waiting for your reply')).toBeTruthy();

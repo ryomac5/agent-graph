@@ -1,3 +1,4 @@
+import { memoizeProjection } from './projection-cache.ts';
 import { resolveActivity } from './activity.ts';
 import { useMemo } from 'react';
 import type { Row, ScreenState } from './store.ts';
@@ -16,7 +17,7 @@ export interface Root {
   auto_name?: string;
 }
 interface ConversationTimes { first?: number; last?: string }
-function readConversationTimes(state: ScreenState): Map<string, ConversationTimes> {
+const readConversationTimes = memoizeProjection(['messages', 'message_memberships', 'runs', 'conversations'], (state): Map<string, ConversationTimes> => {
   const messages = new Map((state.projection.messages ?? []).map(row => [row.id, row]));
   const spoken = new Map<string, Map<unknown, string>>();
   for (const link of state.projection.message_memberships ?? []) {
@@ -45,7 +46,7 @@ function readConversationTimes(state: ScreenState): Map<string, ConversationTime
     const last = [row.last_message_ts, times.at(-1)].filter((value): value is string => typeof value === 'string' && Number.isFinite(Date.parse(value))).sort().at(-1);
     return [id, { first, last }];
   }));
-}
+});
 /** 発言の時刻を優先し、未配信なら実行の開始、観測の開始の順に使う。 */
 export function startedAt(state: ScreenState, root: Root, times = readConversationTimes(state)): number | undefined {
   const starts = root.conversation_ids.map(id => times.get(id)?.first).filter((value): value is number => value !== undefined);
@@ -54,13 +55,15 @@ export function startedAt(state: ScreenState, root: Root, times = readConversati
 /** 生成題名、最初の依頼の順に題に使う。依頼がなければキット名から日付の題を作り、識別子を残す。 */
 function renameKitRoots(state: ScreenState, roots: Root[], times: Map<string, ConversationTimes>): Root[] {
   const groups = new Map<string, { root: Root; start: number }[]>();
+  const projects = new Map((state.projection.projects ?? []).map(row => [row.id, row]));
+  const conversations = new Map((state.projection.conversations ?? []).map(row => [row.id, row]));
   for (const root of roots) {
     const kit = /^(.+)-\d{3,}$/.exec(root.name);
     if (kit) root.kit_name ??= root.name;
     const start = kit ? startedAt(state, root, times) : undefined;
     if (!kit || start === undefined) continue;
     const day = new Date(start);
-    const project = root.project ? String(state.projection.projects?.find(row => row.id === root.project)?.display_name ?? '') : '';
+    const project = root.project ? String(projects.get(root.project)?.display_name ?? '') : '';
     const base = `${project || kit[1]}-${day.getFullYear()}${String(day.getMonth() + 1).padStart(2, '0')}${String(day.getDate()).padStart(2, '0')}`;
     groups.set(base, [...groups.get(base) ?? [], { root, start }]);
   }
@@ -68,7 +71,7 @@ function renameKitRoots(state: ScreenState, roots: Root[], times: Map<string, Co
     .forEach(({ root }, index) => { root.kit_name = root.name; root.name = index === 0 ? base : `${base}-${index + 1}`; });
   for (const root of roots) {
     const first = root.conversation_ids.toSorted((a, b) => (times.get(a)?.first ?? Number.NEGATIVE_INFINITY) - (times.get(b)?.first ?? Number.NEGATIVE_INFINITY))[0];
-    const conversation = state.projection.conversations?.find(row => row.id === first);
+    const conversation = conversations.get(first);
     const excerpt = readTitle(conversation?.ai_title) || readText(conversation?.first_request_excerpt);
     if (excerpt) root.name = excerpt;
   }
@@ -96,7 +99,13 @@ export function reviewConversations(state: ScreenState): Set<string> {
 export function rootProject(root: { project: string | null }, registered: Set<string>): string {
   return root.project !== null && registered.has(root.project) ? root.project : OTHER_PROJECT;
 }
+const readRootsCache = memoizeProjection(['messages', 'message_memberships', 'runs', 'conversations', 'relations', 'roots', 'projects', 'aliases', 'delegations'], () => new Map<string | undefined, Root[]>());
 export function selectRoots(state: ScreenState, project?: string): Root[] {
+  const cache = readRootsCache(state);
+  if (!cache.has(project)) cache.set(project, calculateRoots(state, project));
+  return cache.get(project)!;
+}
+function calculateRoots(state: ScreenState, project?: string): Root[] {
   const times = readConversationTimes(state);
   const reviews = reviewConversations(state);
   const registered = new Set(getRegisteredProjects(state).map(row => String(row.id)));

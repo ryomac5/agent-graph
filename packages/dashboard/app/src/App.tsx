@@ -1,3 +1,4 @@
+import { selectScreenTables } from './lib/projection-cache.ts';
 import { FeatureErrorBoundary } from './components/FeatureErrorBoundary.tsx';
 import { SessionCreate } from './components/SessionCreate.tsx';
 import { dismissEscapeLayer } from './lib/escape-layers.ts';
@@ -61,7 +62,8 @@ const defaultSearchClient: SearchClient = { search: (query, signal) => createSea
 }).search(query, signal) };
 export function App({ target = store, client = unavailableClient, searchClient = defaultSearchClient }: { target?: ScreenStore; client?: ConversationClient; searchClient?: SearchClient }) {
   const navigate = useNavigate();
-  const state = useScreenStore(target);
+  const selectState = useMemo(() => selectScreenTables(['conversations', 'runs', 'relations', 'delegations', 'messages', 'message_memberships', 'approvals', 'projects', 'tasks', 'roots', 'aliases'], ['connection', 'pages', 'projectionError']), []);
+  const state = useScreenStore(target, selectState);
   const [language, setLanguage] = useState<Language>(() => localStorage.getItem('agent-graph-language') === 'ja' ? 'ja' : 'en');
   const [theme, setTheme] = useState<Theme>(() => {
     const saved = localStorage.getItem('agent-graph-theme');

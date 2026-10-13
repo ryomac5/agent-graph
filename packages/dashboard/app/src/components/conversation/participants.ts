@@ -1,4 +1,5 @@
 import { memoizeProjection } from '../../lib/projection-cache.ts';
+import { resolveRunId } from '../../lib/identities.ts';
 import type { Row, ScreenState } from '../../lib/store.ts';
 import { providerName } from '../ActivityRow.tsx';
 import { decodeStoredValue, isActive, readMessageBody, readObject, readText } from './model.ts';
@@ -34,7 +35,7 @@ function resolveConversation(state: ScreenState, conversations: Map<unknown, Row
   if (!raw) return;
   const value = state.identities?.conversations[raw] ?? raw;
   if (conversations.has(value)) return value;
-  const runId = state.identities?.runs[raw] ?? raw;
+  const runId = resolveRunId(raw, state.identities);
   const run = runs.get(runId);
   return run ? readText(run.conversation_id) || undefined : undefined;
 }

@@ -691,6 +691,7 @@ test("hook は応答前に追記を確定し、投影を後続の周期まで保
   let status = 0;
   let accepted = false;
   const response = {
+    setHeader() {},
     writeHead(code: number) { status = code; },
     end(body: string) {
       accepted = JSON.parse(body).accepted;

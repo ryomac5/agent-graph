@@ -1,6 +1,7 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { sendJson } from '../ws/compression.ts';
 import { classifyHookEvent } from "../../../core/src/ledger/index.ts";
 import type { FactInput, JsonValue, Ledger } from "../../../core/src/ledger/index.ts";
 import { defaultLocationResolver, type LocationResolver } from "../observe/location.ts";
@@ -73,15 +74,11 @@ export function createHookFacts(event: HookEvent, locate: LocationResolver = def
   return [conversation, run];
 }
 
-function respond(response: ServerResponse, status: number, body: unknown): void {
-  response.writeHead(status, { "content-type": "application/json" });
-  response.end(JSON.stringify(body));
-}
-
 export function createHookHandler(ledger: Ledger, token: string) {
   const conversations = new Set<string>();
   let lastSeq = 0;
   return async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
+    const respond = (status: number, body: unknown) => sendJson(request, response, body, status);
     const port = request.socket.localPort;
     const host = request.headers.host;
     const sent = Buffer.from(request.headers.authorization ?? "");
@@ -89,15 +86,15 @@ export function createHookHandler(ledger: Ledger, token: string) {
     if (request.socket.remoteAddress !== "127.0.0.1" || host !== `127.0.0.1:${port}`
       || (request.headers.origin !== undefined && request.headers.origin !== `http://${host}`)
       || sent.length !== expected.length || !timingSafeEqual(sent, expected)) {
-      respond(response, 403, { accepted: false });
+      respond(403, { accepted: false });
       return;
     }
     if (request.method !== "POST" || request.url !== HOOK_PATH) {
-      respond(response, 404, { accepted: false });
+      respond(404, { accepted: false });
       return;
     }
     if (!request.headers["content-type"]?.toLowerCase().startsWith("application/json")) {
-      respond(response, 415, { accepted: false });
+      respond(415, { accepted: false });
       return;
     }
     let event: HookEvent;
@@ -108,7 +105,7 @@ export function createHookHandler(ledger: Ledger, token: string) {
       }
       event = parseHookEvent(JSON.parse(Buffer.concat(chunks).toString("utf8")));
     } catch {
-      respond(response, 400, { accepted: false });
+      respond(400, { accepted: false });
       return;
     }
     try {
@@ -129,13 +126,13 @@ export function createHookHandler(ledger: Ledger, token: string) {
           return result;
         });
       if (results.some((result) => result.status === "conflict")) {
-        respond(response, 409, { accepted: false, event_id: event.event_id });
+        respond(409, { accepted: false, event_id: event.event_id });
         return;
       }
-      respond(response, 200, { accepted: true, event_id: event.event_id,
+      respond(200, { accepted: true, event_id: event.event_id,
         generation: event.generation, session_id: event.session_id, results });
     } catch {
-      respond(response, 503, { accepted: false });
+      respond(503, { accepted: false });
     }
   };
 }

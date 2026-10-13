@@ -1,7 +1,7 @@
 import { useCallback, useContext, useRef, useSyncExternalStore } from 'react';
 import { ViewVisible } from './visibility.tsx';
 import { shareValue } from './projection-cache.ts';
-import { mergeIdentities, resolveProjection, resolveRow, type ScreenIdentities } from './identities.ts';
+import { mergeIdentities, resolveProjection, resolveRow, resolveRunId, type ScreenIdentities } from './identities.ts';
 
 export type ConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'runner_unavailable';
 export type Row = Record<string, unknown>;
@@ -73,7 +73,7 @@ export function createStore() {
       return true;
     },
     appendDelta(delta: Delta) {
-      delta = { ...delta, runId: state.identities?.runs[delta.runId] ?? delta.runId,
+      delta = { ...delta, runId: resolveRunId(delta.runId, state.identities),
         ...(delta.conversationId ? { conversationId: state.identities?.conversations[delta.conversationId] ?? delta.conversationId } : {}) };
       const key = JSON.stringify([delta.runId, delta.conversationId, delta.messageId]);
       update({ ...state, deltas: { ...state.deltas, [key]: {

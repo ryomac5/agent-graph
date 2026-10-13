@@ -4,6 +4,7 @@ import { renameSession } from './session-rename.ts';
 import { createServer } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import { WebSocket, WebSocketServer } from "ws";
+import { sendJson, WEBSOCKET_COMPRESSION } from './compression.ts';
 import { PROJECTION_TABLES } from "../../../core/src/ledger/rebuild.ts";
 import { forwardScreenCommand } from "./commands.ts";
 import type { openObservationService } from "../service/index.ts";
@@ -62,7 +63,7 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
   }
   const token = createToken();
   const clients = new Map<WebSocket, { tables?: Set<string>; conversations: Set<string> }>();
-  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES, perMessageDeflate: WEBSOCKET_COMPRESSION });
   function send(socket: WebSocket, message: unknown, serialized?: string): void {
     if (socket.readyState !== WebSocket.OPEN) return;
     if (socket.bufferedAmount > MAX_BUFFERED_BYTES) { socket.terminate(); return; }
@@ -123,8 +124,7 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
       refresh();
       const conversation = readRequestUrl(request)!.searchParams.get('conversation');
       if (!conversation) { response.writeHead(400).end(); return; }
-      response.writeHead(200, { 'Content-Type': 'application/json' });
-      response.end(JSON.stringify(readWatches(() => sendWatch.history(conversation), [])));
+      sendJson(request, response, readWatches(() => sendWatch.history(conversation), []));
       return;
     }
     if (path === "/api/search") { refresh(); search(request, response); return; }
@@ -136,18 +136,16 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
       if (path === "/conversation" && !id || path === "/projection" && (!table || table !== "roots" && !(PROJECTION_TABLES as readonly string[]).includes(table) || ["messages", "message_memberships"].includes(table))) {
         response.writeHead(400).end(); return;
       }
-      response.writeHead(200, { "Content-Type": "application/json" });
-      response.end(JSON.stringify(path === "/conversation" ? feed.conversation(id!, params.get("after") ?? "", {
+      sendJson(request, response, path === "/conversation" ? feed.conversation(id!, params.get("after") ?? "", {
         latest: params.get("latest") === "1", before: params.get("before") ?? undefined,
         message: params.get("message") ?? undefined, edits: params.get("edits") === "1",
-      }) : feed.list(table!, params.get("after") ?? "")));
+      }) : feed.list(table!, params.get("after") ?? ""));
       return;
     }
     if (request.method !== "GET" || path !== "/snapshot") { response.writeHead(404).end(); return; }
     refresh();
-    response.writeHead(200, { "Content-Type": "application/json" });
     const snapshot = feed.snapshot();
-    response.end(JSON.stringify({ ...snapshot, projection: { ...snapshot.projection, send_watches: readWatches(() => sendWatch.list(), []) } }));
+    sendJson(request, response, { ...snapshot, projection: { ...snapshot.projection, send_watches: readWatches(() => sendWatch.list(), []) } });
   });
   server.on("upgrade", (request, socket, head) => {
     if (!authorize(request, port, token) || readRequestUrl(request)?.pathname !== "/ws") {

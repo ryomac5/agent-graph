@@ -55,7 +55,7 @@ test('static search delivery authenticates, preserves filters and catches up new
       end() {
         forwarded.push(url.pathname + url.search);
         void dispatch(url, options.headers).then(result => {
-          const input = Object.assign(new PassThrough(), { statusCode: result.statusCode });
+          const input = Object.assign(new PassThrough(), { statusCode: result.statusCode, headers: result.headers });
           callback(input as unknown as http.IncomingMessage);
           input.end(result.body);
         }).catch(error => proxy.emit('error', error));

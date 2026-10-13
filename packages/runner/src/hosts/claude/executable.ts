@@ -13,17 +13,22 @@ export function resolveClaudeExecutable(
 ): ClaudeExecutable {
   // launchd の短い PATH を補う。シェルの初期化ファイルは実行しない。
   const directories = [...new Set([...(env.PATH?.split(delimiter) ?? []), ...fallbackDirectories])];
-  for (const directory of directories) {
-    const candidate = resolve(directory, "claude");
+  const configured = env.AGENT_GRAPH_CLAUDE_BIN;
+  const candidates = [...(configured ? [configured] : []), ...directories.map((directory) => resolve(directory, "claude"))];
+  for (const candidate of candidates) {
     try {
       accessSync(candidate, constants.X_OK);
       // npm のリンクも実体に解決し、SDK が .js と native を正しく判別できるようにする。
       const path = realpathSync(candidate);
       const stat = statSync(path, { bigint: true });
-      if (!stat.isFile()) continue;
+      if (!stat.isFile()) {
+        if (candidate === configured) console.warn(`[runner:claude] AGENT_GRAPH_CLAUDE_BIN=${configured} is not a file; trying PATH and standard install locations.`);
+        continue;
+      }
       return { path, fingerprint: `${path}:${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}` };
     } catch (error) {
       if (!["ENOENT", "ENOTDIR", "EACCES", "EPERM", "ELOOP"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+      if (candidate === configured) console.warn(`[runner:claude] AGENT_GRAPH_CLAUDE_BIN=${configured} is not executable (${(error as NodeJS.ErrnoException).code}); trying PATH and standard install locations.`);
     }
   }
   return { fingerprint: "bundled" };

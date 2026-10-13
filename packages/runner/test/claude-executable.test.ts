@@ -12,6 +12,27 @@ function createDirectory(t: TestContext): string {
   return directory;
 }
 
+test("Claude executable prefers AGENT_GRAPH_CLAUDE_BIN over PATH", (t) => {
+  const directory = createDirectory(t);
+  const configured = join(directory, "configured-claude");
+  writeFileSync(configured, "configured", { mode: 0o700 });
+  writeFileSync(join(directory, "claude"), "PATH", { mode: 0o700 });
+  const warning = t.mock.method(console, "warn", () => {});
+  assert.equal(resolveClaudeExecutable({ AGENT_GRAPH_CLAUDE_BIN: configured, PATH: directory }, []).path, configured);
+  assert.equal(warning.mock.callCount(), 0);
+});
+
+test("Claude executable warns and uses PATH when AGENT_GRAPH_CLAUDE_BIN is broken", (t) => {
+  const directory = createDirectory(t);
+  const configured = join(directory, "broken-claude");
+  symlinkSync(join(directory, "absent"), configured);
+  writeFileSync(join(directory, "claude"), "PATH", { mode: 0o700 });
+  const warning = t.mock.method(console, "warn", () => {});
+  assert.equal(resolveClaudeExecutable({ AGENT_GRAPH_CLAUDE_BIN: configured, PATH: directory }, []).path, join(directory, "claude"));
+  assert.equal(warning.mock.callCount(), 1);
+  assert.match(warning.mock.calls[0].arguments[0], /AGENT_GRAPH_CLAUDE_BIN=.*broken-claude.*ENOENT/);
+});
+
 test("Claude executable resolves PATH in order before fallback locations", (t) => {
   const directory = createDirectory(t);
   const first = join(directory, "first"), second = join(directory, "second");

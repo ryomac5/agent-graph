@@ -1,3 +1,4 @@
+import type { Fact } from "../../../core/src/ledger/index.ts";
 import assert from "node:assert/strict";
 import { appendFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,6 +12,10 @@ import { openObservationService } from "../../src/service/index.ts";
 import { observeCodexTitles } from "../../src/observe/codex/titles.ts";
 import { fileReadMetrics } from "../../src/observe/files.ts";
 
+// 既存の未対応診断の識別と集約は、新しい未分類診断と分けて検証する。
+function isLegacyUnsupported(fact: Fact): fact is Extract<Fact, { kind: "observation.unsupported" }> {
+  return fact.kind === "observation.unsupported" && !String((fact.payload as { reason?: string } | null)?.reason).startsWith("Unclassified history kinds:");
+}
 const OBSERVED = "2026-10-08T00:00:00.000Z";
 const samples = fileURLToPath(new URL("../samples/", import.meta.url));
 function createFixture(t: TestContext, sample: string) {
@@ -160,7 +165,7 @@ test("未知行と不正 JSON は未対応として追記し、再読は増殖�
   const path = join(f.directory, "rollout-exec.jsonl");
   appendFileSync(path, '{"timestamp":"2026-10-07T02:00:00.000Z","type":"future_row"}\n{broken}\n');
   f.observe();
-  assert.equal(f.read().filter((fact) => fact.kind === "observation.unsupported").length, 2);
+  assert.equal(f.read().filter((fact) => isLegacyUnsupported(fact)).length, 2);
   assert.ok(f.observe().every((result) => result.status === "duplicate"));
 });
 
@@ -325,7 +330,7 @@ test("未対応はファイル・種類・理由で集約し件数を payload �
     observeCodexFile(f.ledger, path, f.options);
   }
   const facts = f.read();
-  const unsupported = facts.filter((fact) => fact.kind === "observation.unsupported");
+  const unsupported = facts.filter((fact) => isLegacyUnsupported(fact));
   assert.equal(unsupported.length, 6);
   assert.deepEqual(unsupported.map((fact) => (fact.payload as { count: number }).count), [2, 2, 1, 2, 2, 1]);
   for (const path of paths) observeCodexFile(f.ledger, path, f.options);
@@ -334,10 +339,10 @@ test("未対応はファイル・種類・理由で集約し件数を payload �
   mkdirSync(join(f.home, "archived_sessions"));
   renameSync(paths[0], archive);
   observeCodexFile(f.ledger, archive, f.options);
-  assert.deepEqual(f.read().filter((fact) => fact.kind === "observation.unsupported"), unsupported);
+  assert.deepEqual(f.read().filter((fact) => isLegacyUnsupported(fact)), unsupported);
   appendFileSync(paths[1], JSON.stringify({ type: "future_row" }) + "\n");
   observeCodexFile(f.ledger, paths[1], f.options);
-  const update = f.read().findLast((fact) => fact.kind === "observation.unsupported")!;
+  const update = f.read().findLast((fact) => isLegacyUnsupported(fact))!;
   assert.equal((update.payload as { count: number }).count, 3);
   assert.equal(update.supersedes, unsupported[3].fact_id);
   const after = f.read();
@@ -352,21 +357,21 @@ test("件数の異なる sessions と archive の未対応は最大件数だけ�
   const row = JSON.stringify({ timestamp: OBSERVED, type: "future_row", threadId: "fiction-unsupported" }) + "\n";
   appendFileSync(live, row);
   assert.ok(f.observe().every((result) => result.status === "appended"));
-  const initial = f.read().find((fact) => fact.kind === "observation.unsupported")!;
+  const initial = f.read().find((fact) => isLegacyUnsupported(fact))!;
   assert.equal((initial.payload as { count: number }).count, 1);
   mkdirSync(join(f.home, "archived_sessions"));
   cpSync(live, archive);
   assert.ok(f.observe().every((result) => result.status !== "conflict"));
-  assert.equal(f.read().filter((fact) => fact.kind === "observation.unsupported").length, 1);
+  assert.equal(f.read().filter((fact) => isLegacyUnsupported(fact)).length, 1);
 
   for (const [path, count] of [[live, 2], [archive, 3]] as const) {
     appendFileSync(path, row.repeat(count - 1));
-    const previous = f.read().findLast((fact) => fact.kind === "observation.unsupported")!;
+    const previous = f.read().findLast((fact) => isLegacyUnsupported(fact))!;
     const results = f.observe();
     assert.ok(results.every((result) => result.status !== "conflict"));
-    assert.equal(results.filter((result) => result.status === "appended").length, 1);
+    assert.equal(results.filter((result) => result.status === "appended").length, 2);
     const facts = f.read();
-    const unsupported = facts.filter((fact) => fact.kind === "observation.unsupported");
+    const unsupported = facts.filter((fact) => isLegacyUnsupported(fact));
     assert.deepEqual(unsupported.map((fact) => (fact.payload as { count: number }).count),
       count === 2 ? [1, 2] : [1, 2, 3]);
     assert.equal(unsupported.at(-1)!.supersedes, previous.fact_id);
@@ -461,7 +466,7 @@ test("常駐の増分読み取りは未対応を 100 件から累積し、複製
   cpSync(path, archive);
   let service = openFixtureService(f);
   const readUnsupported = () => service.ledger.readSince(0, Number.MAX_SAFE_INTEGER)
-    .filter((fact) => fact.kind === "observation.unsupported");
+    .filter((fact) => isLegacyUnsupported(fact));
   try {
     service.ingestOnce();
     assert.deepEqual(readUnsupported().map((fact) => (fact.payload as { count: number }).count), [100]);
@@ -479,7 +484,7 @@ test("常駐の増分読み取りは未対応を 100 件から累積し、複製
   try {
     assert.equal(service.ingestOnce().unsupported, 0);
     appendFileSync(path, row.repeat(7));
-    assert.equal(service.ingestOnce().unsupported, 1);
+    assert.equal(service.ingestOnce().unsupported, 2);
     assert.deepEqual(readUnsupported().map((fact) => (fact.payload as { count: number }).count), [100, 105, 112]);
     assert.equal(service.ingestOnce().unsupported, 0);
     assert.equal(service.ingestOnce().unsupported, 0);
@@ -498,7 +503,7 @@ test("増分読み取りで種類別の offset を保ち、ID 不明の集約も
     service.ingestOnce();
     assert.equal(service.ingestOnce().unsupported, 0);
     const missing = service.ledger.readSince(0, Number.MAX_SAFE_INTEGER)
-      .filter((fact) => fact.kind === "observation.unsupported");
+      .filter((fact) => isLegacyUnsupported(fact));
     assert.deepEqual(missing.map((fact) => (fact.payload as { count: number }).count), [100, 105]);
     const other = join(f.directory, "rollout-exec.jsonl");
     const row = (type: string) => JSON.stringify({ timestamp: OBSERVED, type }) + "\n";
@@ -507,7 +512,7 @@ test("増分読み取りで種類別の offset を保ち、ID 不明の集約も
     appendFileSync(other, row("future_a").repeat(5) + row("future_b").repeat(7));
     service.ingestOnce();
     const unknown = service.ledger.readSince(0, Number.MAX_SAFE_INTEGER)
-      .filter((fact) => fact.kind === "observation.unsupported" && fact.payload?.reason !== "Missing thread identifier");
+      .filter((fact) => isLegacyUnsupported(fact) && fact.payload?.reason !== "Missing thread identifier");
     assert.deepEqual(unknown.map((fact) => (fact.payload as { count: number }).count), [100, 200, 105, 207]);
     assert.equal(service.ingestOnce().unsupported, 0);
   } finally { service.close(); }
@@ -562,7 +567,7 @@ test("常駐と再起動で legacy メタを優先し、旧い未対応 cursor �
       const conversation = view.conversations.find((entry) => entry.id === membership.conversation_id)!;
       assert.ok(conversation.native_id?.startsWith("fiction-meta-rollout-legacy"));
     }
-    assert.equal(facts.filter((fact) => fact.kind === "observation.unsupported").length, 2);
+    assert.equal(facts.filter((fact) => isLegacyUnsupported(fact)).length, 2);
   } finally { service.close(); }
 });
 
@@ -586,7 +591,7 @@ test("offset のない旧い集約を再起動時に全行から補い、以降�
     appendFileSync(path, row.repeat(7));
     service.ingestOnce();
     const facts = service.ledger.readSince(0, Number.MAX_SAFE_INTEGER)
-      .filter((fact) => fact.kind === "observation.unsupported");
+      .filter((fact) => isLegacyUnsupported(fact));
     assert.deepEqual(facts.map((fact) => (fact.payload as { count: number }).count), [100, 105, 112]);
     assert.equal(facts[1].supersedes, facts[0].fact_id);
     assert.equal(facts[2].supersedes, facts[1].fact_id);

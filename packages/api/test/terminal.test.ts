@@ -1,3 +1,4 @@
+import { promptFrame } from './terminal-screen-fixture.ts';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { once } from 'node:events';
@@ -261,6 +262,7 @@ test('hosted sessions survive WebSocket disconnect, replay commands once and att
   const launched = await first.command('session.launch', payload, 'same-launch');
   assert.equal(launched.ok, true);
   await first.command('session.hosts', {});
+  output(promptFrame());
   await first.command('session.send', { conversationId, text: 'one message' }, 'same-send');
   output('before disconnect');
   first.socket.close(); await once(first.socket, 'close');
@@ -272,7 +274,7 @@ test('hosted sessions survive WebSocket disconnect, replay commands once and att
   await next.command('session.send', { conversationId, text: 'one message' }, 'same-send');
   assert.deepEqual(writes, ['\x15', '\x1b[200~one message\x1b[201~', '\r']);
   const attached = await next.command('terminal.attach', { terminalId: launched.result.terminalId });
-  assert.equal(attached.result.scrollback, 'before disconnect while disconnected');
+  assert.equal(attached.result.scrollback, promptFrame() + 'before disconnect while disconnected');
   output(' live');
   await waitUntil(() => next.frames.some(frame => frame.event === 'output' && frame.data === ' live'));
   exit({ exitCode: 0 });

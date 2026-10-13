@@ -16,7 +16,8 @@ import { authorize, createToken, readRequestUrl } from "./security.ts";
 import { createSearchHandler } from "../search/index.ts";
 import { createFilesApi, handleFilesCommand, FilesWriteError, FilesPreviewError } from "../files/index.ts";
 import { createTerminalSession } from "../terminal/index.ts";
-import { createSessionHosts, type HostOptions } from "../terminal/hosts.ts";
+import { createSessionHosts, TerminalInputError, type HostOptions, type SessionSendResult } from "../terminal/hosts.ts";
+import { redact } from "../../../core/src/ledger/redact.ts";
 import { FILE_COMMANDS, TERMINAL_COMMANDS, MAX_FRAME_BYTES } from "./contract.ts";
 import type { RedactionRules } from "../../../core/src/ledger/redact.ts";
 import type { SettingsService } from "../settings/index.ts";
@@ -223,7 +224,13 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
             const captured = watched ? captureWatch(message.payload.conversationId) : undefined;
             result = hosted ? sessionHosts.handle(message.command, message.payload, notify) : terminals.handle(message.command, message.payload);
             if (captured) result = result.then(value => {
-              void recordWatch(message.cmd_id, message.payload.conversationId, message.payload.text, captured, message.payload.attachments, message.payload.retryOf);
+              if ((value as SessionSendResult).delivery !== 'terminal') void recordWatch(message.cmd_id, (value as SessionSendResult).conversationId ?? message.payload.conversationId, message.payload.text, captured, message.payload.attachments, message.payload.retryOf);
+              return value;
+            });
+            if (hosted) result = result.then(value => {
+              const response = value as SessionSendResult;
+              if (response.command) return { ...response, command: { ...response.command,
+                output: redact(response.command.output, options.readRedactionRules?.() ?? service.ledger.getRedactionRules()).text } };
               return value;
             });
             if (retained) {
@@ -239,7 +246,8 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
             send(socket, { type: "ack", cmd_id: message.cmd_id, ok: true, result });
           }, error => {
             send(socket, { type: "ack", cmd_id: message.cmd_id, ok: false,
-              error: error instanceof Error && ["Terminal limit reached", "Unknown terminal", "Invalid terminal size", "Invalid session launch", "Session already hosted", "no_host", "Invalid attachment", "Invalid attachments", "Attachment too large", "Attachment transfer failed"].includes(error.message)
+              ...(error instanceof TerminalInputError ? { result: { terminalId: error.terminalId } } : {}),
+              error: error instanceof TerminalInputError || error instanceof Error && ["Terminal limit reached", "Unknown terminal", "Invalid terminal size", "Invalid session launch", "Session already hosted", "no_host", "Invalid attachment", "Invalid attachments", "Attachment too large", "Attachment transfer failed"].includes(error.message)
                 ? error.message : "Terminal request failed" });
           });
           return;

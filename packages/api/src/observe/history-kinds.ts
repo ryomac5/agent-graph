@@ -1,3 +1,5 @@
+import { CLAUDE_INTERNAL_MESSAGE_FLAGS } from "../../../core/src/ledger/claude-message-flags.ts";
+
 export type HistoryProvider = "claude" | "codex";
 export interface HistoryKind {
   provider: HistoryProvider;
@@ -14,6 +16,9 @@ function readObject(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 function readKind(value: unknown): string { return typeof value === "string" ? value : "<missing>"; }
+export function isHistoryFlag(name: string, value: unknown): boolean {
+  return typeof value === "boolean" || /^is[A-Z]/u.test(name);
+}
 export function identifyHistoryKind(kind: HistoryKind): string {
   return JSON.stringify([kind.provider, kind.type, kind.field, kind.subtype]);
 }
@@ -35,6 +40,11 @@ export function extractHistoryKinds(provider: HistoryProvider, value: unknown): 
     else if (type === "queue-operation") add("operation", row.operation);
     else add("", "");
     if (row.subtype !== undefined && type !== "system") add("subtype", row.subtype);
+    if (type === "user" || type === "assistant") {
+      for (const [name, value] of Object.entries(row).sort(([left], [right]) => left.localeCompare(right))) {
+        if (isHistoryFlag(name, value)) add(`flag.${name}`, typeof value === "boolean" ? String(value) : "<invalid>");
+      }
+    }
     const content = readObject(row.message).content;
     if (Array.isArray(content)) for (const block of content) add("message.content.type", readObject(block).type);
   } else {
@@ -55,6 +65,24 @@ export function extractHistoryKinds(provider: HistoryProvider, value: unknown): 
 
 // 分類の正本。取り込みは現在の読み手の範囲に限る。
 export const HISTORY_CLASSIFICATIONS: HistoryClassification[] = [
+  ...(["user", "assistant"] as const).flatMap(type => [
+    ...CLAUDE_INTERNAL_MESSAGE_FLAGS.map(flag => ({ flag, ignore: true, reason: "圧縮要約・内部メタ・履歴表示専用の行は発言として取り込まない。" })),
+    { flag: "isSidechain", ignore: false, reason: "子の会話にも実際の入力と応答があるため、旗だけでは発言を除外しない。" },
+    ...(type === "user" ? [
+      { flag: "toolEndsTurn", ignore: false, reason: "道具の結果の補助情報。本文ブロックを保持する。" },
+      { flag: "turnCompanion", ignore: false, reason: "付随する入力の印。非発言かどうかは isMeta などで判断する。" },
+      { flag: "queueSkipAttachments", ignore: false, reason: "添付処理の制御は人の発言を否定しない。" },
+      { flag: "queueTranscriptOnly", ignore: false, reason: "待ち行列の保存方法の印。本文の既存の通知分類を保つ。" },
+    ] : [
+      { flag: "isApiErrorMessage", ignore: false, reason: "エラーの応答を assistant の記録として保持する。" },
+      { flag: "isAbortedMidStream", ignore: false, reason: "途中で止まった応答も保持する。" },
+      { flag: "truncatedAfterOutput", ignore: false, reason: "切り詰められた応答も保持する。" },
+    ]),
+  ].flatMap(({ flag, ignore, reason }) => [false, true].map(value => ({
+    provider: "claude" as const, type, field: `flag.${flag}`, subtype: String(value),
+    action: ignore && value ? "ignore" as const : "ingest" as const,
+    handler: ignore && value ? "ignore" : "message", reason,
+  })))),
   {"provider":"codex","type":"event_msg","field":"payload.item_started.item.type","subtype":"<missing>","action":"ignore","handler":"ignore","reason":"item の種類のない旧い補助通知は、発言や関係の根拠として保存しない。"},
   {"provider":"codex","type":"event_msg","field":"payload.item_completed.item.type","subtype":"<missing>","action":"ignore","handler":"ignore","reason":"item の種類のない旧い補助通知は、発言や関係の根拠として保存しない。"},
   {"provider":"claude","type":"attachment","field":"attachment.queued_command.commandMode+origin.kind","subtype":"[\"prompt\",\"human\"]","action":"ingest","handler":"queued-command-user","reason":"利用者の追加入力を保存する。"},
@@ -293,6 +321,12 @@ export function findUnclassifiedKinds(provider: HistoryProvider, row: unknown): 
   return extractHistoryKinds(provider, row).filter(kind => !classifyHistoryKind(kind));
 }
 export function classifyHistoryRow(provider: HistoryProvider, row: unknown): HistoryClassification | undefined {
-  const kind = extractHistoryKinds(provider, row)[0];
+  const kinds = extractHistoryKinds(provider, row);
+  const flags = kinds.filter(kind => kind.field.startsWith("flag.")).map(classifyHistoryKind);
+  // 既知の type に未知の旗が付いても、人の発言へ暗黙に落とさない。
+  if (flags.some(flag => !flag)) return undefined;
+  const ignored = flags.find(flag => flag?.action === "ignore");
+  if (ignored) return ignored;
+  const kind = kinds[0];
   return kind ? classifyHistoryKind(kind) : undefined;
 }

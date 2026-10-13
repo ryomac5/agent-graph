@@ -1,0 +1,6 @@
+{"type":"user","message":{"role":"user","content":"This session is being continued from a previous conversation... (a real user's quotation)"},"isSidechain":false,"uuid":"human","timestamp":"2026-10-13T04:07:50.000Z"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Done"}],"stop_reason":"end_turn"},"isSidechain":false,"uuid":"answer","timestamp":"2026-10-13T04:07:51.000Z"}
+{"type":"system","subtype":"compact_boundary","uuid":"boundary","timestamp":"2026-10-13T04:07:53.375Z","compactMetadata":{"trigger":"auto"}}
+{"type":"user","message":{"role":"user","content":"This session is being continued from a previous conversation... Synthetic compact summary"},"isVisibleInTranscriptOnly":true,"isCompactSummary":true,"isSidechain":false,"uuid":"summary","timestamp":"2026-10-13T04:07:53.376Z"}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Synthetic injected metadata"}]},"isMeta":true,"isSidechain":false,"uuid":"meta","timestamp":"2026-10-13T04:07:54.000Z"}
+{"type":"user","message":{"role":"user","content":"Synthetic transcript-only text"},"isVisibleInTranscriptOnly":true,"isSidechain":false,"uuid":"transcript","timestamp":"2026-10-13T04:07:55.000Z"}

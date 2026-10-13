@@ -1,5 +1,6 @@
 import type { DatabaseSync, SQLInputValue, StatementSync } from 'node:sqlite';
 import type { Fact, JsonValue } from './facts.ts';
+import { isClaudeInternalMessage } from './claude-message-flags.ts';
 import { projectArtifacts } from './projections/artifacts.ts';
 import { projectConversations } from './projections/conversations.ts';
 import { getMessageText, projectMessages } from './projections/messages.ts';
@@ -41,7 +42,7 @@ function prepare(db: DatabaseSync, sql: string): StatementSync {
 }
 const METADATA_FIELDS = ['provider', 'native_id', 'conversation_id', 'task_id', 'run_id',
   'repository_id', 'message_id', 'entity_id', 'artifact_id', 'version', 'role', 'active',
-  'history_format', 'origin', 'type', 'generation', 'project'];
+  'history_format', 'origin', 'type', 'generation', 'project', 'transcript_flags'];
 const SEARCH_ENTITIES = new Set(['task', 'conversation', 'run', 'message', 'message_membership', 'artifact', 'finding', 'alias']);
 const SOURCE_FILTER = [...SEARCH_ENTITIES].map(entity => `kind LIKE '${entity}.%'`).join(' OR ');
 
@@ -389,6 +390,7 @@ export function refreshSearch(db: DatabaseSync, added?: readonly Fact[], allFact
     const meta = (metadataById.get(fact.fact_id) ?? {}) as Record<string, JsonValue>;
     const entity = fact.kind.split('.')[0];
     const subjectId = fact.subject.slice(entity.length + 1);
+    if (entity === 'message' && meta.provider === 'claude' && isClaudeInternalMessage(meta.transcript_flags)) continue;
     const messageId = entity === 'message' ? meta.provider && meta.native_id
       ? createNativeId(String(meta.provider), String(meta.native_id)) : subjectId : null;
     let runId = typeof meta.run_id === 'string' ? meta.run_id : null;

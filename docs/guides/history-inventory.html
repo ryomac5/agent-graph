@@ -3,6 +3,7 @@
 <title>履歴の種類の棚卸し</title>
 <style>body{font:16px/1.7 system-ui,sans-serif;max-width:1100px;margin:40px auto;padding:0 20px;color:#1a1a1a}pre{background:#f2f4f7;padding:16px;overflow:auto}table{border-collapse:collapse;width:100%;margin-bottom:24px}th,td{border:1px solid #ddd;padding:8px;text-align:left;overflow-wrap:anywhere}code{font-size:14px}</style>
 <h1>履歴の種類の棚卸し</h1>
+<p>追補: user / assistant のトップレベルの boolean と isXxx の旗も、名前と真偽値で分類する。isCompactSummary / isMeta / isVisibleInTranscriptOnly が真の行は発言にしない。未分類の旗が一つでもあれば棚卸しは失敗する。以下の132種類は旗を区別する前の記録である。旗を含む最新の棚卸しと既存台帳の補完は <a href="claude-compact-summary-fix.html">圧縮要約の誤表示の修正報告</a> を参照。</p>
 <p>2026-10-13 の読み取り専用の棚卸しで、1,381 ファイル・132 種類を確認した。未分類 0 件、終了コード 0。履歴は走査中にも追記されるため、件数は再実行ごとに変わり得る。以下の件数はこの走査の結果である。</p>
 <h2>実行</h2>
 <pre>node scripts/inventory/history-kinds.mjs

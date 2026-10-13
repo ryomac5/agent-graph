@@ -3,13 +3,14 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
-import { classifyHistoryKind, extractHistoryKinds, identifyHistoryKind } from '../../packages/api/src/observe/history-kinds.ts';
+import { classifyHistoryKind, extractHistoryKinds, identifyHistoryKind, isHistoryFlag } from '../../packages/api/src/observe/history-kinds.ts';
 
 function createRedactedSample(row) {
   if (!row || typeof row !== 'object' || Array.isArray(row)) return { record: '[invalid object]' };
   const sample = {};
   for (const [name, value] of Object.entries(row)) {
     if (['type', 'subtype', 'operation', 'method', 'record_type'].includes(name)) sample[name] = typeof value === 'string' ? value : '[redacted]';
+    else if (isHistoryFlag(name, value)) sample[name] = typeof value === 'boolean' ? value : '[redacted]';
     else if (['attachment', 'payload'].includes(name) && value && typeof value === 'object') {
       sample[name] = { ...(typeof value.type === 'string' ? { type: value.type } : {}),
         ...(typeof value.commandMode === 'string' ? { commandMode: value.commandMode } : {}),

@@ -1,4 +1,5 @@
 import type { Fact, JsonValue } from "../facts.ts";
+import { isClaudeInternalMessage } from "../claude-message-flags.ts";
 import { normalizeClaudeContent } from "./claude-content.ts";
 import { compareFacts, compareText, createNativeId, projectConversationIds, projectEntities, serializeValue } from "./relations.ts";
 import type { ProjectedEntity } from "./relations.ts";
@@ -30,6 +31,8 @@ export function projectMessages(facts: readonly Fact[]): MessageProjection {
       fact.source === "ui" ? 2 : fact.source.startsWith("host-") ? 1 : 0];
   };
   const messages = projectEntities(facts, "message", identify, prioritize);
+  const excluded = new Set(messages.filter(message => message.provider === "claude"
+    && isClaudeInternalMessage(message.transcript_flags)).map(message => message.id));
   const messageIds = new Map(projectEntities(facts, "message", undefined, prioritize)
     .map((message) => [message.id, identify(message, message.id)]));
   const conversationIds = facts.some(fact => fact.kind.startsWith("message_membership."))
@@ -59,7 +62,8 @@ export function projectMessages(facts: readonly Fact[]): MessageProjection {
     message_id: membership.message_id && (messageIds.get(membership.message_id) ?? membership.message_id),
     conversation_id: membership.conversation_id && (conversationIds.get(membership.conversation_id) ?? membership.conversation_id),
   }));
-  const discrepancies = messages.flatMap((message) => {
+  const visible = messages.filter(message => !excluded.has(message.id));
+  const discrepancies = visible.flatMap((message) => {
     const observations = bodyFacts.get(message.id) ?? [];
     const host = observations.filter((fact) => fact.source.startsWith("host-"));
     const differing = host.length && message.body !== undefined ? observations.filter((fact) => {
@@ -81,7 +85,7 @@ export function projectMessages(facts: readonly Fact[]): MessageProjection {
     return selected ?? firstFacts.get(id)!;
   }
   return {
-    messages: messages.map((message) => {
+    messages: visible.map((message) => {
       const origin = selectOrigin(message.id);
       return { ...message, ...normalizeClaudeContent(message),
         source_ts: firstFacts.get(message.id)!.source_ts,
@@ -89,7 +93,7 @@ export function projectMessages(facts: readonly Fact[]): MessageProjection {
         source: origin.source, confidence: origin.confidence,
       };
     }),
-    message_memberships: memberships,
+    message_memberships: memberships.filter(membership => !membership.message_id || !excluded.has(membership.message_id)),
     discrepancies,
   };
 }

@@ -6,7 +6,7 @@ import test from "node:test";
 import { createNativeId, openLedger, project } from "../../../core/src/ledger/index.ts";
 import { observeClaudeFile } from "../../src/observe/claude/index.ts";
 import { observeCodexFile } from "../../src/observe/codex/index.ts";
-import { extractHistoryKinds, HISTORY_CLASSIFICATIONS, identifyHistoryKind } from "../../src/observe/history-kinds.ts";
+import { classifyHistoryRow, extractHistoryKinds, findUnclassifiedKinds, HISTORY_CLASSIFICATIONS, identifyHistoryKind } from "../../src/observe/history-kinds.ts";
 import type { HistoryClassification } from "../../src/observe/history-kinds.ts";
 
 const TS = "2026-10-06T10:00:00.000Z";
@@ -18,6 +18,10 @@ function createSample(entry: HistoryClassification): Record<string, unknown> {
     id: "tool", name: "SyntheticTool", input: {}, tool_use_id: "tool", source: { type: "base64", media_type: "image/png", data: "" } };
   if (provider === "claude") {
     if (type === "user" || type === "assistant") row.message = { role: type, content: field ? [block] : "Synthetic text" };
+    if (field.startsWith("flag.")) {
+      row[field.slice("flag.".length)] = subtype === "true";
+      row.message = { role: type, content: "Synthetic text" };
+    }
     if (field === "subtype" && subtype !== "<missing>") row.subtype = subtype;
     if (field === "operation") { row.operation = subtype; row.content = "Synthetic input"; }
     if (field === "attachment.type") row.attachment = { ...(subtype === "<missing>" ? {} : { type: subtype }),
@@ -129,6 +133,14 @@ for (const provider of ["claude", "codex"] as const) {
 test("分類表に重複鍵や理由のない行がない", () => {
   assert.equal(new Set(HISTORY_CLASSIFICATIONS.map(identifyHistoryKind)).size, HISTORY_CLASSIFICATIONS.length);
   assert.ok(HISTORY_CLASSIFICATIONS.every(entry => entry.reason.trim()));
+});
+
+test("旗の組み合わせでも非発言の分類を優先し、未知の旗は user へ落とさない", () => {
+  const row = { type: "user", message: { content: "Actual input" } };
+  assert.equal(classifyHistoryRow("claude", { ...row, isMeta: true, isCompactSummary: false, isSidechain: true })?.action, "ignore");
+  assert.equal(classifyHistoryRow("claude", { ...row, isCompactSummary: true, isVisibleInTranscriptOnly: true })?.action, "ignore");
+  assert.equal(classifyHistoryRow("claude", { ...row, isFutureInternal: true }), undefined);
+  assert.equal(findUnclassifiedKinds("claude", { ...row, isFutureInternal: true })[0].field, "flag.isFutureInternal");
 });
 
 for (const origin of ["coordinator", "peer"]) {

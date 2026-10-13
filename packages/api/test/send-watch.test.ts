@@ -252,7 +252,8 @@ test('暇な根の期限は貼り付けの待ちが終わった recordAccepted �
 });
 
 async function createApiFixture(t: TestContext, f: ReturnType<typeof createFixture>, sessionHosts: WebSocketOptions['sessionHosts'] = {}) {
-  t.mock.method(Date, 'now', () => NOW);
+  // 端末の起動時刻と経過時間を同じ時計で測り、実行日による負の経過時間を防ぐ。
+  t.mock.timers.enable({ apis: ['Date'], now: NOW });
   const errors = t.mock.method(console, 'error', () => {});
   let handleHttp!: http.RequestListener;
   const server = Object.assign(new EventEmitter(), {
@@ -311,7 +312,7 @@ test('本番 api の送信経路が見張りを作り、台帳が増えなくて
     assert.equal(f.read().state, 'pending');
     assert.ok(frames.some(frame => frame.type === 'ack' && frame.cmd_id === 'send' && frame.ok));
     const seq = api.feed.snapshot().seq;
-    t.mock.method(Date, 'now', () => NOW + SEND_WATCH_TIMEOUT_MS);
+    t.mock.timers.setTime(NOW + SEND_WATCH_TIMEOUT_MS);
     await delay(550);
     assert.equal(api.feed.snapshot().seq, seq);
     assert.ok(frames.some(frame => frame.type === 'send_watches' && frame.rows.some((row: { state: string }) => row.state === 'failed')));
@@ -380,7 +381,10 @@ for (const failure of ['busy', 'exception'] as const) {
       assert.equal((await a.command('launch', 'session.launch', { projectId: 'project', provider: 'claude', resume: session })).ok, true);
       for (let attempt = 0; attempt < 100; attempt++) {
         const hosts = await a.command(`hosts-${attempt}`, 'session.hosts', {});
-        if (hosts.result.hosts.length) break;
+        if (hosts.result.hosts.length) {
+          assert.equal(hosts.result.hosts[0].startedAt, new Date(NOW).toISOString());
+          break;
+        }
         await delay(5);
       }
       if (failure === 'busy') writer.exec('BEGIN IMMEDIATE');

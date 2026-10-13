@@ -5,6 +5,7 @@ import { readAppendOnlyFile } from "../observe/files.ts";
 import type { FileCursor } from "../observe/files.ts";
 import type { RolloutLine, RolloutReader } from "../observe/codex/files.ts";
 import { createDirectoryReader } from "../observe/directories.ts";
+import { CODEX_HISTORY_DETAILS_VERSION, isCodexHistoryDetail } from "../observe/codex/index.ts";
 
 export interface RolloutCheckpoint { cursor: FileCursor; context: RolloutLine[] }
 
@@ -49,13 +50,16 @@ export function createIncrementalRolloutReader(ledger: Ledger, cache = new Map<s
     read(path) {
       const previous = cache.get(path);
       const persisted = saved.get(basename(path));
-      const reset = !previous && persisted?.fileCursor
-        ? readAppendOnlyFile(path, persisted.fileCursor).reset : false;
-      const file = readAppendOnlyFile(path, previous?.cursor);
+      const checkpoint = previous?.cursor ?? persisted?.fileCursor;
+      const backfill = checkpoint && checkpoint.codexHistoryDetailsVersion !== CODEX_HISTORY_DETAILS_VERSION;
+      const reset = checkpoint && (backfill || !previous)
+        ? readAppendOnlyFile(path, checkpoint).reset : false;
+      const file = readAppendOnlyFile(path, backfill ? undefined : previous?.cursor);
+      file.cursor = { ...file.cursor, codexHistoryDetailsVersion: CODEX_HISTORY_DETAILS_VERSION };
       current = file.cursor;
       cursors = new Map();
-      let offset = !file.reset && previous ? previous.cursor.offset : 0;
-      let hash = !file.reset && previous ? previous.cursor.hash : createHash("sha256").digest("hex");
+      let offset = !backfill && !file.reset && previous ? previous.cursor.offset : 0;
+      let hash = !backfill && !file.reset && previous ? previous.cursor.hash : createHash("sha256").digest("hex");
       const lines: RolloutLine[] = [];
       for (const line of file.lines) {
         const start = offset;
@@ -68,7 +72,7 @@ export function createIncrementalRolloutReader(ledger: Ledger, cache = new Map<s
         const raw = offset - start === Buffer.byteLength(line.text) + 2 ? line.text + "\r" : line.text;
         lines.push({ offset: start, end: offset, hash: createHash("sha256").update(raw).digest("hex"), value });
       }
-      const context = file.reset ? [] : previous?.context ?? [];
+      const context = backfill || file.reset ? [] : previous?.context ?? [];
       const all = [...context, ...lines];
       const meta = all.find((line) => readObject(line.value).type === "session_meta"
         || !readObject(line.value).type && typeof readObject(line.value).id === "string");
@@ -86,8 +90,9 @@ export function createIncrementalRolloutReader(ledger: Ledger, cache = new Map<s
       const retained = [...new Set([meta, message, all.at(-1)].filter((line): line is RolloutLine => !!line))];
       staged.set(path, { cursor: file.cursor, context: createRolloutContext(retained) });
       // 最後の行は再読し、途中で止まった複数の事実の追記を補う。
-      const resumeOffset = previous || file.reset || reset ? 0 : persisted?.fileCursor?.offset ?? 0;
-      return { lines: [...new Map([...retained.map((line) => ({ ...line, contextOnly: true })), ...lines.filter((line) => line.offset >= resumeOffset)]
+      const resumeOffset = file.reset || reset ? 0 : backfill ? checkpoint.offset : previous ? 0 : persisted?.fileCursor?.offset ?? 0;
+      return { lines: [...new Map([...retained.map((line) => ({ ...line, contextOnly: true })),
+        ...lines.filter((line) => line.offset >= resumeOffset || backfill && isCodexHistoryDetail(line.value))]
         .map((line) => [line.offset, line])).values()].sort((a, b) => a.offset - b.offset), completeBytes: file.cursor.offset };
     },
   };

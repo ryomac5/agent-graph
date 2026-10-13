@@ -20,7 +20,7 @@ const PANEL_INITIAL_WIDTH = 420;
 const clampWidth = (width: number) => Math.max(PANEL_MIN_WIDTH, Math.min(Math.max(PANEL_MIN_WIDTH, window.innerWidth / 2), width));
 
 export function WorkspacePanel({ project, target, client, language, rootId, bindings = DEFAULT_KEYS }: {
-  project: string; target: ScreenStore; client: ConversationClient; language: Language; rootId?: string; bindings?: KeyBindings;
+  project: string; target: ScreenStore; client: ConversationClient; language: Language; rootId?: string | null; bindings?: KeyBindings;
 }) {
   const [search, setSearch] = useSearchParams();
   const selected = search.get('panel');

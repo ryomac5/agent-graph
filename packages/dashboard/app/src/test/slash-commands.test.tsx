@@ -81,14 +81,15 @@ it('hands an interactive model picker to its existing terminal', async () => {
   expect(f.command.mock.calls.some(([name]) => name === 'session.interrupt')).toBe(false);
 });
 
-it('preserves the draft and exposes a blocked send instead of an optimistic success', async () => {
+it('preserves the draft and explains a blocked send without opening a terminal tab', async () => {
   const f = fixture({ type: 'ack', cmd_id: 'cmd', ok: false, error: 'Terminal is not ready for a message. Continue in the terminal tab.', result: { terminalId: 'terminal' } });
   fireEvent.change(f.input, { target: { value: 'After a panel' } });
   fireEvent.click(screen.getByRole('button', { name: 'Send' }));
   expect((await screen.findByRole('alert')).textContent).toContain('Terminal is not ready');
+  expect(screen.getByRole('alert').textContent).toContain('Continue in the terminal tab.');
   expect(f.input).toHaveProperty('value', 'After a panel');
   expect(document.querySelector('.message-user')).toBeNull();
-  expect(f.openTerminal).toHaveBeenCalledWith('terminal');
+  expect(f.openTerminal).not.toHaveBeenCalled();
 });
 
 it('follows the actual new conversation returned by /clear', async () => {

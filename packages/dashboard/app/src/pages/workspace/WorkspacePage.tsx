@@ -8,7 +8,7 @@ import { dictionaries, type Language } from '../../lib/i18n.ts';
 import { resolveProjectId } from '../../lib/projects.ts';
 import type { ConversationClient } from '../conversation/ConversationPage.tsx';
 import { ConversationPage } from '../conversation/ConversationPage.tsx';
-import { selectRoots, useRootIndex, buildRootTree, currentRootConversation, orderSeries } from '../../lib/roots.ts';
+import { selectRoots, useRootIndex, buildRootTree, currentRootConversation, orderSeries, resolveConversationRoot } from '../../lib/roots.ts';
 import { RootList } from '../../components/RootViews.tsx';
 import { Icon } from '../../components/Icon.tsx';
 import { WorkspacePanel } from './WorkspacePanel.tsx';
@@ -45,9 +45,10 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
   const roots = selectRoots(state, project);
   const index = useRootIndex(state);
   const turns = useTurnConversations();
+  const requestedConversation = search.get('conversation') ?? suppliedConversation;
   // URL の会話が未配信でも、別の根の作業場に切り替えない。
-  const selected = suppliedConversation
-    ? roots.find(root => root.conversation_ids.includes(suppliedConversation) || buildRootTree(root, index).nodes.some(node => node.conversationId === suppliedConversation))
+  const selected = requestedConversation
+    ? resolveConversationRoot(roots, index, requestedConversation)
     : roots.find(root => root.id === search.get('root')) ?? roots[0];
   const projectionComplete = state.projection.conversations !== undefined && !state.projectionError
     && !Object.values(state.pages ?? {}).some(page => page.next);
@@ -63,7 +64,7 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
     catch (cause) { setRetryError(cause instanceof Error ? cause.message : String(cause)); }
   }
   const tree = useMemo(() => selected ? buildRootTree(selected, index) : { nodes: [], edges: [], roots: [], unresolved: [] }, [selected, index]);
-  const requestedChild = search.get('child') ?? suppliedConversation;
+  const requestedChild = search.get('child') ?? requestedConversation;
   const selectedNode = tree.nodes.find(node => node.conversationId === requestedChild || node.id === requestedChild);
   const childId = requestedChild && !selected?.conversation_ids.includes(requestedChild) ? selectedNode?.conversationId : undefined;
   // 表示の並びと操作先は分け、再開した継続元も開けるようにする。
@@ -72,9 +73,9 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
   // 子の会話は、頼んだ内容を名前として出す。
   const childNode = selectedNode;
   const childTitle = childNode ? tree.edges.find(edge => edge.target === childNode.id)?.title || undefined : undefined;
-  const breadcrumb = <>{childId && <button className="btn btn-ghost btn-sm root-back" aria-label={`${language === 'ja' ? '戻る:' : 'Back to'} ${selected?.name ?? ""}`} onClick={() => { const next = new URLSearchParams(search); next.delete('child'); if (selected) next.set('root', selected.id); if (suppliedConversation) navigate(`/p/${encodeURIComponent(project)}?${next}`); else setSearch(next); }}><Icon name="chevronLeft"/><span className="truncate">{selected?.name}</span></button>}</>;
-  const workspaceSession = newSession ? draftWorkspace.current!.session : suppliedConversation ? selected?.id ?? suppliedConversation : childId ?? selected?.id ?? conversationId ?? '';
-  const unresolvedConversationId = suppliedConversation && !newSession && !selected ? suppliedConversation : undefined;
+  const breadcrumb = <>{childId && <button className="btn btn-ghost btn-sm root-back" aria-label={`${language === 'ja' ? '戻る:' : 'Back to'} ${selected?.name ?? ""}`} onClick={() => { const next = new URLSearchParams(search); next.delete('child'); next.delete('conversation'); if (selected) next.set('root', selected.id); if (suppliedConversation) navigate(`/p/${encodeURIComponent(project)}?${next}`); else setSearch(next); }}><Icon name="chevronLeft"/><span className="truncate">{selected?.name}</span></button>}</>;
+  const workspaceSession = newSession ? draftWorkspace.current!.session : requestedConversation ? selected?.id ?? requestedConversation : childId ?? selected?.id ?? conversationId ?? '';
+  const unresolvedConversationId = requestedConversation && !newSession && !selected ? requestedConversation : undefined;
   // 投影の取得失敗時は URL の会話として保存し、根の解決後に合流する。
   const pendingWorkspace = unresolvedConversationId && !projectionComplete && !state.projectionError;
   return <OpenWorkspaceFile.Provider value={(path, worktree) => openFile.current(path, worktree)}><div className={`workspace root-workspace three-workspace${showRootList ? ' with-roots' : ''}`}>
@@ -82,7 +83,7 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
       {/* アプリの画面では、会話の一覧は左のサイドバーのプロジェクトの下に置き、作業場は会話とサブエージェントに広さを渡す。 */}
       {showRootList && <section className="workspace-roots" aria-label={t.conversations}><header className="column-header"><h2>{t.conversations}</h2><span className="column-count numeric">{roots.length}</span></header>
         <div className="column-scroll"><RootList state={state} client={client} roots={roots} selected={selected?.id} language={language} onSelect={root => {
-          const next = new URLSearchParams(search); next.set('root', root.id); next.delete('path'); next.delete('child'); next.delete('session'); setSearch(next);
+          const next = new URLSearchParams(search); next.set('root', root.id); next.delete('conversation'); next.delete('path'); next.delete('child'); next.delete('session'); setSearch(next);
         }}/></div></section>}
       {conversationNotFound ? <section className="workspace-conversation" aria-label={t.conversation}><p role="status" className="status-line">{language === 'ja' ? '会話が見つかりません' : 'Conversation not found'}</p></section>
         : (conversationId || newSession) ? <VisibleView visible={conversationVisible}><Workbench key={project} project={project} session={pendingWorkspace ? undefined : workspaceSession} unresolvedConversationId={unresolvedConversationId} conversationId={conversationId ?? ''} openConversationId={search.get('conversation') ?? suppliedConversation ?? undefined} newSession={newSession} client={client} language={language} bindings={bindings} registerOpenFile={openFile}
@@ -94,7 +95,7 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
                 breadcrumb={childId ? breadcrumb : undefined} seriesIds={tabConversation === conversationId && !childId ? series : undefined} seriesState={tabConversation === conversationId ? childId ? childNode?.state : selected?.state : undefined} displayName={tabConversation === conversationId ? childId ? childTitle : selected?.name : undefined}/>}
         </>}/></VisibleView>
         : <section className="workspace-conversation" aria-label={t.conversation}/>}
-      <VisibleView visible={panelVisible}><WorkspacePanel bindings={bindings} project={project} target={target} client={client} language={language} rootId={selected?.id}/></VisibleView>
+      <VisibleView visible={panelVisible}><WorkspacePanel bindings={bindings} project={project} target={target} client={client} language={language} rootId={requestedConversation && !selected ? null : selected?.id}/></VisibleView>
     </div>
   </div></OpenWorkspaceFile.Provider>;
 }

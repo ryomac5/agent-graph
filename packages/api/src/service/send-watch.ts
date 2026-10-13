@@ -15,6 +15,8 @@ const WAITING_QUEUE = -1;
 const HISTORY_LIMIT = 100;
 const EXCERPT_LENGTH = 120;
 const BUSY_STATES = new Set(['starting', 'running', 'waiting_approval', 'waiting_input']);
+// jsonl の command-name に記録されることを確認済みのコマンドだけを照合する。
+const WATCHED_SLASH_COMMANDS = new Set(['/compact']);
 type WatchRow = Record<string, SQLOutputValue>;
 
 function isBusy(error: unknown): boolean {
@@ -66,6 +68,12 @@ export class SendWatch {
       busy_run: run && BUSY_STATES.has(String(run.state)) ? String(run.id) : null };
   }
   record(id: string, conversation: string, body: string, captured: ReturnType<SendWatch['capture']>, attachments: string[] = []) {
+    const command = body.trimStart().split(/\s/u, 1)[0];
+    if (command.startsWith('/')) {
+      if (!WATCHED_SLASH_COMMANDS.has(command)) return;
+      const provider = this.db.prepare('SELECT provider FROM conversations WHERE id = ?').get(this.canonical(conversation))?.provider;
+      if (provider !== 'claude') return;
+    }
     this.db.prepare('INSERT OR IGNORE INTO api_send_watches VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)')
       .run(id, conversation, redact(body, this.rules()).text, captured.sent_ts, captured.baseline_seq, captured.busy_run,
         captured.busy_run ? null : Date.parse(captured.sent_ts) + SEND_WATCH_TIMEOUT_MS, 'pending', JSON.stringify(attachments));

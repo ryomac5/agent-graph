@@ -10,7 +10,7 @@ import { promisify } from 'node:util';
 import type { spawn, IPty } from 'node-pty';
 import type { FilesRequest } from '../files/index.ts';
 import { MAX_TERMINALS, spawnTerminal, type TerminalNotification } from './index.ts';
-import { TerminalScreen, readPrompt, readPanel, readCommandOutput } from './screen.ts';
+import { TerminalScreen, isInputBlocked, readPrompt, readPanel, readCommandOutput } from './screen.ts';
 import { listSlashCommands } from './slash-commands.ts';
 
 import { createAttachmentStore, escapeAttachmentPath, uploadRemoteAttachment, type AttachmentOptions } from './attachments.ts';
@@ -21,6 +21,7 @@ const STARTUP_LIMIT_MS = 15_000;
 const STARTUP_POLL_MS = 100;
 const COMMAND_SETTLE_MS = 300;
 const COMMAND_LIMIT_MS = 3000;
+const SESSION_CHANGING_COMMANDS = new Set(['clear', 'new', 'resume']);
 const READ_ONLY_PANELS = new Map([
   ['help', /\bHelp\s+General\s+Commands/u],
   ['cost', /\b(?:Total cost:|Session cost|Usage)\b/u],
@@ -32,7 +33,7 @@ const MODEL = /^[a-z0-9][a-z0-9._-]*$/i;
 const execute = promisify(execFile);
 type Notify = (message: TerminalNotification) => void;
 interface Host {
-  terminalId: string; terminal: IPty; startedAt: string; conversationId?: string; resumeId?: string;
+  terminalId: string; terminal: IPty; startedAt: string; startedTick: number; conversationId?: string; resumeId?: string; sessionPid?: number;
   described?: boolean; provider?: 'claude' | 'codex'; projectId?: string; cwd?: string; target?: ExecutionTarget; connection?: SshConnection; remotePid?: number; discoveryBuffer?: string; disconnected?: boolean; mirror?: ReturnType<typeof startRemoteMirror>;
   scrollback: Buffer; screen: TerminalScreen; listeners: Set<Notify>; sending?: Promise<unknown>; lastOutputAt?: number; inputReady?: boolean; inputRevision: number;
 }
@@ -74,9 +75,10 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
   let opening = 0, closed = false;
   let scanning: Promise<void> | undefined;
   function isInputReady(host: Host): boolean {
-    const now = Date.now(), age = now - Date.parse(host.startedAt);
+    const now = performance.now(), age = now - host.startedTick;
     // 準備完了を記憶し、作業中の描画では静穏待ちに戻さない。上限も送信時でなく起動時から数える。
-    host.inputReady ||= age >= (options.warmupMs ?? 2500) && now - (host.lastOutputAt ?? 0) >= (options.quietMs ?? 800);
+    host.inputReady ||= age >= STARTUP_LIMIT_MS
+      || age >= (options.warmupMs ?? 2500) && now - (host.lastOutputAt ?? host.startedTick) >= (options.quietMs ?? 800);
     return host.inputReady;
   }
   // Orca と同じく、入力中の行を消してから貼り付け、Enter は間を置いて別に書く。
@@ -86,12 +88,11 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
     const delay = options.submitDelayMs ?? 500;
     const wait = options.wait ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
     const sending = (host.sending ?? Promise.resolve()).catch(() => {}).then(async (): Promise<SessionSendResult> => {
-      await refresh(true);
+      await recheckLocalSession(host);
       if (!hosts.has(host.terminalId) || host.disconnected) throw new Error('no_host');
       if (host.conversationId && host.conversationId !== conversationId) throw new Error('no_host');
       // 起動や resume の直後は、画面が入力を受け付ける前に貼ると、bracketed paste が効かず素の文字として入る。
       while (!isInputReady(host)) {
-        if (Date.now() - Date.parse(host.startedAt) >= STARTUP_LIMIT_MS) throw new TerminalInputError(host.terminalId);
         await wait(STARTUP_POLL_MS);
         if (!hosts.has(host.terminalId) || host.disconnected) throw new Error('no_host');
       }
@@ -100,7 +101,7 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
       if (!hosts.has(host.terminalId) || host.disconnected) throw new Error('no_host');
       const provider = host.provider!;
       const before = await host.screen.read();
-      if (!readPrompt(before, provider)) throw new TerminalInputError(host.terminalId);
+      if (isInputBlocked(before, provider)) throw new TerminalInputError(host.terminalId);
       const inputRevision = host.inputRevision;
       const slash = /^\/([^\s]+)(?:\s|$)/u.exec(text.trimStart());
       // 引数のないコマンドも空白で確定し、補完候補の先頭を誤実行しない。
@@ -112,7 +113,7 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
       host.terminal.write(`\x1b[200~${pasted.length ? ' ' : ''}${body}\x1b[201~`);
       if (delay) await wait(delay);
       if (!hosts.has(host.terminalId) || host.disconnected) throw new Error('no_host');
-      if (host.inputRevision !== inputRevision || !readPrompt(await host.screen.read(), provider)) throw new TerminalInputError(host.terminalId);
+      if (host.inputRevision !== inputRevision || isInputBlocked(await host.screen.read(), provider)) throw new TerminalInputError(host.terminalId);
       host.terminal.write('\r');
       if (!slash) return {};
       let after = before;
@@ -127,6 +128,8 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
         previous = current;
         if (after.revision > before.revision && settled >= COMMAND_SETTLE_MS) break;
       }
+      if (SESSION_CHANGING_COMMANDS.has(slash[1]) && (host.connection || provider === 'codex')) await refresh(host);
+      else await recheckLocalSession(host);
       const prompt = readPrompt(after, provider);
       const output = prompt ? readCommandOutput(before, after, text, provider) : readPanel(after);
       if (!prompt) {
@@ -142,8 +145,7 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
         }
         return { delivery: 'terminal', terminalId: host.terminalId, command: { text, output, status: 'interactive' } };
       }
-      await refresh(true);
-      // 即時の端末出力だけは一時表示する。skill と compact の非同期結果は履歴で照合する。
+      // 即時の端末出力だけは一時表示し、非同期の結果は既存の履歴取り込みで反映する。
       if (prompt.text.startsWith(text.trim())) throw new TerminalInputError(host.terminalId);
       if (output && (/^\s*⎿/mu.test(output) || ['help', 'cost', 'usage', 'context', 'status', 'model', 'clear', 'new', 'reset', 'config', 'permissions', 'effort'].includes(slash[1])))
         return { ...(slash[1] === 'compact' ? {} : { delivery: 'terminal' as const }), terminalId: host.terminalId, conversationId: host.conversationId,
@@ -154,8 +156,24 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
     host.sending = sending;
     return sending;
   }
-  async function discover(recheck: boolean) {
-    const pending = [...hosts.values()].filter(host => !host.disconnected && (recheck || !host.conversationId || host.connection && !host.mirror));
+  async function readLocalSession(host: Host, pid: number): Promise<boolean> {
+    let row;
+    // 起動中のファイルの不在や書きかけは、次の周期で読み直す。
+    try { row = JSON.parse(await readFile(join(directory, `${pid}.json`), 'utf8')); }
+    catch { return false; }
+    if (row?.pid !== pid || typeof row.sessionId !== 'string' || !UUID.test(row.sessionId)
+      || !host.conversationId && host.resumeId && row.sessionId !== host.resumeId || !hosts.has(host.terminalId) || closed) return false;
+    host.conversationId = JSON.stringify(['claude', row.sessionId]);
+    host.sessionPid = pid;
+    return true;
+  }
+  async function recheckLocalSession(host: Host): Promise<void> {
+    // 確定済みの PID の記録だけを読み直し、送信や一覧取得で ps / lsof / ssh を呼ばない。
+    if (!host.connection && host.provider === 'claude' && !host.disconnected) await readLocalSession(host, host.sessionPid ?? host.terminal.pid);
+  }
+  async function discover(recheck?: Host) {
+    const pending = (recheck ? [recheck] : [...hosts.values()].filter(host => !host.conversationId || host.connection && !host.mirror))
+      .filter(host => !host.disconnected && hosts.has(host.terminalId));
     if (!pending.length) return;
     const processes = pending.some(host => !host.connection && host.provider !== 'codex') ? await (options.listProcesses ?? listProcesses)() : [];
     for (const host of pending.filter(host => host.provider === 'codex' && !host.disconnected)) {
@@ -164,7 +182,7 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
       let row;
       try { row = await discoverCodex(targets, pid, host.connection); } catch { continue; }
       if (!row || closed || !hosts.has(host.terminalId)) continue;
-      if (host.conversationId !== JSON.stringify(['codex', row.sessionId])) { host.mirror?.disconnect(); host.mirror = undefined; }
+      if (host.conversationId !== JSON.stringify(['codex', row.sessionId])) { host.mirror?.stop(); host.mirror = undefined; }
       host.conversationId = JSON.stringify(['codex', row.sessionId]);
       if (host.connection && !host.mirror) host.mirror = startRemoteMirror(targets, host.connection, row.path, row.sessionId, host.projectId!, row.cwd, () => { host.disconnected = true; }, 'codex');
     }
@@ -172,7 +190,7 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
       let row;
       try { row = await discoverRemoteSession(targets, host.connection!, host.cwd!, host.startedAt, host.remotePid, host.conversationId ? undefined : host.resumeId); } catch { continue; }
       if (!row || !hosts.has(host.terminalId) || host.disconnected || closed) continue;
-      if (host.conversationId !== JSON.stringify(['claude', row.sessionId])) { host.mirror?.disconnect(); host.mirror = undefined; }
+      if (host.conversationId !== JSON.stringify(['claude', row.sessionId])) { host.mirror?.stop(); host.mirror = undefined; }
       host.conversationId = JSON.stringify(['claude', row.sessionId]);
       if (host.mirror) continue;
       let remoteFile: string;
@@ -189,19 +207,12 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
         for (const row of processes) if (descendants.has(row.ppid)) descendants.add(row.pid);
       }
       for (const pid of descendants) {
-        let row;
-        // 起動中のファイルの不在や書きかけは、次の周期で読み直す。
-        try { row = JSON.parse(await readFile(join(directory, `${pid}.json`), 'utf8')); }
-        catch { continue; }
-        if (row?.pid !== pid || typeof row.sessionId !== 'string' || !UUID.test(row.sessionId)
-          || !host.conversationId && host.resumeId && row.sessionId !== host.resumeId || !hosts.has(host.terminalId)) continue;
-        host.conversationId = JSON.stringify(['claude', row.sessionId]);
-        break;
+        if (await readLocalSession(host, pid)) break;
       }
     }
   }
-  function refresh(recheck = false): Promise<void> {
-    if (scanning && recheck) return scanning.then(() => refresh(true));
+  function refresh(recheck?: Host): Promise<void> {
+    if (scanning && recheck) return scanning.then(() => refresh(recheck));
     if (!scanning) scanning = discover(recheck).finally(() => { scanning = undefined; });
     return scanning;
   }
@@ -242,7 +253,7 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
           env.TERM = 'xterm-256color';
           const terminal = (options.openTerminal ?? spawnTerminal)(location.connection ? 'ssh' : provider, location.connection ? ['-tt', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', location.connection.destination, '--', buildLaunchCommand(cwd, provider, resumeId, request.model as string | undefined)] : args, { cwd: location.connection ? location.local : cwd, env, name: env.TERM, cols: 80, rows: 24 });
           const terminalId = randomUUID();
-          const host: Host = { described: request.target !== undefined, terminalId, terminal, resumeId, provider, projectId: request.projectId as string, cwd, target, connection: location.connection, startedAt: new Date().toISOString(), scrollback: Buffer.alloc(0), screen: new TerminalScreen(), inputRevision: 0, listeners: new Set() };
+          const host: Host = { described: request.target !== undefined, terminalId, terminal, resumeId, provider, projectId: request.projectId as string, cwd, target, connection: location.connection, startedAt: new Date().toISOString(), startedTick: performance.now(), scrollback: Buffer.alloc(0), screen: new TerminalScreen(), inputRevision: 0, listeners: new Set() };
           hosts.set(terminalId, host);
           terminal.onData(data => {
             if (host.connection && !host.remotePid) {
@@ -251,7 +262,7 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
               host.discoveryBuffer = marker ? undefined : discovery.slice(-128);
               if (marker) host.remotePid = Number(marker[1]);
             }
-            host.lastOutputAt = Date.now();
+            host.lastOutputAt = performance.now();
             host.screen.write(data);
             const buffer = Buffer.concat([host.scrollback, Buffer.from(data)]);
             let start = Math.max(0, buffer.length - MAX_SCROLLBACK_BYTES);
@@ -278,7 +289,8 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
         return { commands: await listSlashCommands(request.provider as 'claude' | 'codex', await selectRoot({ projectId: request.projectId })) };
       }
       if (command === 'session.hosts') {
-        await refresh(true);
+        await refresh();
+        await Promise.all([...hosts.values()].map(recheckLocalSession));
         return { hosts: [...hosts.values()].filter(host => host.conversationId || host.disconnected).map(host => ({
           conversationId: host.conversationId!, terminalId: host.terminalId, pid: host.terminal.pid, startedAt: host.startedAt, ...(host.connection || host.described ? { provider: host.provider, cwd: host.cwd, target: host.target, projectId: host.projectId, disconnected: host.disconnected === true } : {}),
         })) };

@@ -10,7 +10,7 @@ export interface ScreenSnapshot {
 }
 export interface Prompt { start: number; end: number; text: string }
 
-/** カーソルのある入力枠だけを認める。履歴に残った ❯ は入力可能の根拠にしない。 */
+/** コマンド結果の切り出しと Esc 後の復帰確認用。送信を許可する条件にはしない。 */
 export function readPrompt(screen: ScreenSnapshot, provider: 'claude' | 'codex'): Prompt | undefined {
   const { lines, cursorY } = screen;
   if (provider === 'claude') {
@@ -22,7 +22,7 @@ export function readPrompt(screen: ScreenSnapshot, provider: 'claude' | 'codex')
     }
     return;
   }
-  // Codex の選択肢は ›、会話入力は › または >。下のショートカット行も必須にする。
+  // Codex は下のショートカット行が読める場合だけ、結果と入力欄を分ける。
   for (let start = cursorY; start >= 0; start--) {
     if (!/^\s*[›>]\s/u.test(lines[start])) continue;
     const end = lines.findIndex((line, index) => index > cursorY && /\? for shortcuts|context left|context remaining/u.test(line));
@@ -35,6 +35,18 @@ export function readPanel(screen: ScreenSnapshot): string {
   let start = screen.cursorY;
   while (start > 0 && !BORDER.test(screen.lines[start - 1])) start--;
   return screen.lines.slice(start).join('\n').trim();
+}
+
+/** 実機で確認した Claude のパネルと選択欄だけを止め、未知の描画は従来どおり送る。 */
+export function isInputBlocked(screen: ScreenSnapshot, provider: 'claude' | 'codex'): boolean {
+  // Codex の実機記録は起動エラーのみで、拒否の根拠にできるパネルはまだない。
+  if (provider === 'codex' || readPrompt(screen, provider)) return false;
+  const panel = readPanel(screen);
+  const dismiss = /^\s*Esc to cancel\s*$/mu.test(panel);
+  if (dismiss && (/^\s*Help\s+General\s+Commands\b/mu.test(panel)
+    || /^\s*Settings\s+Status\s+Config\s+Usage\s+Stats\s*$/mu.test(panel) && /^\s*Total cost:/mu.test(panel))) return true;
+  // 許可の確認も同じ番号付き選択欄を持つ。履歴中の見出しだけでは止めない。
+  return /^\s*❯\s+\d+\.\s+/mu.test(panel) && /\b(?:Enter to (?:select|confirm|set as default)|Esc to cancel)\b/u.test(panel);
 }
 
 export function readCommandOutput(before: ScreenSnapshot, after: ScreenSnapshot, command: string, provider: 'claude' | 'codex'): string {

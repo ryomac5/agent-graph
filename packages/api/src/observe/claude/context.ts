@@ -17,6 +17,7 @@ export function claudeConversationId(path: string): string {
 export interface ClaudeContextOptions {
   /** 発言の取り込みで読んだ行。先頭から読んだときは fromStart を真にする。 */
   lines?: FileLine[];
+  modelBackfillLines?: FileLine[];
   fromStart?: boolean;
   observedTs?: string;
   locate?: LocationResolver;
@@ -54,11 +55,13 @@ export function observeClaudeContext(ledger: Ledger, path: string, options: Clau
   const locationId = claudeLocationEventId(id);
   let located = existing.some((fact) => fact.source === "transcript-claude" && fact.source_event_id === locationId);
   const states = new Map<string, string>();
+  const models = new Map<string, string>();
   let own: TurnTarget | undefined;
   const hooks: TurnTarget[] = [];
   for (const fact of existing) {
     if (!fact.kind.startsWith("run.") || !fact.payload || !belongs(fact)) continue;
     const payload = fact.payload as Partial<RunPayload>;
+    if (payload.model) models.set(fact.subject, payload.model);
     if (fact.source === "transcript-claude" && fact.kind === "run.created" && typeof payload.generation === "number") {
       own = { subject: fact.subject, generation: payload.generation, started: payload.generation };
     }
@@ -84,14 +87,17 @@ export function observeClaudeContext(ledger: Ledger, path: string, options: Clau
   let firstMessageTs: string | undefined;
   const locate = options.locate ?? defaultLocationResolver;
   const handbacks = new Set<string>();
-  for (const line of lines) {
+  for (const { line, modelsOnly } of [
+    ...(options.modelBackfillLines ?? []).map(line => ({ line, modelsOnly: true })),
+    ...lines.map(line => ({ line, modelsOnly: false })),
+  ]) {
     if (!line.text.trim()) continue;
     const row = parseRow(line.text);
     if (!row || findUnsupportedReason(row)) continue;
     const timestamp = Number.isFinite(Date.parse(String(row.timestamp))) ? String(row.timestamp) : observedTs;
     const base = { source: "transcript-claude" as const, confidence: "confirmed" as const, source_ts: timestamp, observed_ts: observedTs, cursor: null };
     if (row.type === "user" || row.type === "assistant") firstMessageTs ??= timestamp;
-    if (!located && typeof row.cwd === "string" && row.cwd) {
+    if (!modelsOnly && !located && typeof row.cwd === "string" && row.cwd) {
       location = locate(row.cwd);
       append({ ...base, kind: "conversation.updated", subject: `conversation:${id}`, source_event_id: locationId, payload: { ...location } });
       located = true;
@@ -117,6 +123,14 @@ export function observeClaudeContext(ledger: Ledger, path: string, options: Clau
           ...(location ? { cwd: location.cwd, ...(location.repository_id ? { repository_id: location.repository_id } : {}) } : {}) } });
       target = own;
     }
+    // 状態が同じ行でもモデルの変更は独立に残す。過去分は状態の事実を作り直さない。
+    if (evidence.model && models.get(target.subject) !== evidence.model) {
+      append({ ...base, kind: "run.updated", subject: target.subject as `run:${string}`,
+        source_event_id: `model:${id}:${target.generation}:${String(row.uuid ?? line.cursor.offset)}`,
+        payload: { conversation_id: id, generation: target.generation, model: evidence.model } });
+      models.set(target.subject, evidence.model);
+    }
+    if (modelsOnly) continue;
     if (states.get(target.subject) === evidence.state) continue;
     states.set(target.subject, evidence.state);
     append({ ...base, kind: "run.state_changed", subject: target.subject as `run:${string}`,

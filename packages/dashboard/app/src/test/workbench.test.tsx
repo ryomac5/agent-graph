@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useContext, useLayoutEffect, useRef } from 'react';
 import { EditorView } from '@codemirror/view';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
@@ -7,10 +7,12 @@ import { Workbench } from '../pages/workspace/Workbench.tsx';
 import { FileTreePanel, useFileExplorer } from '../pages/files/FilesPage.tsx';
 import { DiffView } from '../components/diff/DiffView.tsx';
 import { parseDiff } from '../components/diff/model.ts';
-import { OpenWorkspaceFile } from '../lib/workspace-context.ts';
+import { OpenWorkspaceFile, WorkspaceConversationHeader, type ConversationTabMetadata } from '../lib/workspace-context.ts';
 import { createStore } from '../lib/store.ts';
 import { workspaceKey } from '../lib/panes.ts';
 import { DEFAULT_KEYS } from '../lib/keys.ts';
+import { trackReloadInputs } from '../lib/reload-inputs.ts';
+import { isDashboardAutoReloadBlocked } from '../lib/reload-guard.ts';
 import type { Ack, TerminalNotice } from '../lib/client.ts';
 const terminalInput = vi.hoisted(() => ({ send: undefined as ((data: string) => void) | undefined }));
 import type { ConversationClient } from '../pages/conversation/ConversationPage.tsx';
@@ -187,6 +189,26 @@ it('reloads on focus and polls disk hashes while preserving unsaved edits', asyn
   await act(async () => poll());
   expect(screen.getByText('This file changed on disk.')).toBeTruthy(); expect(screen.getByRole('textbox', { name: 'Code' }).textContent).toBe('mine');
 });
+it('allows dashboard reload after focused EditorView updates clean content or saves edits', async () => {
+  const inputs = trackReloadInputs(document);
+  try {
+    const f = fixture(); await openCode();
+    const editor = EditorView.findFromDOM(screen.getByRole('textbox', { name: 'Code' }))!;
+    act(() => editor.focus());
+    expect(document.activeElement).toBe(editor.contentDOM);
+    const client = Object.assign(f.client, { canReload: () => true });
+    expect(isDashboardAutoReloadBlocked(client, inputs.isBlocked)).toBe(false);
+    f.changeDisk('external clean content');
+    await act(async () => fireEvent.focus(window));
+    expect(editor.state.doc.toString()).toBe('external clean content');
+    expect(isDashboardAutoReloadBlocked(client, inputs.isBlocked)).toBe(false);
+    edit('unsaved content');
+    expect(isDashboardAutoReloadBlocked(client, inputs.isBlocked)).toBe(true);
+    await act(async () => fireEvent.keyDown(editor.contentDOM, { key: 's', metaKey: true }));
+    expect(editor.state.doc.toString()).toBe('unsaved content');
+    expect(isDashboardAutoReloadBlocked(client, inputs.isBlocked)).toBe(false);
+  } finally { inputs.dispose(); }
+});
 it('keeps terminal output and its process while moving the tab across panes', async () => {
   const f = fixture(); fireEvent.keyDown(screen.getByRole('textbox', { name: 'Message' }), { key: 'd', metaKey: true });
   fireEvent.click(within(panes()[1]).getByRole('button', { name: 'Open tab' })); fireEvent.click(screen.getByRole('menuitem', { name: 'Terminal' }));
@@ -258,4 +280,31 @@ it('closes the last empty pane and restores the closed workspace', async () => {
   expect(localStorage.getItem(workspaceKey('p', 'session'))).toBe('null');
   f.view.unmount(); render(<MemoryRouter><f.Wrapper/></MemoryRouter>);
   expect(panes()).toHaveLength(0);
+});
+
+it('refreshes hidden tab metadata when only the refresh callback changes', () => {
+  const metadata: ConversationTabMetadata = { name: 'Original', state: 'running', title: 'Original title', model: 'old-model' };
+  function Conversation() {
+    const header = useContext(WorkspaceConversationHeader)!;
+    useLayoutEffect(() => { header.report(header.tabId, metadata); }, [header.tabId, header.report]);
+    return <textarea aria-label="Message"/>;
+  }
+  localStorage.setItem(workspaceKey('p', 'refresh'), JSON.stringify({ kind: 'pane', id: 'pane', active: 'first', tabs: [
+    { kind: 'conversation', id: 'first', conversationId: 'c1' },
+    { kind: 'conversation', id: 'second', conversationId: 'c2' },
+  ] }));
+  const client = { command: vi.fn() };
+  const renderConversation = () => <Conversation/>;
+  const renderWorkbench = (refreshTab: (id: string, previous: ConversationTabMetadata) => ConversationTabMetadata) => <MemoryRouter>
+    <Workbench project="p" session="refresh" conversationId="c1" client={client} language="en" renderConversation={renderConversation} refreshTab={refreshTab}/>
+  </MemoryRouter>;
+  const view = render(renderWorkbench((_id, previous) => previous));
+  fireEvent.click(screen.getAllByRole('tab')[1]);
+  const refreshTab = vi.fn((id: string, previous: ConversationTabMetadata) => ({ ...previous, name: 'Updated ' + id, state: 'idle', title: 'Latest title', model: 'new-model' }));
+  view.rerender(renderWorkbench(refreshTab));
+  const hiddenTab = screen.getByRole('tab', { name: 'Updated c1' });
+  expect(hiddenTab.getAttribute('aria-selected')).toBe('false');
+  expect(hiddenTab.title).toContain('Latest title');
+  expect(refreshTab).toHaveBeenCalledWith('c1', metadata);
+  expect(refreshTab.mock.calls.every(([id]) => id === 'c1')).toBe(true);
 });

@@ -203,6 +203,20 @@ test('failed は24時間、closed と retried は7日で本文ごと削除する
   assert.deepEqual(f.watch.history(CONVERSATION), []);
 });
 
+test('jsonl に残ると確認できないスラッシュコマンドは見張らず、配達失敗を作らない', async t => {
+  const f = createFixture(t);
+  const errors = t.mock.method(console, 'error', () => {});
+  t.mock.method(Date, 'now', () => NOW);
+  for (const body of ['/vim', '/plan', ' /help', '\n/model haiku', '/unknown', '/sample:skill target', '/compact-other']) {
+    f.watch.record(body, CONVERSATION, body, f.watch.capture(CONVERSATION, NOW));
+    await f.watch.recordAccepted(body, CONVERSATION, body, f.watch.capture(CONVERSATION, NOW));
+  }
+  assert.equal(f.watch.check(NOW + 2 * SEND_WATCH_TIMEOUT_MS), false);
+  assert.deepEqual(f.watch.history(CONVERSATION), []);
+  assert.deepEqual(f.watch.list(), []);
+  assert.equal(errors.mock.callCount(), 0);
+});
+
 test('compact は履歴の command-name で配達を照合する', async t => {
   const f = createFixture(t);
   const errors = t.mock.method(console, 'error', () => {});
@@ -534,13 +548,25 @@ test('掃除が BUSY でも未配信の変更を返し、次の周期で掃除�
   } finally { writer.close(); }
 });
 
-test('履歴に届かない skill コマンドも削除せず配達失敗になる', t => {
+test('履歴に記録される compact が届かない場合は削除せず配達失敗になる', t => {
   const f = createFixture(t);
   t.mock.method(console, 'error', () => {});
-  record(f, '/custom-skill work');
+  record(f, '/compact keep the summary');
   assert.equal(f.watch.check(NOW + SEND_WATCH_TIMEOUT_MS), true);
   assert.equal(f.read().state, 'failed');
-  assert.equal(f.watch.list()[0].body, '/custom-skill work');
+  assert.equal(f.watch.list()[0].body, '/compact keep the summary');
+});
+
+test('未確認の Codex の compact は見張らない', async t => {
+  const f = createFixture(t);
+  const conversation = JSON.stringify(['codex', 'fixture']);
+  f.append('conversation.created', `conversation:${conversation}`, { provider: 'codex', native_id: 'fixture', origin: 'observed', type: 'interactive' });
+  f.feed.refresh();
+  const errors = t.mock.method(console, 'error', () => {});
+  await f.watch.recordAccepted('compact', conversation, '/compact', f.watch.capture(conversation, NOW));
+  assert.equal(f.watch.check(NOW + 2 * SEND_WATCH_TIMEOUT_MS), false);
+  assert.deepEqual(f.watch.history(conversation), []);
+  assert.equal(errors.mock.callCount(), 0);
 });
 
 test('WebSocket returns panel output once and rejects subsequent sends into a model picker', async t => {

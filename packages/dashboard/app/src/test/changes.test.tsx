@@ -1,3 +1,6 @@
+import { installPreloadRecovery, VERSION_CHECK_MS } from '../lib/preload-recovery.ts';
+import { trackReloadInputs } from '../lib/reload-inputs.ts';
+import { isDashboardAutoReloadBlocked } from '../lib/reload-guard.ts';
 import { afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
@@ -327,4 +330,29 @@ it('keeps long acceptance commands inside the wrapping verification section', ()
   expect(getComputedStyle(summary).whiteSpace).toBe('normal');
   expect(getComputedStyle(summary).overflowWrap).toBe('anywhere');
   style.remove();
+});
+
+it('protects the finding body from auto reload in a hidden tab', async () => {
+  sessionStorage.clear();
+  const inputs = trackReloadInputs(document);
+  const f = setup();
+  fireEvent.click(screen.getByRole('button', { name: 'Comment on code.txt new line 2' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'Finding' }), { target: { value: 'Keep this finding' } });
+  vi.useFakeTimers();
+  vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+  document.head.innerHTML = '<script type="module" src="/assets/old.js"></script>';
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, text: async () => '<script type="module" src="/assets/new.js"></script>' })));
+  const reload = vi.fn();
+  const client = { ...f.client, canReload: () => true };
+  const dispose = installPreloadRecovery(reload, { isBlocked: () => isDashboardAutoReloadBlocked(client, inputs.isBlocked) });
+  try {
+    await act(() => vi.advanceTimersByTimeAsync(VERSION_CHECK_MS * 2));
+    expect(reload).not.toHaveBeenCalled();
+    expect(screen.getByRole('textbox', { name: 'Finding' })).toHaveProperty('value', 'Keep this finding');
+    fireEvent.change(screen.getByRole('textbox', { name: 'Finding' }), { target: { value: '' } });
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(reload).toHaveBeenCalledTimes(1);
+  } finally {
+    dispose(); inputs.dispose(); document.head.innerHTML = ''; vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks();
+  }
 });

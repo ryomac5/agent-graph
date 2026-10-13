@@ -1,3 +1,4 @@
+import { holdDashboardReload } from '../lib/reload-safety.ts';
 import { SettingMenu } from './settings/Controls.tsx';
 import { useEffect, useState } from 'react';
 import type { ConversationClient } from '../pages/conversation/ConversationPage.tsx';
@@ -8,6 +9,7 @@ export function SshSettings({ client, projects, language = 'en' }: { client: Con
   const [connections, setConnections] = useState<SshConnection[]>([]);
   const [saved, setSaved] = useState<SshConnection[]>([]);
   const dirty = JSON.stringify(connections) !== JSON.stringify(saved);
+  useEffect(() => { if (dirty) return holdDashboardReload(); }, [dirty]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');

@@ -20,7 +20,7 @@ function setup({ provider = 'codex', origin = 'managed', status = 'idle', projec
   } });
   store.setConnection('connected');
   const command = vi.fn(async (command: string): Promise<Ack> => ({ type: 'ack', cmd_id: 'cmd', ok: true,
-    result: command === 'settings.models' ? { models: [{ model: 'model-a', displayName: 'Model A', effort: 'medium' }, { model: 'model-b', displayName: 'Model B', effort: 'low' }] } : {} }));
+    result: command === 'list_models' ? [{ model: 'model-a', displayName: 'Model A', effort: 'medium' }, { model: 'model-b', displayName: 'Model B', effort: 'low' }] : {} }));
   const client = supplied ?? { command };
   render(<MemoryRouter initialEntries={['/c/c']}><ConversationPage conversationId={conversationId} target={store} client={client}/></MemoryRouter>);
   return { store, command };
@@ -116,10 +116,10 @@ it('interrupts the current run and never chooses an older generation', async () 
   await waitFor(() => expect(command).toHaveBeenCalledWith('interrupt', { runId: 'new' }));
 });
 
-it('loads models from the API catalog and sends model and effort using set_model', async () => {
+it('loads models from runner and sends model and effort using set_model', async () => {
   const { command } = setup();
   await waitModels();
-  expect(command).toHaveBeenCalledWith('settings.models', { provider: 'codex' });
+  expect(command).toHaveBeenCalledWith('list_models', { provider: 'codex' });
   fireEvent.click(screen.getByRole('button', { name: /^Model · / }));
   fireEvent.click(screen.getByRole('menuitemradio', { name: 'Model B' }));
   fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
@@ -132,7 +132,7 @@ it('loads models from the API catalog and sends model and effort using set_model
 
 it('disables Codex model and effort changes and blocks sending during an active turn', async () => {
   const { command } = setup({ status: 'running' });
-  await waitFor(() => expect(command).toHaveBeenCalledWith('settings.models', { provider: 'codex' }));
+  await waitFor(() => expect(command).toHaveBeenCalledWith('list_models', { provider: 'codex' }));
   expect((screen.getByRole('button', { name: /^Effort · / }) as HTMLButtonElement).disabled).toBe(true);
   fireEvent.click(screen.getByRole('button', { name: /^Model · / }));
   expect(screen.getByText('Available after this turn ends')).toBeTruthy();
@@ -159,7 +159,7 @@ it('sends only on Cmd+Enter, preserves newlines on Enter and rejects composing i
 
 it('uses one send button and immediately continues an external conversation without a dialog', async () => {
   const command = vi.fn(async (name: string): Promise<Ack> => ({ type: 'ack', cmd_id: 'cmd', ok: true,
-    result: name === 'settings.models' ? { models: [{ model: 'model-a', displayName: 'Model A' }, { model: 'model-b', displayName: 'Model B' }] } : name === 'session.launch' ? { terminalId: 'terminal' } : { hosts: [] } }));
+    result: name === 'list_models' ? [{ model: 'model-a', displayName: 'Model A' }, { model: 'model-b', displayName: 'Model B' }] : name === 'session.launch' ? { terminalId: 'terminal' } : { hosts: [] } }));
   setup({ origin: 'observed', status: 'running', client: { command } });
   await waitModels();
   fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Continue please' } });
@@ -192,8 +192,8 @@ it('shows unknown reason, last evidence, timestamp and a dashed state with evide
 });
 
 it('preserves input on failed acknowledgements and disables commands while disconnected', async () => {
-  const command = vi.fn(async (name: string): Promise<Ack> => ({ type: 'ack', cmd_id: 'cmd', ok: name === 'settings.models',
-    result: { models: [{ model: 'model-b', displayName: 'Model B' }] }, error: 'Runner unavailable' }));
+  const command = vi.fn(async (name: string): Promise<Ack> => ({ type: 'ack', cmd_id: 'cmd', ok: name === 'list_models',
+    result: [{ model: 'model-b', displayName: 'Model B' }], error: 'Runner unavailable' }));
   const { store } = setup({ client: { command } });
   await waitModels();
   const input = screen.getByRole('textbox', { name: 'Message' });
@@ -244,7 +244,7 @@ it('decodes SQLite JSON columns from real snapshot rows for tool content and app
 
 it('resumes observed Codex through the terminal without a dialog when runner has stop evidence', async () => {
   const command = vi.fn(async (name: string): Promise<Ack> => ({ type: 'ack', cmd_id: 'cmd', ok: true,
-    result: name === 'settings.models' ? { models: [{ model: 'model-b', displayName: 'Model B' }] } : name === 'session.launch' ? { terminalId: 'terminal' } : { hosts: [] } }));
+    result: name === 'list_models' ? [{ model: 'model-b', displayName: 'Model B' }] : name === 'session.launch' ? { terminalId: 'terminal' } : { hosts: [] } }));
   setup({ origin: 'observed', status: 'ended', client: { command }, projection: { runs: [{ id: 'r', conversation_id: 'c', generation: 1, state: 'ended', last_evidence: { kind: 'process_absent' }, launch: { cwd: '/workspace/demo', model: { model: 'model-a', effort: 'medium' } } }] } });
   await waitModels();
   fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Next step' } });
@@ -272,8 +272,8 @@ it('does not apply an old command response to a different conversation', async (
   } });
   store.setConnection('connected');
   let resolve!: (ack: Ack) => void;
-  const client: ConversationClient = { command: async name => name === 'settings.models'
-    ? { type: 'ack', cmd_id: 'models', ok: true, result: { models: [{ model: 'model-b', displayName: 'Model B' }] } }
+  const client: ConversationClient = { command: async name => name === 'list_models'
+    ? { type: 'ack', cmd_id: 'models', ok: true, result: [{ model: 'model-b', displayName: 'Model B' }] }
     : new Promise(done => { resolve = done; }) };
   const view = render(<MemoryRouter><ConversationPage client={client} target={store} conversationId="c"/></MemoryRouter>);
   await waitModels();
@@ -395,11 +395,11 @@ it('keeps the header to the name, state, provider with model and elapsed time, a
 });
 
 it('shows the model listing error only once the composer is used', async () => {
-  const command = vi.fn(async (name: string): Promise<Ack> => name === 'settings.models'
+  const command = vi.fn(async (name: string): Promise<Ack> => name === 'list_models'
     ? { type: 'ack', cmd_id: 'models', ok: false, error: 'An open Claude query is required to list models' }
     : { type: 'ack', cmd_id: 'cmd', ok: true, result: {} });
   setup({ provider: 'claude', client: { command } });
-  await waitFor(() => expect(command).toHaveBeenCalledWith('settings.models', { provider: 'claude' }));
+  await waitFor(() => expect(command).toHaveBeenCalledWith('list_models', { provider: 'claude' }));
   await act(async () => {});
   expect(screen.queryByText('An open Claude query is required to list models')).toBeNull();
   fireEvent.focus(screen.getByRole('textbox', { name: 'Message' }));
@@ -435,7 +435,7 @@ it('端末の会話にも、案内文ではなく普通の入力欄を出す', (
 
 it('記録のモデル名を一覧の同じモデルとして選び、内部名を出さない', async () => {
   const command = vi.fn(async (name: string): Promise<Ack> => ({ type: 'ack', cmd_id: 'cmd', ok: true,
-    result: name === 'settings.models' ? { models: [{ model: 'default', displayName: 'Default (recommended)' }, { model: 'opus', displayName: 'Opus 5.5' }] } : {} }));
+    result: name === 'list_models' ? [{ model: 'default', displayName: 'Default (recommended)' }, { model: 'opus', displayName: 'Opus 5.5' }] : {} }));
   setup({ provider: 'claude', client: { command }, projection: { runs: [{ id: 'r', conversation_id: 'c', generation: 1, state: 'idle', started_ts: '2026-10-07T00:00:00Z',
     launch: { cwd: '/workspace/demo', model: { model: 'claude-opus-5-5' } } }] } });
   fireEvent.click(screen.getByRole('button', { name: /^Model · / }));

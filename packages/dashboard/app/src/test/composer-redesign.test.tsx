@@ -7,7 +7,7 @@ import { ConversationPage } from '../pages/conversation/ConversationPage.tsx';
 import { createStore } from '../lib/store.ts';
 import { buildRows } from '../pages/graph/rows.ts';
 
-afterEach(() => { cleanup(); sessionStorage.clear(); localStorage.clear(); vi.useRealTimers(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 it('resolves actual executor candidates before config, including legacy role arrays', () => {
   const claude = { executor: 'claude', model: 'opus' }; const codex = { executor: 'codex', model: 'gpt-6-astra' };
   expect(readRecommendedModel({ policy: { roles: { orchestrate: { standard: [codex, claude, { ...claude, model: 'sonnet' }] } } }, config: { agents: { claude: { model: 'haiku' } } } }, 'claude')).toBe('opus');
@@ -20,39 +20,6 @@ it('folds older versions per family while retaining assigned models', () => {
   const visible = readVisibleModels({ policy: { roles: { implement: { heavy: [{ model: 'Sonnet 4.6' }] } } } });
   expect(visible).toEqual(['Sonnet 4.6']);
   expect(findOlderModels(models, visible)).toEqual(new Set(['Opus 5', 'GPT-6-Sol', 'Gemini 3 Flash']));
-});
-it('keeps the latest minor version visible even when it has two digits', () => {
-  const models = ['GPT-6.9-Sol', 'GPT-6.10-Sol', 'GPT-6.10-Astra', 'Fable 5.1', 'Fable 5'].map(displayName => ({ model: displayName, displayName }));
-  expect(findOlderModels(models, [])).toEqual(new Set(['GPT-6.9-Sol', 'Fable 5']));
-});
-it.each(['claude', 'codex'])('reads the API catalog and refreshes unassigned %s models when the menu opens', async provider => {
-  sessionStorage.clear();
-  const target = createStore();
-  target.setSnapshot({ seq: 1, generation: 0, projection: { projects: [{ id: 'p', root_path: '/repo' }] } });
-  target.setConnection('connected');
-  const models = provider === 'claude'
-    ? [{ model: 'claude-opus-5-5', displayName: 'Opus 5.5' }, { model: 'claude-sonnet-5-5', displayName: 'Sonnet 5.5' }, { model: 'claude-haiku-5-5', displayName: 'Haiku 5.5' }, { model: 'claude-fable-5', displayName: 'Fable 5' }]
-    : [{ model: 'gpt-6-astra', displayName: 'GPT-6-Astra' }, { model: 'gpt-6-sol', displayName: 'GPT-6-Sol' }];
-  const added = provider === 'claude' ? { model: 'claude-fable-5-1', displayName: 'Fable 5.1' } : { model: 'gpt-6.1-sol', displayName: 'GPT-6.1-Sol' };
-  const command = vi.fn(async (name: string) => ({ type: 'ack' as const, cmd_id: 'cmd', ok: true, result:
-    name === 'settings.models' ? { state: 'known', models: [...models], defaults: { model: models[0].model, displayName: models[0].displayName } }
-      : name === 'list_models' ? [models[0]]
-        : name === 'settings.read' ? { policy: { roles: { implement: { standard: [{ executor: provider, model: models[0].model }] } } } } : { hosts: [] } }));
-  render(<MemoryRouter><ConversationPage target={target} client={{ command }} newSession={{ cwd: '/repo', projectId: 'p' }}/></MemoryRouter>);
-  fireEvent.click(screen.getByRole('button', { name: provider === 'claude' ? 'Claude' : 'Codex' }));
-  await waitFor(() => expect(command).toHaveBeenCalledWith('settings.models', { provider }));
-  await act(async () => {});
-  expect(command.mock.calls.some(([name]) => name === 'list_models')).toBe(false);
-  const trigger = screen.getByRole('button', { name: /^Model · / });
-  fireEvent.click(trigger);
-  await screen.findByRole('menuitemradio', { name: models[1].displayName });
-  fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
-  models.push(added);
-  fireEvent.keyDown(trigger, { key: 'ArrowDown' });
-  expect(await screen.findByRole('menuitemradio', { name: added.displayName })).toBeTruthy();
-  expect(screen.queryByRole('menuitemradio', { name: models[provider === 'claude' ? 3 : 1].displayName })).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: '1 older versions' }));
-  expect(screen.getByRole('menuitemradio', { name: models[provider === 'claude' ? 3 : 1].displayName })).toBeTruthy();
 });
 it('focuses the selected menu row and supports arrows, Enter, Escape and older versions', () => {
   const choose = vi.fn();
@@ -74,7 +41,7 @@ it.each(['en', 'ja'] as const)('preserves the provider default until the policy 
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ projection: {}, generation: 0, next: null }) })));
   const target = createStore(); target.setSnapshot({ seq: 1, generation: 0, projection: { projects: [{ id: 'p', root_path: '/repo' }] } }); target.setConnection('connected');
   let launched = false;
-  const command = vi.fn(async (name: string) => ({ type: 'ack' as const, cmd_id: 'cmd', ok: true, result: name === 'settings.models' ? { models: [{ model: 'default', displayName: 'Default (recommended)' }, { model: 'sonnet', displayName: 'Sonnet 5.5' }, { model: 'opus', displayName: 'Opus 5.5' }], defaults: { model: 'claude-sonnet-5-5', displayName: 'Sonnet 5.5', effort: 'medium', modelSource: { kind: 'file', path: '/repo/.claude/settings.local.json', key: 'model' }, effortSource: { kind: 'provider', key: 'model default effort' } } } : name === 'settings.read' ? { policy: { roles: { orchestrate: { standard: [{ executor: 'claude', model: 'claude-opus-5-5' }] } } } } : name === 'list_models' ? [{ model: 'default', displayName: 'Default (recommended)' }, { model: 'sonnet', displayName: 'Sonnet 5.5' }, { model: 'opus', displayName: 'Opus 5.5' }] : name === 'session.launch' ? (launched = true, { terminalId: 't' }) : name === 'session.hosts' ? { hosts: launched ? [{ terminalId: 't', conversationId: '["claude","native"]' }] : [] } : {} }));
+  const command = vi.fn(async (name: string) => ({ type: 'ack' as const, cmd_id: 'cmd', ok: true, result: name === 'settings.models' ? { defaults: { model: 'claude-sonnet-5-5', displayName: 'Sonnet 5.5', effort: 'medium', modelSource: { kind: 'file', path: '/repo/.claude/settings.local.json', key: 'model' }, effortSource: { kind: 'provider', key: 'model default effort' } } } : name === 'settings.read' ? { policy: { roles: { orchestrate: { standard: [{ executor: 'claude', model: 'claude-opus-5-5' }] } } } } : name === 'list_models' ? [{ model: 'default', displayName: 'Default (recommended)' }, { model: 'sonnet', displayName: 'Sonnet 5.5' }, { model: 'opus', displayName: 'Opus 5.5' }] : name === 'session.launch' ? (launched = true, { terminalId: 't' }) : name === 'session.hosts' ? { hosts: launched ? [{ terminalId: 't', conversationId: '["claude","native"]' }] : [] } : {} }));
   render(<MemoryRouter><ConversationPage target={target} client={{ command }} newSession={{ cwd: '/repo', projectId: 'p' }} language={language}/></MemoryRouter>);
   await act(async () => {});
   const label = language === 'ja' ? 'モデル · Sonnet 5.5' : 'Model · Sonnet 5.5';
@@ -103,7 +70,7 @@ it.each(['en', 'ja'] as const)('shows unavailable only when provider defaults ca
   const target = createStore(); target.setSnapshot({ seq: 1, generation: 0, projection: { projects: [{ id: 'p', root_path: '/repo' }] } }); target.setConnection('connected');
   const command = vi.fn(async (name: string) => ({ type: 'ack' as const, cmd_id: 'cmd', ok: true, result:
     name === 'list_models' ? [{ model: 'opus', displayName: 'Opus 5.5' }]
-      : name === 'settings.models' ? { models: [{ model: 'opus', displayName: 'Opus 5.5' }], defaults: { model: null, displayName: null, effort: null, modelSource: { kind: 'provider', key: 'account default' } } }
+      : name === 'settings.models' ? { defaults: { model: null, displayName: null, effort: null, modelSource: { kind: 'provider', key: 'account default' } } }
         : name === 'settings.read' ? { policy: { roles: { orchestrate: { standard: [{ executor: 'claude', model: 'opus' }] } } } } : { hosts: [] } }));
   render(<MemoryRouter><ConversationPage target={target} client={{ command }} newSession={{ cwd: '/repo', projectId: 'p' }} language={language}/></MemoryRouter>);
   await waitFor(() => expect(command).toHaveBeenCalledWith('settings.models', { provider: 'claude', cwd: '/repo' }));

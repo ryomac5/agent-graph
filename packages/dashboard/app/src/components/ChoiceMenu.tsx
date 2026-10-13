@@ -4,10 +4,9 @@ import { Icon } from './Icon.tsx';
 import { useEscapeLayer } from '../lib/escape-layers.ts';
 
 export interface MenuChoice { value: string; label: ReactNode; title?: string; detail?: string; older?: boolean; disabled?: boolean }
-export function ChoiceMenu({ label, name, value, choices, onChange, onOpen, disabled, width = 200, footer, note, olderLabel }: {
+export function ChoiceMenu({ label, name, value, choices, onChange, disabled, width = 200, footer, note, olderLabel }: {
   label: ReactNode; name: string; value: string; choices: MenuChoice[]; onChange: (value: string) => void;
   disabled?: boolean; width?: number; footer?: ReactNode; note?: string; olderLabel?: string;
-  onOpen?: () => void;
 }) {
   const id = useId(); const trigger = useRef<HTMLButtonElement>(null); const panel = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false); const [older, setOlder] = useState(false);
@@ -15,7 +14,6 @@ export function ChoiceMenu({ label, name, value, choices, onChange, onOpen, disa
   const choiceKeys = choices.map(choice => choice.value).join("\n");
   const visible = choices.filter(choice => older || !choice.older);
   function close() { setOpen(false); setOlder(false); trigger.current?.focus(); }
-  function show() { if (!open) onOpen?.(); setOpen(true); }
   useEscapeLayer(open, close);
   useLayoutEffect(() => {
     if (!open) return;
@@ -33,7 +31,7 @@ export function ChoiceMenu({ label, name, value, choices, onChange, onOpen, disa
   }, [open]);
   return <>
     <button ref={trigger} type="button" className="btn btn-ghost btn-sm choice-trigger" aria-label={name} title={name} aria-haspopup="menu" aria-expanded={open} aria-controls={open ? id : undefined} disabled={disabled}
-      onClick={() => open ? close() : show()} onKeyDown={event => { if (['ArrowDown', 'ArrowUp'].includes(event.key)) { event.preventDefault(); show(); } }}>{label}<Icon name="chevronDown" size={12}/></button>
+      onClick={() => open ? close() : setOpen(true)} onKeyDown={event => { if (['ArrowDown', 'ArrowUp'].includes(event.key)) { event.preventDefault(); setOpen(true); } }}>{label}<Icon name="chevronDown" size={12}/></button>
     {open && createPortal(<div ref={panel} id={id} tabIndex={-1} role="menu" aria-label={name} className="choice-menu" style={{ width, left: position.left, bottom: position.bottom }} onKeyDown={event => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); }
       if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;

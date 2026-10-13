@@ -492,7 +492,7 @@ it('clears the acknowledged source draft after navigating away without clearing 
 it.each(['model', 'effort'])('holds reload for an unapplied %s and releases on revert and unmount', async field => {
   const target = setup([], { conversations: [{ id: 'c', provider: 'codex', origin: 'managed' }],
     runs: [{ id: 'r', conversation_id: 'c', state: 'idle', generation: 1, launch: { cwd: '/repo', model: { model: 'opus', effort: 'high' } } }] });
-  const modelsClient = { command: (name: string) => name === 'settings.models' ? Promise.resolve({ type: 'ack' as const, cmd_id: 'models', ok: true, result: { models: [{ model: 'opus', displayName: 'Opus 5.5', effort: 'high' }, { model: 'other', displayName: 'Other', effort: 'high' }] } }) : client.command(name) };
+  const modelsClient = { command: (name: string) => name === 'list_models' ? Promise.resolve({ type: 'ack' as const, cmd_id: 'models', ok: true, result: [{ model: 'opus', displayName: 'Opus 5.5', effort: 'high' }, { model: 'other', displayName: 'Other', effort: 'high' }] }) : client.command(name) };
   const view = render(<MemoryRouter><ConversationPage conversationId="c" target={target} client={modelsClient} language="en"/></MemoryRouter>);
   await act(async () => {});
   await act(async () => {});

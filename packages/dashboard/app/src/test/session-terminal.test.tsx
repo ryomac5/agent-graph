@@ -39,7 +39,8 @@ function fixture({ hosted = false, state = 'running', evidence }: { hosted?: boo
   let launched = hosted;
   let discover = true;
   const command = vi.fn(async (name: string, _payload?: unknown): Promise<Ack> => {
-    if (name === 'settings.models') return ack({ models: [{ model: 'opus', displayName: 'Opus' }], defaults: { model: 'opus', displayName: 'Opus', modelSource: { kind: 'file', path: '/home/.claude/settings.json', key: 'model' } } });
+    if (name === 'settings.models') return ack({ defaults: { model: 'opus', displayName: 'Opus', modelSource: { kind: 'file', path: '/home/.claude/settings.json', key: 'model' } } });
+    if (name === 'list_models') return ack([{ model: 'opus', displayName: 'Opus' }]);
     if (name === 'session.launch') { launched = true; return ack({ terminalId: 'terminal', pid: 123 }); }
     if (name === 'session.hosts') return ack({ hosts: launched && discover ? [{ conversationId, terminalId: 'terminal', pid: 123, startedAt: 'now' }] : [] });
     if (name === 'terminal.attach') return ack({ terminalId: 'terminal', scrollback: 'Restored output' });
@@ -114,11 +115,11 @@ it('keeps the selected Haiku launch model after sending a new Workbench conversa
   } });
   const original = f.command.getMockImplementation()!;
   f.command.mockImplementation(async (name, payload) => {
-    if (name === 'settings.models') return ack({ models: [
+    if (name === 'list_models') return ack([
       { model: 'default', displayName: 'Default (recommended)' },
       { model: 'opus', displayName: 'Opus' },
       { model: 'haiku', displayName: 'Haiku' },
-    ] });
+    ]);
     const result = await original(name, payload);
     if (name === 'session.hosts') return ack({ hosts: (result.result as { hosts: object[] }).hosts.map(host => ({ ...host, launchModel: 'haiku' })) });
     return result;

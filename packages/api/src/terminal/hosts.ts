@@ -22,7 +22,7 @@ const MODEL = /^[a-z0-9][a-z0-9._-]*$/i;
 const execute = promisify(execFile);
 type Notify = (message: TerminalNotification) => void;
 interface Host {
-  terminalId: string; terminal: IPty; startedAt: string; conversationId?: string; resumeId?: string;
+  terminalId: string; terminal: IPty; startedAt: string; startedTick: number; conversationId?: string; resumeId?: string;
   described?: boolean; provider?: 'claude' | 'codex'; projectId?: string; cwd?: string; target?: ExecutionTarget; connection?: SshConnection; remotePid?: number; discoveryBuffer?: string; disconnected?: boolean; mirror?: ReturnType<typeof startRemoteMirror>;
   scrollback: Buffer; pending: { text: string; paths: Promise<string[]> }[]; listeners: Set<Notify>; sending?: Promise<void>; lastOutputAt?: number; inputReady?: boolean;
 }
@@ -54,10 +54,10 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
   let opening = 0, closed = false;
   let scanning: Promise<void> | undefined;
   function isInputReady(host: Host): boolean {
-    const now = Date.now(), age = now - Date.parse(host.startedAt);
+    const now = performance.now(), age = now - host.startedTick;
     // 準備完了を記憶し、作業中の描画では静穏待ちに戻さない。上限も送信時でなく起動時から数える。
     host.inputReady ||= age >= STARTUP_LIMIT_MS
-      || age >= (options.warmupMs ?? 2500) && now - (host.lastOutputAt ?? 0) >= (options.quietMs ?? 800);
+      || age >= (options.warmupMs ?? 2500) && now - (host.lastOutputAt ?? host.startedTick) >= (options.quietMs ?? 800);
     return host.inputReady;
   }
   // Orca と同じく、入力中の行を消してから貼り付け、Enter は間を置いて別に書く。
@@ -177,7 +177,7 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
           env.TERM = 'xterm-256color';
           const terminal = (options.openTerminal ?? spawnTerminal)(location.connection ? 'ssh' : provider, location.connection ? ['-tt', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', location.connection.destination, '--', buildLaunchCommand(cwd, provider, resumeId, request.model as string | undefined)] : args, { cwd: location.connection ? location.local : cwd, env, name: env.TERM, cols: 80, rows: 24 });
           const terminalId = randomUUID();
-          const host: Host = { described: request.target !== undefined, terminalId, terminal, resumeId, provider, projectId: request.projectId as string, cwd, target, connection: location.connection, startedAt: new Date().toISOString(), scrollback: Buffer.alloc(0), pending: [], listeners: new Set() };
+          const host: Host = { described: request.target !== undefined, terminalId, terminal, resumeId, provider, projectId: request.projectId as string, cwd, target, connection: location.connection, startedAt: new Date().toISOString(), startedTick: performance.now(), scrollback: Buffer.alloc(0), pending: [], listeners: new Set() };
           hosts.set(terminalId, host);
           terminal.onData(data => {
             if (host.connection && !host.remotePid) {
@@ -186,7 +186,7 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
               host.discoveryBuffer = marker ? undefined : discovery.slice(-128);
               if (marker) host.remotePid = Number(marker[1]);
             }
-            host.lastOutputAt = Date.now();
+            host.lastOutputAt = performance.now();
             const buffer = Buffer.concat([host.scrollback, Buffer.from(data)]);
             let start = Math.max(0, buffer.length - MAX_SCROLLBACK_BYTES);
             while (start < buffer.length && (buffer[start] & 0xc0) === 0x80) start++;

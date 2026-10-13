@@ -1,4 +1,4 @@
-import { useLayoutEffect, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 
 const DRAFT_PREFIX = 'agent-graph-conversation-draft:';
 function readDraft(key: string): string {
@@ -12,6 +12,8 @@ function saveDraft(key: string, text: string) {
   } catch { /* 保存できなくても入力と送信は続ける。 */ }
 }
 export function useConversationDraft(key: string) {
+  const mounted = useRef(true);
+  useLayoutEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const [draft, setDraft] = useState(() => ({ key, text: readDraft(key) }));
   const input = draft.key === key ? draft.text : readDraft(key);
   useLayoutEffect(() => { setDraft(previous => previous.key === key ? previous : { key, text: readDraft(key) }); }, [key]);
@@ -23,7 +25,7 @@ export function useConversationDraft(key: string) {
   }
   function clearSentDraft(sentKey: string, sent: string) {
     if (readDraft(sentKey) === sent) saveDraft(sentKey, '');
-    setDraft(previous => previous.key === sentKey && previous.text === sent ? { key: sentKey, text: '' } : previous);
+    if (mounted.current) setDraft(previous => previous.key === sentKey && previous.text === sent ? { key: sentKey, text: '' } : previous);
   }
   return [input, setInput, clearSentDraft] as const;
 }

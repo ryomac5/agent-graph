@@ -1,11 +1,12 @@
 import { PolicyEditor } from './PolicyEditor.tsx';
 import { useEffect, useRef, useState } from 'react';
 import { labelSetting, SettingsFields, SettingsSection } from '../../components/settings/SettingsFields.tsx';
-import { APPEARANCE_CHOICES, loadAppearance, saveAppearance, requestSettings, describeDecision,
+import { APPEARANCE_CHOICES, loadAppearance, saveAppearance, requestSettings,
   type Appearance, type PolicyPreview, type SettingsClient, type SettingsSnapshot, type SettingsStatus } from '../../lib/settings.ts';
 import { loadPreferences, NOTIFICATION_KINDS, notificationLabel, PREFERENCES_KEY, type NotificationPreferences } from '../../components/notifications/model.ts';
 import { ModelAssignments, type ModelCatalog } from './ModelAssignments.tsx';
 import { assignmentSettingText } from '../../lib/i18n.ts';
+import { PolicyPreview as PolicyPreviewContent } from './PolicyPreview.tsx';
 import './settings.css';
 
 const ERROR_TEXT: Record<string, string> = {
@@ -139,7 +140,7 @@ export function SettingsPage({ client, language, onAppearance, policyOnly = fals
       <SettingsFields value={{ maxRoundTrips: settings.policy.maxRoundTrips, quota: settings.policy.quota, performance: settings.policy.performance, constraints: settings.policy.constraints }} language={lang} onChange={next => edit('policy', { ...settings.policy, ...next })}/>
       <div className="button-row"><button className="btn btn-secondary" disabled={busy || quotaInvalid} onClick={() => void previewPolicy()}>{text('Preview policy', '割り当てをプレビュー')}</button>
       <button className="btn btn-primary" disabled={busy || quotaInvalid || !preview} onClick={() => void save('policy')}>{text('Save policy', '割り当てを保存')}</button></div>
-      {preview && <div role="region" aria-label={text('Policy preview', '割り当てのプレビュー')}><table><thead><tr><th>{text('Delegation', '依頼')}</th><th>{text('Before', '変更前')}</th><th>{text('After', '変更後')}</th></tr></thead><tbody>{preview.rows.map(row => <tr key={row.id}><td>{row.id}</td><td>{describeDecision(row.before)}</td><td>{describeDecision(row.after)}</td></tr>)}</tbody></table>{!preview.rows.length && <p>{text('No past delegations available.', 'プレビューできる過去の依頼がありません。')}</p>}</div>}
+      {preview && <div role="region" aria-label={text('Policy preview', '割り当てのプレビュー')}><PolicyPreviewContent preview={preview} language={lang}/></div>}
     </SettingsSection>
     {!policyOnly && <SettingsSection title={text('Projects', 'プロジェクト')}>
       {fields('project', settings.project as unknown as Record<string, unknown>)}

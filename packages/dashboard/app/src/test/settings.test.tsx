@@ -63,7 +63,9 @@ function createFixture() {
     if (name === 'settings.read') result = structuredClone(value);
     else if (name === 'settings.status') result = structuredClone(status);
     else if (name === 'settings.models') result = { state: 'unknown', models: [] };
-    else if (name === 'settings.previewPolicy') result = { token: 'preview-token', rows: [{ id: 'past-delegation', before: { ok: true, assignment: { executor: 'codex', model: 'before-model' } }, after: { ok: true, assignment: { executor: 'claude', model: 'after-model' } } }] };
+    else if (name === 'settings.previewPolicy') result = { token: 'preview-token', total: 1, changed: 1,
+      roleChanges: [{ role: 'implement', bands: [{ weight: 'standard', before: [{ model: 'before-model' }], after: [{ model: 'after-model' }] }] }],
+      rows: [{ id: 'past-delegation', description: 'Improve the settings screen', timestamp: '2026-10-12T09:30:00Z', role: 'implement', before: { ok: true, assignment: { executor: 'codex', model: 'before-model' } }, after: { ok: true, assignment: { executor: 'claude', model: 'after-model' } } }] };
     else if (name === 'settings.apiKey') result = { configured: !(payload as { remove?: boolean }).remove };
     else if (name === 'settings.write') result = { saved: true };
     else if (name === 'settings.rebuild') { result = { started: true }; status.rebuild = { state: 'running', completed: 2, total: 5 }; }
@@ -169,11 +171,11 @@ it('requires policy preview, shows historical outcomes and invalidates preview a
   const f = createFixture(); render(<SettingsPage client={f.client}/>); await screen.findByRole('button', { name: 'Save policy' });
   expect(screen.getByRole('button', { name: 'Save policy' })).toHaveProperty('disabled', true);
   fireEvent.change(screen.getByLabelText('quota · Stop using at usage'), { target: { value: '95' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Preview policy' })); await screen.findByText('claude · after-model');
-  expect(screen.getByText('codex · before-model')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Preview policy' })); await screen.findByText('Improve the settings screen');
+  expect(screen.getByLabelText('Assignment changes').textContent).toContain('Implementation: before-model → after-model (Standard)');
   fireEvent.change(screen.getByLabelText('performance · Results needed to rank'), { target: { value: '30' } });
   expect(screen.queryByRole('region', { name: 'Policy preview' })).toBeNull(); expect(screen.getByRole('button', { name: 'Save policy' })).toHaveProperty('disabled', true);
-  fireEvent.click(screen.getByRole('button', { name: 'Preview policy' })); await screen.findByText('claude · after-model');
+  fireEvent.click(screen.getByRole('button', { name: 'Preview policy' })); await screen.findByText('Improve the settings screen');
   fireEvent.click(screen.getByRole('button', { name: 'Save policy' })); await screen.findByText('Saved');
   expect(f.command).toHaveBeenCalledWith('settings.write', expect.objectContaining({ store: 'policy', previewToken: 'preview-token', patch: expect.objectContaining({ quota: { softLimitPercent: 70, hardLimitPercent: 95 } }) }));
 });
@@ -290,7 +292,7 @@ it('edits weighted assignments, candidate order and criteria then saves the prev
   fireEvent.click(screen.getByLabelText('Implementation Heavy 2 Remove'));
   fireEvent.click(screen.getByRole('button', { name: 'Advisor Light Edit assignment' }));
   fireEvent.change(screen.getByLabelText('Advisor Light 1 Model'), { target: { value: 'sonnet' } });
-  fireEvent.click(screen.getAllByRole('button', { name: 'Save' }).at(-1)!); await screen.findByText('claude · after-model');
+  fireEvent.click(screen.getAllByRole('button', { name: 'Save' }).at(-1)!); await screen.findByText('Improve the settings screen');
   fireEvent.click(screen.getAllByRole('button', { name: 'Save' }).at(-1)!); await screen.findByText('Saved');
   const save = f.command.mock.calls.find(([name]) => name === 'settings.write')![1] as { patch: SettingsSnapshot['policy'] };
   const roles = save.patch.roles;
@@ -312,7 +314,7 @@ it('supports drag reordering and standard inheritance with Japanese labels and p
   fireEvent.click(screen.getByLabelText('実装 重い作業 ふつうと同じにする'));
   expect(screen.queryByRole('dialog')).toBeNull();
   expect(screen.getByRole('button', { name: '実装 重い作業 割り当てを編集' }).textContent).toBe('GPT-6 Astra');
-  fireEvent.click(screen.getByRole('button', { name: '割り当てをプレビュー' })); await screen.findByText('claude · after-model');
+  fireEvent.click(screen.getByRole('button', { name: '割り当てをプレビュー' })); await screen.findByText('Improve the settings screen');
   fireEvent.click(screen.getByRole('button', { name: '割り当てを保存' })); await screen.findByText('保存しました');
   const save = f.command.mock.calls.find(([name]) => name === 'settings.write')![1] as { patch: SettingsSnapshot['policy'] };
   expect(save.patch.roles.implement).not.toHaveProperty('heavy');

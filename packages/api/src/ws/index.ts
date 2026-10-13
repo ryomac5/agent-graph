@@ -112,7 +112,12 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
   const searchOptions = { port, token };
   const search = createSearchHandler(searchDb, searchOptions);
   const files = createFilesApi(searchDb, options.readRedactionRules);
-  const usage = createUsageService(options.usage);
+  const usage = createUsageService({
+    readRepositoryPaths: () => searchDb.prepare(`SELECT root_path AS path FROM api_projects WHERE root_path IS NOT NULL
+      UNION SELECT cwd AS path FROM conversations WHERE cwd IS NOT NULL
+      UNION SELECT cwd AS path FROM runs WHERE cwd IS NOT NULL`).all().map(row => String(row.path)),
+    ...options.usage,
+  });
   const sessionHosts = createSessionHosts(files.selectRoot, options.sessionHosts);
   const sessionCommands = new Map<string, Promise<unknown>>();
   const completedSessionCommands: string[] = [];

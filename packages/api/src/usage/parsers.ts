@@ -26,6 +26,27 @@ export function parseClaude(value: unknown): { windows: UsageWindow[]; timestamp
     return { key: row.key, label: row.label, usedPercent: readPercent(row.percent), resetsAt: readReset(row.resets_at) };
   })) };
 }
+export function parseClaudeLimits(value: unknown, statusline = false): UsageWindow[] {
+  const data = asRecord(value);
+  const windows = [['five_hour', 'Session'], ['seven_day', 'Week']].flatMap(([key, label]) => {
+    const row = asRecord(data[key]);
+    const percent = row[statusline ? 'used_percentage' : 'utilization'];
+    return percent == null ? [] : [{ key, label, usedPercent: readPercent(percent), resetsAt: readReset(row.resets_at) }];
+  });
+  if (!statusline && Array.isArray(data.model_scoped)) for (const value of data.model_scoped) {
+    const row = asRecord(value);
+    if (typeof row.display_name !== 'string' || !row.display_name.trim() || row.utilization == null) continue;
+    const name = row.display_name.trim();
+    windows.push({ key: `model:${name}`, label: `Week ${name}`, usedPercent: readPercent(row.utilization), resetsAt: readReset(row.resets_at) });
+  }
+  return requireWindows(windows);
+}
+export function parseClaudeStatusline(value: unknown): { windows: UsageWindow[]; timestamp: number } {
+  const data = asRecord(value);
+  const timestamp = typeof data.ts === 'string' ? Date.parse(data.ts) : NaN;
+  if (!Number.isFinite(timestamp)) throw new Error('invalid_data');
+  return { timestamp, windows: parseClaudeLimits(data.rate_limits ?? data, true) };
+}
 export function parseCodex(value: unknown, rollout = false): UsageWindow[] {
   const root = asRecord(value);
   const data = rollout ? root : asRecord(root.rateLimits);

@@ -1,3 +1,4 @@
+import { USAGE_PROBE_PATH } from '../src/usage/probe-path.ts';
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -250,4 +251,19 @@ test('SessionStart のない UserPromptSubmit でも開始時刻が入り、受�
   assert.deepEqual(ledger.readSince(0, 100), before);
   assert.equal((await post(restarted, { ...event, event_id: 'additional', source_ts: '2026-01-01T00:01:00.000Z' })).status, 200);
   assert.equal(projectRuns(ledger.readSince(0, 100))[0].turn_started_ts, event.source_ts);
+});
+
+test('real conversation hooks remain recorded at the exact probe path', async t => {
+  const ledger = openLedger(':memory:');
+  t.after(() => ledger.close());
+  const receiver = createReceiver(ledger);
+  for (const hook_event_name of ['SessionStart', 'UserPromptSubmit', 'Stop', 'SessionEnd']) {
+    const response = await receiver.post(receiver.url, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + receiver.token },
+      body: JSON.stringify({ ...EVENT, event_id: hook_event_name, hook_event_name, input: { cwd: hook_event_name === 'SessionStart' ? '/home/test/repo' : USAGE_PROBE_PATH } }) });
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).accepted, true);
+  }
+  const facts = ledger.readSince(0, Number.MAX_SAFE_INTEGER);
+  assert.equal(facts.filter(fact => fact.kind.startsWith('run.')).length, 4);
+  assert.equal(projectRuns(facts)[0].state, 'ended');
 });

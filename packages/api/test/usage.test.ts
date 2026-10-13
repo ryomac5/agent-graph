@@ -3,10 +3,12 @@ import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, mkdir, rm, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { EventEmitter, once } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { spawn } from 'node:child_process';
 import { createUsageService, readCodexFallback, POLL_MS, RETRY_MS, MANUAL_MS, STALE_MS } from '../src/usage/index.ts';
-import { parseClaude, parseCodex, parseAntigravity, supportsAgy } from '../src/usage/parsers.ts';
-import { CODEX_ARGS, probeCodex } from '../src/usage/process.ts';
+import { parseClaude, parseClaudeLimits, parseClaudeStatusline, parseCodex, parseAntigravity, supportsAgy } from '../src/usage/parsers.ts';
+import { CODEX_ARGS, probeCodex, probeClaude } from '../src/usage/process.ts';
 
 const START = Date.parse('2026-10-11T00:00:00Z');
 const codex = { rateLimits: { primary: { usedPercent: 39, windowDurationMins: 10080, resetsAt: 1791948550 }, secondary: { usedPercent: 95, windowDurationMins: 300, resetsAt: 1791948550 } } };
@@ -27,17 +29,22 @@ lines.on('line', line => { const msg = JSON.parse(line); if (msg.id === 1) proce
   let version = 'agy 1.3.3';
   let turns = 0;
   let fail = false;
+  let claudeFail = false;
+  let claudePercent = 31;
   const calls: { command: string; args: string[]; stdin: unknown }[] = [];
   const launch: typeof spawn = ((command: string, args: string[], options: Parameters<typeof spawn>[2]) => {
     calls.push({ command, args, stdin: options?.stdio });
     if (fail) return spawn(process.execPath, ['-e', 'process.exit(1)'], options);
+    if (command === 'fake-claude') return spawn(process.execPath, ['-e', claudeFail ? 'process.exit(1)' : `import { createInterface } from 'node:readline';
+const lines = createInterface({ input: process.stdin });
+lines.on('line', line => { const msg = JSON.parse(line); process.stdout.write(JSON.stringify({ type: 'control_response', response: { request_id: msg.request_id, subtype: 'success', response: { rate_limits: { seven_day: { utilization: ${claudePercent}, resets_at: '2026-10-12T00:00:00Z' } } } } }) + '\\n'); });`], options);
     if (command === 'fake-codex') return spawn(process.execPath, [script], options);
     const data = args[0] === '--version' ? version : JSON.stringify({ ...agy, num_turns: turns });
     return spawn(process.execPath, ['-e', `process.stdout.write(${JSON.stringify(data)})`], options);
   }) as typeof spawn;
   let time = START;
-  const service = createUsageService({ claudePath: path, codexSessionsPath: join(root, 'sessions'), codexCommand: 'fake-codex', agyCommand: 'fake-agy', spawn: launch, now: () => time });
-  return { root, path, launch, calls, service, setTime: (value: number) => { time = value; }, setVersion: (value: string) => { version = value; }, setTurns: (value: number) => { turns = value; }, setFail: (value = true) => { fail = value; } };
+  const service = createUsageService({ claudePath: path, claudeCommand: 'fake-claude', claudeProbePath: join(root, 'probe'), readRepositoryPaths: () => [join(root, 'repo-old'), join(root, 'repo-new'), join(root, 'repo-bad')], codexSessionsPath: join(root, 'sessions'), codexCommand: 'fake-codex', agyCommand: 'fake-agy', spawn: launch, now: () => time });
+  return { root, path, launch, calls, service, setTime: (value: number) => { time = value; }, setVersion: (value: string) => { version = value; }, setTurns: (value: number) => { turns = value; }, setClaudeFail: (value = true) => { claudeFail = value; }, setClaudePercent: (value: number) => { claudePercent = value; }, setFail: (value = true) => { fail = value; } };
 }
 test('parses all providers, reset times, groups and disabled buckets', () => {
   assert.equal(parseClaude(claude()).windows[0].usedPercent, 31);
@@ -91,11 +98,11 @@ test('stops agy for the service lifetime after nonzero turns and uses null stdin
 test('shares in-flight reads and enforces automatic and manual intervals', async t => {
   const f = await fixture(t);
   await Promise.all([f.service.read(), f.service.read()]);
-  assert.equal(f.calls.length, 3);
-  f.setTime(START + MANUAL_MS - 1); await f.service.read({ force: true }); assert.equal(f.calls.length, 3);
-  f.setTime(START + MANUAL_MS); await f.service.read({ force: true }); assert.equal(f.calls.length, 5);
-  f.setTime(START + MANUAL_MS + POLL_MS - 1); await f.service.read(); assert.equal(f.calls.length, 5);
-  f.setTime(START + MANUAL_MS + POLL_MS); await f.service.read(); assert.equal(f.calls.length, 7);
+  assert.equal(f.calls.length, 4);
+  f.setTime(START + MANUAL_MS - 1); await f.service.read({ force: true }); assert.equal(f.calls.length, 4);
+  f.setTime(START + MANUAL_MS); await f.service.read({ force: true }); assert.equal(f.calls.length, 7);
+  f.setTime(START + MANUAL_MS + POLL_MS - 1); await f.service.read(); assert.equal(f.calls.length, 7);
+  f.setTime(START + MANUAL_MS + POLL_MS); await f.service.read(); assert.equal(f.calls.length, 10);
   await assert.rejects(f.service.read({ force: 'yes' }));
 });
 test('backs off from 30 seconds to 15 minutes and retains old values after failures', async t => {
@@ -113,17 +120,240 @@ test('backs off from 30 seconds to 15 minutes and retains old values after failu
   assert.equal((await f.service.read()).providers[2].state, 'ok');
   const count = f.calls.length;
   f.setTime(time + RETRY_MS); await f.service.read(); assert.equal(f.calls.length, count);
-  f.setTime(time + POLL_MS); await f.service.read(); assert.equal(f.calls.length, count + 2);
+  f.setTime(time + POLL_MS); await f.service.read(); assert.equal(f.calls.length, count + 3);
 });
-test('only rereads changed Claude files and marks values older than 30 minutes stale', async t => {
-  const f = await fixture(t);
+test('uses the legacy file only when direct and statusline sources fail, and rereads it', async t => {
+  const f = await fixture(t); f.setClaudeFail();
   await utimes(f.path, new Date(START), new Date(START));
-  await f.service.read();
-  await writeFile(f.path, JSON.stringify(claude(START, 80))); await utimes(f.path, new Date(START), new Date(START));
-  f.setTime(START + POLL_MS);
   assert.equal((await f.service.read()).providers[0].windows[0].usedPercent, 31);
-  await utimes(f.path, new Date(START + 1_000), new Date(START + 1_000));
+  await writeFile(f.path, JSON.stringify(claude(START, 80)));
+  await utimes(f.path, new Date(START), new Date(START));
   f.setTime(START + STALE_MS + 1);
   const row = (await f.service.read()).providers[0];
-  assert.equal(row.windows[0].usedPercent, 80); assert.equal(row.state, 'stale'); assert.equal(row.reason, 'old_value');
+  assert.equal(row.windows[0].usedPercent, 80); assert.equal(row.state, 'stale'); assert.equal(row.reason, 'record_fallback');
 });
+
+async function writeStatusline(root: string, name: string, time: number, percent: number) {
+  const directory = join(root, name, '.agents/state');
+  await mkdir(directory, { recursive: true });
+  const path = join(directory, 'usage.json');
+  await writeFile(path, JSON.stringify({ ts: new Date(time).toISOString(), rate_limits: {
+    five_hour: { used_percentage: percent, resets_at: 1791948550 },
+    seven_day: { used_percentage: 91, resets_at: 1792015200 },
+  } }));
+  return path;
+}
+test('direct Claude usage takes precedence over statusline and the stopped legacy cache', async t => {
+  const f = await fixture(t); f.setClaudePercent(91);
+  await writeFile(f.path, JSON.stringify(claude(START - 2 * 24 * 60 * 60_000, 46)));
+  await writeStatusline(f.root, 'repo-new', START, 26);
+  const row = (await f.service.read()).providers[0];
+  assert.equal(row.windows[0].usedPercent, 91);
+  assert.equal(row.state, 'ok'); assert.equal(row.fetchedAt, new Date(START).toISOString());
+  assert.equal(f.calls.filter(row => row.command === 'fake-claude').length, 1);
+  f.setTime(START + POLL_MS); f.setClaudePercent(95);
+  assert.equal((await f.service.read()).providers[0].windows[0].usedPercent, 95);
+});
+test('failed Claude query selects the newest valid statusline ts, ignoring mtime and absent model windows', async t => {
+  const f = await fixture(t); f.setClaudeFail();
+  const old = await writeStatusline(f.root, 'repo-old', START - 60_000, 10);
+  const latest = await writeStatusline(f.root, 'repo-new', START, 26);
+  await utimes(old, new Date(START + 60_000), new Date(START + 60_000));
+  await utimes(latest, 0, 0);
+  await mkdir(join(f.root, 'repo-bad', '.agents/state'), { recursive: true });
+  await writeFile(join(f.root, 'repo-bad', '.agents/state/usage.json'), '{');
+  await writeFile(f.path, JSON.stringify(claude(START + 60_000, 46)));
+  const row = (await f.service.read()).providers[0];
+  assert.deepEqual(row.windows.map(window => [window.key, window.usedPercent]), [['five_hour', 26], ['seven_day', 91]]);
+  assert.equal(row.windows[0].resetsAt, new Date(1791948550000).toISOString());
+  assert.equal(row.fetchedAt, new Date(START).toISOString());
+  assert.equal(row.state, 'stale'); assert.equal(row.reason, 'record_fallback');
+  f.setTime(START + RETRY_MS - 1); await f.service.read();
+  assert.equal(f.calls.filter(row => row.command === 'fake-claude').length, 1);
+  await writeStatusline(f.root, 'repo-new', START + RETRY_MS, 28);
+  f.setTime(START + RETRY_MS);
+  assert.equal((await f.service.read()).providers[0].windows[0].usedPercent, 28);
+  f.setClaudeFail(false); f.setTime(START + 3 * RETRY_MS);
+  assert.equal((await f.service.read()).providers[0].state, 'ok');
+});
+test('old fallback timestamps stay stale and back off after repeated direct query failures', async t => {
+  const f = await fixture(t); f.setClaudeFail();
+  await writeFile(f.path, JSON.stringify(claude(START - STALE_MS - 1, 46)));
+  const row = (await f.service.read()).providers[0];
+  assert.equal(row.state, 'stale'); assert.equal(row.fetchedAt, new Date(START - STALE_MS - 1).toISOString());
+  let time = START;
+  for (let attempt = 1; attempt <= 7; attempt++) {
+    const delay = Math.min(RETRY_MS * 2 ** (attempt - 1), POLL_MS);
+    f.setTime(time + delay - 1); await f.service.read();
+    assert.equal(f.calls.filter(row => row.command === 'fake-claude').length, attempt);
+    time += delay;
+    f.setTime(time); await f.service.read();
+    assert.equal(f.calls.filter(row => row.command === 'fake-claude').length, attempt + 1);
+  }
+});
+test('Claude probe sends only get_usage with persistence disabled and disables hooks and isolates caller environment', async t => {
+  const f = await fixture(t);
+  const cwd = join(f.root, 'isolated', '.cache/agent-graph/usage-probe');
+  const environment = { PATH: process.env.PATH, HOME: f.root, AGENT_GRAPH_PARENT_SESSION: 'parent', AGENT_GRAPH_TASK: 'task',
+    AGENT_GRAPH_PROJECT: '/caller', AGENT_GRAPH_SESSION: 'session', CLAUDE_PROJECT_DIR: '/caller', CLAUDECODE: '1',
+    CLAUDE_CODE_SESSION_ID: 'caller-session', HERDR_PANE_ID: 'pane', CLAUDE_CONFIG_DIR: '/auth-config' };
+  const original = { ...environment };
+  const script = `import { createInterface } from 'node:readline';
+import assert from 'node:assert/strict';
+import { realpathSync } from 'node:fs';
+const lines = createInterface({ input: process.stdin });
+const requests = [];
+lines.on('line', line => requests.push(JSON.parse(line)));
+lines.on('close', () => {
+  assert.equal(process.cwd(), realpathSync(${JSON.stringify(cwd)}));
+  assert.equal(process.env.AGENT_GRAPH_PROJECT, ${JSON.stringify(cwd)});
+  assert.equal(process.env.CLAUDE_PROJECT_DIR, ${JSON.stringify(cwd)});
+  for (const key of ['AGENT_GRAPH_PARENT_SESSION', 'AGENT_GRAPH_TASK', 'AGENT_GRAPH_SESSION', 'CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'HERDR_PANE_ID']) assert.equal(process.env[key], undefined);
+  assert.equal(process.env.CLAUDE_CONFIG_DIR, '/auth-config');
+  assert.deepEqual(requests, [{ type: 'control_request', request_id: 'usage', request: { subtype: 'get_usage', skip_behaviors: true } }]);
+  process.stdout.write('non-json startup noise\\n');
+  process.stdout.write(JSON.stringify({ type: 'control_response', response: { request_id: 'other', response: { rate_limits: { seven_day: { utilization: 1 } } } } }) + '\\n');
+  process.stdout.write(JSON.stringify({ type: 'control_response', response: { request_id: 'usage', subtype: 'success', response: { rate_limits: {
+    five_hour: { utilization: 26.5 }, seven_day: { utilization: 91 }, model_scoped: [{ display_name: 'Sonnet', utilization: 80 }]
+  } } } }) + '\\n');
+});`;
+  const launch: typeof spawn = ((command: string, args: string[], options: Parameters<typeof spawn>[2]) => {
+    assert.equal(command, 'fake-claude');
+    assert.equal(options?.cwd, cwd);
+    assert.deepEqual(args, ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--no-session-persistence', '--settings', '{"disableAllHooks":true}']);
+    assert.deepEqual(options?.stdio, ['pipe', 'pipe', 'pipe']);
+    return spawn(process.execPath, ['-e', script], options);
+  }) as typeof spawn;
+  const result = await probeClaude('fake-claude', cwd, launch, environment);
+  assert.deepEqual(environment, original);
+  assert.deepEqual(parseClaudeLimits(result).map(window => [window.key, window.usedPercent]), [['five_hour', 26.5], ['seven_day', 91], ['model:Sonnet', 80]]);
+});
+
+test('Claude sources accept partial windows without inventing missing weekly or model values', () => {
+  const result = parseClaudeStatusline({ ts: new Date(START).toISOString(), five_hour: { used_percentage: 28, resets_at: 1791948550 } });
+  assert.deepEqual(result.windows.map(row => [row.key, row.usedPercent]), [['five_hour', 28]]);
+  assert.equal(result.timestamp, START);
+  assert.deepEqual(parseClaudeLimits({ seven_day: { utilization: 91 }, model_scoped: [{ display_name: 'Sonnet' }] })
+    .map(row => [row.key, row.usedPercent]), [['seven_day', 91]]);
+  assert.throws(() => parseClaudeStatusline({ ts: 'invalid', five_hour: { used_percentage: 28 } }));
+  assert.throws(() => parseClaudeStatusline({ ts: new Date(START).toISOString(), rate_limits: { five_hour: { used_percentage: 101 } } }));
+  assert.throws(() => parseClaudeLimits({}));
+});
+
+test('unavailable sources retain exponential backoff capped at 15 minutes', async t => {
+  const f = await fixture(t); f.setFail();
+  let time = START;
+  for (let failures = 1; failures <= 7; failures++) {
+    f.setTime(time);
+    assert.equal((await f.service.read()).providers[2].state, 'unavailable');
+    const delay = Math.min(RETRY_MS * 2 ** (failures - 1), POLL_MS);
+    f.setTime(time + delay - 1); await f.service.read();
+    assert.equal(f.calls.filter(row => row.command === 'fake-agy').length, failures);
+    time += delay;
+  }
+  f.setFail(false); f.setTime(time);
+  assert.equal((await f.service.read()).providers[2].state, 'ok');
+});
+
+for (const stalled of [false, true]) {
+  test(stalled ? 'Claude timeout escalates SIGTERM to SIGKILL and waits for exit' : 'Claude successful probe waits for natural exit without killing', { timeout: 40_000 }, async t => {
+    const f = await fixture(t);
+    const signals: (NodeJS.Signals | number | undefined)[] = [];
+    let exited = false;
+    const launch: typeof spawn = ((command: string, args: string[], options: Parameters<typeof spawn>[2]) => {
+      const script = "import { createInterface } from 'node:readline';\nconst lines = createInterface({ input: process.stdin });\nlines.on('line', () => process.stdout.write(JSON.stringify({type:'control_response',response:{request_id:'usage',response:{rate_limits:{seven_day:{utilization:31}}}}})+'\\n'));\nlines.on('close', () => setTimeout(() => process.exit(0), 100));";
+      const child = spawn(process.execPath, ['-e', stalled ? "process.on('SIGTERM', () => {}); process.stdin.resume(); setInterval(() => {}, 1000);" : script], options);
+      const kill = child.kill.bind(child);
+      child.kill = signal => { signals.push(signal); return kill(signal); };
+      child.once('exit', () => { exited = true; });
+      t.after(() => { if (!exited) kill('SIGKILL'); });
+      return child;
+    }) as typeof spawn;
+    if (stalled) await assert.rejects(probeClaude('fake', join(f.root, 'probe'), launch), /timeout/);
+    else assert.deepEqual(await probeClaude('fake', join(f.root, 'probe'), launch), { seven_day: { utilization: 31 } });
+    assert.equal(exited, true);
+    assert.deepEqual(signals, stalled ? ['SIGTERM', 'SIGKILL'] : []);
+  });
+}
+
+for (const successful of [false, true]) {
+  test(successful ? 'Claude resolves on natural exit while a descendant keeps stdout open'
+    : 'Claude rejects within the deadline while a descendant keeps stdout open', { timeout: 40_000 }, async t => {
+    const f = await fixture(t);
+    let descendantPid: number | undefined;
+    let closeAtExit: boolean | undefined;
+    const signals: (NodeJS.Signals | number | undefined)[] = [];
+    const launch: typeof spawn = ((command: string, args: string[], options: Parameters<typeof spawn>[2]) => {
+      const script = `import { spawn } from 'node:child_process';
+import { createInterface } from 'node:readline';
+const lines = createInterface({ input: process.stdin });
+const descendant = spawn(process.execPath, ['-e', "setInterval(() => {}, 1000); process.send('ready');"], { stdio: ['ignore', 'inherit', 'inherit', 'ipc'] });
+descendant.once('message', () => {
+  process.stdout.write('descendant:' + descendant.pid + '\\n');
+  descendant.disconnect(); descendant.unref();
+  if (${successful}) {
+    process.stdout.write(JSON.stringify({type:'control_response',response:{request_id:'usage',response:{rate_limits:{seven_day:{utilization:31}}}}}) + '\\n', () => process.exit(0));
+  } else {
+    process.on('SIGTERM', () => {});
+    setInterval(() => {}, 1000);
+  }
+});`;
+      const child = spawn(process.execPath, ['-e', script], options);
+      const kill = child.kill.bind(child);
+      child.kill = signal => { signals.push(signal); return kill(signal); };
+      let closed = false;
+      child.once('close', () => { closed = true; });
+      child.once('exit', () => { closeAtExit = closed; });
+      child.stdout!.on('data', chunk => {
+        const match = /descendant:(\d+)/.exec(chunk.toString());
+        if (match) descendantPid = Number(match[1]);
+      });
+      t.after(() => {
+        if (child.exitCode === null && child.signalCode === null) kill('SIGKILL');
+        if (descendantPid) process.kill(descendantPid, 'SIGKILL');
+      });
+      return child;
+    }) as typeof spawn;
+    const started = performance.now();
+    const pending = probeClaude('fake', join(f.root, 'probe'), launch);
+    if (successful) assert.deepEqual(await pending, { seven_day: { utilization: 31 } });
+    else await assert.rejects(pending, /timeout/);
+    assert.equal(typeof descendantPid, 'number');
+    assert.equal(closeAtExit, false);
+    assert.deepEqual(signals, successful ? [] : ['SIGTERM', 'SIGKILL']);
+    assert.ok(performance.now() - started < (successful ? 5_000 : 35_000));
+  });
+}
+
+for (const responseReceived of [false, true]) {
+  test('Claude finishes after SIGKILL even without exit or close: response=' + responseReceived, async t => {
+    const f = await fixture(t);
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const child = Object.assign(new EventEmitter(), {
+      stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
+      kill: (signal?: NodeJS.Signals | number) => { signals.push(signal); return true; },
+    });
+    const signals: (NodeJS.Signals | number | undefined)[] = [];
+    const launched = once(child, 'launched');
+    const launch = (() => { child.emit('launched'); return child; }) as unknown as typeof spawn;
+    const pending = probeClaude('fake', join(f.root, 'probe'), launch);
+    let settled = false;
+    const rejection = assert.rejects(pending, /timeout/).then(() => { settled = true; });
+    await launched;
+    if (responseReceived) child.stdout.write(JSON.stringify({ type: 'control_response', response: {
+      request_id: 'usage', response: { rate_limits: { seven_day: { utilization: 31 } } },
+    } }) + '\n');
+    t.mock.timers.tick(responseReceived ? 5_000 : 25_000);
+    assert.deepEqual(signals, ['SIGTERM']);
+    t.mock.timers.tick(5_000);
+    assert.deepEqual(signals, ['SIGTERM', 'SIGKILL']);
+    t.mock.timers.tick(999);
+    await Promise.resolve();
+    assert.equal(settled, false);
+    t.mock.timers.tick(1);
+    await rejection;
+    assert.equal(child.stdin.destroyed && child.stdout.destroyed && child.stderr.destroyed, true);
+    t.mock.timers.tick(60_000);
+    assert.deepEqual(signals, ['SIGTERM', 'SIGKILL']);
+  });
+}

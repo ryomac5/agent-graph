@@ -3,15 +3,24 @@ import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { asRecord, parseClaude, parseCodex, parseAntigravity, supportsAgy, type ProviderId, type ProviderUsage, type UsageWindow } from './parsers.ts';
-import { probeCodex, runUsageCommand, type SpawnUsage } from './process.ts';
+import { asRecord, parseClaude, parseClaudeLimits, parseClaudeStatusline, parseCodex, parseAntigravity, supportsAgy, type ProviderId, type ProviderUsage, type UsageWindow } from './parsers.ts';
+import { USAGE_PROBE_PATH } from './probe-path.ts';
+import { probeClaude, probeCodex, runUsageCommand, type SpawnUsage } from './process.ts';
 
 export const POLL_MS = 15 * 60_000;
 export const MANUAL_MS = 5 * 60_000;
 export const STALE_MS = 30 * 60_000;
 export const RETRY_MS = 30_000;
-export interface UsageOptions { claudePath?: string; codexSessionsPath?: string; codexCommand?: string; agyCommand?: string; spawn?: SpawnUsage; now?: () => number }
+export interface UsageOptions { claudePath?: string; claudeCommand?: string; claudeProbePath?: string; readRepositoryPaths?: () => string[]; codexSessionsPath?: string; codexCommand?: string; agyCommand?: string; spawn?: SpawnUsage; now?: () => number }
 interface Entry { value: ProviderUsage; attempted: number; next: number; failures: number }
+export async function readClaudeFallback(repositories: string[]): Promise<ReturnType<typeof parseClaude>> {
+  const results = await Promise.allSettled([...new Set(repositories)].map(async root =>
+    parseClaudeStatusline(JSON.parse(await readFile(join(root, '.agents/state/usage.json'), 'utf8')))));
+  let latest: ReturnType<typeof parseClaude> | undefined;
+  for (const result of results) if (result.status === 'fulfilled' && (!latest || result.value.timestamp > latest.timestamp)) latest = result.value;
+  if (!latest) throw new Error('no_record');
+  return latest;
+}
 export async function readCodexFallback(directory: string): Promise<{ windows: UsageWindow[]; timestamp: number }> {
   let latest: { path: string; mtime: number } | undefined;
   async function visit(directory: string): Promise<void> {
@@ -47,19 +56,20 @@ export function createUsageService(options: UsageOptions = {}) {
   const now = options.now ?? Date.now;
   const entries = new Map<ProviderId, Entry>();
   const inflight = new Map<ProviderId, Promise<ProviderUsage>>();
-  let claudeMtime: number | undefined;
-  let claudeData: ReturnType<typeof parseClaude> | undefined;
   let agySupported: boolean | undefined;
   let agyStopped = false;
   async function fetchProvider(id: ProviderId): Promise<{ windows: UsageWindow[]; timestamp: number; reason?: string }> {
     if (id === 'claude') {
-      const path = options.claudePath ?? join(homedir(), '.cache/agent-graph/usage.json');
-      const info = await stat(path);
-      if (info.mtimeMs !== claudeMtime || !claudeData) {
-        const data = parseClaude(JSON.parse(await readFile(path, 'utf8')));
-        claudeData = data; claudeMtime = info.mtimeMs;
+      try {
+        const limits = await probeClaude(options.claudeCommand ?? 'claude', options.claudeProbePath ?? USAGE_PROBE_PATH, options.spawn);
+        return { windows: parseClaudeLimits(limits), timestamp: now() };
+      } catch {
+        try { return { ...await readClaudeFallback(options.readRepositoryPaths?.() ?? [process.cwd()]), reason: 'record_fallback' }; }
+        catch {
+          const path = options.claudePath ?? join(homedir(), '.cache/agent-graph/usage.json');
+          return { ...parseClaude(JSON.parse(await readFile(path, 'utf8'))), reason: 'record_fallback' };
+        }
       }
-      return claudeData;
     }
     if (id === 'codex') {
       try { return { windows: parseCodex(await probeCodex(options.codexCommand ?? 'codex', options.spawn)), timestamp: now() }; }

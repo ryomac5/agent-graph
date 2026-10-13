@@ -23,14 +23,16 @@ import './graph.css';
 export function GraphPage({ project: suppliedProject, target = store, client, language = 'en', embedded = false, rootId, rootAssignment, catalogs }: {
   catalogs?: ModelCatalog;
   rootAssignment?: OutlineProps['rootAssignment'];
-  project?: string; target?: ScreenStore; client: ConversationClient; language?: Language; embedded?: boolean; rootId?: string;
+  project?: string; target?: ScreenStore; client: ConversationClient; language?: Language; embedded?: boolean; rootId?: string | null;
 }) {
   const params = useParams(); const [search, setSearch] = useSearchParams();
   const route = suppliedProject ?? params.project ?? '';
   const selectState = useMemo(() => selectScreenTables(['roots', 'conversations', 'runs', 'relations', 'delegations', 'approvals', 'messages', 'message_memberships', 'projects'], ['connection', 'pages', 'projectionError']), []);
   const state = useScreenStore(target, selectState); const project = resolveProjectId(state, route);
   const roots = useMemo(() => selectRoots(state, project), [state, project]);
-  const root = roots.find(item => item.id === (rootId ?? search.get('root'))) ?? roots[0];
+  // 埋め込み元で根が未解決なら、URL や先頭の根で補わない。
+  const pendingRoot = embedded && rootId === null;
+  const root = pendingRoot ? undefined : roots.find(item => item.id === (rootId ?? search.get('root'))) ?? roots[0];
   const index = useRootIndex(state);
   const loading = !state.projectionError && ['roots', 'conversations', 'runs', 'relations', 'delegations', 'approvals'].some(table => state.pages?.[table]?.next);
   const tree = useMemo<GraphTree>(() => {
@@ -130,7 +132,7 @@ export function GraphPage({ project: suppliedProject, target = store, client, la
       {error && <p className="banner banner-danger" role="alert">{error}</p>}
       {embedded ? <div className="graph-scroll"><GraphOutline {...props}/></div> : <GraphTimeline {...props} range={range} onRange={setRange}/>}
       {(!embedded || detail) && selectedRow?.node && <GraphDetail row={selectedRow} catalogs={catalogs} language={language} now={now} href={href(selectedRow)} onClose={() => { setDetail(undefined); if (!embedded) setSearch(current => { const query = new URLSearchParams(current); query.delete('child'); return query; }); }}/>}
-    </> : <div className="graph-empty">{language === 'ja' ? '会話がありません' : 'No conversations yet'}</div>}
+    </> : pendingRoot ? null : <div className="graph-empty">{language === 'ja' ? '会話がありません' : 'No conversations yet'}</div>}
   </div>;
 }
 

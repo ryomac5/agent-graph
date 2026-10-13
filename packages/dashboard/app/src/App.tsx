@@ -26,7 +26,7 @@ import { Inbox } from './pages/inbox/Inbox.tsx';
 import { answerApproval, getDecision, getInbox } from './pages/inbox/model.ts';
 import { TurnSignals } from './components/TurnSignals.tsx';
 import { Notifications } from './components/notifications/Notifications.tsx';
-import { selectRoots, isRunning, rootProject, buildRootTree, useRootIndex } from './lib/roots.ts';
+import { selectRoots, isRunning, rootProject, resolveConversationRoot, useRootIndex } from './lib/roots.ts';
 import { ProjectList } from './components/ProjectList.tsx';
 import { RootList } from './components/RootViews.tsx';
 import { Icon } from './components/Icon.tsx';
@@ -155,7 +155,7 @@ export function App({ target = store, client = unavailableClient, searchClient =
   const pathProject = /^\/p\/([^/]+)/.exec(location.pathname)?.[1];
   const pathConversation = /^\/c\/([^/]+)/.exec(location.pathname)?.[1];
 
-  const directRoot = pathConversation ? roots.find(root => root.conversation_ids.includes(decodeURIComponent(pathConversation)) || buildRootTree(root, rootIndex).nodes.some(node => node.conversationId === decodeURIComponent(pathConversation))) : undefined;
+  const directRoot = pathConversation ? resolveConversationRoot(roots, rootIndex, decodeURIComponent(pathConversation)) : undefined;
   // 経路のプロジェクトは表示名でも識別子でも受け、投影の projects の識別子に揃える。
   const lastProject = /^\/p\/([^/?#]+)/.exec(lastWorkspace)?.[1];
   const project = pathProject ? resolveProjectId(state, decodeURIComponent(pathProject)) : directRoot?.project || (lastProject ? resolveProjectId(state, decodeURIComponent(lastProject)) : projects[0]?.id);
@@ -183,7 +183,10 @@ export function App({ target = store, client = unavailableClient, searchClient =
   const rootQuery = search.get('root'); const childQuery = search.get('child');
   useEffect(() => { setMobileView('conversation'); }, [location.pathname, rootQuery, childQuery]);
   const explorer = useFileExplorer({ client, target, project: pathProject ? decodeURIComponent(pathProject) : project ?? '', enabled: location.pathname.endsWith('/files') });
-  const selectedRoot = roots.find(root => root.id === search.get('root')) ?? directRoot ?? roots.find(root => rootProject(root, registeredIds) === project);
+  const requestedConversation = search.get('conversation') ?? (pathConversation ? decodeURIComponent(pathConversation) : undefined);
+  const selectedRoot = requestedConversation
+    ? resolveConversationRoot(roots.filter(root => rootProject(root, registeredIds) === project), rootIndex, requestedConversation)
+    : roots.find(root => root.id === search.get('root')) ?? directRoot ?? roots.find(root => rootProject(root, registeredIds) === project);
   function moveRow(direction: number) {
     const rows = [...(mainRef.current?.querySelectorAll<HTMLElement>('.activity-name, [data-approval-id], .delegation-select, .graph-card-link, [role="treeitem"][tabindex]') ?? [])];
     const current = rows.findIndex(row => row === document.activeElement || (row.closest('.activity-item, .activity-row, [data-approval-id]') ?? row).contains(document.activeElement));

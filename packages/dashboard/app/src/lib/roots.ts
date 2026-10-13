@@ -150,6 +150,12 @@ const readRootIndex = memoizeProjection(['conversations', 'runs', 'relations', '
 });
 export function useRootIndex(state: ScreenState) { return readRootIndex(state); }
 export type RootIndex = ReturnType<typeof useRootIndex>;
+
+/** 未配信の会話は、別の根へ代替せず未解決のまま返す。 */
+export function resolveConversationRoot(roots: Root[], index: RootIndex, conversationId: string): Root | undefined {
+  return roots.find(root => root.conversation_ids.includes(conversationId)
+    || buildRootTree(root, index).nodes.some(node => node.conversationId === conversationId));
+}
 /** 継続元も再開できるため、末尾でなく投影が選んだ操作先を使う。旧い配信では最新世代の状態と時刻で補う。 */
 export function currentRootConversation(root: Root, index?: RootIndex): string | undefined {
   if (root.current_conversation_id && root.conversation_ids.includes(root.current_conversation_id)) return root.current_conversation_id;

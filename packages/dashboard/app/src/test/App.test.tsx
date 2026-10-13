@@ -12,6 +12,58 @@ beforeEach(() => {
     addEventListener: (_: string, listener: () => void) => { change = listener; }, removeEventListener: vi.fn() }));
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+function createTwoRootStore() {
+  const target = createStore();
+  target.setSnapshot({ seq: 1, generation: 1, projection: {
+    projects: [{ id: 'p', display_name: 'Project', root_path: '/repo', state: 'registered' }],
+    roots: [
+      { id: 'root-a', name: 'Root A', project: 'p', state: 'idle', conversation_ids: ['a'] },
+      { id: 'root-b', name: 'Root B', project: 'p', state: 'idle', conversation_ids: ['b'] },
+    ],
+    conversations: [{ id: 'a', provider: 'claude' }, { id: 'b', provider: 'claude' }, { id: 'child-b', provider: 'codex' }],
+    relations: [{ id: 'child', from_id: 'b', to_id: 'child-b', type: 'delegated', active: 1 }],
+  } });
+  return target;
+}
+
+it.each(['b', 'child-b'])('selects Root B in the sidebar for conversation=%s', async conversation => {
+  const target = createTwoRootStore();
+  render(<MemoryRouter initialEntries={[`/p/p?root=root-a&conversation=${conversation}`]}><App target={target}/></MemoryRouter>);
+  const sidebar = await screen.findByRole('region', { name: 'Project sessions' });
+  expect(within(sidebar).getByRole('link', { name: 'Root B' }).getAttribute('aria-current')).toBe('page');
+  expect(within(sidebar).getByRole('link', { name: 'Root A' }).hasAttribute('aria-current')).toBe(false);
+});
+
+it('keeps the embedded graph empty until the requested conversation resolves to a root', async () => {
+  const target = createTwoRootStore();
+  render(<MemoryRouter initialEntries={['/p/p?conversation=brand-new']}><App target={target}/></MemoryRouter>);
+  await screen.findByRole('tab', { name: 'Graph' });
+  expect(document.querySelector('.graph-page')).not.toBeNull();
+  expect(document.querySelector('.graph-row-main[aria-current]')).toBeNull();
+  expect(document.querySelector('.graph-row-main')).toBeNull();
+  act(() => target.mergeProjection({ roots: [{ id: 'new-root', name: 'New root', project: 'p', state: 'idle', conversation_ids: ['brand-new'] }],
+    conversations: [{ id: 'brand-new', provider: 'claude' }] }, 1));
+  await waitFor(() => expect(document.querySelector('.graph-row-main[aria-current]')?.textContent).toContain('New root'));
+});
+
+it.each(['root-a', 'root-b'])('clears sidebar selection after + starts a conversation from %s before its root arrives', async root => {
+  const target = createTwoRootStore();
+  target.setConnection('connected');
+  const client = { command: vi.fn(async (name: string) => ({ type: 'ack' as const, cmd_id: 'cmd', ok: true,
+    result: name === 'session.launch' ? { terminalId: 'new-terminal' }
+      : name === 'session.hosts' ? { hosts: [{ terminalId: 'new-terminal', conversationId: 'brand-new' }] } : {},
+  })) };
+  render(<MemoryRouter initialEntries={[`/p/p?root=${root}`]}><App target={target} client={client}/></MemoryRouter>);
+  const sidebar = await screen.findByRole('region', { name: 'Project sessions' });
+  expect(sidebar.querySelector('[aria-current]')?.textContent).toContain(root === 'root-a' ? 'Root A' : 'Root B');
+  fireEvent.click(screen.getByRole('button', { name: 'Start conversation: Project' }));
+  await waitFor(() => expect(client.command).toHaveBeenCalledWith('session.hosts', expect.anything()));
+  await waitFor(() => expect(sidebar.querySelector('[aria-current]')).toBeNull());
+  act(() => target.mergeProjection({ roots: [{ id: 'new-root', name: 'New root', project: 'p', state: 'idle', conversation_ids: ['brand-new'] }],
+    conversations: [{ id: 'brand-new', provider: 'claude' }] }, 1));
+  await waitFor(() => expect(within(sidebar).getByRole('link', { name: 'New root' }).getAttribute('aria-current')).toBe('page'));
+});
 it('publishes paginated graph tables together after the last response and retains live patches', async () => {
   const target = createStore();
   const children = Array.from({ length: 50 }, (_, index) => `child-${index}`);

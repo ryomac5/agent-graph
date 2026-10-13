@@ -8,7 +8,7 @@ import { dictionaries, type Language } from '../../lib/i18n.ts';
 import { resolveProjectId } from '../../lib/projects.ts';
 import type { ConversationClient } from '../conversation/ConversationPage.tsx';
 import { ConversationPage } from '../conversation/ConversationPage.tsx';
-import { selectRoots, useRootIndex, buildRootTree, currentRootConversation, orderSeries } from '../../lib/roots.ts';
+import { selectRoots, useRootIndex, buildRootTree, currentRootConversation, orderSeries, resolveConversationRoot } from '../../lib/roots.ts';
 import { RootList } from '../../components/RootViews.tsx';
 import { Icon } from '../../components/Icon.tsx';
 import { WorkspacePanel } from './WorkspacePanel.tsx';
@@ -48,7 +48,7 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
   const requestedConversation = search.get('conversation') ?? suppliedConversation;
   // URL の会話が未配信でも、別の根の作業場に切り替えない。
   const selected = requestedConversation
-    ? roots.find(root => root.conversation_ids.includes(requestedConversation) || buildRootTree(root, index).nodes.some(node => node.conversationId === requestedConversation))
+    ? resolveConversationRoot(roots, index, requestedConversation)
     : roots.find(root => root.id === search.get('root')) ?? roots[0];
   const projectionComplete = state.projection.conversations !== undefined && !state.projectionError
     && !Object.values(state.pages ?? {}).some(page => page.next);
@@ -95,7 +95,7 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
                 breadcrumb={childId ? breadcrumb : undefined} seriesIds={tabConversation === conversationId && !childId ? series : undefined} seriesState={tabConversation === conversationId ? childId ? childNode?.state : selected?.state : undefined} displayName={tabConversation === conversationId ? childId ? childTitle : selected?.name : undefined}/>}
         </>}/></VisibleView>
         : <section className="workspace-conversation" aria-label={t.conversation}/>}
-      <VisibleView visible={panelVisible}><WorkspacePanel bindings={bindings} project={project} target={target} client={client} language={language} rootId={selected?.id}/></VisibleView>
+      <VisibleView visible={panelVisible}><WorkspacePanel bindings={bindings} project={project} target={target} client={client} language={language} rootId={requestedConversation && !selected ? null : selected?.id}/></VisibleView>
     </div>
   </div></OpenWorkspaceFile.Provider>;
 }

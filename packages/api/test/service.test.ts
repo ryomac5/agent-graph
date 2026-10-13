@@ -951,3 +951,30 @@ test("本文が変わらない周期でも Codex の題名を取り込み、投�
   feed.refresh();
   assert.equal(feed.snapshot().projection.conversations[0].ai_title, "Changed");
 });
+
+test('usage-probe histories are ignored and existing facts stay outside feed lists', t => {
+  const f = createFixture(t);
+  const directory = join(f.env.CLAUDE_CONFIG_DIR, 'projects', 'probe');
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(join(directory, 'probe.jsonl'), JSON.stringify({ ...JSON.parse(createClaudeMessage('probe')), cwd: '/home/test/.cache/agent-graph/usage-probe' }) + '\n');
+  const service = openObservationService({ env: f.env });
+  t.after(() => service.close());
+  service.ingestOnce();
+  assert.equal(service.ledger.readSince(0, Number.MAX_SAFE_INTEGER).filter(fact => fact.source === 'transcript-claude').length, 0);
+  for (const [id, cwd] of [['probe-interactive', '/home/test/.cache/agent-graph/usage-probe/'], ['probe-unattended', '/home/test/.cache/agent-graph/usage-probe'], ['visible', '/home/test/repo']]) {
+    service.ledger.append({ source: 'legacy', source_event_id: id, kind: 'conversation.created', subject: `conversation:${id}`,
+      source_ts: TS, confidence: 'confirmed', payload: { provider: 'claude', native_id: id, origin: 'observed',
+        type: id === 'probe-unattended' ? 'unattended' : 'interactive', history_format: 'jsonl', cwd } });
+  }
+  const feed = new ProjectionFeed(f.dbPath, service.catchUp);
+  t.after(() => feed.close());
+  const before = service.ledger.readSince(0, Number.MAX_SAFE_INTEGER);
+  const snapshot = feed.snapshot();
+  assert.deepEqual(snapshot.projection.conversations.map(row => row.id), [createNativeId('claude', 'visible')]);
+  assert.equal(snapshot.pages.conversations.total, 1);
+  assert.deepEqual(feed.list('conversations').rows, snapshot.projection.conversations);
+  assert.equal(snapshot.projection.roots.length, 1);
+  assert.deepEqual(snapshot.projection.roots[0].conversation_ids, [createNativeId('claude', 'visible')]);
+  assert.deepEqual(feed.list('roots').rows, snapshot.projection.roots);
+  assert.deepEqual(service.ledger.readSince(0, Number.MAX_SAFE_INTEGER), before);
+});

@@ -251,3 +251,16 @@ test('SessionStart のない UserPromptSubmit でも開始時刻が入り、受�
   assert.equal((await post(restarted, { ...event, event_id: 'additional', source_ts: '2026-01-01T00:01:00.000Z' })).status, 200);
   assert.equal(projectRuns(ledger.readSince(0, 100))[0].turn_started_ts, event.source_ts);
 });
+
+test('usage-probe hooks are acknowledged without ledger facts', async t => {
+  const ledger = openLedger(':memory:');
+  t.after(() => ledger.close());
+  const receiver = createReceiver(ledger);
+  for (const hook_event_name of ['SessionStart', 'Stop', 'SessionEnd']) {
+    const response = await receiver.post(receiver.url, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + receiver.token },
+      body: JSON.stringify({ ...EVENT, hook_event_name, input: { cwd: '/home/test/.cache/agent-graph/usage-probe/' } }) });
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).accepted, true);
+  }
+  assert.deepEqual(ledger.readSince(0, Number.MAX_SAFE_INTEGER), []);
+});

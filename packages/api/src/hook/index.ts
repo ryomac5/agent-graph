@@ -6,6 +6,8 @@ import { classifyHookEvent } from "../../../core/src/ledger/index.ts";
 import type { FactInput, JsonValue, Ledger } from "../../../core/src/ledger/index.ts";
 import { defaultLocationResolver, type LocationResolver } from "../observe/location.ts";
 
+import { isUsageProbeCwd } from '../usage/probe-path.ts';
+
 export const HOOK_REQUEST_TIMEOUT_MS = 5000;
 export const HOOK_PATH = "/hook-v2";
 const LEDGER_READ_BATCH_SIZE = 1000;
@@ -37,6 +39,7 @@ export function parseHookEvent(value: unknown): HookEvent {
 }
 
 export function createHookFacts(event: HookEvent, locate: LocationResolver = defaultLocationResolver): FactInput[] {
+  if (isUsageProbeCwd(event.input.cwd)) return [];
   const source_event_id = JSON.stringify([event.session_id, event.generation, event.event_id]);
   const conversationId = `claude:${event.session_id}`;
   const runId = event.run_id ?? `${conversationId}:${event.generation}`;

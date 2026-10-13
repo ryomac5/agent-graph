@@ -1,3 +1,4 @@
+import { isUsageProbeCwd } from '../../usage/probe-path.ts';
 import { basename, resolve } from "node:path";
 import { classifyClaudeRecord, createNativeId, projectConversations, TURN_RULE_VERSION } from "../../../../core/src/ledger/index.ts";
 import type { AppendResult, Fact, FactInput, Ledger, RunPayload } from "../../../../core/src/ledger/index.ts";
@@ -51,6 +52,8 @@ export function observeClaudeContext(ledger: Ledger, path: string, options: Clau
   };
   const conversation = projectConversations(existing.filter((fact) => fact.kind.startsWith("conversation.")))
     .conversations.find((row) => row.id === id);
+  if (isUsageProbeCwd(conversation?.cwd) || (options.lines ?? readAppendOnlyFile(absolutePath).lines)
+    .some(line => isUsageProbeCwd(parseRow(line.text)?.cwd))) return result;
   const turns = conversation?.origin !== "managed";
   const locationId = claudeLocationEventId(id);
   let located = existing.some((fact) => fact.source === "transcript-claude" && fact.source_event_id === locationId);

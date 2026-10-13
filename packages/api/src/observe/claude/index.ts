@@ -8,6 +8,8 @@ import type { AppendResult, ConversationPayload, FactInput, JsonValue, Ledger, U
 import { readAppendOnlyFile } from "../files.ts";
 import type { FileCursor, FileRead } from "../files.ts";
 
+import { isUsageProbeCwd } from '../../usage/probe-path.ts';
+
 export const CLAUDE_QUEUED_COMMANDS_VERSION = 2;
 export const CLAUDE_MESSAGE_FLAGS_VERSION = 1;
 export const CLAUDE_HISTORY_DETAILS_VERSION = 1;
@@ -26,6 +28,7 @@ export interface ClaudeObserveOptions {
   managed?: boolean;
 }
 export interface ClaudeObservation extends FileRead {
+  ignored?: boolean;
   modelBackfillLines?: FileRead["lines"];
   appended: number;
   duplicates: number;
@@ -129,6 +132,11 @@ export function observeClaudeFile(ledger: Ledger, path: string, options: ClaudeO
   const rows = result.lines.filter((line) => line.text.trim()).map((line) => ({ line, row: parseRow(line.text) }));
   // 起源だけを読むため、名前の候補のために本文を投影しない。
   const previous = projectConversations(existing, new Map()).conversations.find((conversation) => conversation.id === id);
+  if ((!result.reset && cursor?.usageProbe) || isUsageProbeCwd(previous?.cwd) || rows.some(({ row }) => isUsageProbeCwd(row?.cwd))
+    || backfillLines.some(line => isUsageProbeCwd(parseRow(line.text)?.cwd))) {
+    result.cursor = { ...result.cursor, usageProbe: true };
+    return { ...result, ignored: true };
+  }
   const validRows = rows.filter(({ row }) => !findUnsupportedReason(row)).map(({ row }) => row!);
   const payload: ConversationPayload = {
     provider: "claude", native_id: nativeId, history_format: "jsonl",

@@ -103,14 +103,14 @@ test('shares in-flight reads and enforces automatic and manual intervals', async
   f.setTime(START + MANUAL_MS + POLL_MS); await f.service.read(); assert.equal(f.calls.length, 10);
   await assert.rejects(f.service.read({ force: 'yes' }));
 });
-test('retries stale retained values every 30 seconds after failures', async t => {
+test('backs off from 30 seconds to 15 minutes and retains old values after failures', async t => {
   const f = await fixture(t); await f.service.read(); f.setFail();
   let time = START + POLL_MS;
   for (let failures = 1; failures <= 7; failures++) {
     f.setTime(time); const result = await f.service.read();
     assert.equal(result.providers[2].state, 'stale'); assert.equal(result.providers[2].windows[0].usedPercent, 31);
     const count = f.calls.length;
-    const delay = RETRY_MS;
+    const delay = Math.min(RETRY_MS * 2 ** (failures - 1), POLL_MS);
     f.setTime(time + delay - 1); await f.service.read(); assert.equal(f.calls.length, count);
     time += delay;
   }
@@ -166,27 +166,30 @@ test('failed Claude query selects the newest valid statusline ts, ignoring mtime
   assert.equal(row.windows[0].resetsAt, new Date(1791948550000).toISOString());
   assert.equal(row.fetchedAt, new Date(START).toISOString());
   assert.equal(row.state, 'stale'); assert.equal(row.reason, 'record_fallback');
-  f.setTime(START + RETRY_MS - 1); await f.service.read({ force: true });
+  f.setTime(START + RETRY_MS - 1); await f.service.read();
   assert.equal(f.calls.filter(row => row.command === 'fake-claude').length, 1);
   await writeStatusline(f.root, 'repo-new', START + RETRY_MS, 28);
   f.setTime(START + RETRY_MS);
-  assert.equal((await f.service.read({ force: true })).providers[0].windows[0].usedPercent, 28);
-  f.setClaudeFail(false); f.setTime(START + 2 * RETRY_MS);
+  assert.equal((await f.service.read()).providers[0].windows[0].usedPercent, 28);
+  f.setClaudeFail(false); f.setTime(START + 3 * RETRY_MS);
   assert.equal((await f.service.read()).providers[0].state, 'ok');
 });
-test('old fallback timestamps stay stale and retry every 30 seconds instead of 15 minutes', async t => {
+test('old fallback timestamps stay stale and back off after repeated direct query failures', async t => {
   const f = await fixture(t); f.setClaudeFail();
   await writeFile(f.path, JSON.stringify(claude(START - STALE_MS - 1, 46)));
   const row = (await f.service.read()).providers[0];
   assert.equal(row.state, 'stale'); assert.equal(row.fetchedAt, new Date(START - STALE_MS - 1).toISOString());
+  let time = START;
   for (let attempt = 1; attempt <= 7; attempt++) {
-    f.setTime(START + attempt * RETRY_MS - 1); await f.service.read();
+    const delay = Math.min(RETRY_MS * 2 ** (attempt - 1), POLL_MS);
+    f.setTime(time + delay - 1); await f.service.read();
     assert.equal(f.calls.filter(row => row.command === 'fake-claude').length, attempt);
-    f.setTime(START + attempt * RETRY_MS); await f.service.read();
+    time += delay;
+    f.setTime(time); await f.service.read();
     assert.equal(f.calls.filter(row => row.command === 'fake-claude').length, attempt + 1);
   }
 });
-test('Claude probe sends only get_usage with persistence disabled and isolates hooks from caller history', async t => {
+test('Claude probe sends only get_usage with persistence disabled and disables hooks and isolates caller environment', async t => {
   const f = await fixture(t);
   const cwd = join(f.root, 'isolated', '.cache/agent-graph/usage-probe');
   const environment = { PATH: process.env.PATH, HOME: f.root, AGENT_GRAPH_PARENT_SESSION: 'parent', AGENT_GRAPH_TASK: 'task',
@@ -215,7 +218,7 @@ lines.on('close', () => {
   const launch: typeof spawn = ((command: string, args: string[], options: Parameters<typeof spawn>[2]) => {
     assert.equal(command, 'fake-claude');
     assert.equal(options?.cwd, cwd);
-    assert.deepEqual(args, ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--no-session-persistence']);
+    assert.deepEqual(args, ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--no-session-persistence', '--settings', '{"disableAllHooks":true}']);
     assert.deepEqual(options?.stdio, ['pipe', 'pipe', 'pipe']);
     return spawn(process.execPath, ['-e', script], options);
   }) as typeof spawn;
@@ -249,3 +252,24 @@ test('unavailable sources retain exponential backoff capped at 15 minutes', asyn
   f.setFail(false); f.setTime(time);
   assert.equal((await f.service.read()).providers[2].state, 'ok');
 });
+
+for (const stalled of [false, true]) {
+  test(stalled ? 'Claude timeout escalates SIGTERM to SIGKILL and waits for close' : 'Claude successful probe waits for natural close without killing', { timeout: 40_000 }, async t => {
+    const f = await fixture(t);
+    const signals: (NodeJS.Signals | number | undefined)[] = [];
+    let closed = false;
+    const launch: typeof spawn = ((command: string, args: string[], options: Parameters<typeof spawn>[2]) => {
+      const script = "import { createInterface } from 'node:readline';\nconst lines = createInterface({ input: process.stdin });\nlines.on('line', () => process.stdout.write(JSON.stringify({type:'control_response',response:{request_id:'usage',response:{rate_limits:{seven_day:{utilization:31}}}}})+'\\n'));\nlines.on('close', () => setTimeout(() => process.exit(0), 100));";
+      const child = spawn(process.execPath, ['-e', stalled ? "process.on('SIGTERM', () => {}); process.stdin.resume(); setInterval(() => {}, 1000);" : script], options);
+      const kill = child.kill.bind(child);
+      child.kill = signal => { signals.push(signal); return kill(signal); };
+      child.once('close', () => { closed = true; });
+      t.after(() => { if (!closed) kill('SIGKILL'); });
+      return child;
+    }) as typeof spawn;
+    if (stalled) await assert.rejects(probeClaude('fake', join(f.root, 'probe'), launch), /timeout/);
+    else assert.deepEqual(await probeClaude('fake', join(f.root, 'probe'), launch), { seven_day: { utilization: 31 } });
+    assert.equal(closed, true);
+    assert.deepEqual(signals, stalled ? ['SIGTERM', 'SIGKILL'] : []);
+  });
+}

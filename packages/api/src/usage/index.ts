@@ -95,9 +95,7 @@ export function createUsageService(options: UsageOptions = {}) {
     const previous = entries.get(id);
     const time = now();
     // 手動更新の待ち時間も共有し、複数の画面からの重複を防ぐ。
-    const stale = previous && age(previous.value).state === 'stale';
-    if (previous && (stale ? time < Math.min(previous.next, previous.attempted + RETRY_MS)
-      : force ? time - previous.attempted < MANUAL_MS : time < previous.next)) return age(previous.value);
+    if (previous && (force ? time - previous.attempted < MANUAL_MS : time < previous.next)) return age(previous.value);
     const promise = (async () => {
       let value: ProviderUsage;
       let failures = 0;
@@ -112,7 +110,7 @@ export function createUsageService(options: UsageOptions = {}) {
         const reason = error instanceof Error && known.includes(error.message) ? error.message : id === 'claude' ? 'file_unavailable' : 'source_unavailable';
         value = { id, windows: previous?.value.windows ?? [], fetchedAt: previous?.value.fetchedAt ?? null, state: previous?.value.windows.length ? 'stale' : 'unavailable', reason };
       }
-      entries.set(id, { value, attempted: time, failures, next: now() + (value.state === 'stale' ? RETRY_MS : failures ? Math.min(RETRY_MS * 2 ** Math.min(failures - 1, 10), POLL_MS) : POLL_MS) });
+      entries.set(id, { value, attempted: time, failures, next: now() + (failures ? Math.min(RETRY_MS * 2 ** Math.min(failures - 1, 10), POLL_MS) : POLL_MS) });
       return age(value);
     })();
     inflight.set(id, promise);

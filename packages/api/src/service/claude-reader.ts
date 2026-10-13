@@ -85,6 +85,7 @@ export function observeClaudeHistories(ledger: Ledger, directory: string, facts:
     try {
       result = (fileBatch ? (operation: () => ClaudeObservation) => fileBatch(file, operation) : batch)(() => {
         const observation = observeClaudeFile(fileLedger, file, { cursor: start });
+        if (observation.ignored) return observation;
         const titles = observeClaudeTitles(fileLedger, file, { lines: observation.lines,
           fromStart: !start || observation.reset || start.offset === 0 });
         // 発言の取り込みで読んだ行から、場所とターンの根拠を同じ取引で足す。

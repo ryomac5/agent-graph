@@ -1,3 +1,4 @@
+import { VISIBLE_CONVERSATION_SQL } from '../usage/probe-path.ts';
 import { projectRoots, connectRootDelegations, type RootProjection, type RootConversation } from "../../../core/src/ledger/projections/roots.ts";
 import { DatabaseSync, type SQLOutputValue, type StatementSync } from "node:sqlite";
 import type { Fact } from "../../../core/src/ledger/facts.ts";
@@ -274,7 +275,8 @@ export class ProjectionFeed {
     this.prepare("INSERT OR REPLACE INTO api_conversation_summaries VALUES (?, ?, ?, ?)").run(id, count, last?.source_ts ?? null, excerpt);
   }
   private readList(table: string, ids?: string[], after = ""): Record<string, unknown>[] {
-    const where = ids ? "WHERE t.id IN (SELECT value FROM json_each(?))" : "WHERE t.id > ?";
+    const where = (ids ? "WHERE t.id IN (SELECT value FROM json_each(?))" : "WHERE t.id > ?")
+      + (table === 'conversations' ? ` AND (${VISIBLE_CONVERSATION_SQL})` : '');
     const parameter = ids ? JSON.stringify(ids) : after;
     const limit = ids ? "" : `LIMIT ${LIST_PAGE_SIZE}`;
     // 会話の名前と依頼の抜粋は core の投影の値をそのまま配る。画面は本文から名前を導かない。
@@ -561,7 +563,7 @@ export class ProjectionFeed {
     projection.delegations = this.rootDelegations(projection.delegations);
     projection.projects = this.prepare("SELECT * FROM api_projects ORDER BY id").all();
     const pages = Object.fromEntries(LIST_TABLES.map(table => [table, {
-      total: Number(this.prepare(`SELECT count(*) AS count FROM ${table}`).get()!.count),
+      total: Number(this.prepare(`SELECT count(*) AS count FROM ${table} t${table === 'conversations' ? ` WHERE ${VISIBLE_CONVERSATION_SQL}` : ''}`).get()!.count),
       next: projection[table].length === LIST_PAGE_SIZE ? projection[table].at(-1)!.id : null,
     }]));
     pages.roots = { total: this.roots.length, next: this.roots.length >= LIST_PAGE_SIZE ? this.roots[LIST_PAGE_SIZE - 1].id : null };

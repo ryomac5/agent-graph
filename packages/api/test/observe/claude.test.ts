@@ -461,3 +461,18 @@ test("jsonl の包みと自動挿入を投影で正規化し、最初の依頼�
   observeClaudeFile(ledger, path, { observedTs: TS });
   assert.deepEqual(readFacts(ledger), facts);
 });
+
+test('usage-probe history remains ignored across incremental cursor reads', t => {
+  const { ledger, directory } = createFixture(t);
+  const path = join(directory, 'probe.jsonl');
+  writeFileSync(path, JSON.stringify({ ...JSON.parse(createMessage('first')), cwd: '/home/test/.cache/agent-graph/usage-probe' }) + '\n');
+  const first = observeClaudeFile(ledger, path);
+  assert.equal(first.ignored, true);
+  appendFileSync(path, createMessage('next') + '\n');
+  const next = observeClaudeFile(ledger, path, { cursor: first.cursor });
+  assert.equal(next.ignored, true);
+  assert.deepEqual(readFacts(ledger), []);
+  writeFileSync(path, JSON.stringify({ ...JSON.parse(createMessage('replacement')), cwd: '/home/test/repo' }) + '\n');
+  assert.equal(observeClaudeFile(ledger, path, { cursor: next.cursor }).ignored, undefined);
+  assert.equal(readFacts(ledger).filter(fact => fact.kind === 'conversation.created').length, 1);
+});

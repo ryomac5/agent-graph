@@ -4,13 +4,20 @@ import { query, type AccountInfo, type CanUseTool, type Options, type Permission
 import type { JsonValue } from "../../../../core/src/ledger/facts.ts";
 import type { AgentHost, ApprovalId, Decision, ForkRequest, HostCapabilities, HostEvent, HostFact, HostLaunchOptions, IntegrationMode, ModelChoice, ModelInfo, ResumeRequest, RunHandle, StartRequest, UserInput } from "../../host/contract.ts";
 import { AsyncQueue } from "./queue.ts";
+import { resolveClaudeExecutable, type ClaudeExecutable } from "./executable.ts";
+
+export const MODEL_CACHE_TTL_MS = 60_000;
 
 export type ClaudeQuery = AsyncIterable<SDKMessage> & Pick<Query, "interrupt" | "setModel" | "close" | "accountInfo" | "supportedModels">;
 export type QueryFactory = (args: { prompt: AsyncIterable<SDKUserMessage>; options: Options }) => ClaudeQuery;
 export interface ClaudeCapabilities extends HostCapabilities {
   authentication: { type: "unknown" | "subscription" | "api_key"; verified: boolean; subscriptionType?: string; apiProvider?: string };
 }
-export interface ClaudeHostOptions extends HostLaunchOptions { enableFork?: boolean; integrationMode?: IntegrationMode }
+export interface ClaudeHostOptions extends HostLaunchOptions {
+  enableFork?: boolean;
+  integrationMode?: IntegrationMode;
+  resolveExecutable?: () => ClaudeExecutable;
+}
 interface OpenRun {
   request: StartRequest;
   integrationMode: IntegrationMode;
@@ -55,8 +62,8 @@ export class ClaudeHost implements AgentHost {
   private sequence = 0;
   private timestamp = 0;
   private options: ClaudeHostOptions;
-  private models?: ModelInfo[];
-  private modelDiscovery?: Promise<ModelInfo[]>;
+  private models?: { fingerprint: string; expiresAt: number; values: ModelInfo[] };
+  private modelDiscovery?: { fingerprint: string; promise: Promise<ModelInfo[]> };
   constructor(factory: QueryFactory = query, options: ClaudeHostOptions = {}) { this.factory = factory; this.options = options; }
   capabilities(): ClaudeCapabilities {
     return { start: true, resume: this.options.persistSession !== false, fork: this.options.persistSession !== false && (this.options.enableFork ?? false), interrupt: true, approvals: true, setModel: true, delta: true,
@@ -101,10 +108,20 @@ export class ClaudeHost implements AgentHost {
     }
     return { runId: req.runId, nativeId: sessionId, pid: childProcess.pid, events };
   }
-  private createQuery(input: AsyncQueue<SDKUserMessage>, options: Options, integrationMode: IntegrationMode, childProcess: OpenRun["process"] = {}): ClaudeQuery {
+  private resolveExecutable(): ClaudeExecutable {
+    const executable = (this.options.resolveExecutable ?? resolveClaudeExecutable)();
+    if (executable.path) this.degraded.delete("claude_cli_bundled_fallback");
+    else if (!this.degraded.has("claude_cli_bundled_fallback")) {
+      this.degraded.add("claude_cli_bundled_fallback");
+      console.warn("[runner:claude] Claude Code executable not found in PATH or standard install locations; falling back to the SDK-bundled Claude Code.");
+    }
+    return executable;
+  }
+  private createQuery(input: AsyncQueue<SDKUserMessage>, options: Options, integrationMode: IntegrationMode, childProcess: OpenRun["process"] = {}, executable = this.resolveExecutable()): ClaudeQuery {
     return this.factory({ prompt: input, options: {
       settingSources: ["user", "project"], permissionMode: "default", includePartialMessages: true, persistSession: this.options.persistSession ?? true,
       ...options,
+      ...(executable.path ? { pathToClaudeCodeExecutable: executable.path } : {}),
       ...(integrationMode === "strict" ? { strictMcpConfig: true, mcpServers: {} } : {}),
       env: { ...process.env, ...options.env, ...(integrationMode === "enabled" ? {} : { ENABLE_CLAUDEAI_MCP_SERVERS: "false" }),
         CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1", AGENT_GRAPH_MANAGED: "1" },
@@ -163,21 +180,22 @@ export class ClaudeHost implements AgentHost {
     run.request = { ...run.request, model: { ...model } };
   }
   async listModels(): Promise<ModelInfo[]> {
-    const run = [...this.runs.values()].find((run) => !run.closed && !run.finished);
-    if (run) {
-      this.models = await this.readModels(run.query);
-      return this.models;
-    }
-    if (this.models) return this.models;
-    this.modelDiscovery ??= this.discoverModels()
-      .then((models) => { this.models = models; return models; })
-      .finally(() => { this.modelDiscovery = undefined; });
-    return this.modelDiscovery;
+    const executable = this.resolveExecutable();
+    const fingerprint = executable.fingerprint;
+    if (this.models?.fingerprint === fingerprint && Date.now() < this.models.expiresAt) return this.models.values;
+    if (this.modelDiscovery?.fingerprint === fingerprint) return this.modelDiscovery.promise;
+    // 開いている会話は更新前の CLI を保持しうるため、一覧は今の実行ファイルから取る。
+    const discovery = { fingerprint, promise: this.discoverModels(executable).then((values) => {
+      if (this.modelDiscovery === discovery) this.models = { fingerprint, expiresAt: Date.now() + MODEL_CACHE_TTL_MS, values };
+      return values;
+    }).finally(() => { if (this.modelDiscovery === discovery) this.modelDiscovery = undefined; }) };
+    this.modelDiscovery = discovery;
+    return discovery.promise;
   }
   private async readModels(sdkQuery: ClaudeQuery): Promise<ModelInfo[]> {
     return (await sdkQuery.supportedModels()).map((model) => ({ model: model.value, displayName: model.displayName }));
   }
-  private async discoverModels(): Promise<ModelInfo[]> {
+  private async discoverModels(executable: ClaudeExecutable): Promise<ModelInfo[]> {
     const input = new AsyncQueue<SDKUserMessage>();
     let sdkQuery: ClaudeQuery | undefined;
     try {
@@ -185,7 +203,7 @@ export class ClaudeHost implements AgentHost {
         sdkQuery = this.createQuery(input, {
           persistSession: false,
           canUseTool: async () => ({ behavior: "deny", message: "Model discovery does not allow tool execution." }),
-        }, this.options.integrationMode ?? "disabled");
+        }, this.options.integrationMode ?? "disabled", {}, executable);
         return await this.readModels(sdkQuery);
       } finally {
         input.end();

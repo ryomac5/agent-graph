@@ -3,7 +3,7 @@ import { setImmediate } from "node:timers/promises";
 import { test } from "node:test";
 import type { AccountInfo, CanUseTool, Options, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { HostEvent, RunHandle, StartRequest } from "../src/host/contract.ts";
-import { ClaudeHost, type ClaudeQuery, type QueryFactory } from "../src/hosts/claude/index.ts";
+import { ClaudeHost, MODEL_CACHE_TTL_MS, type ClaudeHostOptions, type ClaudeQuery, type QueryFactory } from "../src/hosts/claude/index.ts";
 import { AsyncQueue } from "../src/hosts/claude/queue.ts";
 
 class FakeQuery implements ClaudeQuery {
@@ -39,14 +39,14 @@ class FakeQuery implements ClaudeQuery {
 function makeRequest(runId = "run-1", conversationId = "conversation-1"): StartRequest {
   return { runId, conversationId, generation: 1, cwd: "/tmp", input: { text: "Hello" }, model: { model: "haiku" } };
 }
-function createFixture(configure: (query: FakeQuery) => void = () => {}) {
+function createFixture(configure: (query: FakeQuery) => void = () => {}, options: ClaudeHostOptions = {}) {
   const queries: FakeQuery[] = [];
   const host = new ClaudeHost((args) => {
     const query = new FakeQuery(args);
     configure(query);
     queries.push(query);
     return query;
-  });
+  }, options);
   return { host, queries };
 }
 function collect(handle: RunHandle) {
@@ -350,24 +350,87 @@ test("Claude retries model discovery after a query factory failure", async () =>
   assert.equal(calls, 2);
 });
 
-test("Claude refreshes cached models from an open query and retains them after closing", async () => {
-  const { host, queries } = createFixture();
-  await host.listModels();
+test("Claude refreshes models with the installed CLI while an older conversation stays open", async () => {
+  let version = "2.1.291";
+  const { host, queries } = createFixture((query) => {
+    const displayName = query.options.pathToClaudeCodeExecutable === "/cli/2.1.291" ? "Haiku 4.5" : "Haiku 5.5";
+    query.supportedModels = async () => [{ value: "haiku", displayName, description: "Fast" }];
+  }, { resolveExecutable: () => ({ path: `/cli/${version}`, fingerprint: version }) });
+  assert.deepEqual(await host.listModels(), [{ model: "haiku", displayName: "Haiku 4.5" }]);
   const handle = await host.start(makeRequest());
   const { done } = collect(handle);
-  queries[1].supportedModels = async () => [{ value: "sonnet", displayName: "Sonnet", description: "Balanced" }];
-  const models = [{ model: "sonnet", displayName: "Sonnet" }];
+  version = "2.1.296";
+  const models = [{ model: "haiku", displayName: "Haiku 5.5" }];
   assert.deepEqual(await host.listModels(), models);
+  assert.equal(queries[2].options.pathToClaudeCodeExecutable, "/cli/2.1.296");
+  assert.equal(queries[2].closed, true);
+  assert.deepEqual(queries[2].inputs, []);
   assert.equal(queries[1].closed, false);
+  assert.equal(queries[1].options.pathToClaudeCodeExecutable, "/cli/2.1.291");
   await host.close("run-1");
   await done;
   assert.deepEqual(await host.listModels(), models);
+  assert.equal(queries.length, 3);
+});
+
+test("Claude model cache expires even when the executable is unchanged", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
+  const { host, queries } = createFixture();
+  await host.listModels();
+  t.mock.timers.tick(MODEL_CACHE_TTL_MS - 1);
+  await host.listModels();
+  assert.equal(queries.length, 1);
+  t.mock.timers.tick(1);
+  await host.listModels();
   assert.equal(queries.length, 2);
+  assert.ok(queries.every((query) => query.closed));
+});
+
+test("Claude does not let an older in-flight discovery overwrite newer models", async () => {
+  let version = "old";
+  let release!: () => void;
+  const ready = new Promise<void>((resolve) => { release = resolve; });
+  const { host, queries } = createFixture((query) => {
+    const old = query.options.pathToClaudeCodeExecutable === "/cli/old";
+    query.supportedModels = async () => {
+      if (old) await ready;
+      return [{ value: "haiku", displayName: old ? "Haiku 4.5" : "Haiku 5.5", description: "Fast" }];
+    };
+  }, { resolveExecutable: () => ({ path: `/cli/${version}`, fingerprint: version }) });
+  const first = host.listModels();
+  version = "new";
+  const expected = [{ model: "haiku", displayName: "Haiku 5.5" }];
+  assert.deepEqual(await host.listModels(), expected);
+  release();
+  assert.deepEqual(await first, [{ model: "haiku", displayName: "Haiku 4.5" }]);
+  assert.deepEqual(await host.listModels(), expected);
+  assert.equal(queries.length, 2);
+  assert.ok(queries.every((query) => query.closed));
+});
+
+test("Claude logs bundled fallback and discovers the installed CLI when it becomes available", async (t) => {
+  const warn = t.mock.method(console, "warn", () => {});
+  let installed = false;
+  const { host, queries } = createFixture(() => {}, {
+    resolveExecutable: () => installed ? { path: "/cli/claude", fingerprint: "installed" } : { fingerprint: "bundled" },
+  });
+  await host.listModels();
+  assert.equal(queries[0].options.pathToClaudeCodeExecutable, undefined);
+  assert.ok(host.capabilities().degraded?.includes("claude_cli_bundled_fallback"));
+  assert.match(String(warn.mock.calls[0].arguments[0]), /falling back to the SDK-bundled Claude Code/);
+  await host.listModels();
+  assert.equal(warn.mock.callCount(), 1);
+  installed = true;
+  await host.listModels();
+  assert.equal(queries[1].options.pathToClaudeCodeExecutable, "/cli/claude");
+  assert.ok(!host.capabilities().degraded?.includes("claude_cli_bundled_fallback"));
 });
 
 test("Claude close and resume preserve session ID; model changes use the same query", async () => {
-  const { host, queries } = createFixture();
+  let version = "2.1.291";
+  const { host, queries } = createFixture(() => {}, { resolveExecutable: () => ({ path: `/cli/${version}`, fingerprint: version }) });
   const handle = await host.start(makeRequest());
+  assert.equal(queries[0].options.pathToClaudeCodeExecutable, "/cli/2.1.291");
   const collected = collect(handle);
   await host.setModel("run-1", { model: "sonnet" });
   assert.deepEqual(queries[0].modelChanges, ["sonnet"]);
@@ -377,12 +440,14 @@ test("Claude close and resume preserve session ID; model changes use the same qu
   await collected.done;
   await queries[0].inputReader;
   assert.ok(queries[0].closed);
+  version = "2.1.296";
   const resumed = await host.resume({ ...makeRequest("run-2"), generation: 2, nativeId: handle.nativeId });
   const second = collect(resumed);
   assert.equal(resumed.nativeId, handle.nativeId);
-  assert.equal(queries[1].options.resume, handle.nativeId);
-  assert.equal(queries[1].options.sessionId, undefined);
-  queries[1].emit({ type: "system", subtype: "init", session_id: handle.nativeId, mcp_servers: [] });
+  assert.equal(queries[2].options.pathToClaudeCodeExecutable, "/cli/2.1.296");
+  assert.equal(queries[2].options.resume, handle.nativeId);
+  assert.equal(queries[2].options.sessionId, undefined);
+  queries[2].emit({ type: "system", subtype: "init", session_id: handle.nativeId, mcp_servers: [] });
   await host.close("run-2");
   await second.done;
   await assert.rejects(host.fork({ ...makeRequest("run-3"), nativeId: handle.nativeId }), /not supported/);

@@ -1,3 +1,5 @@
+import type { ClaudeMessageFlags } from "./claude-message-flags.ts";
+
 export const SOURCES = [
   "host-claude", "host-codex", "host-antigravity", "hook", "transcript-claude", "rollout-codex",
   "ui", "intake", "kit", "legacy",
@@ -99,6 +101,7 @@ export interface MessagePayload {
   body?: JsonValue;
   body_state: BodyState;
   tool_output?: JsonValue;
+  transcript_flags?: ClaudeMessageFlags;
 }
 export interface DelegationPayload {
   request_id: string;

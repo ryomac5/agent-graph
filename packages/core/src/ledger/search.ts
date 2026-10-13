@@ -1,5 +1,6 @@
 import type { DatabaseSync, SQLInputValue, StatementSync } from 'node:sqlite';
 import type { Fact, JsonValue } from './facts.ts';
+import { isClaudeHiddenMessage, type ClaudeMessageFlags } from './claude-message-flags.ts';
 import { projectArtifacts } from './projections/artifacts.ts';
 import { projectConversations } from './projections/conversations.ts';
 import { getMessageText, projectMessages } from './projections/messages.ts';
@@ -41,7 +42,7 @@ function prepare(db: DatabaseSync, sql: string): StatementSync {
 }
 const METADATA_FIELDS = ['provider', 'native_id', 'conversation_id', 'task_id', 'run_id',
   'repository_id', 'message_id', 'entity_id', 'artifact_id', 'version', 'role', 'active',
-  'history_format', 'origin', 'type', 'generation', 'project'];
+  'history_format', 'origin', 'type', 'generation', 'project', 'transcript_flags'];
 const SEARCH_ENTITIES = new Set(['task', 'conversation', 'run', 'message', 'message_membership', 'artifact', 'finding', 'alias']);
 const SOURCE_FILTER = [...SEARCH_ENTITIES].map(entity => `kind LIKE '${entity}.%'`).join(' OR ');
 
@@ -413,7 +414,10 @@ export function refreshSearch(db: DatabaseSync, added?: readonly Fact[], allFact
     const normalized = entity === 'message' ? normalizeClaudeContent({
       provider: typeof meta.provider === 'string' ? meta.provider : undefined,
       role: typeof meta.role === 'string' ? meta.role : undefined, body: payload.body,
+      transcript_flags: meta.transcript_flags as ClaudeMessageFlags | undefined,
     }) : {};
+    if (entity === 'message' && meta.provider === 'claude'
+      && isClaudeHiddenMessage(meta.transcript_flags, normalized.role ?? meta.role, normalized.relayed_instruction)) continue;
     const message = splitMessage(normalized.body ?? payload.body);
     const entries: [SearchKind, string][] = entity === 'message'
       ? meta.role === 'tool' ? [['tool_output', [message.message, message.tool, readText(payload.tool_output)].filter(Boolean).join('\n')]]

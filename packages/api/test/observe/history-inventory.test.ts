@@ -36,3 +36,27 @@ for (const unknown of [false, true]) {
     assert.equal(output.filter(row => row.sample).length, unknown ? 3 : 0);
   });
 }
+
+for (const flag of ["isCompactSummary", "isMeta", "isVisibleInTranscriptOnly", "isFutureInternal", "futureBoolean", "invalid"]) {
+  test(`user の旗を独立に棚卸しし、未分類の旗だけでも失敗する (${flag})`, t => {
+    const home = mkdtempSync(join(tmpdir(), "history-flag-inventory-"));
+    t.after(() => rmSync(home, { recursive: true, force: true }));
+    const claude = join(home, ".claude/projects");
+    mkdirSync(claude, { recursive: true });
+    mkdirSync(join(home, ".codex/sessions"), { recursive: true });
+    const row = { type: "user", uuid: "private-identifier", message: { role: "user", content: "private-body" } };
+    const field = flag === "invalid" ? "isMeta" : flag;
+    writeFileSync(join(claude, "fixture.jsonl"), [row, { ...row, [field]: flag === "invalid" ? "private-value" : true }]
+      .map(row => JSON.stringify(row)).join("\n") + "\n");
+    const result = spawnSync(process.execPath, [script.pathname], { env: { ...process.env, HOME: home }, encoding: "utf8" });
+    const unknown = ["isFutureInternal", "futureBoolean", "invalid"].includes(flag);
+    assert.equal(result.status, unknown ? 1 : 0, result.stderr);
+    const output = result.stdout.trim().split("\n").map(line => JSON.parse(line));
+    assert.deepEqual(output.at(-1), { files: 1, kinds: 2, unclassified: unknown ? 1 : 0 });
+    const entry = output.find(entry => entry.kind?.field === `flag.${field}`);
+    assert.equal(entry.count, 1);
+    assert.equal(entry.classification, unknown ? "unclassified" : flag === "isMeta" ? "ingest" : "ignore");
+    if (unknown) assert.equal(entry.sample[field], flag === "invalid" ? "[redacted]" : true);
+    for (const privateValue of ["private-body", "private-identifier", "private-value", home]) assert.ok(!result.stdout.includes(privateValue));
+  });
+}

@@ -1,4 +1,5 @@
 import type { Fact, JsonValue, RunPayload, RunState } from "./facts.ts";
+import { isClaudeInternalMessage } from "./claude-message-flags.ts";
 
 /**
  * 外の会話の状態の規則。観測と hook と投影は、この 1 か所の規則だけで状態を決める。
@@ -61,7 +62,7 @@ export function classifyClaudeRecord(row: Row): TurnEvidence | undefined {
     return row.subtype === "turn_duration" ? { state: "idle", kind: "turn_completed", turn_id: turnId } : undefined;
   }
   if (row.type !== "user" && row.type !== "assistant") return undefined;
-  if (row.isMeta === true || row.isCompactSummary === true || row.isVisibleInTranscriptOnly === true) return undefined;
+  if (isClaudeInternalMessage(row)) return undefined;
   const message = readObject(row.message);
   const content = blocks(message.content);
   if (row.type === "user") {

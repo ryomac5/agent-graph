@@ -2,12 +2,14 @@ import { classifyHistoryRow, findUnclassifiedKinds, identifyHistoryKind } from "
 import { readdirSync, readFileSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { homedir } from "node:os";
-import { createNativeId, projectConversations, serializeValue } from "../../../../core/src/ledger/index.ts";
+import { createFactId, createNativeId, projectConversations, serializeValue } from "../../../../core/src/ledger/index.ts";
+import { isClaudeInternalMessage, readClaudeMessageFlags } from "../../../../core/src/ledger/claude-message-flags.ts";
 import type { AppendResult, ConversationPayload, FactInput, JsonValue, Ledger, UnsupportedObservationPayload } from "../../../../core/src/ledger/index.ts";
 import { readAppendOnlyFile } from "../files.ts";
 import type { FileCursor, FileRead } from "../files.ts";
 
 export const CLAUDE_QUEUED_COMMANDS_VERSION = 2;
+export const CLAUDE_MESSAGE_FLAGS_VERSION = 1;
 
 const HEADLESS_ENTRYPOINTS = new Set(["sdk-cli", "sdk-ts", "sdk-py"]);
 type Row = { [key: string]: JsonValue };
@@ -91,6 +93,8 @@ function createUnsupportedEventId(path: string, row: Row | undefined, reason: st
 export function observeClaudeFile(ledger: Ledger, path: string, options: ClaudeObserveOptions = {}): ClaudeObservation {
   const absolutePath = resolve(path);
   const existing = ledger.readSince(0, Number.MAX_SAFE_INTEGER);
+  const unflaggedMessages = new Set(existing.filter(fact => fact.source === "transcript-claude"
+    && fact.kind === "message.created" && !fact.payload?.transcript_flags).map(fact => fact.source_event_id));
   let cursor = options.cursor;
   if (!cursor) {
     for (const fact of existing) {
@@ -100,11 +104,14 @@ export function observeClaudeFile(ledger: Ledger, path: string, options: ClaudeO
     }
   }
   const result: ClaudeObservation = { ...readAppendOnlyFile(absolutePath, cursor), appended: 0, duplicates: 0, conflicts: [] };
-  // 旧い cursor より前の attachment だけを一度拾い直し、既存行の事実は再生成しない。
-  const queuedBackfill = cursor && !result.reset && cursor.claudeQueuedCommandsVersion !== CLAUDE_QUEUED_COMMANDS_VERSION
-    ? readAppendOnlyFile(absolutePath).lines.filter(line => line.cursor.offset <= cursor.offset) : [];
-  result.cursor = { ...result.cursor, claudeQueuedCommandsVersion: CLAUDE_QUEUED_COMMANDS_VERSION };
-  for (const line of result.lines) line.cursor = { ...line.cursor, claudeQueuedCommandsVersion: CLAUDE_QUEUED_COMMANDS_VERSION };
+  // 読み済みの範囲だけを一度補完する。既存の発言の識別子と payload は書き換えない。
+  const backfillQueued = cursor && !result.reset && cursor.claudeQueuedCommandsVersion !== CLAUDE_QUEUED_COMMANDS_VERSION;
+  const backfillFlags = cursor && cursor.claudeMessageFlagsVersion !== CLAUDE_MESSAGE_FLAGS_VERSION;
+  const backfillLines = backfillQueued || backfillFlags
+    ? result.reset ? result.lines : readAppendOnlyFile(absolutePath).lines.filter(line => line.cursor.offset <= cursor!.offset) : [];
+  const versions = { claudeQueuedCommandsVersion: CLAUDE_QUEUED_COMMANDS_VERSION, claudeMessageFlagsVersion: CLAUDE_MESSAGE_FLAGS_VERSION };
+  result.cursor = { ...result.cursor, ...versions };
+  for (const line of result.lines) line.cursor = { ...line.cursor, ...versions };
   const observedTs = options.observedTs ?? new Date().toISOString();
   const nativeId = basename(path, ".jsonl");
   // 子の行の sessionId は親を指すため、ファイルの agent ID を会話の識別に使う。
@@ -127,6 +134,14 @@ export function observeClaudeFile(ledger: Ledger, path: string, options: ClaudeO
     if (appended.status === "appended") result.appended += 1;
     else if (appended.status === "duplicate") result.duplicates += 1;
     else result.conflicts.push(appended);
+  }
+  function appendMessageFlags(row: Row, common: Pick<FactInput, "source" | "confidence" | "source_ts" | "observed_ts">): void {
+    const messageId = createNativeId("claude", String(row.uuid));
+    const flags = readClaudeMessageFlags(row);
+    append({ ...common, kind: "message.corrected", subject: `message:${messageId}`,
+      source_event_id: `message-flags:v${CLAUDE_MESSAGE_FLAGS_VERSION}:${messageId}:${serializeValue(flags)}`,
+      supersedes: createFactId("transcript-claude", `message:${messageId}`),
+      payload: { provider: "claude", native_id: String(row.uuid), transcript_flags: flags }, cursor: null });
   }
   function appendQueuedCommand(row: Row, handler: string, checkpoint: string | null): void {
     const attachment = readObject(row.attachment)!;
@@ -162,8 +177,9 @@ export function observeClaudeFile(ledger: Ledger, path: string, options: ClaudeO
   const unsupported = new Map<string, UnsupportedInput>();
   const knownUnsupported = new Set(existing.filter((fact) => fact.source === "transcript-claude"
     && fact.kind === "observation.unsupported").map((fact) => fact.source_event_id));
-  const backfillRows = queuedBackfill.map(line => ({ line, row: parseRow(line.text), backfill: true }))
-    .filter(({ row }) => classifyHistoryRow("claude", row)?.handler.startsWith("queued-command-"));
+  const backfillRows = backfillLines.map(line => ({ line, row: parseRow(line.text), backfill: true }))
+    .filter(({ row }) => backfillQueued && classifyHistoryRow("claude", row)?.handler.startsWith("queued-command-")
+      || backfillFlags && (row?.type === "user" || row?.type === "assistant") && isClaudeInternalMessage(row));
   const pendingRows = [...backfillRows, ...rows.map(entry => ({ ...entry, backfill: false }))];
   const hasUnsupported = pendingRows.some(({ row }) => {
     return [findUnsupportedReason(row), findUnclassifiedReason(row)].some(reason =>
@@ -206,6 +222,10 @@ export function observeClaudeFile(ledger: Ledger, path: string, options: ClaudeO
       }
     }
     if (structuralReason || !row) continue;
+    if (backfill && isClaudeInternalMessage(row)) {
+      appendMessageFlags(row, common);
+      continue;
+    }
     const classification = classifyHistoryRow("claude", row);
     if (classification?.handler === "ignore") continue;
     if (classification?.handler.startsWith("queued-command-")) appendQueuedCommand(row, classification.handler, common.cursor);
@@ -225,10 +245,15 @@ export function observeClaudeFile(ledger: Ledger, path: string, options: ClaudeO
     if (classification?.handler === "message") {
       const message = readObject(row.message)!;
       const messageId = createNativeId("claude", String(row.uuid));
+      const flags = isClaudeInternalMessage(row);
+      const backfillMessage = flags && unflaggedMessages.has(`message:${messageId}`);
       const messagePayload = { provider: "claude" as const, native_id: String(row.uuid), version: 1,
-        role: readString(message.role) ?? String(row.type), body: message.content, body_state: "stored" as const };
+        role: readString(message.role) ?? String(row.type), body: message.content, body_state: "stored" as const,
+        ...(flags && !backfillMessage ? { transcript_flags: readClaudeMessageFlags(row) } : {}) };
       append({ ...common, kind: "message.created", subject: `message:${messageId}`,
         source_event_id: `message:${messageId}`, payload: messagePayload, cursor: null });
+      // 旧い事実を全行再読しても payload を変えず、同じ訂正で旗を補う。
+      if (backfillMessage) appendMessageFlags(row, common);
       // 一行の最後の事実だけに再開位置を載せ、所属の追記前に止まっても読み直せるようにする。
       const membershipId = JSON.stringify([messageId, id]);
       append({ ...common, kind: "message_membership.created", subject: `message_membership:${membershipId}`,

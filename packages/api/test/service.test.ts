@@ -179,6 +179,48 @@ function createCodexMessage(id: string) {
   return JSON.stringify({ timestamp: TS, type: "response_item", payload: {
     type: "message", id, role: "user", content: [{ type: "input_text", text: `Fictional ${id}` }] } }) + "\n";
 }
+
+test("queued_command の版 1 から指示と報告だけを補完し、旧い発言を保つ", t => {
+  const f = createFixture(t);
+  const directory = join(f.home, ".claude", "projects", "fixture", "parent", "subagents");
+  mkdirSync(directory, { recursive: true });
+  const path = join(directory, "agent-child.jsonl");
+  const queued = (uuid: string, kind: string, timestamp = true) => ({ type: "attachment", uuid,
+    ...(timestamp ? { timestamp: TS } : {}), attachment: { type: "queued_command", origin: { kind },
+      ...(kind === "human" ? { commandMode: "prompt", timestamp: TS } : {}), prompt: `Synthetic ${uuid}` } });
+  writeFileSync(path, [queued("human", "human"), queued("coordinator", "coordinator"), queued("peer", "peer"),
+    queued("no-time", "coordinator", false), JSON.parse(createClaudeMessage("after"))]
+    .map(row => JSON.stringify(row)).join("\n") + "\n");
+  let service = openObservationService({ home: f.home, env: f.env });
+  service.ingestOnce();
+  service.close();
+  // 版 1 が prompt 以外を捨てて末尾まで読んだ、一時 DB の状態を再現する。
+  const db = new DatabaseSync(f.dbPath);
+  db.prepare("DELETE FROM facts WHERE source_event_id LIKE 'queued-command%' AND source_event_id NOT LIKE '%human%'").run();
+  db.prepare("DELETE FROM facts WHERE kind='observation.unsupported'").run();
+  for (const row of db.prepare("SELECT path, state FROM api_observation_cursors").all()) {
+    const state = JSON.parse(String(row.state));
+    state.cursor.claudeQueuedCommandsVersion = 1;
+    db.prepare("UPDATE api_observation_cursors SET state=? WHERE path=?").run(JSON.stringify(state), row.path);
+  }
+  rebuild(db);
+  db.close();
+  service = openObservationService({ home: f.home, env: f.env });
+  t.after(() => service.close());
+  const original = service.ledger.readSince(0, Number.MAX_SAFE_INTEGER);
+  const result = service.ingestOnce();
+  assert.equal(result.appended, 5);
+  const facts = service.ledger.readSince(0, Number.MAX_SAFE_INTEGER);
+  assert.deepEqual(facts.slice(0, original.length), original);
+  assert.equal(project(facts).messages.length, 4);
+  assert.equal(facts.filter(fact => fact.kind === "observation.unsupported").length, 1);
+  assert.equal(service.ingestOnce().appended, 0);
+  service.close();
+  service = openObservationService({ home: f.home, env: f.env });
+  assert.equal(service.ingestOnce().appended, 0);
+  service.rebuild();
+  assert.deepEqual(service.ledger.readSince(0, Number.MAX_SAFE_INTEGER), facts);
+});
 function readProjection(dbPath: string) {
   const db = new DatabaseSync(dbPath);
   try {

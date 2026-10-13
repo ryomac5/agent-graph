@@ -75,7 +75,8 @@ test("テキストブロックだけを正規化し、画像と道具の結果�
   assert.deepEqual(normalizeClaudeContent({ provider: "claude", role: "assistant", body }), {});
 });
 
-test("投影の更新と旧版の再構築で本文・excerpt・仮名・検索を同じ規則で直す", t => {
+for (const suffix of ["", " while you were working"])
+test(`投影の更新と旧版の再構築で本文・excerpt・仮名・検索を同じ規則で直す (${suffix || "通常"})`, t => {
   const ledger = openLedger(":memory:");
   t.after(() => ledger.close());
   const db = readLedgerDatabase(ledger);
@@ -83,16 +84,20 @@ test("投影の更新と旧版の再構築で本文・excerpt・仮名・検索�
   ledger.append({ source: "transcript-claude", source_event_id: "conversation", source_ts: ts, confidence: "confirmed",
     kind: "conversation.created", subject: "conversation:c", payload: { provider: "claude", native_id: "c", origin: "observed", type: "interactive", history_format: "jsonl" } });
   const bodies = ['<system-reminder>自動挿入</system-reminder>',
-    'Another Claude session sent a message:\n<agent-message from="child">報告本文</agent-message>\n\nThat "other Claude session" is an agent working inside this same session.', wrap("検索対象の依頼。次の文。")];
+    `Another Claude session sent a message${suffix}:\n<agent-message from="child">\n[Subagent hand-back] The text below is the final report. The report follows:\n  報告本文\n</agent-message>\n\nThat "other Claude session" is an agent working inside this same session.`, wrap("検索対象の依頼。次の文。")];
   bodies.forEach((body, index) => {
     const id = `m${index}`;
     ledger.append({ source: "transcript-claude", source_event_id: id, source_ts: ts, confidence: "confirmed", kind: "message.created", subject: `message:${id}`,
-      payload: { provider: "claude", native_id: id, version: 1, role: "user", body_state: "stored", body } });
+      payload: { provider: "claude", native_id: id, version: 1, role: "user", body_state: "stored", body,
+        ...(index === 1 ? { transcript_flags: { isMeta: true } } : {}) } });
     ledger.append({ source: "transcript-claude", source_event_id: `membership${index}`, source_ts: ts, confidence: "confirmed", kind: "message_membership.created", subject: `message_membership:${id}`,
       payload: { message_id: id, conversation_id: "c", active: true } });
   });
   const facts = ledger.readSince(0, 100);
   const projected = project(facts);
+  const reportId = createNativeId("claude", "m1");
+  assert.equal(projected.messages.find(row => row.id === reportId)?.role, "agent_report");
+  assert.equal(projected.messages.find(row => row.id === reportId)?.body, "報告本文");
   assert.equal(projected.conversations[0].first_request_excerpt, "検索対象の依頼。");
   assert.equal(projected.conversations[0].name, "検索対象の依頼。");
   assert.deepEqual(project([...facts].reverse()), projected);
@@ -108,6 +113,12 @@ test("投影の更新と旧版の再構築で本文・excerpt・仮名・検索�
     assert.equal(searchLedger(db, { query: "自動挿入" }).total, 0);
     assert.equal(searchLedger(db, { query: "検索対象" }).total, 1);
     assert.equal(searchLedger(db, { query: "報告本文" }).total, 1);
+    const report = JSON.parse(String(db.prepare("SELECT data FROM projection_records WHERE projection = 'messages' AND entity_id = ?").get(reportId)!.data));
+    assert.equal(report.role, "agent_report");
+    assert.equal(report.body, "報告本文");
+    const result = searchLedger(db, { query: "報告本文" }).results[0];
+    assert.equal(result.message_id, reportId);
+    assert.equal(result.conversation_id, createNativeId("claude", "c"));
   };
   const state = applyIncremental(db, 0); verify();
   rebuild(db); verify();

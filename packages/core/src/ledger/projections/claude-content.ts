@@ -3,7 +3,7 @@ import type { ClaudeMessageFlags } from "../claude-message-flags.ts";
 
 const INJECTED_TAGS = "system-reminder|task-notification|local-command-caveat|local-command-stdout|local-command-stderr|command-message|user-prompt-submit-hook";
 const WRAPPER = new RegExp(`^[ \\t]*<(pasted_content|${INJECTED_TAGS})(?: id="([^"\\n]+)")?>([\\s\\S]*?)<\\/\\1(?: id="\\2")?>`, "gm");
-const REPORT_PREFIX = /^\s*Another Claude session sent a message:\s*/u;
+const REPORT_PREFIX = /^\s*Another Claude session sent a message(?: while you were working)?:\s*/u;
 type NormalizedClaudeContent = { body?: JsonValue; role?: string; content_normalized?: true; relayed_instruction?: true };
 
 /** 行頭の対になった包みだけを読む。コード例の札はそのまま残す。 */

@@ -21,6 +21,7 @@ const ROWS = SAMPLE.trim().split("\n").map(line => JSON.parse(line) as Record<st
 const INTERNAL_IDS = ["summary", "meta", "transcript"].map(id => createNativeId("claude", id));
 const RETAINED_META = [
   { id: "handback", role: "agent_report", query: "Synthetic handback result" },
+  { id: "handback-working", role: "agent_report", query: "Synthetic working handback result" },
   { id: "coordinator", role: "user", query: "Synthetic coordinator instruction" },
   { id: "notification", role: "notification", query: "Synthetic completion notice" },
   { id: "relay", role: "user", query: "Synthetic relayed instruction" },
@@ -42,9 +43,10 @@ function assertMessages(ledger: Ledger) {
   const facts = ledger.readSince(0, Number.MAX_SAFE_INTEGER);
   const projection = project(facts);
   assert.deepEqual(projection.messages.map(row => row.native_id).sort(), ["answer", "human", ...RETAINED_META.map(row => row.id)].sort());
-  for (const { id, role } of RETAINED_META) {
+  for (const { id, role, query } of RETAINED_META) {
     const message = projection.messages.find(row => row.native_id === id)!;
     assert.equal(message.role, role);
+    if (role === "agent_report") assert.equal(message.body, query);
     assert.deepEqual(message.transcript_flags, { isMeta: true });
     if (role === "user") assert.deepEqual(message.body, (ROWS.find(row => row.uuid === id)!.message as Record<string, JsonValue>).content);
     assert.ok(projection.message_memberships.some(row => row.message_id === message.id && row.conversation_id === CONVERSATION && row.active));
@@ -211,7 +213,7 @@ for (const checkpoint of ["saved", "ledger"] as const) {
     const db = new DatabaseSync(f.dbPath);
     const feed = new ProjectionFeed(f.dbPath, () => service.catchUp());
     t.after(() => { feed.close(); db.close(); service.close(); });
-    assert.equal(feed.conversation(CONVERSATION).projection.messages.length, 9);
+    assert.equal(feed.conversation(CONVERSATION).projection.messages.length, 10);
     if (checkpoint === "saved") db.prepare("INSERT INTO api_observation_cursors VALUES (?, ?)")
       .run(f.path, JSON.stringify({ cursor }));
     const original = service.ledger.readSince(0, Number.MAX_SAFE_INTEGER);
@@ -222,17 +224,17 @@ for (const checkpoint of ["saved", "ledger"] as const) {
     assert.equal(report.unsupported, 0);
     const facts = service.ledger.readSince(0, Number.MAX_SAFE_INTEGER);
     assert.deepEqual(facts.slice(0, original.length), original);
-    assert.equal(facts.filter(fact => fact.kind === "message.corrected").length, 7);
+    assert.equal(facts.filter(fact => fact.kind === "message.corrected").length, 8);
     assertMessages(service.ledger);
     const patch = feed.refresh();
     assert.ok(patch && patch !== "resync");
     const scoped = feed.scopePatch(patch, new Set([CONVERSATION]));
     assert.deepEqual(scoped.changes.messages?.remove.sort(), [...INTERNAL_IDS].sort());
     assert.equal(scoped.changes.message_memberships?.remove.length, 3);
-    assert.equal(feed.conversation(CONVERSATION).projection.messages.length, 6);
+    assert.equal(feed.conversation(CONVERSATION).projection.messages.length, 7);
     const summary = feed.snapshot().projection.conversations.find(row => row.id === CONVERSATION)!;
-    assert.equal(summary.message_count, 6);
-    assert.equal(summary.last_message_ts, "2026-10-13T04:07:59.000Z");
+    assert.equal(summary.message_count, 7);
+    assert.equal(summary.last_message_ts, "2026-10-13T04:08:00.000Z");
     assert.equal(db.prepare("SELECT generation FROM projection_state").get()!.generation, generation);
     const saved = JSON.parse(String(db.prepare("SELECT state FROM api_observation_cursors WHERE path = ?").get(f.path)!.state));
     assert.equal(saved.cursor.claudeMessageFlagsVersion, CLAUDE_MESSAGE_FLAGS_VERSION);
@@ -266,10 +268,10 @@ test("旗の補完が途中で止まっても、旧 cursor から再開して全
   assert.throws(() => observeClaudeFile(interrupted, f.path, { cursor }), /Interrupted backfill/);
   assert.deepEqual(observeClaudeFile(ledger, f.path, { cursor }).conflicts, []);
   assertMessages(ledger);
-  assert.equal(ledger.readSince(0, Number.MAX_SAFE_INTEGER).filter(fact => fact.kind === "message.corrected").length, 7);
+  assert.equal(ledger.readSince(0, Number.MAX_SAFE_INTEGER).filter(fact => fact.kind === "message.corrected").length, 8);
   const replay = observeClaudeFile(ledger, f.path, { cursor: { ...cursor, identity: "replaced" } });
   assert.deepEqual(replay.conflicts, []);
-  assert.equal(ledger.readSince(0, Number.MAX_SAFE_INTEGER).filter(fact => fact.kind === "message.corrected").length, 7);
+  assert.equal(ledger.readSince(0, Number.MAX_SAFE_INTEGER).filter(fact => fact.kind === "message.corrected").length, 8);
   assertMessages(ledger);
 });
 

@@ -5,6 +5,51 @@
 <title>Claude の圧縮要約の誤表示を修正</title>
 <style>body{font:16px/1.7 system-ui,sans-serif;max-width:1050px;margin:40px auto;padding:0 20px;color:#1a1a1a}pre{background:#f2f4f7;padding:16px;overflow:auto}table{border-collapse:collapse;width:100%;margin-bottom:24px}th,td{border:1px solid #ddd;padding:8px;text-align:left}code{overflow-wrap:anywhere}</style>
 <h1>Claude の圧縮要約の誤表示を修正</h1>
+<p>2026-10-13 更新。HEAD <code>547d224</code> の最後のレビュー指摘を修正した。<code>Another Claude session sent a message while you were working:</code> で始まる isMeta の報告も <code>agent_report</code> とし、根の会話の投影・検索に残す。</p>
+
+<h2>今回の変更</h2>
+<p><code>packages/core/src/ledger/projections/claude-content.ts</code> の接頭辞だけを次の式に変更した。従来の定型も引き続き受け付ける。</p>
+<pre><code>const REPORT_PREFIX = /^\s*Another Claude session sent a message(?: while you were working)?:\s*/u;</code></pre>
+<p><code>packages/api/test/samples/claude-message-flags.jsonl</code> に匿名化した hand-back 行を追加した。実履歴の <code>isMeta</code>、<code>isSidechain</code>、<code>origin.kind=peer</code>、<code>origin.handback=true</code>、文字列の content、agent-message の包み、報告前後の定型文と字下げを維持し、本文・識別子・パスを見本用に置き換えた。</p>
+<p>参照した実例は AHC072 の会話 <code>0e054729-5b25-43a0-b536-e55470f36600</code> 配下の <code>subagents/agent-ab282a1f2ea5e7177.jsonl</code> 57行目。現在の根ファイル47行目は queue-operation で、<code>subagents/agent-a5d37bdb2084a2c81.jsonl</code> 47行目には同じ接頭辞の通常の peer メッセージがある。いずれも読み取りだけで確認した。</p>
+<p>core は両方の接頭辞について role・正規化後の本文・所属先の検索結果・差分投影・rebuild・順序逆転を検証する。api は追加見本を通常取り込みと旧 cursor からの旗の補完に流し、根の会話への所属、検索、再起動、途中停止からの再開、全行再読と冪等性を検証する。</p>
+
+<h2>実履歴全体の再調査</h2>
+<p>2026-10-13 19:24 JST、<code>~/.claude/projects</code> 配下の全708 JSONLファイルを読み取り専用で走査した。不正JSONは0件。<code>isMeta=true</code> は1,261行、UUIDで重複を除くと1,225件だった。以下は複製を含む履歴行数であり、本番台帳の件数ではない。</p>
+<table>
+<thead><tr><th>種類</th><th>行数</th><th>修正後の投影・検索</th></tr></thead>
+<tbody>
+<tr><td>従来の接頭辞の peer 報告</td><td>399</td><td>399 agent_report</td></tr>
+<tr><td>while you were working 付きの peer 報告</td><td>7（うち hand-back 4）</td><td>7 agent_report（今回の修正で保持）</td></tr>
+<tr><td>coordinator 中継</td><td>178</td><td>178 user</td></tr>
+<tr><td>SYSTEM NOTIFICATION</td><td>25</td><td>25 notification</td></tr>
+<tr><td>人の指示の中継</td><td>4</td><td>4 user</td></tr>
+<tr><td>その他の isMeta</td><td>648</td><td>380 notification、268 非表示</td></tr>
+<tr><td><strong>合計</strong></td><td><strong>1,261</strong></td><td><strong>993保持（報告406・user 182・通知405）、268非表示</strong></td></tr>
+</tbody>
+</table>
+<p>origin の種類・handback の印と本文の定型を突き合わせ、全行に実装の正規化・非表示判定を適用した。hand-back は全395行で、今回の4行を含め全件が agent_report として残る。非表示の本文も関連する定型の有無を調べ、hand-back・coordinator・notification の追加の漏れは0件だった。内部の配信催促 <code>[handback-send-enforce]</code> 15行は最終報告ではなく、従来どおり非表示とする。通知405行は投影・検索に残るが、既存の画面では描かれない。</p>
+
+<h2>今回の試験結果</h2>
+<ul>
+<li>直接関連する core・api の33件は全成功。</li>
+<li>core 全体404件は全成功、スキップ0。5万件の逐次反映と100件の差分反映の性能試験も成功。</li>
+<li>変異試験: Node の読み込みフックで REPORT_PREFIX だけを旧式に戻すと33件中5件が失敗（core 1件、api 4件）。core は agent_report の欠落、api は handback-working の欠落で失敗した。製品ファイルを書き戻す操作はしていない。</li>
+<li>API の取り込み試験439件は全成功、スキップ0。指定された <code>send-watch.test.ts</code> は変更せず、今回の実行範囲にも含めていない。</li>
+<li>core・api の型検査と <code>git diff --check</code> は成功。旧 daemon の既知エラーは検査対象外。</li>
+</ul>
+<p><code>npm_config_offline=true npx --yes pnpm@10 --version</code> は ENOTCACHED で起動できなかったため、依存を追加せず導入済み Node と TypeScript を直接使った。一時ファイルと試験の台帳は作業ツリー内の <code>.review-tmp</code> に隔離した。</p>
+<pre><code>mkdir -p .review-tmp
+TMPDIR="$PWD/.review-tmp" node --test packages/core/test/ledger/claude-content.test.ts packages/api/test/observe/claude-message-flags.test.ts
+TMPDIR="$PWD/.review-tmp" GIT_CEILING_DIRECTORIES="$PWD/.review-tmp" node --import ./packages/core/test/setup.ts --test 'packages/core/test/**/*.test.ts'
+TMPDIR="$PWD/.review-tmp" GIT_CEILING_DIRECTORIES="$PWD/.review-tmp" node --import ./packages/api/test/setup.ts --test 'packages/api/test/observe/**/*.test.ts'
+node node_modules/typescript/bin/tsc -p packages/core --noEmit
+node node_modules/typescript/bin/tsc -p packages/api --noEmit</code></pre>
+<p>本番の台帳・履歴・<code>.endpoint</code> への書き込み、サービスの再起動、commit、push、rebase は行っていない。製品コードの変更は正規表現1か所だけで、投影版や旗の補完の版は変更していない。すでに旧式で投影済みの台帳を更新する運用は今回実行していない。</p>
+
+<details>
+<summary>前回の修正記録（547d224 時点。以下の集計・試験結果は今回の再調査とは別）</summary>
+<p>以下の旧集計は今回発見した7行を報告に含めていない。最新の件数・判定は上の再調査を参照する。</p>
 <p>2026-10-13 更新。commit <code>3e64c84</code> のレビュー指摘1点を修正した。coordinator と人の中継を <code>notification</code> にして子の会話から消していた退行を直し、<code>user</code> として親の吹き出しに残す。圧縮要約の非表示、isMeta の報告・通知の保持、未知の旗、冪等性は維持した。dashboard の部品、本番の台帳・履歴・<code>.endpoint</code> は変更せず、API / runner の再起動、commit、push は行っていない。</p>
 
 <h2>修正した内容</h2>
@@ -55,4 +100,5 @@
 <li>性能: core の5万件の差分投影は会話1個で28,184.3 ms、5個で26,305.4 ms（基準60秒以内）。100件の反映は21.8 / 18.9 ms（基準300 ms以内）。API の移行と投影は12,267.8 ms、5万行の取り込みと投影は13,331.8 ms（基準30秒以内）。すべて成功し、時間切れによる性能試験の単独再実行は不要だった。</li>
 </ul>
 <p><code>npm_config_offline=true npx --yes pnpm@10 --version</code> はキャッシュ不足（ENOTCACHED）で起動できなかった。依存を追加せず、導入済み Node の <code>node --run test</code> を core / API で実行し、型検査は <code>node node_modules/typescript/bin/tsc -p &lt;対象&gt; --noEmit</code> で全9対象を確認した。台帳・接続を使う試験は各試験の一時環境に隔離し、本番 API / runner は操作していない。</p>
+</details>
 </html>

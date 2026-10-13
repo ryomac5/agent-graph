@@ -359,10 +359,12 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
         if (!disposed && ack.ok) {
           const next = readHosts(ack.result);
           setHosts(next);
-          setHostsLoadedFor(conversationId);
           setPendingHost(previous => next.some(host => host.terminalId === previous?.terminalId) ? undefined : previous);
         }
       } catch { /* 接続の復帰後に一覧を取り直す。 */ }
+      finally {
+        if (!disposed) setHostsLoadedFor(conversationId);
+      }
     };
     void poll();
     const timer = setInterval(() => { void poll(); }, HOST_POLL_MS);

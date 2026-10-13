@@ -18,8 +18,9 @@ vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { fit() {} } }));
 const newId = '["claude","new-conversation"]';
 function deferAck() {
   let resolve!: (ack: Ack) => void;
-  const promise = new Promise<Ack>(accept => { resolve = accept; });
-  return { promise, resolve };
+  let reject!: (error: Error) => void;
+  const promise = new Promise<Ack>((accept, decline) => { resolve = accept; reject = decline; });
+  return { promise, resolve, reject };
 }
 const host = { terminalId: 'terminal', conversationId: newId, provider: 'claude', cwd: '/repo', projectId: 'p' };
 const hostsAck: Ack = { type: 'ack', cmd_id: 'cmd', ok: true, result: { hosts: [host] } };
@@ -129,7 +130,8 @@ it.each([false, true])('shows the new + conversation before its root and merges 
   expect(screen.getByTestId('url').textContent).toBe('?root=old-root');
 });
 
-it.each([[newId, true], [newId, false], ['missing-conversation', false]] as const)('waits for the first host response before deciding whether a URL conversation exists (%s, exists: %s)', async (conversationId, exists) => {
+it.each([[newId, true, 'ok'], [newId, false, 'ok'], ['missing-conversation', false, 'ok'],
+  ['missing-conversation', false, 'ok:false'], ['missing-conversation', false, 'reject']] as const)('waits for the first host response before deciding whether a URL conversation exists (%s, exists: %s, response: %s)', async (conversationId, exists, response) => {
   const target = createStore();
   target.setSnapshot({ seq: 1, generation: 1, projection: { projects, conversations: [], roots: [] } });
   target.setConnection('connected');
@@ -141,7 +143,10 @@ it.each([[newId, true], [newId, false], ['missing-conversation', false]] as cons
   expect(screen.queryByText('Conversation not found')).toBeNull();
   expect(screen.getByText('Loading…').getAttribute('role')).toBe('status');
   expect(screen.queryByRole('textbox', { name: 'Message' })).toBeNull();
-  await act(async () => pending.resolve({ ...hostsAck, result: { hosts: exists ? [host] : [] } }));
+  await act(async () => {
+    if (response === 'reject') pending.reject(new Error('Host refresh failed'));
+    else pending.resolve({ ...hostsAck, ok: response !== 'ok:false', result: { hosts: exists ? [host] : [] } });
+  });
   expect(screen.queryByText('Loading…')).toBeNull();
   if (exists) {
     expect(screen.queryByText('Conversation not found')).toBeNull();

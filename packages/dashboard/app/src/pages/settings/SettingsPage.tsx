@@ -1,3 +1,4 @@
+import { holdDashboardReload } from '../../lib/reload-safety.ts';
 import { PolicyEditor } from './PolicyEditor.tsx';
 import { useEffect, useRef, useState } from 'react';
 import { labelSetting, SettingsFields, SettingsSection } from '../../components/settings/SettingsFields.tsx';
@@ -40,6 +41,8 @@ export function SettingsPage({ client, language, onAppearance, policyOnly = fals
   const [models, setModels] = useState<ModelCatalog>({});
   const latestPolicy = useRef(settings?.policy); latestPolicy.current = settings?.policy;
   const dirty = useRef(new Set<FileStore>());
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  useEffect(() => { if (hasUnsavedChanges) return holdDashboardReload(); }, [hasUnsavedChanges]);
   const edits = useRef({ config: 0, policy: 0, project: 0 });
   const mounted = useRef(true);
   useEffect(() => {
@@ -79,6 +82,7 @@ export function SettingsPage({ client, language, onAppearance, policyOnly = fals
   function edit(store: FileStore, value: unknown) {
     edits.current[store] += 1;
     dirty.current.add(store);
+    setHasUnsavedChanges(true);
     setSettings(previous => previous && { ...previous, [store]: value });
     if (store === 'policy') { setPreview(undefined); setProviderPreview(undefined); setProviderConfirmed(false); }
   }
@@ -92,6 +96,7 @@ export function SettingsPage({ client, language, onAppearance, policyOnly = fals
         store, patch, ...(store === 'policy' ? { previewToken: preview?.token } : {}), confirmation,
       });
       if (edits.current[store] === revision) dirty.current.delete(store);
+      setHasUnsavedChanges(dirty.current.size > 0);
       if (store === 'policy') setPreview(undefined);
       setNotice(result.existingPayloadDeletion === 'requires_confirmation'
         ? text('Saved. Existing payloads have not been deleted; separate confirmation is required.', '保存しました。既存の本文は未削除。別の確認が必要です。')
@@ -110,9 +115,9 @@ export function SettingsPage({ client, language, onAppearance, policyOnly = fals
   function fields(store: FileStore, value: Record<string, unknown>, section?: string) {
     return <SettingsFields value={value} language={lang} prefix={section ?? ''} inheritIsolation={store === 'project'} onChange={next => edit(store, section ? { ...settings![store], [section]: next } : next)}/>;
   }
-  if (policyOnly) return <div className="assignment-settings settings-page">{error && <p role="alert">{displayError(error)}</p>}{settings ? <PolicyEditor client={client} policy={settings.policy} models={models} language={lang} dirty={dirty.current.has('policy')} onChange={next => edit('policy', next)} onSaved={revision => { if (latestPolicy.current === revision) dirty.current.delete('policy'); setNotice(text('Saved', '保存しました')); }} onRefresh={provider => void perform(async () => { const result = await requestSettings<ModelCatalog[string]>(client, 'settings.models', { provider }); setModels(previous => ({ ...previous, [provider]: result })); })}/> : <p>{text('Loading settings…', '設定を読み込み中…')}</p>}{notice && <p role="status">{notice}</p>}</div>;
+  if (policyOnly) return <div className="assignment-settings settings-page">{error && <p role="alert">{displayError(error)}</p>}{settings ? <PolicyEditor client={client} policy={settings.policy} models={models} language={lang} dirty={dirty.current.has('policy')} onChange={next => edit('policy', next)} onSaved={revision => { if (latestPolicy.current === revision) dirty.current.delete('policy'); setHasUnsavedChanges(dirty.current.size > 0); setNotice(text('Saved', '保存しました')); }} onRefresh={provider => void perform(async () => { const result = await requestSettings<ModelCatalog[string]>(client, 'settings.models', { provider }); setModels(previous => ({ ...previous, [provider]: result })); })}/> : <p>{text('Loading settings…', '設定を読み込み中…')}</p>}{notice && <p role="status">{notice}</p>}</div>;
   return <div className={policyOnly ? "assignment-settings settings-page" : "page settings-page"}>{!policyOnly && <header className="page-header"><div className="page-title"><p className="eyebrow">agent-graph</p><h1>{text('Settings', '設定')}</h1></div>
-    <button className="btn btn-secondary" disabled={busy} onClick={() => void perform(async () => { dirty.current.clear(); setPreview(undefined); setSettings(await requestSettings(client, 'settings.read')); })}>{text('Reload settings', '設定を読み直す')}</button></header>}
+    <button className="btn btn-secondary" disabled={busy} onClick={() => void perform(async () => { dirty.current.clear(); setHasUnsavedChanges(false); setPreview(undefined); setSettings(await requestSettings(client, 'settings.read')); })}>{text('Reload settings', '設定を読み直す')}</button></header>}
     {error && <p role="alert" className="banner banner-danger">{displayError(error)}</p>}{notice && <p role="status" className="banner">{notice}</p>}
     {Object.entries(settings?.errors ?? {}).map(([store, reason]) => <p key={store} role="alert" className="banner banner-warning">{text(store, ({ config: '個人設定', policy: '割り当て', project: 'プロジェクト' })[store] ?? store)}: {displayError(reason)}<small className="settings-note">{text('Previous valid settings remain active.', '前の有効な値で動き続けます。')}</small></p>)}
     {!settings ? <p>{text('Loading settings…', '設定を読み込み中…')}</p> : <>

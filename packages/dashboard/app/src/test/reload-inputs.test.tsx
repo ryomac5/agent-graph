@@ -1,3 +1,6 @@
+import { SettingsPage } from '../pages/settings/SettingsPage.tsx';
+import { defaultConfig, defaultProject } from '../../../../core/src/settings/index.ts';
+import { defaultPolicy } from '../../../../core/src/assign/policy.ts';
 import { SshSettings } from '../components/SshSettings.tsx';
 import { afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
@@ -151,4 +154,41 @@ it('protects SSH additions without typed input and releases after saving', async
   fireEvent.click(view.getByRole('button', { name: 'Remove connection' }));
   expect(isDashboardAutoReloadBlocked(client, inputs.isBlocked)).toBe(true);
   view.unmount(); expect(isDashboardAutoReloadBlocked(client, inputs.isBlocked)).toBe(false);
+});
+
+it.each(['save', 'reload settings', 'leave page'])('protects unsaved settings checkbox in a hidden tab and releases on %s', async action => {
+  const inputs = track();
+  const snapshot = { config: defaultConfig(), policy: defaultPolicy(), project: defaultProject(), errors: {}, apiKeyConfigured: false };
+  const client = { canReload: () => true, command: vi.fn(async (name: string) => ({ type: 'ack' as const, cmd_id: name, ok: true,
+    result: name === 'settings.status' ? undefined : name === 'settings.read' ? structuredClone(snapshot) : name === 'settings.models' ? { state: 'unknown', models: [] } : { saved: true } })) };
+  vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
+  vi.useFakeTimers();
+  vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+  document.head.innerHTML = '<script type="module" src="/assets/old.js"></script>';
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, text: async () => '<script type="module" src="/assets/new.js"></script>' })));
+  const reload = vi.fn();
+  let stop = () => {};
+  try {
+    const view = render(<SettingsPage client={client} language="en"/>);
+    await act(async () => {});
+    const checkbox = view.getByRole('checkbox', { name: 'observation · Observe Claude' });
+    const original = (checkbox as HTMLInputElement).checked;
+    fireEvent.click(checkbox);
+    expect(checkbox).toHaveProperty('checked', !original);
+    expect(inputs.isBlocked()).toBe(false);
+    stop = installPreloadRecovery(reload, { isBlocked: () => isDashboardAutoReloadBlocked(client, inputs.isBlocked) });
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(reload).not.toHaveBeenCalled();
+    expect(checkbox).toHaveProperty('checked', !original);
+    await act(async () => {
+      if (action === 'leave page') view.unmount();
+      else fireEvent.click(view.getByRole('button', { name: action === 'save' ? 'Save personal settings' : 'Reload settings' }));
+    });
+    if (action === 'save') expect(client.command).toHaveBeenCalledWith('settings.write', expect.objectContaining({ store: 'config', patch: expect.objectContaining({ observation: expect.objectContaining({ claude: !original }) }) }));
+    if (action === 'reload settings') expect(checkbox).toHaveProperty('checked', original);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(reload).toHaveBeenCalledTimes(1);
+  } finally {
+    stop(); cleanup(); document.head.innerHTML = ''; vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks();
+  }
 });

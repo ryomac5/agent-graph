@@ -227,3 +227,91 @@ test('保持期間の境界は observed_ts と cutoff の時差・小数秒を�
   assert.deepEqual(rows[1].payload, { body: 'equal' });
   assert.equal(readLedgerDatabase(ledger).prepare('SELECT count(*) AS count FROM facts WHERE payload IS NULL').get()!.count, 1);
 });
+
+test('補完は複数バッチの混在書式を揃え、正規形・不正値・無関係な会話には書き込まない', t => {
+  const { db, append } = createFixture(t);
+  append('conversation.created', 'conversation:c', { provider: 'codex', native_id: 'c' });
+  append('message.created', 'message:seed', { role: 'user', body: 'seed', version: 1, body_state: 'stored' });
+  applyIncremental(db, 0);
+  const formats = [UTC, OFFSET, '2026-10-13 00:00:00', '2026-10-13T00:00:00.000000Z', 'invalid', null];
+  const count = 800;
+  db.exec(`CREATE TABLE api_conversation_summaries (id TEXT PRIMARY KEY, message_count INTEGER, last_message_ts TEXT, last_message_excerpt TEXT);
+    INSERT INTO api_conversation_summaries VALUES ('changed', 800, NULL, 'old'), ('shared', 800, NULL, 'old'),
+      ('inactive', 0, NULL, 'unchanged'), ('unrelated', 1, NULL, 'unchanged');
+    CREATE TEMP TABLE repair_writes (table_name TEXT, id TEXT);`);
+  const fact = db.prepare(`INSERT INTO facts (fact_id, source, source_event_id, kind, subject, payload_hash, source_ts, observed_ts, schema_version, confidence)
+    VALUES (?, 'ui', ?, 'message.created', ?, 'hash', ?, ?, 1, 'confirmed')`);
+  const message = db.prepare(`INSERT INTO messages (id, source_ts, source_event_id, body) VALUES (?, ?, ?, ?)`);
+  const search = db.prepare(`INSERT INTO search_documents (id, source_ts, fact_id, subject, kind, confidence, identifiers)
+    VALUES (?, ?, 'fixture', 'message:fixture', 'message', 'confirmed', '')`);
+  const projection = db.prepare('INSERT INTO projection_records VALUES (?, ?, ?)');
+  const entity = db.prepare('INSERT INTO entity_records (entity, id, data, last_seq) VALUES (?, ?, ?, 0)');
+  const membership = db.prepare('INSERT INTO message_memberships VALUES (?, ?, ?, ?)');
+  db.exec('BEGIN');
+  for (let index = 0; index < count; index++) {
+    const id = `mixed-${String(index).padStart(4, '0')}`;
+    const timestamp = formats[index % formats.length];
+    fact.run(id, id, `message:${id}`, timestamp ?? UTC, UTC);
+    message.run(id, timestamp, `event:${index}`, JSON.stringify(`body ${index}`));
+    search.run(id, timestamp ?? UTC);
+    const data = JSON.stringify({ source_ts: timestamp, started_ts: timestamp,
+      pending_inputs: [{ source_ts: timestamp, body: OFFSET }, { source_ts: UTC }, { source_ts: null }],
+      body: { source_ts: OFFSET }, evidence: { started_ts: OFFSET } });
+    projection.run('messages', id, data);
+    entity.run('message', id, data);
+    for (const conversation of ['changed', 'shared', 'inactive']) membership.run(`${conversation}-${id}`, id, conversation, conversation === 'inactive' ? 0 : 1);
+  }
+  db.exec('COMMIT');
+  const beforeJson = db.prepare("SELECT data FROM projection_records WHERE entity_id = 'mixed-0001'").get()!.data;
+  for (const [table, key] of [['facts', 'fact_id'], ['messages', 'id'], ['search_documents', 'id'], ['projection_records', 'entity_id'], ['entity_records', 'id']]) {
+    db.exec(`CREATE TEMP TRIGGER track_${table} AFTER UPDATE ON ${table}
+      BEGIN INSERT INTO repair_writes VALUES ('${table}', new.${key}); END`);
+  }
+  db.exec(`CREATE TEMP TRIGGER track_summaries AFTER UPDATE ON api_conversation_summaries
+    BEGIN INSERT INTO repair_writes VALUES ('summaries', new.id); END`);
+  const result = normalizeLedgerTimestamps(db);
+  assert.equal(result.changes.messages, 400);
+  for (const row of db.prepare("SELECT id, source_ts FROM messages WHERE id LIKE 'mixed-%'").iterate()) {
+    const index = Number(String(row.id).slice(6));
+    assert.equal(row.source_ts, index % formats.length === 4 ? 'invalid' : index % formats.length === 5 ? null : UTC);
+  }
+  assert.equal(db.prepare("SELECT count(*) AS n FROM facts WHERE fact_id LIKE 'mixed-%' AND source_ts NOT IN (?, 'invalid')").get(UTC)!.n, 0);
+  assert.equal(db.prepare("SELECT count(*) AS n FROM search_documents WHERE id LIKE 'mixed-%' AND source_ts NOT IN (?, 'invalid')").get(UTC)!.n, 0);
+  for (const [table, key] of [['projection_records', 'entity_id'], ['entity_records', 'id']]) {
+    for (const row of db.prepare(`SELECT ${key} AS id, data FROM ${table} WHERE ${key} LIKE 'mixed-%'`).iterate()) {
+      const index = Number(String(row.id).slice(6));
+      const data = JSON.parse(String(row.data));
+      const expected = index % formats.length === 4 ? 'invalid' : index % formats.length === 5 ? null : UTC;
+      assert.equal(data.source_ts, expected);
+      assert.equal(data.started_ts, expected);
+      assert.equal(data.pending_inputs[0].source_ts, expected);
+      assert.equal(data.pending_inputs[0].body, OFFSET);
+      assert.equal(data.body.source_ts, OFFSET);
+      assert.equal(data.evidence.started_ts, OFFSET);
+    }
+  }
+  assert.notEqual(db.prepare("SELECT data FROM projection_records WHERE entity_id = 'mixed-0001'").get()!.data, beforeJson);
+  for (const row of db.prepare("SELECT id FROM repair_writes WHERE table_name != 'summaries'").iterate()) {
+    assert.ok([1, 2, 3].includes(Number(String(row.id).slice(6)) % formats.length), String(row.id));
+  }
+  assert.deepEqual(db.prepare("SELECT id FROM repair_writes WHERE table_name = 'summaries' ORDER BY id").all().map(row => row.id), ['changed', 'shared']);
+  // 不正値が最新になる既存の文字列順と、同時刻の event 順も維持する。
+  assert.equal(db.prepare("SELECT last_message_excerpt FROM api_conversation_summaries WHERE id = 'changed'").get()!.last_message_excerpt, 'body 796');
+  db.exec('DELETE FROM repair_writes');
+  assert.deepEqual(normalizeLedgerTimestamps(db), { changes: {}, generation: result.generation });
+  assert.equal(db.prepare('SELECT count(*) AS n FROM repair_writes').get()!.n, 0);
+});
+
+test('単一 JSON 内の大量の待機入力も分割し、バッチ境界の不正値を飛ばして完了する', t => {
+  const { db } = createFixture(t);
+  const count = 800;
+  const pending_inputs = Array.from({ length: count }, (_, index) => ({
+    source_ts: index % 3 === 0 ? 'invalid' : OFFSET, body: { source_ts: OFFSET },
+  }));
+  db.prepare('INSERT INTO projection_records VALUES (?, ?, ?)').run('conversations', 'queued', JSON.stringify({ pending_inputs }));
+  const result = normalizeLedgerTimestamps(db);
+  assert.equal(result.changes.projection_records, 533);
+  const repaired = JSON.parse(String(db.prepare("SELECT data FROM projection_records WHERE entity_id = 'queued'").get()!.data));
+  assert.deepEqual(repaired.pending_inputs, pending_inputs.map((input, index) => ({ ...input, source_ts: index % 3 === 0 ? 'invalid' : UTC })));
+  assert.deepEqual(normalizeLedgerTimestamps(db), { changes: {}, generation: result.generation });
+});

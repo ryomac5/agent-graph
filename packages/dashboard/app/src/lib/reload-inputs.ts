@@ -1,22 +1,16 @@
-const EDITABLE = 'input, textarea, select, [contenteditable]:not([contenteditable="false"])';
+const EDITABLE = 'input, textarea';
+const TEXT_INPUT_TYPES = new Set(['text', 'email', 'url', 'number', 'tel', 'password']);
 
-function readValue(element: HTMLElement, original = false): string {
-  if (element instanceof HTMLInputElement) {
-    if (['checkbox', 'radio'].includes(element.type)) return String(original ? element.defaultChecked : element.checked);
-    return original ? element.defaultValue : element.value;
-  }
-  if (element instanceof HTMLTextAreaElement) return original ? element.defaultValue : element.value;
-  if (element instanceof HTMLSelectElement) return original
-    ? [...element.options].filter(option => option.defaultSelected).map(option => option.value).join('\n')
-    : [...element.selectedOptions].map(option => option.value).join('\n');
-  return element.textContent ?? '';
+function readValue(element: HTMLInputElement | HTMLTextAreaElement, original = false): string {
+  return original ? element.defaultValue : element.value;
 }
 
 export function trackReloadInputs(document: Document) {
-  const originals = new Map<HTMLElement, string>();
+  const originals = new Map<HTMLInputElement | HTMLTextAreaElement, string>();
   const remember = (event: Event) => {
-    const element = event.target instanceof Element ? event.target.closest<HTMLElement>(EDITABLE) : null;
-    if (!element || originals.has(element)) return;
+    const element = event.target instanceof Element ? event.target.closest<HTMLInputElement | HTMLTextAreaElement>(EDITABLE) : null;
+    if (!element || element.closest('[data-reload-ignore]') || originals.has(element)) return;
+    if (element instanceof HTMLInputElement && !TEXT_INPUT_TYPES.has(element.type)) return;
     originals.set(element, readValue(element, ['input', 'change'].includes(event.type)));
   };
   // React が controlled の defaultValue を更新する前に、編集前の値を取る。
@@ -34,6 +28,7 @@ export function trackReloadInputs(document: Document) {
       }
       for (const [element, original] of originals) {
         if (!element.isConnected) { originals.delete(element); continue; }
+        if (element.closest('[data-reload-ignore]')) { originals.delete(element); continue; }
         const draftKey = element.dataset.conversationDraft;
         if (draftKey !== undefined) {
           try { if ((sessionStorage.getItem('agent-graph-conversation-draft:' + draftKey) ?? '') === readValue(element)) continue; }

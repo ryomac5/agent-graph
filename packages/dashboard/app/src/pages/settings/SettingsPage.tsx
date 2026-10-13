@@ -173,7 +173,7 @@ export function SettingsPage({ client, language, onAppearance, policyOnly = fals
     }</>}
     {!policyOnly && <SettingsSection title={text('Appearance', '外観')}>
       {(Object.entries(APPEARANCE_CHOICES) as [keyof Appearance, readonly string[]][]).map(([key, options]) => <label key={key}><span><strong>{text(({ theme: 'Theme', density: 'Density', diff: 'Diff layout', time: 'Time display', language: 'Language' })[key], ({ theme: 'テーマ', density: '表示密度', diff: '差分の表示方式', time: '時刻の表示', language: '言語' })[key])}</strong></span>
-        <select aria-label={key} value={appearance[key]} onChange={event => { const next = { ...appearance, [key]: event.target.value } as Appearance; setAppearance(next); saveAppearance(next); onAppearance?.(next); }}>{options.map(option => <option key={option} value={option}>{option === 'ja' ? '日本語' : option === 'en' ? 'English' : option}</option>)}</select></label>)}
+        <select data-reload-ignore aria-label={key} value={appearance[key]} onChange={event => { const next = { ...appearance, [key]: event.target.value } as Appearance; setAppearance(next); saveAppearance(next); onAppearance?.(next); }}>{options.map(option => <option key={option} value={option}>{option === 'ja' ? '日本語' : option === 'en' ? 'English' : option}</option>)}</select></label>)}
     </SettingsSection>}
   </div>;
 }

@@ -167,7 +167,7 @@ export async function startStaticServer(options: StaticOptions) {
       } catch { response.writeHead(404).end(); }
       return;
     }
-    if (['/snapshot', '/conversation', '/projection', '/api/search'].includes(url.pathname)) {
+    if (['/snapshot', '/conversation', '/projection', '/api/search', '/api/send-watches'].includes(url.pathname)) {
       if (!authorize(request, port, upstream.token)) { response.writeHead(403).end(); return; }
       const proxy = requestHttp(new URL(url.pathname + url.search, upstream.url), {
         headers: { 'x-agent-graph-token': upstream.token },

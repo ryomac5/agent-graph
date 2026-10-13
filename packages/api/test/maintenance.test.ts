@@ -265,6 +265,7 @@ test('Settings commands work over authenticated WebSocket without runner and reb
   const waiters: ((message: Record<string, any>) => void)[] = [];
   socket.on('message', data => {
     const message = JSON.parse(data.toString());
+    if (message.type === 'send_watches') return;
     const resolve = waiters.shift();
     if (resolve) resolve(message); else queue.push(message);
   });

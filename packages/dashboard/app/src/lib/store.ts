@@ -23,6 +23,10 @@ export function createStore() {
     subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
     setConnection: (connection: ConnectionState) => update({ ...state, connection }),
     setSnapshot: (snapshot: Snapshot) => update({ ...state, ...snapshot, snapshotReady: true, pages: snapshot.pages, projection: resolveProjection(snapshot.projection, snapshot.identities), deltas: {}, projectionError: undefined }),
+    setSendWatches: (rows: Row[]) => {
+      const shared = shareValue(state.projection.send_watches, rows);
+      if (shared !== state.projection.send_watches) update({ ...state, projection: { ...state.projection, send_watches: shared! } });
+    },
     clearDeltas: () => update({ ...state, deltas: {} }),
     mergeProjection(projection: Record<string, Row[]>, generation: number, identities = state.identities, pages = state.pages, projectionError = state.projectionError) {
       if (generation !== state.generation) return;

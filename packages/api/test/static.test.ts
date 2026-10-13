@@ -58,7 +58,7 @@ testSocket('snapshot requires token and returns the exact API snapshot', async t
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), await (await fetch(upstream.url + '/snapshot', { headers })).json());
   // 会話の発言と一覧の続きも、同じ検証で api へ中継する。
-  for (const path of ['/conversation?id=demo', '/projection?table=conversations']) {
+  for (const path of ['/conversation?id=demo', '/projection?table=conversations', '/api/send-watches?conversation=demo']) {
     assert.equal((await fetch(server.url + path)).status, 403);
     const proxied = await fetch(server.url + path, { headers });
     const direct = await fetch(upstream.url + path, { headers });

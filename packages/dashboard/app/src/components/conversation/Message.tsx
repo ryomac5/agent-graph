@@ -39,8 +39,8 @@ export function countTools(rows: Row[]): number {
  * 発言を 1 つ描く。右の列は利用者の吹き出し、左の列はエージェントの吹き出しにする。
  * 送り主の名前は、続く同じ送り主の発言では省く。時刻は常に出す。
  */
-function RenderMessage({ row, sender, showName = true, language = 'en', streaming = false, parentRequest = false, toolResults, delegationNodes, onSelectChild }: {
-  row: Row; sender: Sender; showName?: boolean; language?: Language; streaming?: boolean; parentRequest?: boolean; toolResults?: Map<string, unknown>; delegationNodes?: DelegationNodes; onSelectChild?: (id: string) => void;
+function RenderMessage({ row, sender, showName = true, language = 'en', streaming = false, parentRequest = false, toolResults, delegationNodes, onSelectChild, onRetry }: {
+  onRetry?: (row: Row) => void; row: Row; sender: Sender; showName?: boolean; language?: Language; streaming?: boolean; parentRequest?: boolean; toolResults?: Map<string, unknown>; delegationNodes?: DelegationNodes; onSelectChild?: (id: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const t = (key: Parameters<typeof translate>[1]) => translate(language, key);
@@ -87,7 +87,7 @@ function RenderMessage({ row, sender, showName = true, language = 'en', streamin
   const unavailable = row.body_state === 'unavailable' || row.body_state === 'omitted';
   if (!unavailable && !text && !tools.length && blocks.length > 0 && blocks.every(paired)) return null;
   // 本文のない利用者の行は、hook が差し込んだ行か道具の結果だけの行である。吹き出しを出さない。
-  if (!unavailable && !streaming && !text && !tools.length && !images.length && end && row.tool_output == null) return null;
+  if (!unavailable && !streaming && !text && !tools.length && !images.length && end && row.tool_output == null && row.delivery_state !== 'failed') return null;
   const toolOutput = row.tool_output !== undefined && row.tool_output !== null;
   const hasTools = (!hasDelegations && tools.length > 0) || orphanResults.length > 0 || toolOutput;
   const renderTool = (tool: Row, index: number) => isDelegationTool(tool)
@@ -103,6 +103,7 @@ function RenderMessage({ row, sender, showName = true, language = 'en', streamin
     </header>
     {parentRequest && <span className="message-request-label">{language === 'ja' ? '受けた依頼' : 'Request from root'}</span>}
     <div className="message-main">
+      {row.delivery_state === 'failed' && <p className="status-line danger" role="alert">{t('notDelivered')} {onRetry && <button className="btn btn-link btn-sm" disabled={row.retry_pending === true} onClick={() => onRetry(row)}>{t('resend')}</button>}</p>}
       {row.delivery_state === 'sending' && <p className="status-line" role="status">Sending…</p>}
       {row.delivery_state === 'queued' && <p className="status-line" role="status">Queued — Claude will read this after the current step</p>}
       {images.length > 0 && <div className="message-images">{images.map((src, index) => <img key={index} src={src} alt={`${t('image')} ${index + 1}`} loading="lazy"/>)}</div>}
@@ -163,7 +164,7 @@ function sameResults(rows: Row[], a?: Map<string, unknown>, b?: Map<string, unkn
 export const Message = memo(RenderMessage, (a, b) => {
   if (!sameValue(a.row, b.row) || !sameValue(a.sender, b.sender) || a.showName !== b.showName
     || a.language !== b.language || a.streaming !== b.streaming || a.parentRequest !== b.parentRequest
-    || a.onSelectChild !== b.onSelectChild || !sameResults([b.row], a.toolResults, b.toolResults)) return false;
+    || a.onRetry !== b.onRetry || a.onSelectChild !== b.onSelectChild || !sameResults([b.row], a.toolResults, b.toolResults)) return false;
   return sameDelegationNodes(a.delegationNodes, b.delegationNodes);
 });
 export const ToolRun = memo(RenderToolRun, (a, b) => a.language === b.language

@@ -181,6 +181,15 @@ it('keeps delegation messages unchanged when rebuilt nodes have the same display
   expect(select).toHaveBeenCalledWith('child');
 });
 
+it('shows Not delivered and resend even when the failed message contained only an image', () => {
+  const retry = vi.fn();
+  const row = { id: 'image-send', role: 'user', body: '', attachments: ['image-id'], delivery_state: 'failed' };
+  render(<Message row={row} sender={{ key: 'user', side: 'end', name: 'You' }} onRetry={retry}/>);
+  expect(screen.getByText('Not delivered')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Resend' }));
+  expect(retry).toHaveBeenCalledWith(row);
+});
+
 it('renders only the clock leaves over 30 seconds, including the workspace tab title', async () => {
   vi.useFakeTimers();
   const now = Date.parse('2026-10-13T00:00:10Z');
@@ -361,4 +370,72 @@ it('keeps multiple delegation tools without ids distinct and refreshes their sel
   } }); });
   expect((screen.getByRole('button', { name: /First child/ }) as HTMLButtonElement).disabled).toBe(true);
   expect((screen.getByRole('button', { name: /Second child/ }) as HTMLButtonElement).disabled).toBe(false);
+});
+
+it('refreshes delivery status, retry availability and the retry handler through Message memo', () => {
+  const sender = { key: 'user', side: 'end' as const, name: 'You' };
+  const row = { id: 'delivery', role: 'user', body: 'Retry this message' };
+  const firstRetry = vi.fn();
+  const nextRetry = vi.fn();
+  const view = render(<Message row={{ ...row, delivery_state: 'sending' }} sender={sender} onRetry={firstRetry}/>);
+  expect(screen.getByText('Sending…')).toBeTruthy();
+  const failed = { ...row, delivery_state: 'failed' };
+  view.rerender(<Message row={failed} sender={sender} onRetry={firstRetry}/>);
+  expect(screen.getByText('Not delivered')).toBeTruthy();
+  expect(screen.queryByText('Sending…')).toBeNull();
+  view.rerender(<Message row={{ ...failed, retry_pending: true }} sender={sender} onRetry={firstRetry}/>);
+  expect((screen.getByRole('button', { name: 'Resend' }) as HTMLButtonElement).disabled).toBe(true);
+  view.rerender(<Message row={failed} sender={sender} onRetry={firstRetry}/>);
+  view.rerender(<Message row={failed} sender={sender} onRetry={nextRetry}/>);
+  fireEvent.click(screen.getByRole('button', { name: 'Resend' }));
+  expect(firstRetry).not.toHaveBeenCalled();
+  expect(nextRetry).toHaveBeenCalledWith(failed);
+  view.rerender(<Message row={row} sender={sender} onRetry={nextRetry}/>);
+  expect(screen.queryByText('Not delivered')).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Resend' })).toBeNull();
+});
+
+it('updates failed delivery and notifications without advancing seq, and resends to the current run', async () => {
+  const target = createStore();
+  target.setSnapshot({ seq: 1, generation: 1, projection: {
+    conversations: [{ id: 'c', provider: 'codex', origin: 'managed' }],
+    runs: [{ id: 'run', conversation_id: 'c', state: 'idle', generation: 1 }],
+    messages: [{ id: 'm', role: 'assistant', body: 'Keep this rendered' }],
+    message_memberships: [{ id: 'link', message_id: 'm', conversation_id: 'c', active: 1 }],
+  } });
+  target.setConnection('connected');
+  let finish!: (value: { type: 'ack'; cmd_id: string; ok: boolean }) => void;
+  const client = {
+    command: vi.fn((command: string, _payload: unknown) => command === 'send'
+      ? new Promise<{ type: 'ack'; cmd_id: string; ok: boolean }>(resolve => { finish = resolve; })
+      : Promise.resolve({ type: 'ack' as const, cmd_id: 'cmd', ok: true, result: [] })),
+    fetchConversation: vi.fn(async () => ({ generation: 1, projection: {}, next: null })),
+  };
+  render(<MemoryRouter><ConversationPage target={target} client={client} conversationId="c"/>
+    <Notifications target={target} client={client}/></MemoryRouter>);
+  await act(async () => {});
+  const watch = { id: 'delivery', conversation_id: 'c', body: 'Lost message', state: 'pending', attachments: [] };
+  act(() => target.setSendWatches([watch]));
+  renderMarkdown.mockClear();
+  act(() => target.setSendWatches([{ ...watch, state: 'failed' }]));
+  expect(target.getSnapshot().seq).toBe(1);
+  expect(screen.getByText('Not delivered')).toBeTruthy();
+  expect(screen.getByRole('heading', { name: 'A message you sent did not reach the conversation' })).toBeTruthy();
+  expect(renderMarkdown.mock.calls.map(([text]) => text)).not.toContain('Keep this rendered');
+  const collect = vi.spyOn(noticeModel, 'collectNotifications');
+  act(() => target.setSendWatches([{ ...watch, state: 'failed' }]));
+  expect(collect).not.toHaveBeenCalled();
+  act(() => { target.applyPatch({ type: 'patch', generation: 1, from_seq: 1, seq: 2, changes: {
+    runs: { upsert: [{ id: 'new-run', conversation_id: 'c', state: 'idle', generation: 2 }], remove: ['run'] },
+  } }); });
+  fireEvent.click(screen.getByRole('button', { name: 'Resend' }));
+  expect(client.command).toHaveBeenCalledWith('send', { runId: 'new-run', input: { text: 'Lost message' }, retryOf: 'delivery' });
+  expect((screen.getByRole('button', { name: 'Resend' }) as HTMLButtonElement).disabled).toBe(true);
+  await act(async () => finish({ type: 'ack', cmd_id: 'cmd', ok: true }));
+  expect((screen.getByRole('button', { name: 'Resend' }) as HTMLButtonElement).disabled).toBe(false);
+  act(() => target.setSendWatches([]));
+  expect(target.getSnapshot().seq).toBe(2);
+  expect(screen.queryByText('Not delivered')).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Resend' })).toBeNull();
+  expect(screen.queryByRole('heading', { name: 'A message you sent did not reach the conversation' })).toBeNull();
 });

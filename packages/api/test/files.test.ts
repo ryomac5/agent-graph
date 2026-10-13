@@ -265,10 +265,17 @@ test("WebSocket acknowledges files commands and safe failures while runner is un
   let sequence = 0;
   async function command(command: string, payload: unknown) {
     const cmd_id = `file-${++sequence}`;
-    const pending = once(socket, "message");
+    const pending = new Promise<Record<string, any>>(resolve => {
+      const receive = (data: import('ws').RawData) => {
+        const frame = JSON.parse(data.toString());
+        if (frame.type === 'send_watches') return;
+        socket.off('message', receive);
+        resolve(frame);
+      };
+      socket.on('message', receive);
+    });
     socket.send(JSON.stringify({ type: "cmd", cmd_id, command, payload }));
-    const [data] = await pending;
-    const ack = JSON.parse(data.toString());
+    const ack = await pending;
     assert.equal(ack.type, "ack");
     assert.equal(ack.cmd_id, cmd_id);
     return ack;

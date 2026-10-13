@@ -7,6 +7,8 @@ const PREFIX_SIZE = 4096;
 export interface FileCursor {
   claudeQueuedCommandsVersion?: number;
   claudeMessageFlagsVersion?: number;
+  claudeHistoryDetailsVersion?: number;
+  codexHistoryDetailsVersion?: number;
   path: string;
   identity: string;
   offset: number;

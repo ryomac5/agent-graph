@@ -71,7 +71,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     for (const entry of result.entries) {
       const classification = classifyHistoryKind(entry.kind);
       // ファイルは実パスでなく、この走査内の参照番号で示す。見本は種別の構造だけに限る。
-      console.log(JSON.stringify({ ...entry, classification: classification?.action ?? 'unclassified' }));
+      console.log(JSON.stringify({ ...entry, classification: classification?.action ?? 'unclassified',
+        ...(classification ? { handler: classification.handler, reason: classification.reason } : {}) }));
       if (!classification) unknown++;
     }
     console.log(JSON.stringify({ files: result.files, kinds: result.entries.length, unclassified: unknown }));

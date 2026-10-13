@@ -60,3 +60,30 @@ for (const flag of ["isCompactSummary", "isMeta", "isVisibleInTranscriptOnly", "
     for (const privateValue of ["private-body", "private-identifier", "private-value", home]) assert.ok(!result.stdout.includes(privateValue));
   });
 }
+
+test("追加した履歴とモデルの有無を棚卸しし、本文・題名・モデル名・子の識別子を出さない", t => {
+  const home = mkdtempSync(join(tmpdir(), "history-details-inventory-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const claude = join(home, ".claude/projects");
+  const codex = join(home, ".codex/sessions");
+  mkdirSync(claude, { recursive: true }); mkdirSync(codex, { recursive: true });
+  writeFileSync(join(claude, "private-file.jsonl"), [
+    { type: "custom-title", customTitle: "private-title", sessionId: "private-id" },
+    { type: "assistant", message: { model: "private-model", content: "private-body" } },
+    { type: "attachment", attachment: { type: "structured_output", data: { verdict: "approve", comment: "private-body" } } },
+  ].map(row => JSON.stringify(row)).join("\n") + "\n");
+  writeFileSync(join(codex, "private-file.jsonl"), [
+    { type: "response_item", payload: { type: "function_call", name: "spawn_agent", arguments: "private-body", call_id: "private-id" } },
+    { type: "event_msg", payload: { type: "item_completed", thread_id: "private-id",
+      item: { type: "SubAgentActivity", kind: "started", agent_thread_id: "private-child", agent_path: "/private-path" } } },
+  ].map(row => JSON.stringify(row)).join("\n") + "\n");
+  const result = spawnSync(process.execPath, [script.pathname], { env: { ...process.env, HOME: home }, encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  const output = result.stdout.trim().split("\n").map(line => JSON.parse(line));
+  assert.deepEqual(output.at(-1), { files: 2, kinds: 6, unclassified: 0 });
+  assert.ok(output.slice(0, -1).every(entry => entry.classification === "ingest" && entry.handler && entry.reason));
+  assert.equal(output.find(entry => entry.kind?.field === "message.model").count, 1);
+  for (const value of ["private-title", "private-model", "private-body", "private-id", "private-child", "/private-path", "private-file", home]) {
+    assert.ok(!result.stdout.includes(value));
+  }
+});

@@ -33,6 +33,7 @@ const MODEL = /^[a-z0-9][a-z0-9._-]*$/i;
 const execute = promisify(execFile);
 type Notify = (message: TerminalNotification) => void;
 interface Host {
+  launchModel?: string;
   terminalId: string; terminal: IPty; startedAt: string; startedTick: number; conversationId?: string; resumeId?: string; sessionPid?: number;
   described?: boolean; provider?: 'claude' | 'codex'; projectId?: string; cwd?: string; target?: ExecutionTarget; connection?: SshConnection; remotePid?: number; discoveryBuffer?: string; disconnected?: boolean; mirror?: ReturnType<typeof startRemoteMirror>;
   scrollback: Buffer; screen: TerminalScreen; listeners: Set<Notify>; sending?: Promise<unknown>; lastOutputAt?: number; inputReady?: boolean; inputRevision: number;
@@ -254,6 +255,7 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
           const terminal = (options.openTerminal ?? spawnTerminal)(location.connection ? 'ssh' : provider, location.connection ? ['-tt', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', location.connection.destination, '--', buildLaunchCommand(cwd, provider, resumeId, request.model as string | undefined)] : args, { cwd: location.connection ? location.local : cwd, env, name: env.TERM, cols: 80, rows: 24 });
           const terminalId = randomUUID();
           const host: Host = { described: request.target !== undefined, terminalId, terminal, resumeId, provider, projectId: request.projectId as string, cwd, target, connection: location.connection, startedAt: new Date().toISOString(), startedTick: performance.now(), scrollback: Buffer.alloc(0), screen: new TerminalScreen(), inputRevision: 0, listeners: new Set() };
+          host.launchModel = request.model as string | undefined;
           hosts.set(terminalId, host);
           terminal.onData(data => {
             if (host.connection && !host.remotePid) {
@@ -292,7 +294,9 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
         await refresh();
         await Promise.all([...hosts.values()].map(recheckLocalSession));
         return { hosts: [...hosts.values()].filter(host => host.conversationId || host.disconnected).map(host => ({
-          conversationId: host.conversationId!, terminalId: host.terminalId, pid: host.terminal.pid, startedAt: host.startedAt, ...(host.connection || host.described ? { provider: host.provider, cwd: host.cwd, target: host.target, projectId: host.projectId, disconnected: host.disconnected === true } : {}),
+          conversationId: host.conversationId!, terminalId: host.terminalId, pid: host.terminal.pid, startedAt: host.startedAt,
+          ...(host.launchModel ? { launchModel: host.launchModel } : {}),
+          ...(host.connection || host.described ? { provider: host.provider, cwd: host.cwd, target: host.target, projectId: host.projectId, disconnected: host.disconnected === true } : {}),
         })) };
       }
       if (command === 'session.send' || command === 'session.interrupt') {

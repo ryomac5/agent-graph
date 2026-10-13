@@ -108,6 +108,36 @@ it('waits for the new conversation before sending its first message', async () =
   await vi.waitFor(() => expect(f.command).toHaveBeenCalledWith('session.send', { conversationId, text: '最初の発言' }));
   await vi.waitFor(() => expect(screen.getByRole('textbox', { name: '入力' })).toHaveProperty('value', ''));
 });
+it('keeps the selected Haiku launch model after sending a new Workbench conversation', async () => {
+  const f = fixture();
+  f.target.setSnapshot({ seq: 1, generation: 0, projection: {
+    projects: [{ id: 'p', root_path: '/repo', state: 'registered' }],
+  } });
+  const original = f.command.getMockImplementation()!;
+  f.command.mockImplementation(async (name, payload) => {
+    if (name === 'list_models') return ack([
+      { model: 'default', displayName: 'Default (recommended)' },
+      { model: 'opus', displayName: 'Opus' },
+      { model: 'haiku', displayName: 'Haiku' },
+    ]);
+    const result = await original(name, payload);
+    if (name === 'session.hosts') return ack({ hosts: (result.result as { hosts: object[] }).hosts.map(host => ({ ...host, launchModel: 'haiku' })) });
+    return result;
+  });
+  render(<f.Wrapper newSession/>);
+  fireEvent.click(await screen.findByRole('button', { name: /^(Model|モデル) · / }));
+  fireEvent.click(await screen.findByRole('menuitemradio', { name: /Haiku/ }));
+  fireEvent.change(screen.getByRole('textbox', { name: '入力' }), { target: { value: '最初の発言' } });
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: '送信' })); });
+  expect(f.command).toHaveBeenCalledWith('session.launch', { projectId: 'p', provider: 'claude', model: 'haiku' });
+  await waitFor(() => expect(f.command).toHaveBeenCalledWith('session.send', { conversationId, text: '最初の発言' }));
+  await waitFor(() => expect(screen.getByRole('textbox', { name: '入力' })).toHaveProperty('value', ''));
+  expect(screen.getByRole('textbox', { name: '入力' }).getAttribute('data-conversation-draft')).toBe(conversationId);
+  const modelButton = screen.getByRole('button', { name: /^(Model|モデル) · / });
+  expect(modelButton.textContent).toContain('Haiku');
+  expect(modelButton.textContent).not.toContain('Recommended');
+  expect(modelButton.textContent).not.toContain('おすすめ');
+});
 it('updates terminal availability every five seconds', async () => {
   vi.useFakeTimers();
   const f = fixture();

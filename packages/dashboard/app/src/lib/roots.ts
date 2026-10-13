@@ -237,9 +237,15 @@ export function buildRootTree(root: Root, index: RootIndex): DelegationTree {
       const evidence = readObject(relation.evidence);
       const request = readText(evidence.request_id);
       const delegation = request ? index.requests.get(request) : undefined;
-      const node: TreeNode = { id, kind: 'conversation', conversationId: id, run, label: '', attempts: [], children: [],
-        provider: readText(conversation?.provider), model: readText(run?.model) || readModel(run).model || readText(conversation?.model) || readText(evidence.model),
-        role: resolveChildRole(evidence, delegation), state: readText(run?.state ?? conversation?.state) || 'unknown' };
+      const attempts = delegation ? readAttempts(delegation) : [];
+      const assignment = readObject(attempts.at(-1)?.assignment);
+      // kit の仮 ID には会話も run もない。関係の request_id で委譲の記録に結ぶ。
+      const runless = !conversation && !run && delegation;
+      const node: TreeNode = { id, kind: runless ? 'delegation' : 'conversation', conversationId: runless ? undefined : id,
+        run, delegation, label: '', attempts, children: [],
+        provider: readText(conversation?.provider) || readText(delegation?.provider) || readText(assignment.executor) || readText(assignment.provider),
+        model: readText(run?.model) || readModel(run).model || readText(conversation?.model) || readText(delegation?.model) || readText(assignment.model) || readText(evidence.model),
+        role: resolveChildRole(evidence, delegation), state: readText(run?.state ?? conversation?.state ?? delegation?.state) || 'unknown' };
       // Claude の子は、結果を返して止まると待機に戻る。頼まれた仕事は終えているので、完了として見せる。
       if (node.provider === 'claude' && evidence.agentType !== undefined && node.state === 'idle') node.state = 'ended';
       node.label = nodeLine(node);
@@ -273,7 +279,7 @@ export function buildRootTree(root: Root, index: RootIndex): DelegationTree {
       edges.push({ id: group.id, source: root.id, target: group.id, title: '', confidence: 'confirmed', kind: 'delegated' });
     }
     if (planner && goal && !group.label) group.label = goal;
-    const existing = nodes.find(node => node.conversationId === conversationId && conversationId);
+    const existing = nodes.find(node => node.delegation?.id === delegation.id || node.conversationId === conversationId && conversationId);
     const node: TreeNode = existing ?? { id: `delegation:${readText(delegation.id)}`, kind: 'delegation', conversationId: conversationId || undefined,
       run, delegation, label: '', role: resolveChildRole({}, delegation), provider: readText(index.conversations.get(conversationId)?.provider ?? delegation.provider ?? assignment.executor),
       model: readText(run?.model) || readModel(run).model || readText(delegation.model) || readText(assignment.model), state: readText(run?.state ?? delegation.state) || 'unknown', children: [], attempts };
@@ -296,7 +302,8 @@ export function buildRootTree(root: Root, index: RootIndex): DelegationTree {
       if (edge) edge.title ||= delegatedTitle({}, delegation);
       continue;
     }
-    const priorTitle = edges.find(edge => edge.target === node.id)?.title;
+    const priorEdge = edges.find(edge => edge.target === node.id);
+    const priorTitle = priorEdge?.title;
     if (existing) {
       for (const parent of nodes) parent.children = parent.children.filter(id => id !== node.id);
       const edgeIndex = edges.findIndex(edge => edge.target === node.id);
@@ -304,7 +311,7 @@ export function buildRootTree(root: Root, index: RootIndex): DelegationTree {
     } else nodes.push(node);
     group.children.push(node.id);
     edges.push({ id: `task:${readText(delegation.id)}`, source: group.id, target: node.id,
-      title: single ? delegatedTitle({}, delegation) || priorTitle || '' : priorTitle || delegatedTitle({}, delegation), confidence: 'confirmed', kind: 'delegated' });
+      title: single ? delegatedTitle({}, delegation) || priorTitle || '' : priorTitle || delegatedTitle({}, delegation), confidence: priorEdge?.confidence ?? 'confirmed', kind: 'delegated' });
     if (!existing && conversationId) addChildren(node, conversationId);
   }
   return { nodes, edges, roots: [root.id], unresolved: [] };

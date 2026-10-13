@@ -79,12 +79,12 @@ const LOAD_OLDER_THRESHOLD_PX = 80;
 const HOST_POLL_MS = 5000;
 const HOST_START_TIMEOUT_MS = 30000;
 const HOST_DISCOVERY_POLL_MS = 250;
-export interface SessionHost { conversationId: string; terminalId: string; provider?: string; cwd?: string; disconnected?: boolean; projectId?: string; target?: { kind: string; id?: string } }
+export interface SessionHost { conversationId: string; terminalId: string; provider?: string; launchModel?: string; cwd?: string; disconnected?: boolean; projectId?: string; target?: { kind: string; id?: string } }
 function readHosts(result: unknown): SessionHost[] {
   const rows = readObject(result).hosts;
   return (Array.isArray(rows) ? rows : []).flatMap(row => {
     const value = readObject(row);
-    return typeof value.conversationId === 'string' && typeof value.terminalId === 'string' ? [{ conversationId: value.conversationId, terminalId: value.terminalId, provider: readText(value.provider), cwd: readText(value.cwd), disconnected: value.disconnected === true, projectId: readText(value.projectId), target: value.target as SessionHost["target"] }] : [];
+    return typeof value.conversationId === 'string' && typeof value.terminalId === 'string' ? [{ conversationId: value.conversationId, terminalId: value.terminalId, provider: readText(value.provider), launchModel: readText(value.launchModel), cwd: readText(value.cwd), disconnected: value.disconnected === true, projectId: readText(value.projectId), target: value.target as SessionHost["target"] }] : [];
   });
 }
 
@@ -245,7 +245,8 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
   const shouldDiscoverHosts = Boolean(nativeProvider || provider === 'claude' || !conversation && conversationId);
   const launch = readObject(run?.launch);
   const saved = readModel(run);
-  const currentModel = readText(run?.model) || saved.model;
+  const launchedHost = readHosts({ hosts: [location.state?.sessionHost] }).find(host => host.conversationId === conversationId);
+  const currentModel = readText(run?.model) || saved.model || creatingHost?.launchModel || launchedHost?.launchModel || '';
   const currentEffort = saved.effort || readText(run?.effort);
   const savedCwd = readText(launch.cwd ?? run?.cwd ?? run?.worktree_path ?? conversation?.cwd) || newSession?.cwd || readText(state.projection.projects?.find(row => row.id === conversation?.project)?.root_path);
   const [models, setModels] = useState<Model[]>([]);
@@ -253,7 +254,7 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
   const [providerDefaults, setProviderDefaults] = useState<{ provider: string; cwd: string; value: ProviderDefaults }>();
   const [visibleModels, setVisibleModels] = useState<string[]>([]);
   const [edited, setEdited] = useState(false);
-  const [model, setModel] = useState('');
+  const [model, setModel] = useState(currentModel);
   const [effort, setEffort] = useState('');
   const [cwd, setCwd] = useState('');
   const defaultCwd = cwd.trim() || savedCwd;

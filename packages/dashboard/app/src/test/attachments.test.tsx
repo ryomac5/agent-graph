@@ -1,3 +1,6 @@
+import { installPreloadRecovery, VERSION_CHECK_MS } from '../lib/preload-recovery.ts';
+import { trackReloadInputs } from '../lib/reload-inputs.ts';
+import { isDashboardAutoReloadBlocked } from '../lib/reload-guard.ts';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
@@ -119,4 +122,30 @@ it('会話の id から提供元を読む', async () => {
   expect(providerFromId('["codex","019a"]')).toBe('codex');
   expect(providerFromId('["claude","a305"]')).toBe('claude');
   expect(providerFromId('not-json')).toBe('');
+});
+
+it('protects attached image bytes from auto reload in a hidden tab', async () => {
+  sessionStorage.clear();
+  const inputs = trackReloadInputs(document);
+  const f = renderConversation(); drop(f.box, [image()]);
+  await screen.findByRole('img', { name: 'image.png' });
+  vi.useFakeTimers();
+  vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+  document.head.innerHTML = '<script type="module" src="/assets/old.js"></script>';
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, text: async () => '<script type="module" src="/assets/new.js"></script>' })));
+  const reload = vi.fn();
+  const client = { command: f.command, canReload: () => true };
+  const dispose = installPreloadRecovery(reload, { isBlocked: () => isDashboardAutoReloadBlocked(client, inputs.isBlocked) });
+  try {
+    await act(() => vi.advanceTimersByTimeAsync(VERSION_CHECK_MS * 2));
+    expect(reload).not.toHaveBeenCalled();
+    expect(screen.getByRole('img', { name: 'image.png' })).toBeTruthy();
+    expect(screen.getByRole('img', { name: 'image.png' }).getAttribute('src')).toBe('data:image/png;base64,iVBORw0KGgo=');
+    fireEvent.click(screen.getByRole('button', { name: 'Remove image: image.png' }));
+    expect(screen.queryByRole('img', { name: 'image.png' })).toBeNull();
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(reload).toHaveBeenCalledTimes(1);
+  } finally {
+    dispose(); inputs.dispose(); document.head.innerHTML = ''; vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks();
+  }
 });

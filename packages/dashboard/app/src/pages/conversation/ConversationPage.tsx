@@ -25,6 +25,7 @@ import { isBlank, isToolOnly, Message, ToolRun } from '../../components/conversa
 import { harnessKind, readMessageBody } from '../../lib/message-body.ts';
 import { useToolResults } from '../../components/conversation/ToolCall.tsx';
 import { resolveParticipants, senderOf, type Sender } from '../../components/conversation/participants.ts';
+import { holdDashboardReload } from '../../lib/reload-safety.ts';
 import { ACTIVE_STATES, compareEntries, messageSignature, PENDING_APPROVALS, readObject, readText, selectTimeline, showValue, type TimelineEntry } from '../../components/conversation/model.ts';
 import { ChoiceMenu } from '../../components/ChoiceMenu.tsx';
 import { describeDefaultSource, displayModel, findOlderModels, isRecommended, readVisibleModels, type ComposerModel } from '../../components/conversation/models.ts';
@@ -569,6 +570,10 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
     finally { if (isVisible(sourceConversation)) setPending(false); }
   }
   async function send() {
+    const release = holdDashboardReload();
+    try { await sendInput(); } finally { release(); }
+  }
+  async function sendInput() {
     if (!(external ? canLaunch : canSend) || (!input.trim() && !attachments.items.length)) return;
     if (attachments.items.length && !terminalConversation) return;
     if (external && !terminalConversation && !starting && !supported) { setHandoffBlocked(true); return; }
@@ -666,6 +671,13 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
     if (await execute('answer', { approvalId, decision })) setAnswered(previous => new Set([...previous, approvalId]));
   }
 
+  // 記録のモデル名「claude-opus-5-5」は、一覧の「Opus 5.5」と同じものとして選ぶ。内部名をそのまま出さない。
+  const matchModel = (value: string) => models.find(item => item.model === value)?.model
+    ?? models.find(item => modelName(value) !== '' && [item.displayName, `Claude ${item.displayName}`].includes(modelName(value)))?.model ?? value;
+  const selectedModel = matchModel(model);
+  const dirty = edited && Boolean(model) && (selectedModel !== matchModel(appliedModel?.model || currentModel || (terminalConversation ? 'default' : '')) || effort !== (appliedModel?.effort ?? currentEffort));
+  useEffect(() => { if (dirty) return holdDashboardReload(); }, [dirty]);
+
   if (!conversation) return <section className={`conversation-page missing${embedded ? ' embedded' : ''}`}><div className="empty-state">
     <Icon name="message" size={22}/><h1>{t('conversation')}</h1><p>{t('noConversation')}</p></div></section>;
   const Heading = embedded ? 'h2' : 'h1';
@@ -676,11 +688,6 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
   const shownEffort = appliedModel?.effort ?? currentEffort;
   const nameRoot = root?.conversation_ids.includes(conversationId) ? root : undefined;
   const title = displayName || conversationName(state, conversationId) || t('conversation');
-  // 記録のモデル名「claude-opus-5-5」は、一覧の「Opus 5.5」と同じものとして選ぶ。内部名をそのまま出さない。
-  const matchModel = (value: string) => models.find(item => item.model === value)?.model
-    ?? models.find(item => modelName(value) !== '' && [item.displayName, `Claude ${item.displayName}`].includes(modelName(value)))?.model ?? value;
-  const selectedModel = matchModel(model);
-  const dirty = edited && Boolean(model) && (selectedModel !== matchModel(appliedModel?.model || currentModel || (terminalConversation ? 'default' : '')) || effort !== (appliedModel?.effort ?? currentEffort));
   const usesDefault = !model || model === 'default' || models.some(item => item.model === model && isRecommended(item));
   const resolvedModel = appliedModel?.model || currentModel || (usesDefault ? recommendedModel : model);
   const defaultLabel = defaults?.displayName ? displayModel(defaults.model ?? '', [{ model: defaults.model ?? '', displayName: defaults.displayName }]) : recommendedModel ? displayModel(recommendedModel, models) : t('noModels');
@@ -831,7 +838,7 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
             <button className="btn btn-ghost" aria-label={`${attachments.text.remove}: ${item.file.name}`} disabled={pending} onClick={() => attachments.remove(item.key)}>×</button>
           </div>)}
         </div>}
-        <textarea ref={inputRef} aria-label={t('input')} rows={1} placeholder={t('placeholder')} value={input}
+        <textarea data-conversation-draft={draftKey} ref={inputRef} aria-label={t('input')} rows={1} placeholder={t('placeholder')} value={input}
           disabled={pending || !connected || !external && !canSend} onChange={event => setInput(event.target.value)} onKeyDown={event => {
             if (event.key === 'Enter' && event.metaKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); }
           }}/>

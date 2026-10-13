@@ -1,3 +1,4 @@
+import { isDashboardAutoReloadBlocked } from '../lib/reload-guard.ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createClient } from '../lib/client.ts';
 import { createStore, type Snapshot } from '../lib/store.ts';
@@ -25,6 +26,26 @@ function fixture(fetchSnapshot: () => Promise<Snapshot> = vi.fn(async () => ({ s
 }
 afterEach(() => vi.useRealTimers());
 describe('WebSocket client', () => {
+  it('blocks reload for commands and ordinary terminals, but not hosted terminal attachments', async () => {
+    const { client, sockets } = fixture();
+    const socket = sockets[0];
+    expect(client.canReload()).toBe(true); expect(isDashboardAutoReloadBlocked(client, () => false)).toBe(false);
+    const send = client.command('send', {}, 'sending');
+    expect(client.canReload()).toBe(false); expect(isDashboardAutoReloadBlocked(client, () => false)).toBe(true);
+    socket.receive({ type: 'ack', cmd_id: 'sending', ok: false }); await send;
+    expect(client.canReload()).toBe(true); expect(isDashboardAutoReloadBlocked(client, () => false)).toBe(false);
+    const open = client.command('terminal.open', {}, 'open');
+    socket.receive({ type: 'ack', cmd_id: 'open', ok: true, result: { terminalId: 'ordinary' } }); await open;
+    expect(client.canReload()).toBe(false); expect(isDashboardAutoReloadBlocked(client, () => false)).toBe(true);
+    socket.receive({ type: 'terminal', event: 'output', terminalId: 'ordinary', data: 'still running' });
+    expect(client.canReload()).toBe(false); expect(isDashboardAutoReloadBlocked(client, () => false)).toBe(true);
+    socket.receive({ type: 'terminal', event: 'exit', terminalId: 'ordinary', exitCode: 0 });
+    expect(client.canReload()).toBe(true); expect(isDashboardAutoReloadBlocked(client, () => false)).toBe(false);
+    const attach = client.command('terminal.attach', { terminalId: 'hosted' }, 'attach');
+    socket.receive({ type: 'ack', cmd_id: 'attach', ok: true, result: { terminalId: 'hosted' } }); await attach;
+    expect(client.canReload()).toBe(true); expect(isDashboardAutoReloadBlocked(client, () => false)).toBe(false);
+    client.stop();
+  });
   it('reconnects with the last seq and generation, applies replay once, and backs off', async () => {
     vi.useFakeTimers();
     const { client, sockets, target } = fixture();

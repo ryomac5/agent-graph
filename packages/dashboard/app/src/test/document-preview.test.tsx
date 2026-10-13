@@ -73,6 +73,9 @@ it('syncs preview edits with source, the right panel, split panes and files.writ
   expect(within(work as HTMLElement).queryAllByRole('tab')).toHaveLength(1);
   fireEvent.keyDown(document.querySelectorAll('[data-pane-id]')[1], { key: 'p', metaKey: true });
   fireEvent.click(within(await screen.findByRole('option', { name: 'notes.md' })).getByRole('button'));
+  // 分割しても既存タブの表示モードは保持される。
+  expect(screen.getByRole('textbox', { name: 'Code' })).toBe(code);
+  fireEvent.click(within(code.closest<HTMLElement>('.code-tab')!).getByRole('button', { name: 'Preview' }));
   expect(await within(work as HTMLElement).findAllByRole('heading', { name: 'Edited Original' })).toHaveLength(2);
   for (const button of within(work as HTMLElement).getAllByRole('button', { name: 'Raw' })) fireEvent.click(button);
   const codes = screen.getAllByRole('textbox', { name: 'Code' });

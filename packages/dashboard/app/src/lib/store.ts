@@ -21,6 +21,7 @@ export function createStore() {
     subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
     setConnection: (connection: ConnectionState) => update({ ...state, connection }),
     setSnapshot: (snapshot: Snapshot) => update({ ...state, ...snapshot, pages: snapshot.pages, projection: resolveProjection(snapshot.projection, snapshot.identities), deltas: {}, projectionError: undefined }),
+    setSendWatches: (rows: Row[]) => update({ ...state, projection: { ...state.projection, send_watches: rows } }),
     clearDeltas: () => update({ ...state, deltas: {} }),
     mergeProjection(projection: Record<string, Row[]>, generation: number, identities = state.identities, pages = state.pages, projectionError = state.projectionError) {
       if (generation !== state.generation) return;

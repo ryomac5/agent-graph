@@ -168,3 +168,12 @@ it('keeps delegation messages unchanged when rebuilt nodes have the same display
   fireEvent.click(screen.getByRole('button', { name: /Child task/ }));
   expect(select).toHaveBeenCalledWith('child');
 });
+
+it('shows Not delivered and resend even when the failed message contained only an image', () => {
+  const retry = vi.fn();
+  const row = { id: 'image-send', role: 'user', body: '', attachments: ['image-id'], delivery_state: 'failed' };
+  render(<Message row={row} sender={{ key: 'user', side: 'end', name: 'You' }} onRetry={retry}/>);
+  expect(screen.getByText('Not delivered')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Resend' }));
+  expect(retry).toHaveBeenCalledWith(row);
+});

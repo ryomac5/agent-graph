@@ -302,6 +302,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     return { allEntries, owner };
   }, [historyMessages, historyMemberships, state.projection.approvals, state.projection.relations, state.projection.observation_gaps, timelineRuns, seriesKey, Boolean(seriesIds)]);
   const messageEntries = useMemo(() => allEntries.filter(entry => entry.kind === 'message'), [allEntries]);
+  const failedDeliveries = (state.projection.send_watches ?? []).filter(row => row.state === 'failed' && resolveConversation(readText(row.conversation_id)) === conversationId);
   const pendingInputs = useMemo(() => (Array.isArray(conversation?.pending_inputs) ? conversation.pending_inputs : []).map(readObject), [conversation?.pending_inputs]);
   useEffect(() => {
     const reconciled = new Set<unknown>();
@@ -620,6 +621,12 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
       if (id !== conversationId) { if (onConversation) onConversation(id); else navigate(`/c/${encodeURIComponent(id)}`); }
     }
   }
+  async function retryDelivery(row: Row) {
+    const ack = terminalConversation
+      ? await execute('session.send', { conversationId, text: readText(row.body), attachments: row.attachments, retryOf: row.id })
+      : await execute('send', { runId: run?.id, input: { text: readText(row.body) }, retryOf: row.id });
+    if (ack) setSentMessages(previous => previous.filter(message => message.text !== row.body));
+  }
   async function applyModel() {
     const applied = model === 'default' ? recommendedModel : model;
     if (!applied) return;
@@ -738,7 +745,9 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
           {!entry.row.series && entry.time && <TimeStamp value={entry.time} fallback="" language={language}/>}
         </div>;
       })}
+      {failedDeliveries.map(row => <Message key={'delivery:' + row.id} language={language} sender={senderOf({ role: 'user' }, participants)} row={{ ...row, source_ts: row.sent_ts, role: 'user', body_state: 'stored', delivery_state: 'failed', retry_pending: pending }} onRetry={retryDelivery}/>)}
       {sentMessages.filter(message => resolveConversation(message.conversationId) === conversationId
+        && !failedDeliveries.some(row => row.body === message.text)
         && !pendingInputs.some(row => !message.known.has(row.id) && sameSent(readBody(row.body), message.text))).map(message => <Message key={message.id} language={language} sender={senderOf({ role: 'user' }, participants)} row={{ id: message.id, role: 'user', body: message.text, body_state: 'stored', delivery_state: 'sending' }}/>) }
       {deltas.map(([key, delta]) => <Message key={key} language={language} streaming sender={agentSender} showName={nameShown(agentSender)}
         row={{ id: delta.messageId ?? key, role: 'assistant', body: delta.text, body_state: 'stored' } satisfies Row}/>)}

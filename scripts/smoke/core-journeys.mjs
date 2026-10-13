@@ -64,6 +64,15 @@ async function snapshot() {
   if (!response.ok) throw new Error(`Snapshot failed: ${response.status}`);
   return response.json();
 }
+async function waitForClosedSend(text) {
+  await waitFor(async () => {
+    const response = await fetch(`${BASE}/api/send-watches?conversation=${encodeURIComponent(smoke.id)}`,
+      { headers: { 'x-agent-graph-token': await readToken() } });
+    if (!response.ok) throw new Error(`Send watch failed: ${response.status}`);
+    const rows = await response.json();
+    return rows.some(row => row.body === text && row.state === 'closed' && row.message_id);
+  }, 'send watch closed with ledger message', REPLY_TIMEOUT_MS);
+}
 function nativeOf(id) { const value = JSON.parse(id); return Array.isArray(value) ? value[1] : ''; }
 async function rememberSession() {
   await writeFile(SESSION_FILE, `${JSON.stringify({ conversationId: smoke.id, project: smoke.project, model: MODEL, createdAt: new Date().toISOString() }, null, 2)}\n`);
@@ -273,6 +282,7 @@ async function main() {
           if (navigated) throw new Error('page navigated before the reply appeared');
           return 'OK appeared without navigation or reload';
         });
+        await step('1b send watch closed', async () => { await waitForClosedSend(text); return 'api confirmed the ledger message'; });
         const alert = await composer().getByRole('alert').allTextContents();
         if (alert.length) throw new Error(`composer alert: ${alert.join(' ')}`);
         return `${smoke.created ? 'created' : 'reused'} ${smoke.id}, reply in ${((Date.now() - started) / 1000).toFixed(1)}s, launches=${smoke.launches.join(',') || 'none'}`;
@@ -325,6 +335,7 @@ async function main() {
       await page.reload();
       await waitFor(async () => await bubble().count() === 1 && !/Sending…|Queued/.test(await bubble().innerText()),
         'recorded midturn message survives reload');
+      await waitForClosedSend(second);
       return 'second message persisted through queue delivery and two reloads';
     });
 
@@ -365,6 +376,7 @@ async function main() {
       await thumbnail.waitFor({ timeout: 30_000 });
       if (!await loaded(thumbnail)) throw new Error('thumbnail in the conversation did not load');
       await waitReply(marker);
+      await waitForClosedSend(`${marker}。OK とだけ返してください。`);
       smoke.phase = 'idle';
       if (!previewLoaded) throw new Error('image preview in the message box did not load; transcript and conversation thumbnail are fine');
       return `image in ${transcript.replace(homedir(), '~')}`;

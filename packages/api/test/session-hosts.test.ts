@@ -8,6 +8,8 @@ import { createSessionHosts, MAX_SCROLLBACK_BYTES } from '../src/terminal/hosts.
 import { escapeAttachmentPath } from '../src/terminal/attachments.ts';
 import type { TerminalNotification } from '../src/terminal/index.ts';
 
+const HOST_DISCOVERY_TIMEOUT_MS = 5000;
+const HOST_DISCOVERY_POLL_MS = 10;
 const SESSION = '12345678-1234-1234-1234-123456789abc';
 const conversationId = JSON.stringify(['claude', SESSION]);
 async function createFixture(t: TestContext, waits?: number[]) {
@@ -146,7 +148,12 @@ test('image sends paste each escaped path, wait 300ms, paste body, wait 500ms an
   const f = await createFixture(t, waits);
   await f.launch(SESSION);
   await writeFile(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: SESSION }));
-  await f.handle('session.hosts');
+  const deadline = Date.now() + HOST_DISCOVERY_TIMEOUT_MS;
+  // 起動時の走査がファイル作成前に始まっていても、実際の所属確認を待つ。
+  while (!((await f.handle('session.hosts')) as { hosts: { conversationId: string }[] }).hosts.some(host => host.conversationId === conversationId)) {
+    assert.ok(Date.now() < deadline, 'Session discovery timed out');
+    await new Promise(resolve => setTimeout(resolve, HOST_DISCOVERY_POLL_MS));
+  }
   const image = await f.handle('attachment.put', { name: 'test.png', mime: 'image/png', dataBase64: 'iVBORw0KGgo=' }) as { attachmentId: string; path: string };
   const first = f.handle('session.send', { conversationId, text: 'body', attachments: [image.attachmentId, image.attachmentId] });
   const second = f.handle('session.send', { conversationId, text: '' , attachments: [image.attachmentId] });

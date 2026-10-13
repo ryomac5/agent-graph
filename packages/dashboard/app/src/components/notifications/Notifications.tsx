@@ -42,7 +42,12 @@ export function Notifications({ client, target = store, initiallyOpen = true, co
         } catch { setError(text('Browser notification unavailable; notification shown here.', 'ブラウザー通知を表示できないため画面内に表示します')); }
       }
     }
-    if (visible.length) setNotices(items => [...visible.reverse(), ...items].slice(0, NOTICE_LIMIT));
+    setNotices(items => {
+      const retained = items.filter(notice => notice.kind !== 'delivery_failed'
+        || state.projection.send_watches?.some(row => row.id === notice.deliveryId && row.state === 'failed'));
+      return visible.length ? [...visible.reverse(), ...retained].slice(0, NOTICE_LIMIT)
+        : retained.length === items.length ? items : retained;
+    });
   }, [state, preferences, language]);
   useEffect(() => { if (open && focused) panel.current?.focus(); }, [open, focused]);
   useEffect(() => () => { for (const notification of browserNotices.current) notification.close(); }, []);

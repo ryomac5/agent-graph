@@ -1,24 +1,27 @@
+import { translate } from '../conversation/text.ts';
 import type { ScreenState, Row } from '../../lib/store.ts';
 import { getConversation, isPending, readText } from '../../pages/inbox/model.ts';
 import { conversationName } from '../../lib/format.ts';
 import { selectRoots } from '../../lib/roots.ts';
 import type { Language } from '../../lib/i18n.ts';
 
-export const NOTIFICATION_KINDS = ['approval', 'input', 'failed', 'completed'] as const;
+export const NOTIFICATION_KINDS = ['approval', 'input', 'failed', 'completed', 'delivery_failed'] as const;
 export type NotificationKind = typeof NOTIFICATION_KINDS[number];
 export type NotificationMode = 'in_app' | 'browser' | 'silent';
 export type NotificationPreferences = Record<NotificationKind, NotificationMode>;
 export const PREFERENCES_KEY = 'agent-graph-notifications';
 export const NOTIFICATION_LABELS: Record<NotificationKind, string> = {
-  approval: 'Approval pending', input: 'Input pending', failed: 'Run failed', completed: 'Run completed',
+  delivery_failed: 'A message you sent did not reach the conversation', approval: 'Approval pending', input: 'Input pending', failed: 'Run failed', completed: 'Run completed',
 };
 export const NOTIFICATION_LABELS_JA: Record<NotificationKind, string> = {
-  approval: '承認待ち', input: '返答待ち', failed: '失敗', completed: '完了',
+  delivery_failed: '送った発言が会話に届きませんでした', approval: '承認待ち', input: '返答待ち', failed: '失敗', completed: '完了',
 };
 export function notificationLabel(kind: NotificationKind, language: Language): string {
+  if (kind === 'delivery_failed') return translate(language, 'deliveryFailed');
   return (language === 'ja' ? NOTIFICATION_LABELS_JA : NOTIFICATION_LABELS)[kind];
 }
 export function notificationDetail(notice: Notice, state: ScreenState, language: Language): string {
+  if (notice.kind === 'delivery_failed') return notice.detail;
   const name = selectRoots(state).find(root => root.conversation_ids.includes(notice.conversationId ?? ''))?.name
     || conversationName(state, notice.conversationId ?? '') || (language === 'ja' ? '会話' : 'Conversation');
   const events = language === 'ja' ? { approval: '承認を待っています', input: '返答を待っています', failed: '失敗しました', completed: '完了しました' }
@@ -27,7 +30,7 @@ export function notificationDetail(notice: Notice, state: ScreenState, language:
 }
 export interface Notice {
   id: string; kind: NotificationKind; title: string; detail: string;
-  conversationId?: string; approvalId?: string; time: string;
+  conversationId?: string; approvalId?: string; deliveryId?: string; time: string;
 }
 export function loadPreferences(storage?: Pick<Storage, 'getItem'>): NotificationPreferences {
   let saved: Record<string, unknown> = {};
@@ -64,6 +67,11 @@ export function collectNotifications(previous: ScreenState | undefined, next: Sc
     const hasHistory = previous && Object.keys(previous.projection).length > 0;
     if (hasHistory && row.state === 'failed') add('failed', row);
     if (hasHistory && row.state === 'ended') add('completed', row);
+  }
+  for (const row of next.projection.send_watches ?? []) {
+    if (row.state !== 'failed' || previous?.projection.send_watches?.some(before => before.id === row.id && before.state === 'failed')) continue;
+    notices.push({ id: 'delivery:' + row.id, deliveryId: String(row.id), kind: 'delivery_failed', title: translate(language, 'deliveryFailed'),
+      detail: readText(row.body).slice(0, 120), conversationId: readText(row.conversation_id), time: readText(row.failed_ts) });
   }
   return notices;
 }

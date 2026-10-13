@@ -243,3 +243,25 @@ it.each(['claude', 'codex'])('sends observed %s to an existing terminal host wit
   await waitFor(() => expect(f.command).toHaveBeenCalledWith('session.send', { conversationId, text: 'Existing host' }));
   expect(f.command.mock.calls.some(([name]) => ['session.launch', 'fork', 'adopt'].includes(name))).toBe(false);
 });
+
+it('restores a failed bubble after reload and resends its text through the existing send route', async () => {
+  const f = fixture('observed', 'idle', { kind: 'turn_completed' }, 'claude');
+  const conversationId = '["claude","native-id"]';
+  f.target.setSendWatches([{ id: 'delivery', conversation_id: conversationId, body: 'Missing message', attachments: [], state: 'failed', sent_ts: '2026-10-13T10:00:00Z' }]);
+  render(<f.Wrapper/>);
+  expect(await screen.findByText('未配達')).toBeTruthy();
+  expect(screen.getByText('Missing message')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: '再送' }));
+  await waitFor(() => expect(f.command).toHaveBeenCalledWith('session.send', { conversationId, text: 'Missing message', attachments: [], retryOf: 'delivery' }));
+  await act(async () => f.finish(ack()));
+});
+
+it('removes the failed bubble and retry action when the watch closes or expires', async () => {
+  const f = fixture('observed', 'idle', { kind: 'turn_completed' }, 'claude');
+  f.target.setSendWatches([{ id: 'delivery', conversation_id: '["claude","native-id"]', body: 'Late message', attachments: [], state: 'failed' }]);
+  render(<f.Wrapper/>);
+  expect(await screen.findByText('未配達')).toBeTruthy();
+  act(() => f.target.setSendWatches([]));
+  expect(screen.queryByText('未配達')).toBeNull();
+  expect(screen.queryByRole('button', { name: '再送' })).toBeNull();
+});

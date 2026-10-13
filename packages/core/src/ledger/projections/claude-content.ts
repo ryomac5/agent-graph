@@ -4,6 +4,7 @@ import type { ClaudeMessageFlags } from "../claude-message-flags.ts";
 const INJECTED_TAGS = "system-reminder|task-notification|local-command-caveat|local-command-stdout|local-command-stderr|command-message|user-prompt-submit-hook";
 const WRAPPER = new RegExp(`^[ \\t]*<(pasted_content|${INJECTED_TAGS})(?: id="([^"\\n]+)")?>([\\s\\S]*?)<\\/\\1(?: id="\\2")?>`, "gm");
 const REPORT_PREFIX = /^\s*Another Claude session sent a message:\s*/u;
+type NormalizedClaudeContent = { body?: JsonValue; role?: string; content_normalized?: true; relayed_instruction?: true };
 
 /** 行頭の対になった包みだけを読む。コード例の札はそのまま残す。 */
 function unwrapText(text: string): string {
@@ -37,9 +38,10 @@ function mapText(body: JsonValue | undefined, transform: (text: string) => strin
 }
 
 /** 台帳は原文を保ち、発言・依頼の抜粋・検索には同じ本文を渡す。 */
-export function normalizeClaudeContent(message: { provider?: string; role?: string; body?: JsonValue; transcript_flags?: ClaudeMessageFlags }) {
+export function normalizeClaudeContent(message: { provider?: string; role?: string; body?: JsonValue; transcript_flags?: ClaudeMessageFlags }): NormalizedClaudeContent {
   if (message.provider !== "claude" || !["user", "agent_report"].includes(message.role ?? "")) return {};
   let role = message.role!;
+  let relayedInstruction = false;
   let hasUserText = Array.isArray(message.body) && message.body.some(block => block && typeof block === "object"
     && !Array.isArray(block) && block.type && block.type !== "text" && block.type !== "input_text");
   const body = mapText(message.body, text => {
@@ -56,8 +58,7 @@ export function normalizeClaudeContent(message: { provider?: string; role?: stri
       return message.transcript_flags?.isMeta ? text : "";
     }
     if (message.transcript_flags?.isMeta && /^The (?:user sent a new|coordinator sent a) message while you were working:\n/u.test(text)) {
-      role = "notification";
-      return text;
+      relayedInstruction = true;
     }
     const cleaned = unwrapText(text);
     if (cleaned.trim()) hasUserText = true;
@@ -65,5 +66,6 @@ export function normalizeClaudeContent(message: { provider?: string; role?: stri
     return cleaned;
   });
   if (role === "notification" && hasUserText) role = "user";
-  return { body, role, content_normalized: true as const };
+  return { body, role, content_normalized: true as const,
+    ...(relayedInstruction ? { relayed_instruction: true as const } : {}) };
 }

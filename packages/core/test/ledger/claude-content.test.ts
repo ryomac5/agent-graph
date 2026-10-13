@@ -5,6 +5,7 @@ import { openLedger, readLedgerDatabase, applyIncremental, rebuild, project, cre
 import { forgetRunnerProjection } from "../../src/ledger/projections/storage.ts";
 import { searchLedger } from "../../src/ledger/search.ts";
 import { initializeSchema } from "../../src/ledger/schema.ts";
+import { isClaudeHiddenMessage } from "../../src/ledger/claude-message-flags.ts";
 
 const wrap = (body: string, id = "d49b") => `<pasted_content id="${id}">\n${body}\n</pasted_content id="${id}">`;
 const normalize = (body: string) => normalizeClaudeContent({ provider: "claude", role: "user", body });
@@ -40,6 +41,29 @@ test("queued_command の peer の報告にも通常の子の報告と同じ正�
   assert.deepEqual(peer, { role: "agent_report", body: "子の報告", content_normalized: true });
   assert.deepEqual(peer, normalize(`Another Claude session sent a message:\n${body}`));
 });
+
+for (const prefix of ["The coordinator sent a message while you were working:", "The user sent a new message while you were working:"]) {
+  test(`${prefix} 定型行を保ち、従来の本文正規化と user 表示を維持する`, () => {
+    const raw = `${prefix}\n${wrap("途中の指示")}\n<system-reminder>内部の注意</system-reminder>`;
+    const expected = `${prefix}\n途中の指示`;
+    for (const body of [raw, [{ type: "text", text: raw }]]) {
+      const normalized = normalizeClaudeContent({ provider: "claude", role: "user", body, transcript_flags: { isMeta: true } });
+      assert.equal(normalized.role, "user");
+      assert.deepEqual(normalized.body, typeof body === "string" ? expected : [{ type: "text", text: expected }]);
+      assert.equal(normalized.relayed_instruction, true);
+      assert.equal(isClaudeHiddenMessage({ isMeta: true }, normalized.role, normalized.relayed_instruction), false);
+      for (const flag of ["isCompactSummary", "isVisibleInTranscriptOnly"]) {
+        assert.equal(isClaudeHiddenMessage({ isMeta: true, [flag]: true }, normalized.role, normalized.relayed_instruction), true);
+      }
+      const unflagged = normalizeClaudeContent({ provider: "claude", role: "user", body });
+      assert.equal(unflagged.role, "user");
+      assert.deepEqual(unflagged.body, normalized.body);
+      assert.equal(unflagged.relayed_instruction, undefined);
+    }
+    const internal = normalizeClaudeContent({ provider: "claude", role: "user", body: "内部の指示", transcript_flags: { isMeta: true } });
+    assert.equal(isClaudeHiddenMessage({ isMeta: true }, internal.role, internal.relayed_instruction), true);
+  });
+}
 
 test("テキストブロックだけを正規化し、画像と道具の結果と他の provider は保つ", () => {
   const image = { type: "image", source: { data: "sample" } };

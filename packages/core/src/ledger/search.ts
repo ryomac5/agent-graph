@@ -417,7 +417,7 @@ export function refreshSearch(db: DatabaseSync, added?: readonly Fact[], allFact
       transcript_flags: meta.transcript_flags as ClaudeMessageFlags | undefined,
     }) : {};
     if (entity === 'message' && meta.provider === 'claude'
-      && isClaudeHiddenMessage(meta.transcript_flags, normalized.role ?? meta.role)) continue;
+      && isClaudeHiddenMessage(meta.transcript_flags, normalized.role ?? meta.role, normalized.relayed_instruction)) continue;
     const message = splitMessage(normalized.body ?? payload.body);
     const entries: [SearchKind, string][] = entity === 'message'
       ? meta.role === 'tool' ? [['tool_output', [message.message, message.tool, readText(payload.tool_output)].filter(Boolean).join('\n')]]

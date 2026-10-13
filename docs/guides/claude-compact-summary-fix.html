@@ -5,52 +5,54 @@
 <title>Claude の圧縮要約の誤表示を修正</title>
 <style>body{font:16px/1.7 system-ui,sans-serif;max-width:1050px;margin:40px auto;padding:0 20px;color:#1a1a1a}pre{background:#f2f4f7;padding:16px;overflow:auto}table{border-collapse:collapse;width:100%;margin-bottom:24px}th,td{border:1px solid #ddd;padding:8px;text-align:left}code{overflow-wrap:anywhere}</style>
 <h1>Claude の圧縮要約の誤表示を修正</h1>
-<p>2026-10-13 更新。commit <code>417872a</code> のレビュー指摘3点を修正した。圧縮要約の除外を保ち、isMeta の一律除外で消えていた報告・通知を残す。本番の台帳・履歴・<code>.endpoint</code> への書き込み、API / runner の再起動、commit、push は行っていない。</p>
+<p>2026-10-13 更新。commit <code>3e64c84</code> のレビュー指摘1点を修正した。coordinator と人の中継を <code>notification</code> にして子の会話から消していた退行を直し、<code>user</code> として親の吹き出しに残す。圧縮要約の非表示、isMeta の報告・通知の保持、未知の旗、冪等性は維持した。dashboard の部品、本番の台帳・履歴・<code>.endpoint</code> は変更せず、API / runner の再起動、commit、push は行っていない。</p>
 
 <h2>修正した内容</h2>
 <ul>
 <li><code>isCompactSummary=true</code> と <code>isVisibleInTranscriptOnly=true</code> は、role にかかわらず除外する。圧縮境界の <code>compacted</code> 関係は残す。</li>
-<li><code>isMeta</code> の分類は <code>ignore</code> から <code>message</code> に戻した。本文と <code>transcript_flags</code> を保存し、投影と検索では本文の正規化後も <code>role=user</code> の内部行だけを隠す。<code>agent_report</code>、<code>notification</code>、assistant の応答は残す。</li>
-<li><code>Another Claude session sent a message:</code> の報告は既存の正規化で <code>agent_report</code> にする。isMeta の <code>[SYSTEM NOTIFICATION]</code> と coordinator の中継は、本文を保つ <code>notification</code> にする。表示名は既存の英語 <code>Agent report</code> / <code>Notification</code> を使う。</li>
+<li><code>isMeta</code> の分類は前回修正の <code>message</code> を維持する。本文と <code>transcript_flags</code> を保存し、<code>isClaudeHiddenMessage</code> は正規化後も <code>role=user</code> の内部行を隠す。ただし、投影側の正規化が付ける <code>relayed_instruction</code> の印を持つ2種類の中継は除外する。検索も同じ判定を使う。</li>
+<li><code>Another Claude session sent a message:</code> の報告は <code>agent_report</code>、isMeta の <code>[SYSTEM NOTIFICATION]</code> は本文を保つ <code>notification</code> のままとする。assistant の応答も従来どおり残す。</li>
 <li>未知の boolean や不正な旗の値が付いても、構造が有効な user / assistant 行は取り込む。除外は既知の非発言の旗だけで決める。未知の旗の <code>observation.unsupported</code> 記録と、棚卸しの終了コード1は維持した。</li>
-<li>実データと同じ旗・本文の包み・origin の形を持つ、匿名化した hand-back、coordinator、システム通知、人の指示の中継を見本に追加した。</li>
+<li>前回追加した匿名化見本を使い、coordinator と人の中継の role、定型行を含む本文、子の会話への所属、検索結果を試験で固定した。</li>
 </ul>
 
 <h2>子への人の指示の中継</h2>
-<p><code>The user sent a new message while you were working:\n&lt;本文&gt;</code> の4件は、isMeta が真の場合に <code>notification</code> として全文を残す。子が途中で受け取った指示は、その後の応答や変更を理解するために必要である。中継の前置きも残し、直接の人の発言と区別する。coordinator の <code>The coordinator sent a message while you were working:</code> も同じ扱いとする。旗のない通常発言を、この追加規則だけで通知に変えることはない。</p>
+<p><code>The coordinator sent a message while you were working:</code> と <code>The user sent a new message while you were working:</code> は、正規化後も <code>user</code> にする。<code>3e64c84^</code> の実装では先頭の定型行を削らず、通常の <code>unwrapText</code> を通していたことを確認した。今回も定型行を残し、pasted_content の包みや system-reminder の処理は変更前と同じにする。</p>
+<p>既存の <code>participants.ts</code> は正規化済みの user 行を子の会話の親側へ割り当てる。<code>Message.tsx</code> が非表示にする notification にはしない。例外の印は投影の戻り値に置き、台帳の旗や dashboard の部品は変更しない。圧縮要約・履歴表示専用の旗が同時に付く場合は、引き続き非表示を優先する。</p>
 <p>実行状態を判定する既存の旗判定は維持する。これらの内部行を、run の開始・未読の活動・Queued・送信の見張りの受信確認の根拠にはしない。</p>
 
 <h2>既存行の訂正と rebuild</h2>
 <p><code>claudeMessageFlagsVersion=1</code> を維持した。本番に <code>message-flags:</code> の訂正事実がないことを読み取りで確認済み。旧い cursor のファイルを通常走査で一度読み直し、旗付きの既存発言へ <code>message.corrected</code> を追記する。隠す行と残す行の両方に旗を補い、新規取り込みと同じ正規化・表示・検索の規則を適用する。元の事実と本文は変更しない。</p>
 <p>履歴を先頭から再読した場合も、旧い <code>message.created</code> の payload を変えず、同じ訂正で旗を補う。再送・再起動・途中停止で訂正を増殖させない。</p>
-<p><strong>投影版の引き上げと offline rebuild は不要。</strong> 訂正の追記が通常の差分投影と検索更新を起こす。会話の件数・最終時刻・所属と画面の差分も更新される。試験用台帳では差分反映と全件 rebuild の一致を確認した。本番へは未反映であり、導入後の通常走査で補完する。元履歴がない行の旗は推測しない。</p>
+<p><strong>今回確認した本番では、投影版の引き上げと offline rebuild は不要。</strong> 読取スナップショットで <code>message-flags:</code> の訂正は0件、coordinator 177件の元事実には旗がなく、現投影はすべて user だった。導入後の通常走査による旗の補完が、差分投影と検索更新を起こす。試験用台帳では差分反映と全件 rebuild の一致を確認した。本番には未反映であり、元履歴がない行の旗は推測しない。</p>
+<p>すでに <code>3e64c84</code> で旗の補完を済ませ、notification として投影した別の台帳では、コードの差し替えだけでは既存投影が更新されないため rebuild が必要である。今回はその条件に当たらず、本番の rebuild は実行していない。</p>
 
 <h2>本番台帳の読み取り専用集計</h2>
-<p>2026-10-13 18:30 JST、<code>max(seq)=287292</code> の読取スナップショット。<code>DatabaseSync(path, {readOnly:true})</code> と <code>PRAGMA query_only=ON; BEGIN</code> を使い、現存する Claude 履歴708ファイル・user 行30,338件を照合した。台帳の通常の <code>message.created</code> と UUID で結び、旗を補った場合の正規化後の role から判定した。本文は出力・保存していない。</p>
+<p>2026-10-13 18:57 JST、<code>max(seq)=287461</code> の読取スナップショット。<code>DatabaseSync(path, {readOnly:true})</code> と <code>PRAGMA query_only=ON; BEGIN</code> を使い、現存する Claude 履歴705ファイル・user 行30,266件・assistant 行48,212件を走査した。台帳の通常の <code>message.created</code> と UUID で結び、旗を補った場合の正規化結果と <code>isClaudeHiddenMessage</code> で判定した。対象行の台帳未照合・不正JSONは0件。本文は出力・保存していない。</p>
 <table>
-<thead><tr><th>旗付き行の種類</th><th>履歴行数</th><th>台帳件数（UUID重複除外）</th><th>隠れる件数</th><th>残る件数・role</th></tr></thead>
+<thead><tr><th>旗付き行の種類</th><th>履歴行数</th><th>台帳件数（UUID重複除外）</th><th>投影・検索から除外</th><th>投影・検索に残る件数・role</th><th>会話画面に残る件数</th></tr></thead>
 <tbody>
-<tr><td>圧縮要約・履歴表示専用</td><td>14</td><td>12</td><td>12</td><td>0</td></tr>
-<tr><td>isMeta の子の報告（hand-back を含む）</td><td>397</td><td>385</td><td>0</td><td>385 agent_report</td></tr>
-<tr><td>isMeta の coordinator 中継</td><td>176</td><td>176</td><td>0</td><td>176 notification</td></tr>
-<tr><td>isMeta の [SYSTEM NOTIFICATION]</td><td>25</td><td>25</td><td>0</td><td>25 notification</td></tr>
-<tr><td>isMeta の人の指示の中継</td><td>4</td><td>4</td><td>0</td><td>4 notification</td></tr>
-<tr><td>その他の isMeta</td><td>655</td><td>631</td><td>260</td><td>371 notification</td></tr>
-<tr><td><strong>合計</strong></td><td><strong>1,271</strong></td><td><strong>1,233</strong></td><td><strong>272</strong></td><td><strong>961（報告385・通知576）</strong></td></tr>
+<tr><td>圧縮要約・履歴表示専用</td><td>14</td><td>12</td><td>12</td><td>0</td><td>0</td></tr>
+<tr><td>isMeta の子の報告（hand-back を含む）</td><td>398</td><td>386</td><td>0</td><td>386 agent_report</td><td>386</td></tr>
+<tr><td>isMeta の coordinator 中継</td><td>177</td><td>177</td><td>0</td><td>177 user</td><td>177（親側）</td></tr>
+<tr><td>isMeta の [SYSTEM NOTIFICATION]</td><td>25</td><td>25</td><td>0</td><td>25 notification</td><td>0</td></tr>
+<tr><td>isMeta の人の指示の中継</td><td>4</td><td>4</td><td>0</td><td>4 user</td><td>4（親側）</td></tr>
+<tr><td>その他の isMeta</td><td>651</td><td>631</td><td>260</td><td>371 notification</td><td>0</td></tr>
+<tr><td><strong>合計</strong></td><td><strong>1,269</strong></td><td><strong>1,235</strong></td><td><strong>272</strong></td><td><strong>963（user 181・報告386・通知396）</strong></td><td><strong>567</strong></td></tr>
 </tbody>
 </table>
-<p>旗付き行の重複は38行。圧縮要約と履歴表示専用の旗が両方ある行は一度だけ数えた。isMeta の1,221件のうち260件を隠し、961件を残す。coordinator と人の指示の中継の計180件は、現在の user 表示から notification に変わる。その他の通知371件は、従来の包みの正規化を維持する。旗のない発言と別経路の queued-command は表の対象外である。</p>
-<p>レビュー記載の報告403行に対し、今回の現存履歴から照合できた報告は397行・台帳385件だった。上表は今回のスナップショットと照合結果を採用し、前回の一律除外の集計を置き換えた。</p>
+<p>旗付き行の重複は34行。圧縮要約と履歴表示専用の旗が両方ある行は一度だけ数えた。isMeta の1,223件のうち260件を投影・検索から除外し、963件を残す。coordinator は台帳側からも177件と数え直し、全件を現存履歴と照合できた。人の中継4件と合わせた181件は、現行本番と同じ user 表示を維持する。</p>
+<p>notification 396件は投影・検索には残るが、既存の dashboard では会話画面に描かれない。表の「残る」はこの区別を明示した。既存の表示規則に当てはめると、画面では計567件が残り、計668件が非表示になる。通知の描画を足す変更は行っていない。旗のない発言と別経路の queued-command は表の対象外。前回と読取時点・現存履歴が異なるため、今回の集計で置き換えた。</p>
 
 <h2>試験結果</h2>
 <ul>
-<li>分類・取り込み・棚卸しの回帰試験301件成功。報告・通知・中継の role、本文の検索、所属、未知の旗の記録と発言の保持、通常発言の保持、状態と送信の見張りを確認。</li>
-<li>旧 cursor からの補完、事実の不変性、途中停止と全行再読、再起動、順序逆転、差分投影と rebuild の一致を確認。関連10件の最終再実行も成功。</li>
-<li>変異試験: 作業ツリー内の隔離コピーで読み手の isMeta を一律 ignore に戻すと、10件中2件が失敗し終了コード1。hand-back・coordinator・通知・中継の4件の欠落と、assistant の欠落を検出した。</li>
-<li>core: 401件成功、失敗0。API: 775件中754件成功、21件スキップ、失敗0。スキップは隔離環境でのローカル接続の制限による。</li>
+<li>関連32件成功。2種類の中継について、user の role、定型行を含む本文、子の会話への所属と親子関係、検索の発言ID・会話IDを確認。本文の包みの正規化、旗なしの本文処理、要約・履歴専用の旗の優先も確認。</li>
+<li>旧 cursor からの補完、事実の不変性、途中停止と全行再読、再起動、順序逆転、差分投影と rebuild の一致を確認。圧縮要約の非表示、isMeta の報告・通知、未知の旗、再送の冪等性、状態と送信の見張りも維持した。</li>
+<li>変異試験: 作業ツリー内の隔離コピーで <code>claude-content.ts</code> だけを <code>3e64c84</code> の notification 化に戻すと、coordinator と人の中継の試験がそれぞれ <code>actual: notification / expected: user</code> で失敗した。2件中2件失敗、終了コード1。</li>
+<li>core: 403件成功、失敗0。API: 777件について、再試験込みで756件成功、21件スキップ、未解消の失敗0。スキップは隔離環境でのローカル接続の制限による。</li>
+<li>API 全体の初回は755件成功・19件スキップ・3件失敗。一時ディレクトリを作業ツリー内に置いたことで、非Gitの見本が親リポジトリを見つける失敗1件と、Unixソケットのパス長による失敗2件が出た。<code>GIT_CEILING_DIRECTORIES</code> を設定して projects-add の3件は全成功。<code>TMPDIR</code> を作業ツリー直下に短縮して ws の11件は5件成功・6件スキップとなった。再試験のための製品コード・既存試験の変更は行っていない。</li>
 <li>型検査: 全9対象を確認し、指定済みの <code>packages/daemon/src/http/views.ts:83</code> の TS2322 以外は成功。<code>git diff --check</code> も成功。</li>
-<li>本番履歴の棚卸し: 1,386ファイル・147種類・未分類0、終了コード0。</li>
-<li>性能: core の5万件の差分投影は会話1個で30,350.4 ms、5個で29,068.7 ms（基準60秒以内）。100件の反映は20.5 / 19.5 ms（基準300 ms以内）。API の移行と投影は14,047.6 ms、5万行の取り込みと投影は14,832.2 ms（基準30秒以内）。すべて成功し、時間切れによる単独再実行は不要だった。</li>
+<li>性能: core の5万件の差分投影は会話1個で28,184.3 ms、5個で26,305.4 ms（基準60秒以内）。100件の反映は21.8 / 18.9 ms（基準300 ms以内）。API の移行と投影は12,267.8 ms、5万行の取り込みと投影は13,331.8 ms（基準30秒以内）。すべて成功し、時間切れによる性能試験の単独再実行は不要だった。</li>
 </ul>
-<p><code>npm_config_offline=true npx --yes pnpm@10</code> はキャッシュ不足（ENOTCACHED）で起動できなかった。依存を追加せず、導入済み Node の <code>node --run test</code> を core / API で実行し、型検査は <code>node node_modules/typescript/bin/tsc -p &lt;対象&gt; --noEmit</code> で行った。台帳・接続を使う試験は各試験の一時環境に隔離した。</p>
+<p><code>npm_config_offline=true npx --yes pnpm@10 --version</code> はキャッシュ不足（ENOTCACHED）で起動できなかった。依存を追加せず、導入済み Node の <code>node --run test</code> を core / API で実行し、型検査は <code>node node_modules/typescript/bin/tsc -p &lt;対象&gt; --noEmit</code> で全9対象を確認した。台帳・接続を使う試験は各試験の一時環境に隔離し、本番 API / runner は操作していない。</p>
 </html>

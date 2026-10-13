@@ -7,12 +7,12 @@ export function isClaudeInternalMessage(value: unknown): boolean {
   return CLAUDE_INTERNAL_MESSAGE_FLAGS.some(flag => (value as Record<string, unknown>)[flag] === true);
 }
 
-/** isMeta の報告・通知は残し、正規化後も user の内部行だけを隠す。 */
-export function isClaudeHiddenMessage(value: unknown, role: unknown): boolean {
+/** isMeta の報告・通知・中継は残し、正規化後も user のその他の内部行だけを隠す。 */
+export function isClaudeHiddenMessage(value: unknown, role: unknown, relayedInstruction = false): boolean {
   if (!value || typeof value !== "object") return false;
   const flags = value as ClaudeMessageFlags;
   return flags.isCompactSummary === true || flags.isVisibleInTranscriptOnly === true
-    || flags.isMeta === true && role === "user";
+    || flags.isMeta === true && role === "user" && !relayedInstruction;
 }
 
 export function readClaudeMessageFlags(row: Record<string, unknown>): ClaudeMessageFlags {

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test, { type TestContext } from "node:test";
-import { applyIncremental, createNativeId, openLedger, project, readLedgerDatabase, type JsonValue, type Ledger } from "../../../core/src/ledger/index.ts";
+import { applyIncremental, createNativeId, openLedger, project, readLedgerDatabase, rebuild, type JsonValue, type Ledger } from "../../../core/src/ledger/index.ts";
 import { searchLedger } from "../../../core/src/ledger/search.ts";
 import { CLAUDE_INTERNAL_MESSAGE_FLAGS } from "../../../core/src/ledger/claude-message-flags.ts";
 import { observeClaudeFile, CLAUDE_MESSAGE_FLAGS_VERSION, CLAUDE_QUEUED_COMMANDS_VERSION } from "../../src/observe/claude/index.ts";
@@ -21,9 +21,9 @@ const ROWS = SAMPLE.trim().split("\n").map(line => JSON.parse(line) as Record<st
 const INTERNAL_IDS = ["summary", "meta", "transcript"].map(id => createNativeId("claude", id));
 const RETAINED_META = [
   { id: "handback", role: "agent_report", query: "Synthetic handback result" },
-  { id: "coordinator", role: "notification", query: "Synthetic coordinator instruction" },
+  { id: "coordinator", role: "user", query: "Synthetic coordinator instruction" },
   { id: "notification", role: "notification", query: "Synthetic completion notice" },
-  { id: "relay", role: "notification", query: "Synthetic relayed instruction" },
+  { id: "relay", role: "user", query: "Synthetic relayed instruction" },
 ];
 
 function createFixture(t: TestContext) {
@@ -46,7 +46,8 @@ function assertMessages(ledger: Ledger) {
     const message = projection.messages.find(row => row.native_id === id)!;
     assert.equal(message.role, role);
     assert.deepEqual(message.transcript_flags, { isMeta: true });
-    assert.ok(projection.message_memberships.some(row => row.message_id === message.id));
+    if (role === "user") assert.deepEqual(message.body, (ROWS.find(row => row.uuid === id)!.message as Record<string, JsonValue>).content);
+    assert.ok(projection.message_memberships.some(row => row.message_id === message.id && row.conversation_id === CONVERSATION && row.active));
   }
   assert.ok(!projection.message_memberships.some(row => INTERNAL_IDS.includes(row.message_id!)));
   assert.deepEqual(project([...facts].reverse()), projection);
@@ -106,6 +107,46 @@ test("実際の圧縮行の形を読み、人の引用は残し、要約・メ�
   observeClaudeFile(ledger, f.path, { cursor: observation.cursor });
   assert.deepEqual(ledger.readSince(0, Number.MAX_SAFE_INTEGER), before);
 });
+
+for (const { id, query } of RETAINED_META.filter(row => row.role === "user")) {
+  test(`${id}: 途中の指示を user のまま子の会話と検索に残す`, t => {
+    const f = createFixture(t);
+    const directory = join(f.home, ".claude", "projects", "fixture", "session", "subagents");
+    mkdirSync(directory, { recursive: true });
+    const path = join(directory, "child.jsonl");
+    const row = ROWS.find(row => row.uuid === id)!;
+    writeFileSync(path, JSON.stringify(row) + "\n");
+    const ledger = openLedger(f.dbPath);
+    t.after(() => ledger.close());
+    observeClaudeFile(ledger, path);
+    const db = readLedgerDatabase(ledger);
+    const messageId = createNativeId("claude", id);
+    const childId = createNativeId("claude", "child");
+    const facts = ledger.readSince(0, Number.MAX_SAFE_INTEGER);
+    const projection = project(facts);
+    assert.equal(projection.conversations[0].type, "subagent");
+    assert.ok(projection.relations.some(link => link.type === "delegated" && link.from_id === CONVERSATION && link.to_id === childId));
+    assert.deepEqual(project([...facts].reverse()), projection);
+    const verify = () => {
+      const message = JSON.parse(String(db.prepare("SELECT data FROM projection_records WHERE projection = 'messages' AND entity_id = ?").get(messageId)!.data));
+      assert.equal(message.role, "user");
+      assert.deepEqual(message.body, (row.message as Record<string, JsonValue>).content);
+      assert.equal(message.content_normalized, true);
+      assert.deepEqual(db.prepare("SELECT conversation_id, active FROM message_memberships WHERE message_id = ?").all(messageId)
+        .map(membership => ({ ...membership })), [{ conversation_id: childId, active: 1 }]);
+      const results = searchLedger(db, { query });
+      assert.equal(results.total, 1);
+      assert.equal(results.results[0].message_id, messageId);
+      assert.equal(results.results[0].conversation_id, childId);
+    };
+    applyIncremental(db, 0);
+    verify();
+    rebuild(db);
+    verify();
+    observeClaudeFile(ledger, path);
+    assert.deepEqual(ledger.readSince(0, Number.MAX_SAFE_INTEGER), facts);
+  });
+}
 
 test("false の旗・子の会話・道具の結果・画像・通常の追加入力を落とさない", t => {
   const f = createFixture(t);

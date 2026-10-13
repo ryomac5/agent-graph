@@ -31,9 +31,11 @@ export function projectMessages(facts: readonly Fact[]): MessageProjection {
       fact.source === "ui" ? 2 : fact.source.startsWith("host-") ? 1 : 0];
   };
   const messages = projectEntities(facts, "message", identify, prioritize);
-  const excluded = new Set(messages.filter(message => message.provider === "claude"
-    && message.transcript_flags
-    && isClaudeHiddenMessage(message.transcript_flags, normalizeClaudeContent(message).role ?? message.role)).map(message => message.id));
+  const excluded = new Set(messages.filter(message => {
+    if (message.provider !== "claude" || !message.transcript_flags) return false;
+    const normalized = normalizeClaudeContent(message);
+    return isClaudeHiddenMessage(message.transcript_flags, normalized.role ?? message.role, normalized.relayed_instruction);
+  }).map(message => message.id));
   const messageIds = new Map(projectEntities(facts, "message", undefined, prioritize)
     .map((message) => [message.id, identify(message, message.id)]));
   const conversationIds = facts.some(fact => fact.kind.startsWith("message_membership."))

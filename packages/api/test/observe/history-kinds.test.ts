@@ -135,11 +135,12 @@ test("分類表に重複鍵や理由のない行がない", () => {
   assert.ok(HISTORY_CLASSIFICATIONS.every(entry => entry.reason.trim()));
 });
 
-test("旗の組み合わせでも非発言の分類を優先し、未知の旗は user へ落とさない", () => {
+test("除外は既知の非発言の旗に限り、isMeta と未知の旗は発言として取り込む", () => {
   const row = { type: "user", message: { content: "Actual input" } };
-  assert.equal(classifyHistoryRow("claude", { ...row, isMeta: true, isCompactSummary: false, isSidechain: true })?.action, "ignore");
+  assert.equal(classifyHistoryRow("claude", { ...row, isMeta: true, isCompactSummary: false, isSidechain: true })?.handler, "message");
   assert.equal(classifyHistoryRow("claude", { ...row, isCompactSummary: true, isVisibleInTranscriptOnly: true })?.action, "ignore");
-  assert.equal(classifyHistoryRow("claude", { ...row, isFutureInternal: true }), undefined);
+  assert.equal(classifyHistoryRow("claude", { ...row, isFutureInternal: true })?.handler, "message");
+  assert.equal(classifyHistoryRow("claude", { ...row, isFutureInternal: true, isCompactSummary: true })?.action, "ignore");
   assert.equal(findUnclassifiedKinds("claude", { ...row, isFutureInternal: true })[0].field, "flag.isFutureInternal");
 });
 

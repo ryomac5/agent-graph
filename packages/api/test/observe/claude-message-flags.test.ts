@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test, { type TestContext } from "node:test";
-import { createNativeId, openLedger, project, type JsonValue, type Ledger } from "../../../core/src/ledger/index.ts";
+import { applyIncremental, createNativeId, openLedger, project, readLedgerDatabase, type JsonValue, type Ledger } from "../../../core/src/ledger/index.ts";
 import { searchLedger } from "../../../core/src/ledger/search.ts";
 import { CLAUDE_INTERNAL_MESSAGE_FLAGS } from "../../../core/src/ledger/claude-message-flags.ts";
 import { observeClaudeFile, CLAUDE_MESSAGE_FLAGS_VERSION, CLAUDE_QUEUED_COMMANDS_VERSION } from "../../src/observe/claude/index.ts";
@@ -19,6 +19,12 @@ const CONVERSATION = createNativeId("claude", "session");
 const SAMPLE = readFileSync(new URL("../samples/claude-message-flags.jsonl", import.meta.url), "utf8");
 const ROWS = SAMPLE.trim().split("\n").map(line => JSON.parse(line) as Record<string, JsonValue>);
 const INTERNAL_IDS = ["summary", "meta", "transcript"].map(id => createNativeId("claude", id));
+const RETAINED_META = [
+  { id: "handback", role: "agent_report", query: "Synthetic handback result" },
+  { id: "coordinator", role: "notification", query: "Synthetic coordinator instruction" },
+  { id: "notification", role: "notification", query: "Synthetic completion notice" },
+  { id: "relay", role: "notification", query: "Synthetic relayed instruction" },
+];
 
 function createFixture(t: TestContext) {
   const home = mkdtempSync(join(tmpdir(), "claude-message-flags-"));
@@ -35,10 +41,26 @@ function createFixture(t: TestContext) {
 function assertMessages(ledger: Ledger) {
   const facts = ledger.readSince(0, Number.MAX_SAFE_INTEGER);
   const projection = project(facts);
-  assert.deepEqual(projection.messages.map(row => row.native_id).sort(), ["answer", "human"]);
+  assert.deepEqual(projection.messages.map(row => row.native_id).sort(), ["answer", "human", ...RETAINED_META.map(row => row.id)].sort());
+  for (const { id, role } of RETAINED_META) {
+    const message = projection.messages.find(row => row.native_id === id)!;
+    assert.equal(message.role, role);
+    assert.deepEqual(message.transcript_flags, { isMeta: true });
+    assert.ok(projection.message_memberships.some(row => row.message_id === message.id));
+  }
   assert.ok(!projection.message_memberships.some(row => INTERNAL_IDS.includes(row.message_id!)));
   assert.deepEqual(project([...facts].reverse()), projection);
   return projection;
+}
+
+function assertSearch(db: DatabaseSync) {
+  for (const { id, query } of RETAINED_META) {
+    const results = searchLedger(db, { query });
+    assert.equal(results.total, 1, id);
+    assert.equal(results.results[0].message_id, createNativeId("claude", id));
+    assert.equal(results.results[0].conversation_id, CONVERSATION);
+  }
+  assert.equal(searchLedger(db, { query: "Synthetic injected metadata" }).total, 0);
 }
 
 // 旧読み手が旗を捨てて保存した事実と、末尾まで読み済みの cursor を再現する。
@@ -75,6 +97,11 @@ test("実際の圧縮行の形を読み、人の引用は残し、要約・メ�
   assert.equal(projection.runs[0].state, "idle");
   assert.equal(projection.runs[0].last_evidence_ts, "2026-10-13T04:07:51.000Z");
   assert.deepEqual(projection.conversations[0].pending_inputs ?? [], []);
+  applyIncremental(readLedgerDatabase(ledger), 0);
+  assertSearch(readLedgerDatabase(ledger));
+  const meta = ledger.readSince(0, Number.MAX_SAFE_INTEGER).find(fact => fact.kind === "message.created" && fact.payload?.native_id === "meta")!;
+  assert.ok(meta.kind === "message.created");
+  assert.deepEqual(meta.payload?.transcript_flags, { isMeta: true });
   const before = ledger.readSince(0, Number.MAX_SAFE_INTEGER);
   observeClaudeFile(ledger, f.path, { cursor: observation.cursor });
   assert.deepEqual(ledger.readSince(0, Number.MAX_SAFE_INTEGER), before);
@@ -96,6 +123,44 @@ test("false の旗・子の会話・道具の結果・画像・通常の追加�
   assert.equal(project(ledger.readSince(0, Number.MAX_SAFE_INTEGER)).messages.length, rows.length);
 });
 
+test("未知・不正な旗でも user と assistant を保持し、未分類の記録と再送の冪等性を保つ", t => {
+  const f = createFixture(t);
+  const ledger = openLedger(f.dbPath);
+  t.after(() => ledger.close());
+  const rows = ["user", "assistant"].flatMap(role => [
+    { isFutureInternal: true }, { futureBoolean: true }, { futureBoolean: false }, { isMeta: "invalid" },
+  ].map((flags, index) => ({ type: role, uuid: `${role}-${index}`, timestamp: TS,
+    message: { role, content: `Future flag ${role} ${index}` }, ...flags })));
+  writeFileSync(f.path, rows.map(row => JSON.stringify(row)).join("\n") + "\n");
+  observeClaudeFile(ledger, f.path);
+  const facts = ledger.readSince(0, Number.MAX_SAFE_INTEGER);
+  assert.equal(facts.filter(fact => fact.kind === "observation.unsupported").length, rows.length);
+  assert.deepEqual(project(facts).messages.map(row => [row.native_id, row.role]).sort(), rows.map(row => [row.uuid, row.type]).sort());
+  applyIncremental(readLedgerDatabase(ledger), 0);
+  assert.equal(searchLedger(readLedgerDatabase(ledger), { query: "Future flag" }).total, rows.length);
+  observeClaudeFile(ledger, f.path);
+  assert.deepEqual(ledger.readSince(0, Number.MAX_SAFE_INTEGER), facts);
+});
+
+test("isMeta の assistant は残し、要約・履歴専用の旗は報告にも優先する", t => {
+  const f = createFixture(t);
+  const ledger = openLedger(f.dbPath);
+  t.after(() => ledger.close());
+  const report = ROWS.find(row => row.uuid === "handback")!;
+  const rows = [
+    { ...report, uuid: "compact-report", isCompactSummary: true },
+    { ...report, uuid: "transcript-report", isVisibleInTranscriptOnly: true },
+    { type: "assistant", uuid: "meta-answer", timestamp: TS, isMeta: true,
+      message: { role: "assistant", content: "Meta assistant response" } },
+  ];
+  writeFileSync(f.path, rows.map(row => JSON.stringify(row)).join("\n") + "\n");
+  observeClaudeFile(ledger, f.path);
+  assert.deepEqual(project(ledger.readSince(0, Number.MAX_SAFE_INTEGER)).messages.map(row => row.native_id), ["meta-answer"]);
+  applyIncremental(readLedgerDatabase(ledger), 0);
+  assert.equal(searchLedger(readLedgerDatabase(ledger), { query: "Meta assistant response" }).total, 1);
+  assert.equal(searchLedger(readLedgerDatabase(ledger), { query: "Synthetic handback result" }).total, 0);
+});
+
 for (const checkpoint of ["saved", "ledger"] as const) {
   test(`API の再開で変更のない履歴を一度補完し、差分投影と再構築が一致する (${checkpoint})`, t => {
     const f = createFixture(t);
@@ -105,7 +170,7 @@ for (const checkpoint of ["saved", "ledger"] as const) {
     const db = new DatabaseSync(f.dbPath);
     const feed = new ProjectionFeed(f.dbPath, () => service.catchUp());
     t.after(() => { feed.close(); db.close(); service.close(); });
-    assert.equal(feed.conversation(CONVERSATION).projection.messages.length, 5);
+    assert.equal(feed.conversation(CONVERSATION).projection.messages.length, 9);
     if (checkpoint === "saved") db.prepare("INSERT INTO api_observation_cursors VALUES (?, ?)")
       .run(f.path, JSON.stringify({ cursor }));
     const original = service.ledger.readSince(0, Number.MAX_SAFE_INTEGER);
@@ -116,27 +181,29 @@ for (const checkpoint of ["saved", "ledger"] as const) {
     assert.equal(report.unsupported, 0);
     const facts = service.ledger.readSince(0, Number.MAX_SAFE_INTEGER);
     assert.deepEqual(facts.slice(0, original.length), original);
-    assert.equal(facts.filter(fact => fact.kind === "message.corrected").length, 3);
+    assert.equal(facts.filter(fact => fact.kind === "message.corrected").length, 7);
     assertMessages(service.ledger);
     const patch = feed.refresh();
     assert.ok(patch && patch !== "resync");
     const scoped = feed.scopePatch(patch, new Set([CONVERSATION]));
     assert.deepEqual(scoped.changes.messages?.remove.sort(), [...INTERNAL_IDS].sort());
     assert.equal(scoped.changes.message_memberships?.remove.length, 3);
-    assert.equal(feed.conversation(CONVERSATION).projection.messages.length, 2);
+    assert.equal(feed.conversation(CONVERSATION).projection.messages.length, 6);
     const summary = feed.snapshot().projection.conversations.find(row => row.id === CONVERSATION)!;
-    assert.equal(summary.message_count, 2);
-    assert.equal(summary.last_message_ts, "2026-10-13T04:07:51.000Z");
+    assert.equal(summary.message_count, 6);
+    assert.equal(summary.last_message_ts, "2026-10-13T04:07:59.000Z");
     assert.equal(db.prepare("SELECT generation FROM projection_state").get()!.generation, generation);
     const saved = JSON.parse(String(db.prepare("SELECT state FROM api_observation_cursors WHERE path = ?").get(f.path)!.state));
     assert.equal(saved.cursor.claudeMessageFlagsVersion, CLAUDE_MESSAGE_FLAGS_VERSION);
     assert.equal(searchLedger(db, { query: "Synthetic compact summary" }).total, 0);
     assert.equal(searchLedger(db, { query: "real user's quotation" }).total, 1);
+    assertSearch(db);
     const tables = ["messages", "message_memberships", "conversations", "runs", "search_documents", "conversation_name_candidates"];
     const snapshot = () => tables.map(table => db.prepare(`SELECT * FROM ${table}`).all().map(row => JSON.stringify(row)).sort());
     const beforeRebuild = snapshot();
     service.rebuild();
     assert.deepEqual(snapshot(), beforeRebuild);
+    assertSearch(db);
     assert.equal(service.ingestOnce().appended, 0);
     service.close();
     service = openObservationService({ ...f });
@@ -158,7 +225,11 @@ test("旗の補完が途中で止まっても、旧 cursor から再開して全
   assert.throws(() => observeClaudeFile(interrupted, f.path, { cursor }), /Interrupted backfill/);
   assert.deepEqual(observeClaudeFile(ledger, f.path, { cursor }).conflicts, []);
   assertMessages(ledger);
-  assert.equal(ledger.readSince(0, Number.MAX_SAFE_INTEGER).filter(fact => fact.kind === "message.corrected").length, 3);
+  assert.equal(ledger.readSince(0, Number.MAX_SAFE_INTEGER).filter(fact => fact.kind === "message.corrected").length, 7);
+  const replay = observeClaudeFile(ledger, f.path, { cursor: { ...cursor, identity: "replaced" } });
+  assert.deepEqual(replay.conflicts, []);
+  assert.equal(ledger.readSince(0, Number.MAX_SAFE_INTEGER).filter(fact => fact.kind === "message.corrected").length, 7);
+  assertMessages(ledger);
 });
 
 for (const flag of CLAUDE_INTERNAL_MESSAGE_FLAGS) {

@@ -1,5 +1,5 @@
 import type { Fact, JsonValue } from "../facts.ts";
-import { isClaudeInternalMessage } from "../claude-message-flags.ts";
+import { isClaudeHiddenMessage } from "../claude-message-flags.ts";
 import { normalizeClaudeContent } from "./claude-content.ts";
 import { compareFacts, compareText, createNativeId, projectConversationIds, projectEntities, serializeValue } from "./relations.ts";
 import type { ProjectedEntity } from "./relations.ts";
@@ -32,7 +32,8 @@ export function projectMessages(facts: readonly Fact[]): MessageProjection {
   };
   const messages = projectEntities(facts, "message", identify, prioritize);
   const excluded = new Set(messages.filter(message => message.provider === "claude"
-    && isClaudeInternalMessage(message.transcript_flags)).map(message => message.id));
+    && message.transcript_flags
+    && isClaudeHiddenMessage(message.transcript_flags, normalizeClaudeContent(message).role ?? message.role)).map(message => message.id));
   const messageIds = new Map(projectEntities(facts, "message", undefined, prioritize)
     .map((message) => [message.id, identify(message, message.id)]));
   const conversationIds = facts.some(fact => fact.kind.startsWith("message_membership."))

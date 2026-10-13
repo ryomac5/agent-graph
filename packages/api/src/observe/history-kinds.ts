@@ -66,7 +66,8 @@ export function extractHistoryKinds(provider: HistoryProvider, value: unknown): 
 // 分類の正本。取り込みは現在の読み手の範囲に限る。
 export const HISTORY_CLASSIFICATIONS: HistoryClassification[] = [
   ...(["user", "assistant"] as const).flatMap(type => [
-    ...CLAUDE_INTERNAL_MESSAGE_FLAGS.map(flag => ({ flag, ignore: true, reason: "圧縮要約・内部メタ・履歴表示専用の行は発言として取り込まない。" })),
+    ...CLAUDE_INTERNAL_MESSAGE_FLAGS.map(flag => ({ flag, ignore: flag !== "isMeta",
+      reason: flag === "isMeta" ? "旗を保存し、正規化した報告と通知を残す。" : "圧縮要約・履歴表示専用の行は発言として取り込まない。" })),
     { flag: "isSidechain", ignore: false, reason: "子の会話にも実際の入力と応答があるため、旗だけでは発言を除外しない。" },
     ...(type === "user" ? [
       { flag: "toolEndsTurn", ignore: false, reason: "道具の結果の補助情報。本文ブロックを保持する。" },
@@ -323,8 +324,7 @@ export function findUnclassifiedKinds(provider: HistoryProvider, row: unknown): 
 export function classifyHistoryRow(provider: HistoryProvider, row: unknown): HistoryClassification | undefined {
   const kinds = extractHistoryKinds(provider, row);
   const flags = kinds.filter(kind => kind.field.startsWith("flag.")).map(classifyHistoryKind);
-  // 既知の type に未知の旗が付いても、人の発言へ暗黙に落とさない。
-  if (flags.some(flag => !flag)) return undefined;
+  // 未知の旗は別途記録する。取り込みの除外は既知の非発言の旗に限る。
   const ignored = flags.find(flag => flag?.action === "ignore");
   if (ignored) return ignored;
   const kind = kinds[0];

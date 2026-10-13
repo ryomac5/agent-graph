@@ -93,6 +93,8 @@ function createUnsupportedEventId(path: string, row: Row | undefined, reason: st
 export function observeClaudeFile(ledger: Ledger, path: string, options: ClaudeObserveOptions = {}): ClaudeObservation {
   const absolutePath = resolve(path);
   const existing = ledger.readSince(0, Number.MAX_SAFE_INTEGER);
+  const unflaggedMessages = new Set(existing.filter(fact => fact.source === "transcript-claude"
+    && fact.kind === "message.created" && !fact.payload?.transcript_flags).map(fact => fact.source_event_id));
   let cursor = options.cursor;
   if (!cursor) {
     for (const fact of existing) {
@@ -132,6 +134,14 @@ export function observeClaudeFile(ledger: Ledger, path: string, options: ClaudeO
     if (appended.status === "appended") result.appended += 1;
     else if (appended.status === "duplicate") result.duplicates += 1;
     else result.conflicts.push(appended);
+  }
+  function appendMessageFlags(row: Row, common: Pick<FactInput, "source" | "confidence" | "source_ts" | "observed_ts">): void {
+    const messageId = createNativeId("claude", String(row.uuid));
+    const flags = readClaudeMessageFlags(row);
+    append({ ...common, kind: "message.corrected", subject: `message:${messageId}`,
+      source_event_id: `message-flags:v${CLAUDE_MESSAGE_FLAGS_VERSION}:${messageId}:${serializeValue(flags)}`,
+      supersedes: createFactId("transcript-claude", `message:${messageId}`),
+      payload: { provider: "claude", native_id: String(row.uuid), transcript_flags: flags }, cursor: null });
   }
   function appendQueuedCommand(row: Row, handler: string, checkpoint: string | null): void {
     const attachment = readObject(row.attachment)!;
@@ -213,12 +223,7 @@ export function observeClaudeFile(ledger: Ledger, path: string, options: ClaudeO
     }
     if (structuralReason || !row) continue;
     if (backfill && isClaudeInternalMessage(row)) {
-      const messageId = createNativeId("claude", String(row.uuid));
-      const flags = readClaudeMessageFlags(row);
-      append({ ...common, kind: "message.corrected", subject: `message:${messageId}`,
-        source_event_id: `message-flags:v${CLAUDE_MESSAGE_FLAGS_VERSION}:${messageId}:${serializeValue(flags)}`,
-        supersedes: createFactId("transcript-claude", `message:${messageId}`),
-        payload: { provider: "claude", native_id: String(row.uuid), transcript_flags: flags }, cursor: null });
+      appendMessageFlags(row, common);
       continue;
     }
     const classification = classifyHistoryRow("claude", row);
@@ -240,10 +245,15 @@ export function observeClaudeFile(ledger: Ledger, path: string, options: ClaudeO
     if (classification?.handler === "message") {
       const message = readObject(row.message)!;
       const messageId = createNativeId("claude", String(row.uuid));
+      const flags = isClaudeInternalMessage(row);
+      const backfillMessage = flags && unflaggedMessages.has(`message:${messageId}`);
       const messagePayload = { provider: "claude" as const, native_id: String(row.uuid), version: 1,
-        role: readString(message.role) ?? String(row.type), body: message.content, body_state: "stored" as const };
+        role: readString(message.role) ?? String(row.type), body: message.content, body_state: "stored" as const,
+        ...(flags && !backfillMessage ? { transcript_flags: readClaudeMessageFlags(row) } : {}) };
       append({ ...common, kind: "message.created", subject: `message:${messageId}`,
         source_event_id: `message:${messageId}`, payload: messagePayload, cursor: null });
+      // 旧い事実を全行再読しても payload を変えず、同じ訂正で旗を補う。
+      if (backfillMessage) appendMessageFlags(row, common);
       // 一行の最後の事実だけに再開位置を載せ、所属の追記前に止まっても読み直せるようにする。
       const membershipId = JSON.stringify([messageId, id]);
       append({ ...common, kind: "message_membership.created", subject: `message_membership:${membershipId}`,

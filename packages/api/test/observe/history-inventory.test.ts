@@ -55,7 +55,7 @@ for (const flag of ["isCompactSummary", "isMeta", "isVisibleInTranscriptOnly", "
     assert.deepEqual(output.at(-1), { files: 1, kinds: 2, unclassified: unknown ? 1 : 0 });
     const entry = output.find(entry => entry.kind?.field === `flag.${field}`);
     assert.equal(entry.count, 1);
-    assert.equal(entry.classification, unknown ? "unclassified" : "ignore");
+    assert.equal(entry.classification, unknown ? "unclassified" : flag === "isMeta" ? "ingest" : "ignore");
     if (unknown) assert.equal(entry.sample[field], flag === "invalid" ? "[redacted]" : true);
     for (const privateValue of ["private-body", "private-identifier", "private-value", home]) assert.ok(!result.stdout.includes(privateValue));
   });

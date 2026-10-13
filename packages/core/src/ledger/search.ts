@@ -1,6 +1,6 @@
 import type { DatabaseSync, SQLInputValue, StatementSync } from 'node:sqlite';
 import type { Fact, JsonValue } from './facts.ts';
-import { isClaudeInternalMessage } from './claude-message-flags.ts';
+import { isClaudeHiddenMessage, type ClaudeMessageFlags } from './claude-message-flags.ts';
 import { projectArtifacts } from './projections/artifacts.ts';
 import { projectConversations } from './projections/conversations.ts';
 import { getMessageText, projectMessages } from './projections/messages.ts';
@@ -390,7 +390,6 @@ export function refreshSearch(db: DatabaseSync, added?: readonly Fact[], allFact
     const meta = (metadataById.get(fact.fact_id) ?? {}) as Record<string, JsonValue>;
     const entity = fact.kind.split('.')[0];
     const subjectId = fact.subject.slice(entity.length + 1);
-    if (entity === 'message' && meta.provider === 'claude' && isClaudeInternalMessage(meta.transcript_flags)) continue;
     const messageId = entity === 'message' ? meta.provider && meta.native_id
       ? createNativeId(String(meta.provider), String(meta.native_id)) : subjectId : null;
     let runId = typeof meta.run_id === 'string' ? meta.run_id : null;
@@ -415,7 +414,10 @@ export function refreshSearch(db: DatabaseSync, added?: readonly Fact[], allFact
     const normalized = entity === 'message' ? normalizeClaudeContent({
       provider: typeof meta.provider === 'string' ? meta.provider : undefined,
       role: typeof meta.role === 'string' ? meta.role : undefined, body: payload.body,
+      transcript_flags: meta.transcript_flags as ClaudeMessageFlags | undefined,
     }) : {};
+    if (entity === 'message' && meta.provider === 'claude'
+      && isClaudeHiddenMessage(meta.transcript_flags, normalized.role ?? meta.role)) continue;
     const message = splitMessage(normalized.body ?? payload.body);
     const entries: [SearchKind, string][] = entity === 'message'
       ? meta.role === 'tool' ? [['tool_output', [message.message, message.tool, readText(payload.tool_output)].filter(Boolean).join('\n')]]

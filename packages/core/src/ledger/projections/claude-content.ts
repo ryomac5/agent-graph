@@ -1,4 +1,5 @@
 import type { JsonValue } from "../facts.ts";
+import type { ClaudeMessageFlags } from "../claude-message-flags.ts";
 
 const INJECTED_TAGS = "system-reminder|task-notification|local-command-caveat|local-command-stdout|local-command-stderr|command-message|user-prompt-submit-hook";
 const WRAPPER = new RegExp(`^[ \\t]*<(pasted_content|${INJECTED_TAGS})(?: id="([^"\\n]+)")?>([\\s\\S]*?)<\\/\\1(?: id="\\2")?>`, "gm");
@@ -36,7 +37,7 @@ function mapText(body: JsonValue | undefined, transform: (text: string) => strin
 }
 
 /** 台帳は原文を保ち、発言・依頼の抜粋・検索には同じ本文を渡す。 */
-export function normalizeClaudeContent(message: { provider?: string; role?: string; body?: JsonValue }) {
+export function normalizeClaudeContent(message: { provider?: string; role?: string; body?: JsonValue; transcript_flags?: ClaudeMessageFlags }) {
   if (message.provider !== "claude" || !["user", "agent_report"].includes(message.role ?? "")) return {};
   let role = message.role!;
   let hasUserText = Array.isArray(message.body) && message.body.some(block => block && typeof block === "object"
@@ -52,7 +53,11 @@ export function normalizeClaudeContent(message: { provider?: string; role?: stri
     }
     if (/^\s*\[SYSTEM NOTIFICATION[^\n]*\]/u.test(text)) {
       role = "notification";
-      return "";
+      return message.transcript_flags?.isMeta ? text : "";
+    }
+    if (message.transcript_flags?.isMeta && /^The (?:user sent a new|coordinator sent a) message while you were working:\n/u.test(text)) {
+      role = "notification";
+      return text;
     }
     const cleaned = unwrapText(text);
     if (cleaned.trim()) hasUserText = true;

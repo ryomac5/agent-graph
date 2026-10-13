@@ -213,6 +213,19 @@ function openRoutedWorkspace(target: ScreenStore, initialEntry: string) {
   return { ...view, client };
 }
 
+it('opens a query-selected child in its own root and returns to the root conversation', () => {
+  const target = createStore();
+  target.setSnapshot({ seq: 1, generation: 1, projection: { roots: [latestRoot],
+    conversations: [{ id: latestId }, { id: requestedId }],
+    relations: [{ id: 'child', type: 'delegated', from_id: latestId, to_id: requestedId, active: 1 }],
+  } });
+  openRoutedWorkspace(target, `/p/other?conversation=${encodeURIComponent(requestedId)}`);
+  expectRequestedConversation();
+  expect(readOpenConversation().getAttribute('data-series')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Back to latest-root' }));
+  expect(readOpenConversation().textContent).toBe(latestId);
+});
+
 it('reuses sibling tabs, unsent inputs and the terminal session within the same root', async () => {
   const target = createStore();
   target.setSnapshot({ seq: 1, generation: 1, projection: { roots: [latestRoot],

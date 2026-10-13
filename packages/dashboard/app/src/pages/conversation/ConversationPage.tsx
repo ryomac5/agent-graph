@@ -1,5 +1,6 @@
 import { LoadingFeature } from '../../components/LoadingFeature.tsx';
 import { readSessionProvider, SESSION_PROVIDER_KEY } from '../../lib/session-start.ts';
+import { resolveRunId } from '../../lib/identities.ts';
 import { createPortal } from 'react-dom';
 import { SessionName } from '../../components/SessionName.tsx';
 import { memo, useCallback, useContext, useEffect, useMemo, useLayoutEffect, useRef, useState } from 'react';
@@ -220,7 +221,7 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
   const [hostedConversation, setHostedConversation] = useState<Row>();
   const [receipt, setReceipt] = useState<{ conversationId: string; runId: string; provider: string; cwd: string; model: string; effort: string }>();
   const receiptConversationId = receipt ? resolveConversation(receipt.conversationId) : undefined;
-  const receiptRunId = receipt ? state.identities?.runs[receipt.runId] ?? receipt.runId : undefined;
+  const receiptRunId = receipt ? resolveRunId(receipt.runId, state.identities) : undefined;
   const [continued, setContinued] = useState(false);
   const [sentMessages, setSentMessages] = useState<{ id: string; conversationId: string; text: string; known: Set<unknown>; acknowledged: boolean }[]>([]);
   const starting = Boolean(newSession && !conversationId);

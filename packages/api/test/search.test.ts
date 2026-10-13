@@ -30,7 +30,7 @@ test('search API authenticates, validates filters, searches aliases and returns 
     input.headers = { host: '127.0.0.1:7422', 'x-agent-graph-token': options.token, ...headers };
     const response = new ServerResponse(input);
     let body = '';
-    response.end = function (chunk?: unknown) { body = typeof chunk === 'string' ? chunk : ''; return this; };
+    response.end = function (chunk?: unknown) { body = Buffer.isBuffer(chunk) ? chunk.toString() : typeof chunk === 'string' ? chunk : ''; return this; };
     handler(input, response);
     socket.destroy();
     return { status: response.statusCode, cache: response.getHeader('cache-control'),

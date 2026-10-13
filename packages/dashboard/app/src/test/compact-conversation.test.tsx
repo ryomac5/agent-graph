@@ -30,7 +30,7 @@ function setup(messages: Row[] = [], state = 'running') {
   target.setConnection('connected');
   const client: ConversationClient = { subscribeTerminal: () => () => {}, command: vi.fn(async name => ({ type: 'ack' as const, cmd_id: 'cmd', ok: true,
     result: name === 'session.hosts' ? { hosts: [{ conversationId: 'c', terminalId: 'terminal', provider: 'claude', cwd: '/repo' }] }
-      : name === 'list_models' ? [{ model: 'model-a', displayName: 'Model A' }] : {} })) };
+      : name === 'settings.models' ? { models: [{ model: 'model-a', displayName: 'Model A' }] } : {} })) };
   return { target, client };
 }
 function mount(f: ReturnType<typeof setup>, breadcrumb?: React.ReactNode) {

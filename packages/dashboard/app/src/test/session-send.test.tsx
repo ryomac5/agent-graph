@@ -28,8 +28,8 @@ function fixture(origin = 'managed', state = 'idle', evidence?: unknown, provide
   } });
   target.setConnection('connected');
   let finish!: (value: Ack) => void;
-  const command = vi.fn((name: string): Promise<Ack> => name === 'list_models'
-    ? Promise.resolve(ack([{ model: 'model-a', displayName: 'Model A' }])) : name === 'session.hosts' ? Promise.resolve(ack({ hosts: [] })) : name === 'session.launch' ? Promise.resolve(ack({ terminalId: 'terminal' })) : new Promise(resolve => { finish = resolve; }));
+  const command = vi.fn((name: string): Promise<Ack> => name === 'settings.models'
+    ? Promise.resolve(ack({ models: [{ model: 'model-a', displayName: 'Model A' }] })) : name === 'session.hosts' ? Promise.resolve(ack({ hosts: [] })) : name === 'session.launch' ? Promise.resolve(ack({ terminalId: 'terminal' })) : new Promise(resolve => { finish = resolve; }));
   const client: ConversationClient = { command };
   function Wrapper() { return <MemoryRouter><Workbench project="p" session="root" conversationId={conversationId} client={client} language="ja"
     renderConversation={(id, onConversation) => <ConversationPage target={target} client={client} conversationId={id} onConversation={onConversation} language="ja" embedded/>}/></MemoryRouter>; }
@@ -69,7 +69,7 @@ it.each([
 
 it.each(['send', 'session.send', 'session.launch'])('shows a %s failure and preserves input for retry', async name => {
   const f = fixture(name === 'send' ? 'managed' : 'observed', name === 'session.launch' ? 'ended' : 'running', name === 'session.launch' ? { kind: 'session_end' } : undefined);
-  if (name === 'session.launch') f.command.mockImplementation(async command => command === 'list_models' ? ack([{ model: 'model-a', displayName: 'Model A' }]) : command === 'session.hosts' ? ack({ hosts: [] }) : { type: 'ack', cmd_id: 'cmd', ok: false, error: 'Runner unavailable' });
+  if (name === 'session.launch') f.command.mockImplementation(async command => command === 'settings.models' ? ack({ models: [{ model: 'model-a', displayName: 'Model A' }] }) : command === 'session.hosts' ? ack({ hosts: [] }) : { type: 'ack', cmd_id: 'cmd', ok: false, error: 'Runner unavailable' });
   render(<f.Wrapper/>);
   await waitFor(() => expect(screen.getByRole('button', { name: /^(Model|モデル) · / }).textContent).toContain('Model A'));
   const input = screen.getByRole('textbox', { name: '入力' });
@@ -104,8 +104,7 @@ it.each(['claude', 'codex'])('creates a %s session from the project plus, opens 
   const conversationId = JSON.stringify([provider, '12345678-1234-1234-1234-123456789abc']);
   let launched = false;
   f.command.mockImplementation(async (name: string) => {
-    if (name === 'settings.models') return ack({ defaults: { model: 'model-a', displayName: 'Model A', effort: 'high', modelSource: { kind: 'file', path: '/repo/.codex/config.toml', key: 'model' }, effortSource: { kind: 'file', path: '/repo/.codex/config.toml', key: 'model_reasoning_effort' } } });
-    if (name === 'list_models') return ack([{ model: 'model-a', displayName: 'Model A' }]);
+    if (name === 'settings.models') return ack({ models: [{ model: 'model-a', displayName: 'Model A' }], defaults: { model: 'model-a', displayName: 'Model A', effort: 'high', modelSource: { kind: 'file', path: '/repo/.codex/config.toml', key: 'model' }, effortSource: { kind: 'file', path: '/repo/.codex/config.toml', key: 'model_reasoning_effort' } } });
     if (name === 'ssh.read') return ack({ connections: [] });
     if (name === 'git.branches') return ack({ branches: ['main', 'origin/main'] });
     if (name === 'session.launch') { launched = true; return ack({ terminalId: 'terminal', pid: 123 }); }
@@ -167,8 +166,7 @@ it('opens exactly one empty tab for a project without sessions and keeps it when
   const conversationId = '["codex","started"]';
   let launched = false;
   f.command.mockImplementation(async (name: string) => {
-    if (name === 'settings.models') return ack({ defaults: { model: 'model-a', displayName: 'Model A', effort: 'high', modelSource: { kind: 'file', path: '/repo/.codex/config.toml', key: 'model' }, effortSource: { kind: 'file', path: '/repo/.codex/config.toml', key: 'model_reasoning_effort' } } });
-    if (name === 'list_models') return ack([{ model: 'model-a', displayName: 'Model A' }]);
+    if (name === 'settings.models') return ack({ models: [{ model: 'model-a', displayName: 'Model A' }], defaults: { model: 'model-a', displayName: 'Model A', effort: 'high', modelSource: { kind: 'file', path: '/repo/.codex/config.toml', key: 'model' }, effortSource: { kind: 'file', path: '/repo/.codex/config.toml', key: 'model_reasoning_effort' } } });
     if (name === 'session.launch') { launched = true; return ack({ terminalId: 'started-terminal' }); }
     if (name === 'session.hosts') return ack({ hosts: launched ? [{ terminalId: 'started-terminal', conversationId, provider: 'codex', projectId: 'p', cwd: '/repo' }] : [] });
     return ack([]);
@@ -194,7 +192,7 @@ it('opens exactly one empty tab for a project without sessions and keeps it when
 
 it('keeps the first input and shows the reason when starting fails', async () => {
   const f = fixture();
-  f.command.mockImplementation(async (name: string) => name === 'settings.models' ? ack({ defaults: { model: 'model-a', displayName: 'Model A', effort: 'high', modelSource: { kind: 'file', path: '/repo/.codex/config.toml', key: 'model' }, effortSource: { kind: 'file', path: '/repo/.codex/config.toml', key: 'model_reasoning_effort' } } }) : name === 'list_models' ? ack([{ model: 'model-a', displayName: 'Model A' }]) : name === 'session.launch' ? { type: 'ack', cmd_id: 'cmd', ok: false, error: 'Host unavailable' } : ack([]));
+  f.command.mockImplementation(async (name: string) => name === 'settings.models' ? ack({ models: [{ model: 'model-a', displayName: 'Model A' }], defaults: { model: 'model-a', displayName: 'Model A', effort: 'high', modelSource: { kind: 'file', path: '/repo/.codex/config.toml', key: 'model' }, effortSource: { kind: 'file', path: '/repo/.codex/config.toml', key: 'model_reasoning_effort' } } }) : name === 'session.launch' ? { type: 'ack', cmd_id: 'cmd', ok: false, error: 'Host unavailable' } : ack([]));
   render(<MemoryRouter initialEntries={['/p/p?session=draft']}><App target={f.target} client={f.client}/></MemoryRouter>);
   await waitFor(() => expect(screen.getByRole('button', { name: /^(Model|モデル) · / }).textContent).toContain('Model A'));
   fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'First input' } });
@@ -241,7 +239,7 @@ it.each(['claude', 'codex'])('resumes observed %s using the ID provider before i
 it.each(['claude', 'codex'])('sends observed %s to an existing terminal host without relaunching', async provider => {
   const f = fixture('observed', 'running', undefined, provider);
   const conversationId = JSON.stringify([provider, 'native-id']);
-  f.command.mockImplementation(async name => name === 'list_models' ? ack([{ model: 'model-a', displayName: 'Model A' }]) : name === 'session.hosts' ? ack({ hosts: [{ terminalId: 'existing', conversationId, provider, projectId: 'p', cwd: '/repo' }] }) : ack());
+  f.command.mockImplementation(async name => name === 'settings.models' ? ack({ models: [{ model: 'model-a', displayName: 'Model A' }] }) : name === 'session.hosts' ? ack({ hosts: [{ terminalId: 'existing', conversationId, provider, projectId: 'p', cwd: '/repo' }] }) : ack());
   render(<f.Wrapper/>);
   await waitFor(() => expect(screen.getByRole('button', { name: /^(Model|モデル) · / }).textContent).toContain('Model A'));
   fireEvent.change(screen.getByRole('textbox', { name: '入力' }), { target: { value: 'Existing host' } });

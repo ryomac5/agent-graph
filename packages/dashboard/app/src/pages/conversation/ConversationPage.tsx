@@ -251,6 +251,7 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
   const savedCwd = readText(launch.cwd ?? run?.cwd ?? run?.worktree_path ?? conversation?.cwd) || newSession?.cwd || readText(state.projection.projects?.find(row => row.id === conversation?.project)?.root_path);
   const [models, setModels] = useState<Model[]>([]);
   const [modelsError, setModelsError] = useState('');
+  const [modelRevision, setModelRevision] = useState(0);
   const [providerDefaults, setProviderDefaults] = useState<{ provider: string; cwd: string; value: ProviderDefaults }>();
   const [visibleModels, setVisibleModels] = useState<string[]>([]);
   const [edited, setEdited] = useState(false);
@@ -535,22 +536,24 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
     });
   }
   useEffect(() => () => { if (scrollFrame.current !== undefined) cancelAnimationFrame(scrollFrame.current); }, []);
+  useEffect(() => { setModels([]); setModelsError(''); }, [client, provider, connected, conversationId]);
   useEffect(() => {
     let disposed = false;
-    setModels([]); setModelsError('');
     if (!provider || !connected) return;
-    void client.command('list_models', { provider }).then(ack => {
+    void client.command('settings.models', { provider }).then(ack => {
       if (disposed) return;
       if (!ack.ok) { setModelsError(ack.error ?? t('failed')); return; }
-      const available = (Array.isArray(ack.result) ? ack.result : []).flatMap(item => {
+      const catalog = readObject(ack.result).models;
+      const available = (Array.isArray(catalog) ? catalog : []).flatMap(item => {
         const value = readObject(item);
         return typeof value.model === 'string' ? [{ model: value.model, displayName: readText(value.displayName) || value.model, effort: readText(value.effort) || undefined }] : [];
       });
       setModels(available);
+      setModelsError('');
       if (!currentModel) setModel(value => value || (terminalConversation ? 'default' : available[0]?.model || ''));
     }).catch(reason => { if (!disposed) setModelsError(String(reason)); });
     return () => { disposed = true; };
-  }, [client, provider, connected, language, conversationId]);
+  }, [client, provider, connected, language, conversationId, modelRevision]);
 
   useEffect(() => {
     let disposed = false;
@@ -877,7 +880,7 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
         <div className="composer-toolbar">
           <div className="composer-controls">
             {starting && <div className="composer-provider" role="group" aria-label={language === 'ja' ? '提供元' : 'Provider'}>{['claude', 'codex'].map(value => <button type="button" key={value} aria-pressed={sessionProvider === value} disabled={pending} onClick={() => { setSessionProvider(value); localStorage.setItem(SESSION_PROVIDER_KEY, value); setModel(''); setEffort(''); setEdited(false); }}>{value === 'claude' ? 'Claude' : 'Codex'}</button>)}</div>}
-            <ChoiceMenu name={t('model') + ' · ' + modelLabel} label={<><span className={"composer-provider-mark provider-" + provider} aria-hidden="true"><Icon name={provider === "claude" ? "sparkle" : "terminal"} size={16}/></span><span className="truncate" title={!shownModel && usesDefault ? modelSource : undefined}>{modelLabel}</span>{usesDefault && !shownModel && <span className="muted-text" style={{ font: "var(--type-meta)" }}>{t('recommended')}</span>}</>} width={320} value={selectedModel} choices={modelChoices} disabled={!connected || pending} olderLabel={language === 'ja' ? '古いバージョン ' + olderModels.size + ' 件' : olderModels.size + ' older versions'}
+            <ChoiceMenu name={t('model') + ' · ' + modelLabel} label={<><span className={"composer-provider-mark provider-" + provider} aria-hidden="true"><Icon name={provider === "claude" ? "sparkle" : "terminal"} size={16}/></span><span className="truncate" title={!shownModel && usesDefault ? modelSource : undefined}>{modelLabel}</span>{usesDefault && !shownModel && <span className="muted-text" style={{ font: "var(--type-meta)" }}>{t('recommended')}</span>}</>} onOpen={() => setModelRevision(value => value + 1)} width={320} value={selectedModel} choices={modelChoices} disabled={!connected || pending} olderLabel={language === 'ja' ? '古いバージョン ' + olderModels.size + ' 件' : olderModels.size + ' older versions'}
               note={codexActive ? t('activeCodex') : models.length ? undefined : t('noModels')} onChange={value => { setEdited(true); setModel(value); if (provider === 'codex') setEffort(models.find(item => item.model === value)?.effort ?? ''); }}
               footer={<button className="btn btn-primary btn-sm" disabled={codexActive || !dirty || model === 'default' && !recommendedModel || (!external && !writable)} onClick={() => { if (!external) void applyModel(); }}>{t('applyShort')}</button>}/>
             {provider === 'codex' && <ChoiceMenu name={t('effort') + ' · ' + effortValue} label={<>{t('effort')} <span className="mono">{effortValue}</span></>} value={effort} disabled={!connected || pending || codexActive}

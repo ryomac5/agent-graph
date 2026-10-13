@@ -19,10 +19,17 @@ export function readRecommendedModel(settings: unknown, provider: string): strin
 }
 export function findOlderModels(models: ComposerModel[], keep: string[]): Set<string> {
   const versions = models.map(item => {
-    const match = /^(.*?)[ -]?(\d+(?:\.\d+)?)(?:[ -](.+))?$/.exec(item.displayName);
-    return { item, key: match ? `${match[1].replace(/[ -]$/, '')}/${match[3] ?? ''}` : '', version: match ? Number(match[2]) : 0 };
+    const match = /^(.*?)[ -]?(\d+(?:\.\d+)*)(?:[ -](.+))?$/.exec(item.displayName);
+    return { item, key: match ? `${match[1].replace(/[ -]$/, '').toLowerCase()}/${(match[3] ?? '').toLowerCase()}` : '', version: match ? match[2].split('.').map(Number) : [] };
   });
-  return new Set(versions.filter(({ item, key, version }) => key && !keep.includes(item.model) && versions.some(other => other.key === key && other.version > version)).map(({ item }) => item.model));
+  function isNewer(candidate: number[], version: number[]): boolean {
+    for (let index = 0; index < Math.max(candidate.length, version.length); index++) {
+      const difference = (candidate[index] ?? 0) - (version[index] ?? 0);
+      if (difference) return difference > 0;
+    }
+    return false;
+  }
+  return new Set(versions.filter(({ item, key, version }) => key && !keep.includes(item.model) && versions.some(other => other.key === key && isNewer(other.version, version))).map(({ item }) => item.model));
 }
 
 export function readVisibleModels(settings: unknown): string[] {

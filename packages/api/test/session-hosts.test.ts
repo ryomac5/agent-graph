@@ -500,3 +500,15 @@ for (const [provider, remote] of [['codex', false], ['claude', true], ['codex', 
     }
   });
 }
+
+test('hosts retain the requested launch model before any assistant response', async t => {
+  const f = await createFixture(t);
+  await writeFile(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: SESSION }));
+  await f.handle('session.launch', { projectId: 'p', provider: 'claude', model: 'haiku' });
+  for (let refresh = 0; refresh < 2; refresh++) {
+    const result = await f.handle('session.hosts') as { hosts: { conversationId: string; launchModel?: string }[] };
+    assert.equal(result.hosts[0].conversationId, conversationId);
+    assert.equal(result.hosts[0].launchModel, 'haiku');
+  }
+  assert.deepEqual(f.launches[0].args, ['--model', 'haiku']);
+});

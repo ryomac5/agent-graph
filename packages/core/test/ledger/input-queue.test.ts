@@ -27,6 +27,7 @@ test("dequeue は先頭だけ、remove は本文が一致する一件、popAll �
   assert.deepEqual(read(), []);
   append("enqueue", "<agent-message agent_id=\"other\">Report</agent-message>");
   append("enqueue", "<task-notification><summary>Done</summary></task-notification>");
+  append("enqueue", "Your claude.ai usage limit has reset. You can continue working.");
   assert.deepEqual(read(), []);
   append("enqueue", "Later");
   const facts = ledger.readSince(0, Number.MAX_SAFE_INTEGER);

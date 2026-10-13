@@ -15,6 +15,8 @@ import { createAttachmentStore, escapeAttachmentPath, uploadRemoteAttachment, ty
 
 export const MAX_SCROLLBACK_BYTES = 256 * 1024;
 const DISCOVERY_MS = 500;
+const STARTUP_LIMIT_MS = 15_000;
+const STARTUP_POLL_MS = 100;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MODEL = /^[a-z0-9][a-z0-9._-]*$/i;
 const execute = promisify(execFile);
@@ -22,7 +24,7 @@ type Notify = (message: TerminalNotification) => void;
 interface Host {
   terminalId: string; terminal: IPty; startedAt: string; conversationId?: string; resumeId?: string;
   described?: boolean; provider?: 'claude' | 'codex'; projectId?: string; cwd?: string; target?: ExecutionTarget; connection?: SshConnection; remotePid?: number; discoveryBuffer?: string; disconnected?: boolean; mirror?: ReturnType<typeof startRemoteMirror>;
-  scrollback: Buffer; pending: { text: string; paths: Promise<string[]> }[]; listeners: Set<Notify>; sending?: Promise<void>; lastOutputAt?: number;
+  scrollback: Buffer; pending: { text: string; paths: Promise<string[]> }[]; listeners: Set<Notify>; sending?: Promise<void>; lastOutputAt?: number; inputReady?: boolean;
 }
 export interface HostOptions {
   targets?: TargetService;
@@ -32,7 +34,7 @@ export interface HostOptions {
   listProcesses?: () => Promise<{ pid: number; ppid: number }[]>;
   /** 貼り付けのあと Enter を送るまでの待ち。試験では 0 にする。 */
   submitDelayMs?: number;
-  /** 貼る前に、出力が止まってから待つ時間と、起動から待つ時間。試験では 0 にする。 */
+  /** 起動時だけ、出力が止まってから待つ時間と、起動から待つ時間。試験では 0 にする。 */
   quietMs?: number; warmupMs?: number;
   attachments?: AttachmentOptions;
   wait?: (ms: number) => Promise<void>;
@@ -51,6 +53,13 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
   const directory = options.sessionsDirectory ?? join(homedir(), '.claude', 'sessions');
   let opening = 0, closed = false;
   let scanning: Promise<void> | undefined;
+  function isInputReady(host: Host): boolean {
+    const now = Date.now(), age = now - Date.parse(host.startedAt);
+    // 準備完了を記憶し、作業中の描画では静穏待ちに戻さない。上限も送信時でなく起動時から数える。
+    host.inputReady ||= age >= STARTUP_LIMIT_MS
+      || age >= (options.warmupMs ?? 2500) && now - (host.lastOutputAt ?? 0) >= (options.quietMs ?? 800);
+    return host.inputReady;
+  }
   // Orca と同じく、入力中の行を消してから貼り付け、Enter は間を置いて別に書く。
   // 同じ書き込みに Enter を含めると、貼り付けの中身として扱われて送られないことがあるからである。
   // 送信は端末ごとに順に並べ、続けて送った発言が混ざらないようにする。
@@ -60,11 +69,13 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
     host.sending = (host.sending ?? Promise.resolve()).catch(() => {}).then(async () => {
       if (!hosts.has(host.terminalId) || host.disconnected) throw new Error('no_host');
       // 起動や resume の直後は、画面が入力を受け付ける前に貼ると、bracketed paste が効かず素の文字として入る。
-      // 起動から少し経ち、出力が止まって間が空くまで待ってから貼る。上限を設けて、待ち続けないようにする。
-      const quiet = options.quietMs ?? 800; const warmup = options.warmupMs ?? 2500; const limit = Date.now() + 15_000;
-      while (Date.now() < limit && (Date.now() - Date.parse(host.startedAt) < warmup || Date.now() - (host.lastOutputAt ?? 0) < quiet)) await wait(100);
+      while (!isInputReady(host)) {
+        await wait(STARTUP_POLL_MS);
+        if (!hosts.has(host.terminalId) || host.disconnected) throw new Error('no_host');
+      }
       const localPaths = await paths;
       const pasted = host.connection ? await Promise.all(localPaths.map(path => uploadRemoteAttachment(targets, host.connection!, path))) : localPaths;
+      if (!hosts.has(host.terminalId) || host.disconnected) throw new Error('no_host');
       host.terminal.write('\x15');
       for (const path of pasted) host.terminal.write(`\x1b[200~${escapeAttachmentPath(path)}\x1b[201~`);
       if (pasted.length) await wait(300);
@@ -129,7 +140,10 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
     if (!scanning) scanning = discover().finally(() => { scanning = undefined; });
     return scanning;
   }
-  const timer = setInterval(() => { void refresh().catch(() => {}); }, DISCOVERY_MS);
+  const timer = setInterval(() => {
+    for (const host of hosts.values()) isInputReady(host);
+    void refresh().catch(() => {});
+  }, DISCOVERY_MS);
   timer.unref();
   return {
     hasTerminal(id: unknown) { return typeof id === 'string' && hosts.has(id); },

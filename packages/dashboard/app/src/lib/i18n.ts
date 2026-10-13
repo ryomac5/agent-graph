@@ -45,7 +45,7 @@ export const graphText = {
   en: { running: 'running', needsYou: 'needs you', today: 'Today', earlier: 'Earlier', showMore: 'Show 20 more',
     inferred: 'Inferred', allow: 'Allow', deny: 'Deny', requests: 'Request graph', request: 'Request', who: 'Who',
     now: 'Now', range: 'Time range', report: 'Report', elapsed: 'Elapsed', rounds: 'Rounds', close: 'Close details', open: 'Open conversation' },
-  ja: { running: '実行中', needsYou: 'あなたの番', today: '今日', earlier: '以前', showMore: 'さらに20件表示',
+  ja: { running: '実行中', needsYou: '要確認', today: '今日', earlier: '以前', showMore: 'さらに20件表示',
     inferred: '推定', allow: '承認を許可', deny: '承認を拒否', requests: 'サブエージェントのグラフ', request: '依頼', who: '相手',
     now: '現在', range: '期間', report: '報告', elapsed: '経過', rounds: 'やりとり', close: '詳細を閉じる', open: '会話を開く' },
 } as const;

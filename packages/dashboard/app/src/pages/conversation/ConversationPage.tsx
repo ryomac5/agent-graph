@@ -25,6 +25,7 @@ import { isBlank, isToolOnly, Message, ToolRun } from '../../components/conversa
 import { harnessKind, readMessageBody } from '../../lib/message-body.ts';
 import { useToolResults } from '../../components/conversation/ToolCall.tsx';
 import { resolveParticipants, senderOf, type Sender } from '../../components/conversation/participants.ts';
+import { holdDashboardReload } from '../../lib/reload-safety.ts';
 import { ACTIVE_STATES, compareEntries, messageSignature, PENDING_APPROVALS, readObject, readText, selectTimeline, showValue, type TimelineEntry } from '../../components/conversation/model.ts';
 import { ChoiceMenu } from '../../components/ChoiceMenu.tsx';
 import { describeDefaultSource, displayModel, findOlderModels, isRecommended, readVisibleModels, type ComposerModel } from '../../components/conversation/models.ts';
@@ -569,6 +570,10 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
     finally { if (isVisible(sourceConversation)) setPending(false); }
   }
   async function send() {
+    const release = holdDashboardReload();
+    try { await sendInput(); } finally { release(); }
+  }
+  async function sendInput() {
     if (!(external ? canLaunch : canSend) || (!input.trim() && !attachments.items.length)) return;
     if (attachments.items.length && !terminalConversation) return;
     if (external && !terminalConversation && !starting && !supported) { setHandoffBlocked(true); return; }

@@ -4,8 +4,9 @@ import { createSearchClient } from './pages/search/model.ts';
 import { createClient } from './lib/client.ts';
 import { installStyleNonce } from './lib/style-nonce.ts';
 import { installPreloadRecovery } from './lib/preload-recovery.ts';
+import { isDashboardReloadBlocked } from './lib/reload-safety.ts';
+import { hasUnsavedDocuments } from './lib/file-documents.ts';
 
-installPreloadRecovery();
 installStyleNonce();
 
 const injectedToken = document.querySelector<HTMLMetaElement>('meta[name="agent-graph-token"]')?.content ?? '';
@@ -23,6 +24,10 @@ const client = createClient({ url: `${location.protocol === 'https:' ? 'wss:' : 
     if (meta) meta.content = next;
     return next;
   } });
+installPreloadRecovery(undefined, {
+  subscribeConnected: client.subscribeConnected,
+  isBlocked: () => !client.canReload() || isDashboardReloadBlocked() || hasUnsavedDocuments(client),
+});
 client.start();
 createRoot(document.getElementById('root')!).render(<Dashboard client={client} searchClient={{ search: (query, signal) => createSearchClient({ token }).search(query, signal) }}/>);
 window.addEventListener('pagehide', () => client.stop());

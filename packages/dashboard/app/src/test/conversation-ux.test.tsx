@@ -13,6 +13,8 @@ import { selectTimeline, type TimelineEntry } from '../components/conversation/m
 import { resolveParticipants } from '../components/conversation/participants.ts';
 import { effortLabel, toolsLabel } from '../components/conversation/text.ts';
 import { Message } from '../components/conversation/Message.tsx';
+import { installPreloadRecovery, RELOAD_IDLE_MS } from '../lib/preload-recovery.ts';
+import { isDashboardReloadBlocked } from '../lib/reload-safety.ts';
 
 beforeEach(() => { localStorage.clear(); sessionStorage.clear(); vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ generation: 0, projection: { messages: [], message_memberships: [] }, next: null }) }))); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -430,6 +432,23 @@ it('restores per-conversation drafts after switching conversations and reloading
   expect(value()).toBe('Child draft');
 });
 
+it('restores a multiline draft after an automatic version reload', async () => {
+  const target = setup();
+  const page = <MemoryRouter><ConversationPage conversationId="c" target={target} client={client}/></MemoryRouter>;
+  let view = render(page); await act(async () => {});
+  vi.useFakeTimers();
+  document.head.innerHTML = '<script type="module" src="/assets/old.js"></script>';
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, text: async () => '<script type="module" src="/assets/new.js"></script>' })));
+  const reload = vi.fn(() => { view.unmount(); view = render(page); });
+  const dispose = installPreloadRecovery(reload, { isBlocked: isDashboardReloadBlocked });
+  try {
+    fireEvent.input(screen.getByRole('textbox', { name: 'Message' }), { target: { value: '書きかけ\nKeep this draft' } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(RELOAD_IDLE_MS); });
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('textbox', { name: 'Message' })).toHaveProperty('value', '書きかけ\nKeep this draft');
+  } finally { dispose(); document.head.innerHTML = ''; vi.useRealTimers(); }
+});
+
 it('retains a draft after a failed send', async () => {
   const target = setup();
   const failing = { command: (name: string) => name === 'send' ? Promise.resolve({ type: 'ack' as const, cmd_id: 'send', ok: false, error: 'Unavailable' }) : client.command(name) };
@@ -453,8 +472,10 @@ it('clears the acknowledged source draft after navigating away without clearing 
   fireEvent.keyDown(screen.getByRole('textbox', { name: 'Message' }), { key: 'Enter', metaKey: true });
   await screen.findAllByText('Sending…');
   view.rerender(page('child')); await act(async () => {});
+  expect(isDashboardReloadBlocked()).toBe(true);
   fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Keep child draft' } });
   await act(async () => { acknowledge({ type: 'ack', cmd_id: 'send', ok: true }); });
+  expect(isDashboardReloadBlocked()).toBe(false);
   expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).value).toBe('Keep child draft');
   expect(sessionStorage.getItem('agent-graph-conversation-draft:c')).toBeNull();
   view.rerender(page('c')); await act(async () => {});

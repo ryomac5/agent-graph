@@ -25,6 +25,26 @@ function fixture(fetchSnapshot: () => Promise<Snapshot> = vi.fn(async () => ({ s
 }
 afterEach(() => vi.useRealTimers());
 describe('WebSocket client', () => {
+  it('blocks reload for commands and ordinary terminals, but not hosted terminal attachments', async () => {
+    const { client, sockets } = fixture();
+    const socket = sockets[0];
+    expect(client.canReload()).toBe(true);
+    const send = client.command('send', {}, 'sending');
+    expect(client.canReload()).toBe(false);
+    socket.receive({ type: 'ack', cmd_id: 'sending', ok: false }); await send;
+    expect(client.canReload()).toBe(true);
+    const open = client.command('terminal.open', {}, 'open');
+    socket.receive({ type: 'ack', cmd_id: 'open', ok: true, result: { terminalId: 'ordinary' } }); await open;
+    expect(client.canReload()).toBe(false);
+    socket.receive({ type: 'terminal', event: 'output', terminalId: 'ordinary', data: 'still running' });
+    expect(client.canReload()).toBe(false);
+    socket.receive({ type: 'terminal', event: 'exit', terminalId: 'ordinary', exitCode: 0 });
+    expect(client.canReload()).toBe(true);
+    const attach = client.command('terminal.attach', { terminalId: 'hosted' }, 'attach');
+    socket.receive({ type: 'ack', cmd_id: 'attach', ok: true, result: { terminalId: 'hosted' } }); await attach;
+    expect(client.canReload()).toBe(true);
+    client.stop();
+  });
   it('reconnects with the last seq and generation, applies replay once, and backs off', async () => {
     vi.useFakeTimers();
     const { client, sockets, target } = fixture();

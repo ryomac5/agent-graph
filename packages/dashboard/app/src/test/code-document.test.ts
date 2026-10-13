@@ -1,6 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import { createCodeDocument } from '../lib/code-document.ts';
 import type { Ack } from '../lib/client.ts';
+import { getFileDocument, hasUnsavedDocuments } from '../lib/file-documents.ts';
 function fixture(editable = true) {
   let content = 'original', hash = 'h1', conflict = false;
   const client = { command: vi.fn(async (name: string, payload?: unknown): Promise<Ack> => {
@@ -10,6 +11,16 @@ function fixture(editable = true) {
   const document = createCodeDocument(client, { projectId: 'p', path: 'a.ts', worktree: '/repo' });
   return { document, client, change: (next: string) => { content = next; hash = next; }, conflict: (value: boolean) => { conflict = value; } };
 }
+it('blocks auto reload for cached unsaved files until saved or discarded', async () => {
+  const { client } = fixture();
+  const document = getFileDocument(client, { projectId: 'p', path: 'a.ts' });
+  await document.refresh(); expect(hasUnsavedDocuments(client)).toBe(false);
+  document.edit('draft'); expect(hasUnsavedDocuments(client)).toBe(true);
+  const saving = document.save(); expect(hasUnsavedDocuments(client)).toBe(true);
+  await saving; expect(hasUnsavedDocuments(client)).toBe(false);
+  document.edit('second draft'); expect(hasUnsavedDocuments(client)).toBe(true);
+  document.discard(); expect(hasUnsavedDocuments(client)).toBe(false);
+});
 it('saves edits with their base hash and clears the dirty mark', async () => {
   const { document, client } = fixture(); await document.refresh(); document.edit('edited'); await document.save();
   expect(client.command).toHaveBeenLastCalledWith('files.write', { projectId: 'p', worktree: '/repo', path: 'a.ts', content: 'edited', baseHash: 'h1' });

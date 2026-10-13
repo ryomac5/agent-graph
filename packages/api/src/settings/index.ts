@@ -8,8 +8,9 @@ import { mergePolicy } from "../../../core/src/assign/policy.ts";
 import { resolveModel, type ModelUsage } from "../../../core/src/assign/models.ts";
 import { readAvailableModels } from "./models.ts";
 import { resolveProviderDefaults, type DefaultOptions } from "./defaults.ts";
-import { decide, type DecisionInput } from "../../../core/src/assign/assign.ts";
-import type { DelegateRequest, Role, Weight } from "../../../core/src/delegate/types.ts";
+import { buildPolicyPreview, type PastDelegation } from "./policy-preview.ts";
+export type { PastDelegation } from "./policy-preview.ts";
+import type { Role, Weight } from "../../../core/src/delegate/types.ts";
 import type { Ledger } from "../../../core/src/ledger/ledger.ts";
 import type { JsonValue } from "../../../core/src/ledger/facts.ts";
 import type { ScreenCommand } from "../ws/contract.ts";
@@ -20,7 +21,6 @@ import { parseSettingsToml, updateSettingsToml } from "./toml.ts";
 export const SETTINGS_WATCH_INTERVAL_MS = 100;
 
 export interface KeychainPort { setClaudeApiKey(value: string): Promise<void>; deleteClaudeApiKey(): Promise<void>; hasClaudeApiKey(): Promise<boolean> }
-export interface PastDelegation { id: string; request: DelegateRequest; context: Omit<DecisionInput, "policy"> }
 export interface SettingsOptions {
   paths: Record<FileStore, string>;
   providerHome?: string;
@@ -148,9 +148,9 @@ export class SettingsService {
   previewPolicy(patch: unknown) {
     const policy = mergePolicy(this.values.policy, patch);
     const token = randomUUID();
-    const rows = this.options.history().map(({ id, request, context }) => ({ id, before: decide(request, { ...context, policy: this.values.policy }), after: decide(request, { ...context, policy }) }));
+    const preview = buildPolicyPreview(token, this.values.policy, policy, this.options.history());
     this.previews.set(token, { policy, base: revision(this.values.policy) });
-    return { token, rows };
+    return preview;
   }
   write(store: FileStore, patch: unknown, options: { previewToken?: string; confirmation?: boolean } = {}): Promise<void> {
     return this.serialize(async () => {

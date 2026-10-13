@@ -1,15 +1,10 @@
-import { modelName } from './format.ts';
 import type { Ack } from './client.ts';
 import type { ConfigSettings, ProjectSettings, SettingsStatus, Policy } from '../../../../api/src/ws/settings-contract.ts';
 export type { ConfigSettings, ProjectSettings, SettingsStatus, Policy };
 export type { ProviderDefaults, DefaultSource } from '../../../../api/src/ws/settings-contract.ts';
 export interface SettingsClient { command(command: string, payload?: unknown, cmdId?: string): Promise<Ack> }
 export interface SettingsSnapshot { config: ConfigSettings; policy: Policy; project: ProjectSettings; errors: Record<string, string>; apiKeyConfigured: boolean }
-export interface PolicyPreview { token: string; rows: { id: string; before: Decision; after: Decision }[] }
-interface Decision { ok: boolean; assignment?: { executor: string; model: string }; reason?: string[] }
-export function describeDecision(decision: Decision): string {
-  return decision.ok && decision.assignment ? `${decision.assignment.executor} · ${modelName(decision.assignment.model)}` : decision.reason?.join('; ') ?? 'Unavailable';
-}
+export type { PolicyPreview } from '../../../../api/src/ws/settings-contract.ts';
 export async function requestSettings<T>(client: SettingsClient, command: string, payload?: unknown): Promise<T> {
   const ack = await client.command(command, payload);
   if (!ack.ok) throw new Error(ack.error ?? 'Settings operation failed');

@@ -43,6 +43,16 @@ function createFixture(t: TestContext, busy = false) {
 function record(f: ReturnType<typeof createFixture>, body = 'Next step') {
   f.watch.record('send', CONVERSATION, body, f.watch.capture(CONVERSATION, NOW));
 }
+test('送信の時刻列を共通の UTC 形式で保存し、期間境界で失敗する', t => {
+  const f = createFixture(t);
+  const captured = { ...f.watch.capture(CONVERSATION, NOW), sent_ts: '2026-10-13T19:00:00+0900' };
+  f.watch.record('send', CONVERSATION, 'Next step', captured);
+  assert.equal(f.read().sent_ts, '2026-10-13T10:00:00.000Z');
+  f.watch.check(NOW + SEND_WATCH_TIMEOUT_MS - 1);
+  assert.equal(f.read().state, 'pending');
+  f.watch.check(NOW + SEND_WATCH_TIMEOUT_MS);
+  assert.equal(f.read().state, 'failed');
+});
 function addMessage(f: ReturnType<typeof createFixture>, id: string, body: string, role = 'user') {
   f.append('message.created', `message:${id}`, { role, body, body_state: 'stored', version: 1 });
   f.append('message_membership.created', `message_membership:${id}`, { message_id: id, conversation_id: CONVERSATION, active: true });

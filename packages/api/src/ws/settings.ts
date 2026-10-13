@@ -41,7 +41,7 @@ export function createServeSettings(observation: ReturnType<typeof openObservati
     ...transport,
     history() {
       const rows: PastDelegation[] = [];
-      // SQLite が読める時差にそろえ、取り込み順によらず最近の依頼を選ぶ。
+      // 起動後の補完が終わる前も、SQLite が読めないコロンなしの時差を並べる。
       for (const row of db.prepare(`SELECT subject, payload, source_ts FROM facts
         WHERE kind = 'delegation.created' AND payload IS NOT NULL
         ORDER BY julianday(CASE WHEN source_ts GLOB '*[+-][0-9][0-9][0-9][0-9]'

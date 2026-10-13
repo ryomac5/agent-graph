@@ -59,6 +59,30 @@ test('conversation windows return only latest bodies and page backwards in numer
   assert.deepEqual(feed.conversation('c', '', { before }).projection.messages, older.projection.messages);
 });
 
+test('mixed timestamp formats keep chronological windows, summaries, and equivalent cursors', t => {
+  const { feed, ledger, base } = createConversation(t);
+  for (const [id, timestamp] of [['offset', '2026-10-13T09:00:00.1+0900'], ['utc', '2026-10-13T00:00:00.900000Z']]) {
+    ledger.append({ ...base, source_ts: timestamp, source_event_id: id, subject: `message:${id}`, kind: 'message.created',
+      payload: { provider: 'codex', native_id: id, version: 1, role: 'assistant', body_state: 'stored', body: id } });
+    ledger.append({ ...base, source_event_id: `member:${id}`, subject: `message_membership:${id}`, kind: 'message_membership.created',
+      payload: { message_id: id, conversation_id: 'c', active: true } });
+  }
+  feed.refresh();
+  const latest = feed.conversation('c', '', { latest: true });
+  assert.deepEqual(latest.projection.messages.slice(-2).map(row => [row.body, row.source_ts]), [
+    ['"offset"', '2026-10-13T00:00:00.100Z'], ['"utc"', '2026-10-13T00:00:00.900Z'],
+  ]);
+  const cursor = latest.olderCursor!;
+  const expected = feed.conversation('c', '', { before: cursor }).projection.messages;
+  for (const source_ts of ['2026-10-13T09:00:00+0900', '2026-10-13T00:00:00Z', '2026-10-13T00:00:00.000000Z']) {
+    const equivalent = { ...cursor, source_ts };
+    assert.deepEqual(feed.conversation('c', '', { before: equivalent }).projection.messages, expected);
+    assert.deepEqual(feed.conversation('c', '', { before: JSON.stringify(equivalent) }).projection.messages, expected);
+  }
+  const conversation = feed.list('conversations').rows.find(row => row.id === '["codex","session"]')!;
+  assert.equal(conversation.last_message_ts, '2026-10-13T00:00:00.900Z');
+});
+
 test('detached cursor membership still advances to the oldest window with tuple and legacy arguments', t => {
   const { feed, ledger, base } = createConversation(t);
   const latest = feed.conversation('c', '', { latest: true });

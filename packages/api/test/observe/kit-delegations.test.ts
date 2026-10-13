@@ -193,6 +193,19 @@ test("同じ内容のファイル置換でも位置由来の requestId は変わ
   assert.deepEqual(f.observer.observe(), []);
 });
 
+test('時差付きの kit 行を UTC で保存した後も、再読込で同じ依頼へ結ぶ', t => {
+  const f = createFixture(t);
+  writeFileSync(f.path, encode(start('offset', { ts: '2026-01-01T09:00:00+0900' }), done('offset')));
+  f.observer.observe();
+  const before = f.facts().filter(fact => fact.kind !== 'delegation.updated');
+  assert.equal(before.find(fact => fact.kind === 'delegation.created')!.source_ts, '2026-01-01T00:00:00.000Z');
+  const replacement = join(f.state, 'replacement.jsonl');
+  writeFileSync(replacement, encode(start('offset', { ts: '2026-01-01T00:00:00.000000Z' }), done('offset')));
+  renameSync(replacement, f.path);
+  f.observer.observe();
+  assert.deepEqual(f.facts().filter(fact => fact.kind !== 'delegation.updated'), before);
+});
+
 test("既存の kit 観測経路で取り込み、runner の復旧と終了済み依頼の再送でホストを起動しない", async (t) => {
   const f = createFixture(t);
   writeFileSync(join(f.state, "sessions.json"), "{}");

@@ -1,3 +1,4 @@
+import { normalizeStoredTimestamp } from "../timestamps.ts";
 import type { Fact } from "../facts.ts";
 import { projectInputQueues, type PendingInput } from "./input-queue.ts";
 import { compareEventOrder } from "../event-order.ts";
@@ -163,7 +164,8 @@ export function projectConversations(
     if (fact.kind !== "conversation.created") continue;
     const payload = fact.payload as { provider?: string; native_id?: string } | null;
     const id = payload?.provider && payload.native_id ? createNativeId(payload.provider, payload.native_id) : fact.subject.slice(13);
-    if (!created.has(id) || fact.source_ts < created.get(id)!) created.set(id, fact.source_ts);
+    const timestamp = normalizeStoredTimestamp(fact.source_ts);
+    if (!created.has(id) || timestamp < created.get(id)!) created.set(id, timestamp);
   }
   const tasksById = new Map(tasks.map((task) => [task.id, task]));
   // キットの名前の正本は別名の事実。会話の表示用に同じ値を再追記しない。

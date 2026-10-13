@@ -6,6 +6,7 @@ import { pollObservation } from "./poll.ts";
 import { createHistoryWatch } from "./history-watch.ts";
 import { fileReadMetrics } from "../observe/files.ts";
 import { createCheckpointSchedule } from "./checkpoint-schedule.ts";
+import { repairTimestampsOnStartup } from "./repair-timestamps.ts";
 
 const port = parentPort!;
 const { observe, hook: enableHook = true, measureMemory, ...options } = workerData as ObservationOptions & { observe: boolean; hook?: boolean; measureMemory?: boolean };
@@ -101,7 +102,18 @@ port.on("message", async (message) => {
     }
     return;
   }
-  if (message === "start" && observe && !started) { started = true; ingest(); }
+  if (message === "start" && !started) {
+    started = true;
+    try {
+      const result = repairTimestampsOnStartup(service.dbPath);
+      port.postMessage({ type: "timestamps-repaired", ...result });
+      port.postMessage({ type: "projected", seq: service.projectionSeq() });
+    } catch (error) {
+      // 補完失敗は配信・投影を止めない。完了印がないため次回起動で再試行する。
+      port.postMessage({ type: "timestamp-repair-failed", message: error instanceof Error ? error.message : String(error) });
+    }
+    if (observe) ingest();
+  }
   if (message === "stop") {
     stopped = true;
     clearTimeout(timer);

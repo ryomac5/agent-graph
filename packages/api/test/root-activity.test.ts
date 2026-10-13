@@ -25,7 +25,7 @@ test('hook の根の状態と開始時刻を snapshot と patch に配り、旧 
     const patch = feed.refresh();
     assert.ok(patch && patch !== 'resync');
     assert.equal(patch.changes.runs.upsert[0].state, 'running');
-    assert.equal(patch.changes.runs.upsert[0].turn_started_ts, start);
+    assert.equal(patch.changes.runs.upsert[0].turn_started_ts, '2026-10-11T00:01:00.000Z');
     ledger.append({ source: 'transcript-claude', source_event_id: 'child-stop', source_ts: '2026-10-11T00:11:42Z',
       kind: 'run.state_changed', subject: 'run:claude:root:1', confidence: 'confirmed',
       payload: { conversation_id: 'claude:root', generation: 1, state: 'idle', last_evidence: { kind: 'turn_completed' } } });
@@ -34,7 +34,7 @@ test('hook の根の状態と開始時刻を snapshot と patch に配り、旧 
     const running = feed.snapshot().projection;
     assert.equal(running.runs[0].state, 'running');
     assert.equal(running.roots[0].state, 'running');
-    assert.equal(running.runs[0].turn_started_ts, start);
+    assert.equal(running.runs[0].turn_started_ts, '2026-10-11T00:01:00.000Z');
     ledger.append({ source: 'transcript-claude', source_event_id: 'process-absent', source_ts: '2026-10-11T00:11:43Z',
       kind: 'run.state_changed', subject: 'run:claude:root:1', confidence: 'confirmed',
       payload: { conversation_id: 'claude:root', generation: 1, state: 'idle', last_evidence: { kind: 'process_absent' } } });

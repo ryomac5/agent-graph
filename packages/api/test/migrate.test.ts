@@ -31,6 +31,18 @@ function createFixture(t: TestContext, name = "old") {
   return { directory, path, db, ledger, addSession };
 }
 
+test('旧 DB の時差・小数秒を正規化した後も再移行で訂正の事実を増やさない', async t => {
+  const { path, db, ledger, addSession } = createFixture(t);
+  addSession('offset');
+  db.exec("UPDATE sessions SET started_at = '2026-01-01T09:00:00+0900'");
+  db.exec("INSERT INTO turns (id, session_id, at, prompt) VALUES ('offset-turn', 'offset', '2026-01-01T00:00:00.123456Z', 'request')");
+  await migrateLegacyDatabases([path], ledger);
+  const before = ledger.readSince(0, 1000);
+  assert.ok(before.some(fact => fact.source_ts === '2026-01-01T00:00:00.123Z'));
+  await migrateLegacyDatabases([path], ledger);
+  assert.deepEqual(ledger.readSince(0, 1000), before);
+});
+
 test("旧行の規則を写し、二度の変換で件数・台帳・旧 DB の内容が変わらない", async (t) => {
   const { directory, path, db, ledger, addSession } = createFixture(t);
   addSession("first", "ended", "idle");

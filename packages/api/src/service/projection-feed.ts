@@ -11,6 +11,7 @@ import { compactScreenIdentities, createScreenIdentities, type ScreenIdentities 
 import type { ObservationProgress } from "./index.ts";
 
 import { initializeSummaryIndex, LATEST_MESSAGE_SQL, FALLBACK_MESSAGE_SQL } from "./summary-index.ts";
+import { normalizeTimestampFields } from "../../../core/src/ledger/timestamps.ts";
 
 export type ProjectionRows = Record<string, Record<string, unknown>[]>;
 export interface ProjectionPatch {
@@ -32,12 +33,12 @@ function compareMessageCursors(a: MessageCursor, b: MessageCursor): number {
     || compareEventOrder(a.source_event_id, b.source_event_id) || compareEventOrder(a.id, b.id);
 }
 function readMessageCursor(value: string | MessageCursor): string | MessageCursor {
-  if (typeof value !== 'string') return value;
+  if (typeof value !== 'string') return normalizeTimestampFields(value);
   // HTTP の before には組を JSON で載せる。旧い ID（JSON 配列を含む）も受ける。
   try {
     const cursor = JSON.parse(value);
     if (cursor && typeof cursor.source_ts === 'string' && typeof cursor.source_event_id === 'string'
-      && typeof cursor.id === 'string') return cursor;
+      && typeof cursor.id === 'string') return normalizeTimestampFields(cursor);
   } catch { /* 旧い ID はそのまま使う。 */ }
   return value;
 }

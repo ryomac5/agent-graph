@@ -703,8 +703,8 @@ test("画面が読む発言の時刻と出所、実行の起動設定と作業�
   assert.equal(run.cwd, "/repo/tree");
   assert.equal(run.branch, "main");
   const message = incremental.messages[0];
-  assert.equal(message.source_ts, "2026-01-01T00:00:03Z");
+  assert.equal(message.source_ts, "2026-01-01T00:00:03.000Z");
   assert.equal(message.source, "host-claude");
   assert.equal(message.confidence, "confirmed");
-  assert.equal(incremental.approvals[0].requested_ts, "2026-01-01T00:00:04Z");
+  assert.equal(incremental.approvals[0].requested_ts, "2026-01-01T00:00:04.000Z");
 });

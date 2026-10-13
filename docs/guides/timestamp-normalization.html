@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>台帳の時刻正規化・棚卸しと補完手順</title>
+<style>body{font-family:system-ui,sans-serif;color:#1a1a1a;max-width:1080px;margin:40px auto;padding:0 20px;line-height:1.65}h1{font-size:1.7rem}h2{margin-top:2rem;font-size:1.2rem}table{border-collapse:collapse;width:100%;font-size:.9rem;margin:1rem 0}th,td{border:1px solid #ccc;text-align:left;padding:5px 9px}th{background:#eee}code,pre{font-family:ui-monospace,monospace}pre{background:#f5f5f5;padding:14px;overflow:auto}td{overflow-wrap:anywhere}</style>
+<h1>台帳の時刻正規化</h1>
+<p>本番の台帳を <code>DatabaseSync(..., { readOnly: true })</code> と <code>PRAGMA query_only = ON</code> で開き、同じ読み取りトランザクション内で集計した。完了時刻は 2026-10-13T12:20:39.263Z、上限 seq は 291,156。本番のファイル・.endpoint は変更しておらず、api と runner の再起動もしていない。</p>
+<h2>原因と変更</h2>
+<p>旧 append は Date.parse による妥当性検査のみを行い、入力の文字列をそのまま保存していた。kit の +0900 は SQLite が解釈できず、Codex の小数秒の桁数差は文字列の比較と食い違う。台帳の source_ts・observed_ts と投影・検索索引の時刻を UTC・ミリ秒 3 桁の Z 形式にする。ミリ秒未満は切り捨てる。時差がない日時も明示的に UTC と解釈する。append の時刻列は 2 月 30 日など存在しない日付を含めて拒否する。投影と補完では解釈できない時刻を元の値で保持し、後続の事実の反映を止めない。</p>
+<p>payload と payload_hash、fact_id、source_event_id は変更しない。payload 内の時刻は、投影へ取り出すときにだけ変換する。任意の本文・証拠の中身は正規化の対象外。entity_records と projection_records の時刻、および pending_inputs の source_ts も揃える。</p>
+<h2>取り込み元</h2>
+<table><thead><tr><th>経路</th><th>入力と混入点</th><th>対応</th></tr></thead><tbody><tr><td>Claude transcript</td><td>api/observe/claude/index.ts が履歴の timestamp を source_ts に渡す。今回の本番値は全件 Z・3 桁。</td><td>共通 append と投影出口で正規化</td></tr>
+<tr><td>Codex rollout</td><td>api/observe/codex/index.ts の readTimestamp が妥当な文字列をそのまま渡す。今回 5 桁が 5 件、6 桁が 36 件。</td><td>共通 append で 3 桁に切り捨て</td></tr>
+<tr><td>kit</td><td>api/observe/kit/delegations.ts が events.jsonl の row.ts を直接渡す。今回 +0900 が 1,338 件。</td><td>共通 append と再読込の行照合に同じ関数を使用</td></tr>
+<tr><td>hook</td><td>api/hook/index.ts が event.source_ts を台帳と run payload に渡す。今回の本番値は全件 Z・3 桁。</td><td>台帳列は append、run の列は投影で正規化</td></tr>
+<tr><td>runner hosts / intake</td><td>ホストと受付は主に new Date().toISOString() で生成する。</td><td>すべて共通 append を通す</td></tr>
+<tr><td>api / ui</td><td>設定・操作・観測時刻は主に toISOString()。</td><td>共通 append。送信見張りの sent_ts も同じ関数で保存</td></tr>
+<tr><td>legacy migration</td><td>旧 DB の日時を渡す。今回の本番値は全件 Z・3 桁。</td><td>再移行の版照合も正規化。最初の依頼の選択は実時刻で比較</td></tr></tbody></table>
+<table><thead><tr><th>source</th><th>source_ts の書式</th><th>件数</th><th>julianday NULL</th></tr></thead><tbody><tr><td>hook</td><td>Z;fraction=3</td><td>7423</td><td>0</td></tr>
+<tr><td>host-antigravity</td><td>Z;fraction=3</td><td>33</td><td>0</td></tr>
+<tr><td>host-claude</td><td>Z;fraction=3</td><td>21</td><td>0</td></tr>
+<tr><td>host-codex</td><td>Z;fraction=3</td><td>30</td><td>0</td></tr>
+<tr><td>intake</td><td>Z;fraction=3</td><td>114</td><td>0</td></tr>
+<tr><td>kit</td><td>+0900;fraction=0</td><td>1338</td><td>1338</td></tr>
+<tr><td>kit</td><td>Z;fraction=3</td><td>235</td><td>0</td></tr>
+<tr><td>legacy</td><td>Z;fraction=3</td><td>13577</td><td>0</td></tr>
+<tr><td>rollout-codex</td><td>Z;fraction=3</td><td>84314</td><td>0</td></tr>
+<tr><td>rollout-codex</td><td>Z;fraction=5</td><td>5</td><td>0</td></tr>
+<tr><td>rollout-codex</td><td>Z;fraction=6</td><td>36</td><td>0</td></tr>
+<tr><td>transcript-claude</td><td>Z;fraction=3</td><td>183977</td><td>0</td></tr>
+<tr><td>ui</td><td>Z;fraction=3</td><td>53</td><td>0</td></tr></tbody></table>
+<h2>全時刻列の棚卸し</h2>
+<p><code>fraction=N</code> は小数秒 N 桁。NULL は欠損値で、julianday NULL 欄は非 NULL の文字列が変換不能な件数だけを示す。numeric は既存の数値索引・期限であり、文字列には変換しない。message_name_inputs.source_time と conversation_name_candidates.source_time は Unix ミリ秒、api_message_order.timestamp は Julian day、deadline_ms は Unix ミリ秒または内部の待ち状態値である。</p>
+<table><thead><tr><th>表</th><th>列</th><th>書式</th><th>件数</th><th>julianday NULL</th></tr></thead><tbody><tr><td>api_conversation_summaries</td><td>last_message_ts</td><td>NULL</td><td>1432</td><td>0</td></tr>
+<tr><td>api_conversation_summaries</td><td>last_message_ts</td><td>Z;fraction=3</td><td>1658</td><td>0</td></tr>
+<tr><td>api_message_order</td><td>timestamp</td><td>numeric</td><td>120937</td><td>0</td></tr>
+<tr><td>api_send_watches</td><td>sent_ts</td><td>Z;fraction=3</td><td>11</td><td>0</td></tr>
+<tr><td>api_send_watches</td><td>deadline_ms</td><td>NULL</td><td>2</td><td>0</td></tr>
+<tr><td>api_send_watches</td><td>deadline_ms</td><td>numeric</td><td>9</td><td>0</td></tr>
+<tr><td>api_send_watches</td><td>closed_ts</td><td>NULL</td><td>1</td><td>0</td></tr>
+<tr><td>api_send_watches</td><td>closed_ts</td><td>Z;fraction=3</td><td>10</td><td>0</td></tr>
+<tr><td>api_send_watches</td><td>failed_ts</td><td>NULL</td><td>10</td><td>0</td></tr>
+<tr><td>api_send_watches</td><td>failed_ts</td><td>Z;fraction=3</td><td>1</td><td>0</td></tr>
+<tr><td>approvals</td><td>requested_ts</td><td>Z;fraction=3</td><td>2</td><td>0</td></tr>
+<tr><td>connections</td><td>last_evidence_ts</td><td>行なし</td><td>0</td><td>0</td></tr>
+<tr><td>conversation_name_candidates</td><td>source_time</td><td>numeric</td><td>6247</td><td>0</td></tr>
+<tr><td>conversations</td><td>created_ts</td><td>NULL</td><td>1</td><td>0</td></tr>
+<tr><td>conversations</td><td>created_ts</td><td>Z;fraction=3</td><td>3091</td><td>0</td></tr>
+<tr><td>facts</td><td>source_ts</td><td>+0900;fraction=0</td><td>1338</td><td>1338</td></tr>
+<tr><td>facts</td><td>source_ts</td><td>Z;fraction=3</td><td>289777</td><td>0</td></tr>
+<tr><td>facts</td><td>source_ts</td><td>Z;fraction=5</td><td>5</td><td>0</td></tr>
+<tr><td>facts</td><td>source_ts</td><td>Z;fraction=6</td><td>36</td><td>0</td></tr>
+<tr><td>facts</td><td>observed_ts</td><td>Z;fraction=3</td><td>291156</td><td>0</td></tr>
+<tr><td>message_name_inputs</td><td>source_time</td><td>numeric</td><td>118000</td><td>0</td></tr>
+<tr><td>messages</td><td>source_ts</td><td>Z;fraction=3</td><td>118000</td><td>0</td></tr>
+<tr><td>runs</td><td>started_ts</td><td>NULL</td><td>919</td><td>0</td></tr>
+<tr><td>runs</td><td>started_ts</td><td>Z;fraction=3</td><td>2458</td><td>0</td></tr>
+<tr><td>runs</td><td>ended_ts</td><td>NULL</td><td>1720</td><td>0</td></tr>
+<tr><td>runs</td><td>ended_ts</td><td>Z;fraction=3</td><td>1657</td><td>0</td></tr>
+<tr><td>runs</td><td>last_evidence_ts</td><td>Z;fraction=3</td><td>3377</td><td>0</td></tr>
+<tr><td>runs</td><td>turn_started_ts</td><td>NULL</td><td>3371</td><td>0</td></tr>
+<tr><td>runs</td><td>turn_started_ts</td><td>Z;fraction=3</td><td>6</td><td>0</td></tr>
+<tr><td>search_documents</td><td>source_ts</td><td>Z;fraction=3</td><td>143597</td><td>0</td></tr></tbody></table>
+<h2>JSON 投影の時刻欄</h2>
+<table><thead><tr><th>表</th><th>投影 / 実体</th><th>欄</th><th>書式</th><th>件数</th></tr></thead><tbody><tr><td>projection_records</td><td>approvals</td><td>requested_ts</td><td>Z;fraction=3</td><td>2</td></tr>
+<tr><td>projection_records</td><td>conversations</td><td>created_ts</td><td>NULL</td><td>1</td></tr>
+<tr><td>projection_records</td><td>conversations</td><td>created_ts</td><td>Z;fraction=3</td><td>3091</td></tr>
+<tr><td>projection_records</td><td>messages</td><td>source_ts</td><td>Z;fraction=3</td><td>118000</td></tr>
+<tr><td>projection_records</td><td>runs</td><td>ended_ts</td><td>Z;fraction=3</td><td>1657</td></tr>
+<tr><td>projection_records</td><td>runs</td><td>last_evidence_ts</td><td>Z;fraction=3</td><td>3377</td></tr>
+<tr><td>projection_records</td><td>runs</td><td>started_ts</td><td>Z;fraction=3</td><td>2458</td></tr>
+<tr><td>projection_records</td><td>runs</td><td>turn_started_ts</td><td>Z;fraction=3</td><td>6</td></tr>
+<tr><td>entity_records</td><td>run</td><td>ended_ts</td><td>Z;fraction=3</td><td>1908</td></tr>
+<tr><td>entity_records</td><td>run</td><td>last_evidence_ts</td><td>Z;fraction=3</td><td>3018</td></tr>
+<tr><td>entity_records</td><td>run</td><td>started_ts</td><td>Z;fraction=3</td><td>2458</td></tr></tbody></table>
+<p>pending_inputs の時刻欄はこのスナップショットでは 0 件。専用の時刻列を持たない表も PRAGMA table_info で確認した：</p>
+<p>aliases, api_conversation_ids, api_observation_cursors, api_project_resolution, api_projection_changes, api_projects, artifacts, command_receipts, delegation_runs, delegations, entity_records, fact_projection_dependencies, findings, message_memberships, projection_records, projection_state, relations, run_commit_results, run_subjects, runner_projection_version, schema_version, search_body_sources, search_dirty, search_fts, search_fts_config, search_fts_content, search_fts_data, search_fts_docsize, search_fts_idx, search_references, search_sources, search_state, tasks</p>
+<h2>source payload 内の時刻（変更しない）</h2>
+<table><thead><tr><th>source</th><th>欄</th><th>書式</th><th>件数</th></tr></thead><tbody><tr><td>hook</td><td>ended_ts</td><td>Z;fraction=3</td><td>1427</td></tr>
+<tr><td>hook</td><td>last_evidence_ts</td><td>Z;fraction=3</td><td>4730</td></tr>
+<tr><td>hook</td><td>started_ts</td><td>Z;fraction=3</td><td>1432</td></tr>
+<tr><td>host-antigravity</td><td>ended_ts</td><td>Z;fraction=3</td><td>3</td></tr>
+<tr><td>host-antigravity</td><td>started_ts</td><td>Z;fraction=3</td><td>3</td></tr>
+<tr><td>host-claude</td><td>ended_ts</td><td>Z;fraction=3</td><td>1</td></tr>
+<tr><td>host-claude</td><td>started_ts</td><td>Z;fraction=3</td><td>1</td></tr>
+<tr><td>host-codex</td><td>ended_ts</td><td>Z;fraction=3</td><td>1</td></tr>
+<tr><td>host-codex</td><td>started_ts</td><td>Z;fraction=3</td><td>1</td></tr>
+<tr><td>legacy</td><td>ended_ts</td><td>Z;fraction=3</td><td>251</td></tr>
+<tr><td>legacy</td><td>started_ts</td><td>Z;fraction=3</td><td>333</td></tr>
+<tr><td>rollout-codex</td><td>ended_ts</td><td>Z;fraction=3</td><td>226</td></tr>
+<tr><td>rollout-codex</td><td>last_evidence_ts</td><td>Z;fraction=3</td><td>5319</td></tr>
+<tr><td>transcript-claude</td><td>last_evidence_ts</td><td>Z;fraction=3</td><td>23424</td></tr>
+<tr><td>transcript-claude</td><td>started_ts</td><td>Z;fraction=3</td><td>692</td></tr></tbody></table>
+<h2>比較箇所の確認</h2>
+<table><thead><tr><th>箇所</th><th>処理</th></tr></thead><tbody><tr><td>core/projections/conversations.ts</td><td>混在した古い事実から created_ts の最小値を選ぶ前に正規化</td></tr>
+<tr><td>core/projections/index.ts・roots.ts</td><td>正規化済みの投影から活動時刻と根の順序を選ぶ。文字列比較を維持</td></tr>
+<tr><td>core/projections の事実比較、input-queue.ts</td><td>Date.parse の数値比較を維持。ミリ秒未満の扱いも共通の Date 精度</td></tr>
+<tr><td>core/search.ts</td><td>索引の source_ts と検索の from/to 引数を正規化。julianday で期間と順序を判定</td></tr>
+<tr><td>core/ledger.ts・index.ts</td><td>observed_ts と purgePayloads の境界引数を正規化。境界と同時刻の行は保持</td></tr>
+<tr><td>api/ws/settings.ts</td><td>コロンなしの正負の時差に対応する CASE を維持。補完前でも最近の依頼を実時刻順で選ぶ</td></tr>
+<tr><td>api/service/projection-feed.ts</td><td>履歴の並び・活動時刻は投影の正規形を使用。外部から受けた履歴カーソルは共通関数で正規化</td></tr>
+<tr><td>api/service/summary-index.ts・runner/projection.ts・api/observe/session-query.ts</td><td>julianday / unixepoch は正規形の列を読む。補完時に式索引と API 補助索引を更新</td></tr>
+<tr><td>api/service/send-watch.ts</td><td>送信列を正規化。配達照合の seq と実時計の差を吸収する期限計算は、書式と別の仕様なので保持</td></tr>
+<tr><td>api/observe/kit/delegations.ts・api/migrate/index.ts</td><td>既存の保存済み UTC と外部の raw 時刻を同じ関数で照合。再取り込み時の冪等性を維持</td></tr>
+<tr><td>dashboard/app の graph/rows・activity・format・turns・roots・projection-client・RootViews</td><td>API が配る正規化済みの投影だけを文字列で比較する。表示文言・画面コードは変更なし</td></tr></tbody></table>
+<h2>既存データの適用手順</h2>
+<p><strong>offline rebuild と手動補完は不要。</strong>schema 版 14 と runner 投影版 11 を据え置く。api の配信開始後、観測 worker が補完を自動実行する。<code>--no-observe</code> でも実行し、<code>ledger_repairs</code> の <code>utc-milliseconds-v1</code> があれば次の起動では走査しない。完了印は補完と同じ取引で確定する。失敗はログに残して投影・配信を続け、完了印がないため次回起動で再試行する。全書き手には正規化する append が必要で、旧い書き手が残ると非正規形が再び入る。以下は調査・明示的な再適用のための任意の手順である。</p>
+<pre>node scripts/audit-ledger-timestamps.ts /path/to/ledger.db
+node scripts/normalize-ledger-timestamps.ts /path/to/ledger.db --apply
+node scripts/audit-ledger-timestamps.ts /path/to/ledger.db</pre>
+<p>この作業では本番への適用は未実施。補完は BEGIN IMMEDIATE と synchronous=FULL で原子的に行い、実際に違う時刻欄だけを UPDATE する。JSON 投影、式索引、API の発言時刻索引と最新発言の要約、誤った文字列最小値で選ばれた会話の作成時刻も補う。変更があれば projection_state.generation だけを 1 増やして画面の resync を促す（schema / 投影版の引き上げではない）。書き込み失敗は完了印を含めて全体を rollback。不正な既存時刻は変更せず残す。明示的な再実行も冪等である。</p>
+<h2>レビュー修正後の大規模台帳での実測</h2>
+<p>2026-10-13、Node 24.6.0。読み取り専用接続と query_only の読み取り取引から SQLite backup を使い、7,005,245,440 bytes（7.01 GB）、293,791 事実のスナップショットを作業ツリー内に作成した。複製に対してのみ書き込み、api と runner の本番プロセス・.endpoint は変更していない。測定では観測と hook を無効にした実際の observation-worker を使用し、同じ DB の読み取り専用接続で 10 ms 間隔の読み取りも行った。</p>
+<table><thead><tr><th>項目</th><th>実測</th></tr></thead><tbody>
+<tr><td>修正前の同期補完</td><td>3,655 ms</td></tr>
+<tr><td>修正版の worker ready（補完前）</td><td>878.19 ms。完了印なしで ready を返す</td></tr>
+<tr><td>配信開始後に行う初回補完</td><td>4,076.93 ms、facts 1,445 行を更新</td></tr>
+<tr><td>完了印ありの次回起動</td><td>worker ready 860.30 ms、補完の確認 0.66 ms、変更 0 件</td></tr>
+<tr><td>初回の親スレッドでの読み取り</td><td>414 回、最大 0.068 ms。10 ms タイマーの最大間隔 12.36 ms</td></tr>
+</tbody></table>
+<p>補完を同期で起動経路に追加すると、この標本では約 4.08 秒延びる。その待ち時間を配信開始後へ移したため、起動は補完完了を待たない。数値は 1 回ずつのローカル実測であり、全 HTTP 経路の応答時間や最大負荷での上限ではない。原子性を保つため、補完中の約 4 秒は書き込みロックを保持する。runner の追記はロックを待ち、観測 worker の append と投影も補完完了後に再開する。WAL の読み取りと親スレッドは継続する。</p>
+<p>前後の全行の seq、fact_id、source_event_id、payload、payload_hash を順序付きで SHA-256 に集約し、完全一致を確認した。事実数と schema 14・runner 投影版 11 も不変だった。上の棚卸しとは取得時点が異なるため件数は異なる。</p>
+<h2>レビュー修正の検証</h2>
+<ul>
+<li>core 全体 414 件成功。追加・修正した時刻・設定履歴・自動補完の回帰試験 15 件も成功。</li>
+<li>API 全体 783 件を実行。完了ログが JSON 標準出力に混じる問題を修正し、該当する 1 万会話・10 万発言の試験を再実行して成功。Git 探索上限とソケットパス長を試験環境で直した再確認を含め、最終結果は 762 成功、21 skip、未解消の失敗 0。skip は socket の sandbox 制約による既存の条件であり、試験の判定や制限時間は緩めていない。</li>
+<li>旧実装で payload 時刻の例外、TZ 依存、存在しない日付の受理、生の +0900 行の履歴順序が失敗することを確認。自動補完だけを旧 worker に戻した作業ツリー内の別コピーでも、新しい起動試験が未完了で失敗した。</li>
+<li>補完の rollback 試験は、日時検証による例外から SQL 書き込み失敗の注入へ変更。時刻列・世代・完了印の原子性と、次回起動での再試行を確認。不正な既存値の保持は別の試験で固定した。</li>
+<li>全パッケージと scripts の型検査は、指定された daemon/src/http/views.ts:83 の既知エラーのみ。git diff --check 成功。pnpm の取得は ENOTFOUND のため、導入済み Node と TypeScript で package.json と同じ処理を直接実行した。</li>
+</ul>
+<h2>初回変更時の検証（レビュー修正前）</h2>
+<ul>
+<li>core: 410 件を実行。書式の期待値だけが旧形式だった 4 件を更新し、該当ファイル 35 件の再実行で全件成功。</li>
+<li>API: 779 件を実行。kit の再読込照合・正規形の期待値・作業ツリー内での試験環境を修正し、新規の再移行・再読込試験を含む該当 79 件を再実行して 73 成功、6 skip、失敗 0。残る skip は sandbox の socket 制約による。</li>
+<li>runner: 208 件を実行。作業ツリー内の一時ファイルが親の ESM 設定を継承したため、検証用の一時領域だけに CommonJS の package.json を置いて再実行し、対象 15 件成功。長い socket パスを相対パスにした 3 件は、sandbox の listen 制約により既存の条件で skip。試験の判定・時間制限は変更していない。</li>
+<li>追加の core 回帰 6 件は成功。変更前の実装を別ディレクトリへ展開し、新しい補完関数と同じ試験を載せると 5 件が失敗することを確認。並び順、julianday、検索と保持期間、payload 不変、補完の冪等性・rollback を固定した。</li>
+<li>既存性能試験: 5 万件の applyIncremental 合計は 39,246.2 / 40,788.8 ms（上限 60,000 ms）、100 件は 24.1 / 27.1 ms（上限 300 ms）。API の大量移行・履歴取り込み、runner の 20 万 / 40 万件の試験も成功。負荷による時間切れはなかった。</li>
+<li>全パッケージ・scripts の型検査: 指定された packages/daemon/src/http/views.ts:83 の既知エラー以外は成功。git diff --check 成功。</li>
+</ul>
+<p>npx --yes pnpm@10 は npm レジストリへの接続が ENOTFOUND、offline も ENOTCACHED で起動できなかったため、導入済み Node と TypeScript で package.json と同じ処理を直接実行した。テストの一時領域はすべてこの作業ツリー内。Git の探索上限を作業ツリーの根に設定し、非 Git ディレクトリの標本が親リポジトリを誤認しないようにした。ソケットの skip は本番 API / runner の起動ではなく、隔離された試験インスタンスに対する環境制約である。</p>
+<pre>TMPDIR="$PWD/.agents/tmp" node --import ./packages/core/test/setup.ts --test --test-concurrency=1 "packages/core/test/**/*.test.ts"
+TMPDIR="$PWD/t" GIT_CEILING_DIRECTORIES="$PWD" node --import ./packages/api/test/setup.ts --test --test-concurrency=1 "packages/api/test/**/*.test.ts"
+node node_modules/typescript/bin/tsc -p packages/core --noEmit
+node node_modules/typescript/bin/tsc -p packages/api --noEmit
+node node_modules/typescript/bin/tsc -p packages/runner --noEmit
+node node_modules/typescript/bin/tsc -p scripts --noEmit</pre>
+</html>

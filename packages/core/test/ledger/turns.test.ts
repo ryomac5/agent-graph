@@ -90,11 +90,11 @@ test("観測の根拠のある running は保ち、根拠が止まると idle �
   const started = run("running", "turn_started", "2026-10-07T00:00:01Z");
   const [running] = projectRuns([created, started]);
   assert.equal(running.state, "running");
-  assert.equal(running.last_evidence_ts, "2026-10-07T00:00:01Z");
+  assert.equal(running.last_evidence_ts, "2026-10-07T00:00:01.000Z");
   assert.equal(running.repository_id, "repo");
   const [idle] = projectRuns([started, created, run("idle", "turn_completed", "2026-10-07T00:05:00Z", { model: "claude-test" })]);
   assert.equal(idle.state, "idle");
-  assert.equal(idle.last_evidence_ts, "2026-10-07T00:05:00Z");
+  assert.equal(idle.last_evidence_ts, "2026-10-07T00:05:00.000Z");
   assert.equal(idle.model, "claude-test");
 });
 
@@ -133,12 +133,12 @@ test("ターンの開始を台帳から保持し、承認と道具で時計を�
   const tool = event("tool", "running", "tool_call", "2026-10-11T00:10:42Z");
   const approval = event("approval", "waiting_approval", "request_approval", "2026-10-11T00:11:00Z");
   for (const facts of [[start, tool], [start, tool, approval], [approval, tool, start]]) {
-    assert.equal(projectRuns(facts)[0].turn_started_ts, start.source_ts);
+    assert.equal(projectRuns(facts)[0].turn_started_ts, "2026-10-11T00:00:00.000Z");
   }
   const stop = event("stop", "idle", "turn_completed", "2026-10-11T00:12:00Z");
   assert.equal(projectRuns([start, tool, stop])[0].turn_started_ts, undefined);
   const next = event("next", "running", "turn_started", "2026-10-11T00:13:00Z");
-  assert.equal(projectRuns([next, stop, start, tool])[0].turn_started_ts, next.source_ts);
+  assert.equal(projectRuns([next, stop, start, tool])[0].turn_started_ts, "2026-10-11T00:13:00.000Z");
 });
 
 test("hook の running 中は transcript の turn_completed だけを無視する", () => {
@@ -149,12 +149,12 @@ test("hook の running 中は transcript の turn_completed だけを無視す�
   const start = event("hook", "running", { hook_event_name: "UserPromptSubmit" }, "2026-10-11T00:00:00Z");
   const completed = event("transcript-claude", "idle", { kind: "turn_completed" }, "2026-10-11T00:01:00Z");
   assert.equal(projectRuns([start, completed])[0].state, "running");
-  assert.equal(projectRuns([start, completed])[0].turn_started_ts, start.source_ts);
+  assert.equal(projectRuns([start, completed])[0].turn_started_ts, "2026-10-11T00:00:00.000Z");
   for (const [state, kind] of [["idle", "process_absent"], ["idle", "turn_interrupted"], ["waiting_approval", "request_approval"], ["running", "turn_started"]] as const) {
     const observed = event("transcript-claude", state, { kind }, "2026-10-11T00:02:00Z");
     const [run] = projectRuns([start, completed, observed]);
     assert.equal(run.state, state);
-    assert.equal(run.turn_started_ts, state === "idle" ? undefined : kind === "turn_started" ? observed.source_ts : start.source_ts);
+    assert.equal(run.turn_started_ts, state === "idle" ? undefined : kind === "turn_started" ? "2026-10-11T00:02:00.000Z" : "2026-10-11T00:00:00.000Z");
   }
   const absent = event("transcript-claude", "idle", { kind: "process_absent" }, "2026-10-11T00:02:00Z");
   const next = event("transcript-claude", "running", { kind: "turn_started" }, "2026-10-11T00:03:00Z");

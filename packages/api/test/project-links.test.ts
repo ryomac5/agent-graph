@@ -53,7 +53,7 @@ test("Claude の会話の記録から、作業ツリーの場所を本体のリ�
   assert.equal(conversation.repository_id, repositoryId);
   assert.equal(view.runs.length, 1);
   assert.equal(view.runs[0].state, "running");
-  assert.equal(view.runs[0].last_evidence_ts, "2026-10-07T01:00:00Z");
+  assert.equal(view.runs[0].last_evidence_ts, "2026-10-07T01:00:00.000Z");
   assert.equal(view.runs[0].repository_id, repositoryId);
   // 道具の呼び出しと結果はターンの途中なので、状態の事実を増やさない。
   assert.equal(facts(ledger).filter((fact) => fact.kind === "run.state_changed").length, 1);

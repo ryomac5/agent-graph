@@ -231,6 +231,7 @@ export type FactInput = {
     kind: K;
     subject: `${EntityKind}:${string}`;
     payload: FactPayloads[K];
+    // 入力は出所の書式を受け、台帳の列と投影は UTC・ミリ秒 3 桁で保持する。
     source_ts: string;
     observed_ts?: string;
     cursor?: string | null;

@@ -6,6 +6,7 @@ import { redactValue, validateRules } from "./redact.ts";
 import type { RedactionRules } from "./redact.ts";
 import { initializeSchema, FACT_SCHEMA_VERSION } from "./schema.ts";
 import { collectProjectionDependencies } from "./projections/dependencies.ts";
+import { normalizeTimestamp } from "./timestamps.ts";
 
 export const STORAGE_SCOPES = ["metadata", "message_body", "tool_output", "full_diff"] as const;
 export type StorageScope = typeof STORAGE_SCOPES[number];
@@ -75,9 +76,6 @@ function restrictPayload(value: JsonValue, level: number, toolBody = false): Jso
   if (value.body_state === "stored" && !("body" in result)) result.body_state = "omitted";
   return result;
 }
-function assertTimestamp(value: string): void {
-  if (!Number.isFinite(Date.parse(value))) throw new TypeError("時刻は有効な日時で指定してください");
-}
 function assertInput(input: FactInput): void {
   if (!SOURCES.includes(input.source) || !CONFIDENCES.includes(input.confidence)) {
     throw new TypeError("source または confidence が未対応です");
@@ -88,8 +86,6 @@ function assertInput(input: FactInput): void {
   }
   if (!input.source_event_id) throw new TypeError("source_event_id は必須です");
   if (action === "corrected" && !input.supersedes) throw new TypeError("訂正には supersedes が必須です");
-  assertTimestamp(input.source_ts);
-  if (input.observed_ts !== undefined) assertTimestamp(input.observed_ts);
 }
 
 function enableWal(db: DatabaseSync): void {
@@ -155,6 +151,8 @@ export function openLedger(path: string, options: LedgerOptions = {}): Ledger {
     },
     append(input) {
       assertInput(input);
+      const sourceTs = normalizeTimestamp(input.source_ts);
+      const observedTs = normalizeTimestamp(input.observed_ts ?? new Date().toISOString());
       // JSON 化で toJSON 等を解決してから秘匿する。生の本文は SQLite に渡さない。
       const plainPayload = JSON.parse(JSON.stringify(input.payload)) as JsonValue;
       const redacted = redactValue(plainPayload, rules) as JsonValue;
@@ -163,7 +161,6 @@ export function openLedger(path: string, options: LedgerOptions = {}): Ledger {
       // 規則がキー名も伏せる場合でも、保存範囲の判定を迂回させない。
       const payload = serializeCanonical(redactValue(restrictPayload(plainPayload, level), rules) as JsonValue);
       const factId = createFactId(input.source, input.source_event_id);
-      const observedTs = input.observed_ts ?? new Date().toISOString();
       return transact<AppendResult>(() => {
         const existing = findExisting.get(input.source, input.source_event_id);
         if (existing) {
@@ -174,7 +171,7 @@ export function openLedger(path: string, options: LedgerOptions = {}): Ledger {
         }
         const result = insert.run(
           factId, input.source, input.source_event_id, input.kind, input.subject,
-          payload, payloadHash, input.source_ts, observedTs, FACT_SCHEMA_VERSION,
+          payload, payloadHash, sourceTs, observedTs, FACT_SCHEMA_VERSION,
           input.cursor ?? null, input.confidence, input.supersedes ?? null,
         );
         const seq = Number(result.lastInsertRowid);
@@ -194,8 +191,8 @@ export function openLedger(path: string, options: LedgerOptions = {}): Ledger {
       } as Fact));
     },
     purgePayloads(before) {
-      assertTimestamp(before);
-      return transact(() => Number(purge.run(before).changes));
+      const cutoff = normalizeTimestamp(before);
+      return transact(() => Number(purge.run(cutoff).changes));
     },
     prunePayloads(retentionDays = DEFAULT_RETENTION_DAYS, now = new Date()) {
       if (!Number.isFinite(retentionDays) || retentionDays < 0) throw new RangeError("保持期間は非負の日数で指定してください");

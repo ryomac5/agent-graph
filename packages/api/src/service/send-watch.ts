@@ -1,3 +1,4 @@
+import { normalizeTimestamp } from '../../../core/src/ledger/timestamps.ts';
 import { setTimeout as delay } from 'node:timers/promises';
 import { DatabaseSync, type SQLOutputValue } from 'node:sqlite';
 import { getMessageText } from '../../../core/src/ledger/projections/messages.ts';
@@ -75,7 +76,7 @@ export class SendWatch {
       if (provider !== 'claude') return;
     }
     this.db.prepare('INSERT OR IGNORE INTO api_send_watches VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)')
-      .run(id, conversation, redact(body, this.rules()).text, captured.sent_ts, captured.baseline_seq, captured.busy_run,
+      .run(id, conversation, redact(body, this.rules()).text, normalizeTimestamp(captured.sent_ts), captured.baseline_seq, captured.busy_run,
         captured.busy_run ? null : Date.parse(captured.sent_ts) + SEND_WATCH_TIMEOUT_MS, 'pending', JSON.stringify(attachments));
   }
   async recordAccepted(id: string, conversation: string, body: string, captured: ReturnType<SendWatch['capture']>, attachments: string[] = [], retryOf?: string) {

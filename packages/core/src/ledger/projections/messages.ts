@@ -1,4 +1,5 @@
 import type { Fact, JsonValue } from "../facts.ts";
+import { normalizeTimestamp } from "../timestamps.ts";
 import { isClaudeHiddenMessage } from "../claude-message-flags.ts";
 import { normalizeClaudeContent } from "./claude-content.ts";
 import { compareFacts, compareText, createNativeId, projectConversationIds, projectEntities, serializeValue } from "./relations.ts";
@@ -91,7 +92,7 @@ export function projectMessages(facts: readonly Fact[]): MessageProjection {
     messages: visible.map((message) => {
       const origin = selectOrigin(message.id);
       return { ...message, ...normalizeClaudeContent(message),
-        source_ts: firstFacts.get(message.id)!.source_ts,
+        source_ts: normalizeTimestamp(firstFacts.get(message.id)!.source_ts),
         source_event_id: firstFacts.get(message.id)!.source_event_id,
         source: origin.source, confidence: origin.confidence,
       };

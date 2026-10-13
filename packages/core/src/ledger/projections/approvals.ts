@@ -1,4 +1,5 @@
 import type { ApprovalPayload, Fact } from "../facts.ts";
+import { normalizeTimestamp } from "../timestamps.ts";
 import { projectArtifacts } from "./artifacts.ts";
 import { compareProjectionFacts, prepareProjectionFacts, projectEntityRecords } from "./delegations.ts";
 
@@ -22,7 +23,7 @@ export function projectApprovals(facts: readonly Fact[]): ApprovalProjection[] {
       }
     }
     const requested = active.find((fact) => fact.subject === `approval:${record.id}` && (fact.kind === "approval.created" || fact.kind === "approval.corrected"));
-    if (requested) approval.requested_ts = requested.source_ts;
+    if (requested) approval.requested_ts = normalizeTimestamp(requested.source_ts);
     const resolved = active.some((fact) => fact.subject === `approval:${record.id}` && (fact.kind === "approval.resolved" || fact.kind === "approval.answered"));
     if (requested && !resolved && ["pending", "requested", "waiting", "waiting_approval"].includes(approval.state)) {
       const expired = active.some((fact) => fact.subject === `run:${approval.run_id}` && compareProjectionFacts(fact, requested) > 0

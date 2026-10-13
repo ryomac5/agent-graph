@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { Fact, Source } from "../facts.ts";
 import { compareText, projectEntities } from "./relations.ts";
 import type { ProjectedEntity } from "./relations.ts";
+import { normalizeTimestamp } from "../timestamps.ts";
 
 export type ProjectedProject = ProjectedEntity<"project">;
 
@@ -56,7 +57,7 @@ export function projectUnsupportedObservations(facts: readonly Fact[]): Unsuppor
     groups.set(key, {
       source_kind, format_name, format_version,
       count: (previous?.count ?? 0) + 1,
-      last_detected_ts: latest ? previous.last_detected_ts : fact.observed_ts,
+      last_detected_ts: latest ? previous.last_detected_ts : normalizeTimestamp(fact.observed_ts),
     });
   }
   return [...groups.entries()].sort(([left], [right]) => compareText(left, right)).map(([, value]) => value);

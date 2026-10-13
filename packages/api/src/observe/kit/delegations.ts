@@ -3,13 +3,13 @@ import { statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { createRequestId, fingerprintRequest, validateRequest, type IntakeRequest } from "../../../../core/src/intake/index.ts";
 import type { AppendResult, Confidence, Fact, FactInput, JsonValue, Ledger } from "../../../../core/src/ledger/index.ts";
-import { projectConversations, projectNames, projectProjects, searchNames } from "../../../../core/src/ledger/index.ts";
+import { normalizeTimestamp, projectConversations, projectNames, projectProjects, searchNames } from "../../../../core/src/ledger/index.ts";
 import { readInode, readAppendOnlyFile, type FileCursor } from "../files.ts";
 
 type Row = { [key: string]: JsonValue };
 class KitConflict extends Error {}
 function identifyRow(row: Row): string {
-  return JSON.stringify([row.session, row.node_id, row.ts, row.event]);
+  return JSON.stringify([row.session, row.node_id, normalizeTimestamp(String(row.ts)), row.event]);
 }
 interface Start {
   requestId: string;

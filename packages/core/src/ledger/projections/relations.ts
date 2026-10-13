@@ -1,4 +1,5 @@
 import type { EntityKind, EntityPayloads, Fact, JsonValue, RelationPayload } from "../facts.ts";
+import { normalizeTimestampFields } from "../timestamps.ts";
 
 export type ProjectedEntity<E extends EntityKind> = { id: string } & Partial<EntityPayloads[E]>;
 
@@ -92,7 +93,7 @@ export function projectEntities<E extends EntityKind>(
   const identities = new Map([...original].map(([id, row]) => [id, identify(row, id)]));
   const rows = [...identities].some(([id, canonical]) => id !== canonical)
     ? mergeRows((id) => identities.get(id)!) : original;
-  return [...rows.values()].sort((left, right) => compareText(left.id, right.id));
+  return [...rows.values()].map(normalizeTimestampFields).sort((left, right) => compareText(left.id, right.id));
 }
 
 export type ProjectedRelation = ProjectedEntity<"relation">;

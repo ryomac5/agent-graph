@@ -3,6 +3,8 @@ import { openLedger as openBaseLedger, type LedgerOptions, type Ledger, BUSY_TIM
 import { initializeSchema } from "./schema.ts";
 import { collectProjectionDependencies } from "./projections/dependencies.ts";
 import { registerLedgerDatabase } from "./repository.ts";
+import { normalizeTimestamp } from "./timestamps.ts";
+export * from "./timestamps.ts";
 export * from "./facts.ts";
 export * from "./ledger.ts";
 export * from "./schema.ts";
@@ -77,7 +79,7 @@ export function openLedger(path: string, options: LedgerOptions = {}): Ledger {
     },
     purgePayloads(before) {
       const count = base.purgePayloads(before);
-      if (path === ":memory:") database.prepare("UPDATE facts SET payload = NULL WHERE payload IS NOT NULL AND julianday(observed_ts) < julianday(?)").run(before);
+      if (path === ":memory:") database.prepare("UPDATE facts SET payload = NULL WHERE payload IS NOT NULL AND julianday(observed_ts) < julianday(?)").run(normalizeTimestamp(before));
       return count;
     },
     prunePayloads(retentionDays = DEFAULT_RETENTION_DAYS, now = new Date()) {

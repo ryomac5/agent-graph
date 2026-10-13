@@ -1,6 +1,7 @@
 import type { Fact, JsonValue, RunPayload } from "../facts.ts";
 import { orderActiveFacts } from "./connections.ts";
 import { isTurnEvidence, rejectUnobservedLiveState } from "../turns.ts";
+import { normalizeTimestampFields } from "../timestamps.ts";
 
 // ホストと観測側は、この構造を end_evidence に正規化して追記する。
 export type EndEvidence =
@@ -151,6 +152,6 @@ export function projectRuns(facts: readonly Fact[]): RunProjection[] {
     run.last_evidence_ts ??= fact.source_ts;
     runs.set(key, run);
   }
-  return [...runs.values()]
+  return [...runs.values()].map(normalizeTimestampFields)
     .sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0);
 }

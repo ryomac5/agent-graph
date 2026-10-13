@@ -3,7 +3,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { createPagedIdentityFeed, PAGE_SIZE, TURN_START } from './fixtures/paged-identities.ts';
+import { createPagedIdentityFeed, PAGE_SIZE } from './fixtures/paged-identities.ts';
+
+const TURN_START = '2026-10-11T00:00:00.000Z';
 
 test('snapshot 全対応表と後続ページと既存 run の patch が旧形式の識別子を解決する', t => {
   const directory = mkdtempSync(join(tmpdir(), 'paged-identities-'));

@@ -2,6 +2,7 @@ import type { DelegationPayload, Fact, FactPayloads, JsonValue } from "../facts.
 import { isAbsolute } from "node:path";
 import { repoKey } from "../../paths.ts";
 import { projectProjects, type ProjectedProject } from "./projects.ts";
+import { normalizeTimestampFields } from "../timestamps.ts";
 
 export interface DelegationAttempt {
   attempt: number;
@@ -104,7 +105,7 @@ export function projectEntityRecords<P extends object>(facts: readonly Fact[], e
     const id = fact.subject.slice(entity.length + 1);
     records.set(id, { ...records.get(id), ...fact.payload, id } as Partial<P> & { id: string });
   }
-  return [...records.values()].sort((left, right) => left.id.localeCompare(right.id));
+  return [...records.values()].map(normalizeTimestampFields).sort((left, right) => left.id.localeCompare(right.id));
 }
 function serializeRequest(value: unknown): string {
   if (value === undefined) return "undefined";

@@ -66,7 +66,7 @@ export class SendWatch {
   record(id: string, conversation: string, body: string, captured: ReturnType<SendWatch['capture']>, attachments: string[] = []) {
     if (body.trimStart().startsWith('/')) return;
     this.db.prepare('INSERT OR IGNORE INTO api_send_watches VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)')
-      .run(id, conversation, redact(body, this.rules()).text, captured.sent_ts, captured.baseline_seq, captured.busy_run,
+      .run(id, conversation, redact(body, this.rules()).text, normalizeTimestamp(captured.sent_ts), captured.baseline_seq, captured.busy_run,
         captured.busy_run ? null : Date.parse(captured.sent_ts) + SEND_WATCH_TIMEOUT_MS, 'pending', JSON.stringify(attachments));
   }
   async recordAccepted(id: string, conversation: string, body: string, captured: ReturnType<SendWatch['capture']>, attachments: string[] = [], retryOf?: string) {
@@ -214,3 +214,4 @@ export class SendWatch {
   }
   close() { this.stopped = true; this.queued.clear(); this.db.close(); }
 }
+import { normalizeTimestamp } from '../../../core/src/ledger/timestamps.ts';

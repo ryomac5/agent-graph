@@ -42,7 +42,7 @@ test("serve preview reads kit descriptions/tasks and ledger titles with source d
     assert.equal(preview.total, 6);
     assert.equal(preview.changed, 5);
     assert.deepEqual(preview.rows.map(row => row.description), ["Improve settings preview", "Fix request summaries", "", "Ledger request title", "Older ledger request"]);
-    assert.deepEqual(preview.rows.slice(0, 3).map(row => row.timestamp), ["2026-10-12T18:30:00+0900", "2026-10-12T09:20:00Z", "2026-10-12T18:10:00+09:00"]);
+    assert.deepEqual(preview.rows.slice(0, 3).map(row => row.timestamp), ["2026-10-12T09:30:00.000Z", "2026-10-12T09:20:00.000Z", "2026-10-12T09:10:00.000Z"]);
     assert.ok(preview.rows.every(row => row.role === "implement"));
     assert.deepEqual(preview.roleChanges.map(change => change.role), ["implement"]);
     assert.equal(observation.ledger.readSince(0, 1000).length, factsBefore);
@@ -86,7 +86,7 @@ test("serve preview selects the newest 100 requests across mixed offsets and out
     assert.equal(preview.total, POLICY_HISTORY_LIMIT);
     assert.equal(preview.changed, POLICY_HISTORY_LIMIT);
     assert.deepEqual(preview.rows.map(row => row.description), [119, 118, 117, 116, 115].map(index => `Request ${index}`));
-    assert.deepEqual(preview.rows.map(row => row.timestamp), [119, 118, 117, 116, 115].map(index => readTimestamp(index, index % 2 ? "+0900" : index % 4 ? "+09:00" : "Z")));
+    assert.deepEqual(preview.rows.map(row => row.timestamp), [119, 118, 117, 116, 115].map(index => readTimestamp(index, "Z").replace("Z", ".000Z")));
     // 境界の依頼だけを変更対象から外し、101 件目が代わりに入らないことも確かめる。
     observation.ledger.append({ source: "intake", source_event_id: "boundary-update", source_ts: readTimestamp(olderCount, "+09:00"),
       kind: "delegation.created", subject: "delegation:boundary", confidence: "confirmed",

@@ -41,12 +41,10 @@ export function createServeSettings(observation: ReturnType<typeof openObservati
     ...transport,
     history() {
       const rows: PastDelegation[] = [];
-      // SQLite が読める時差にそろえ、取り込み順によらず最近の依頼を選ぶ。
+      // 台帳の時刻列は書き込み時と既存行の補完で UTC に揃える。
       for (const row of db.prepare(`SELECT subject, payload, source_ts FROM facts
         WHERE kind = 'delegation.created' AND payload IS NOT NULL
-        ORDER BY julianday(CASE WHEN source_ts GLOB '*[+-][0-9][0-9][0-9][0-9]'
-          THEN substr(source_ts, 1, length(source_ts) - 2) || ':' || substr(source_ts, -2)
-          ELSE source_ts END) DESC, seq DESC`).iterate()) {
+        ORDER BY julianday(source_ts) DESC, seq DESC`).iterate()) {
         const payload = readObject(JSON.parse(String(row.payload)));
         // 移行済みの元依頼は constraints.request にあり、除外条件もそこから復元する。
         const legacyRequest = readObject(readObject(payload.constraints).request);

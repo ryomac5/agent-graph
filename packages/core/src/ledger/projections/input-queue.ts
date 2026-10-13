@@ -3,6 +3,7 @@ import { getMessageText } from "./messages.ts";
 import { compareText, projectConversationIds } from "./relations.ts";
 import { normalizeClaudeContent } from "./claude-content.ts";
 import { projectRuns } from "./runs.ts";
+import { normalizeTimestamp } from "../timestamps.ts";
 
 export interface PendingInput {
   id: string;
@@ -49,7 +50,7 @@ export function projectInputQueues(facts: readonly Fact[]): Map<string, PendingI
     const body = normalized.body ?? event.body;
     if (event.operation === "enqueue" && body !== undefined && normalized.role === "user"
       && !/^(?:<(?:agent-message|task-notification)\b|Your claude\.ai usage limit has reset\.)/u.test(text)) {
-      queue.push({ id: fact.source_event_id, body, source_ts: fact.source_ts,
+      queue.push({ id: fact.source_event_id, body, source_ts: normalizeTimestamp(fact.source_ts),
         ...(event.delivery_id ? { delivery_id: event.delivery_id } : {}), state: "queued" });
     } else if (event.operation === "dequeue") {
       queue.shift();

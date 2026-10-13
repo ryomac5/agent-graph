@@ -1,4 +1,5 @@
 import type { ConnectionPayload, Fact } from "../facts.ts";
+import { normalizeTimestampFields } from "../timestamps.ts";
 
 export interface ConnectionProjection extends ConnectionPayload { id: string }
 
@@ -40,5 +41,5 @@ export function projectConnections(facts: readonly Fact[]): ConnectionProjection
       last_evidence_ts: payload.last_evidence_ts ?? fact.source_ts,
     } as ConnectionProjection);
   }
-  return [...connections.values()].sort((left, right) => compareText(left.id, right.id));
+  return [...connections.values()].map(normalizeTimestampFields).sort((left, right) => compareText(left.id, right.id));
 }

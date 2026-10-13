@@ -27,7 +27,7 @@ test("旧い subject の会話へ native ID の enqueue を結び、snapshot と
   const rows = patch.changes.conversations.upsert;
   assert.equal(rows.length, 1);
   assert.equal(rows[0].id, id);
-  assert.deepEqual(rows[0].pending_inputs, [{ id: "input-queue:session:0001", body: "First line\nSecond line", source_ts: timestamp, state: "queued" }]);
+  assert.deepEqual(rows[0].pending_inputs, [{ id: "input-queue:session:0001", body: "First line\nSecond line", source_ts: "2026-10-13T00:00:00.000Z", state: "queued" }]);
   const before = feed.snapshot().projection.conversations;
   rebuild(db); feed.refresh();
   assert.deepEqual(feed.snapshot().projection.conversations, before);

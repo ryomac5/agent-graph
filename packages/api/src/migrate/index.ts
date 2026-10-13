@@ -8,6 +8,7 @@ import type { GitRunner, ProjectLocation } from "../../../core/src/ledger/reposi
 import type { AppendResult, Confidence, Fact, FactInput, FactKind, FactPayloads, JsonValue, Ledger, Provider } from "../../../core/src/ledger/index.ts";
 import type { BatchLedger } from "../service/batch-ledger.ts";
 import { extractProvisionalName } from "../../../core/src/ledger/projections/conversations.ts";
+import { normalizeTimestamp } from "../../../core/src/ledger/timestamps.ts";
 
 const FALLBACK_TS = "1970-01-01T00:00:00.000Z";
 const FACT_BATCH_SIZE = 1000;
@@ -63,7 +64,7 @@ function readLatestVersions(ledger: Ledger): Map<string, LegacyVersion> {
       if (!Array.isArray(identity) || (identity.length !== 5 && identity.length !== 6)
         || !identity.every((value) => typeof value === "string") || identity[3] !== fact.kind) continue;
       versions.set(JSON.stringify(identity.slice(0, 4)), { fact_id: fact.fact_id, source_event_id: fact.source_event_id,
-        source_ts: fact.source_ts, confidence: fact.confidence, subject: fact.subject, digest: identity[4] });
+        source_ts: normalizeTimestamp(fact.source_ts), confidence: fact.confidence, subject: fact.subject, digest: identity[4] });
     }
     seq = facts.at(-1)!.seq;
   }
@@ -256,7 +257,7 @@ function migrateSnapshot(
   const catalogById = new Map(catalog.map(row => [JSON.stringify([row.namespace, String(row.id)]), row]));
   const namespace = JSON.stringify(repos.map((row) => String(row.key)).sort());
   const firstRequests = new Map<string, string>();
-  for (const row of [...turns].sort((a, b) => String(a.at).localeCompare(String(b.at)) || String(a.id).localeCompare(String(b.id)))) {
+  for (const row of [...turns].sort((a, b) => Date.parse(String(a.at)) - Date.parse(String(b.at)) || String(a.id).localeCompare(String(b.id)))) {
     if (row.hidden === 1 || !readText(row, "prompt")?.trim()) continue;
     if (!firstRequests.has(String(row.session_id))) firstRequests.set(String(row.session_id), String(row.prompt));
   }
@@ -298,7 +299,8 @@ function migrateSnapshot(
     const versionKey = JSON.stringify(identity);
     const previous = versions.get(versionKey);
     const digest = hash(JSON.stringify(payload));
-    const unchanged = previous?.digest === digest && previous.source_ts === ts
+    const timestamp = normalizeTimestamp(ts);
+    const unchanged = previous?.digest === digest && previous.source_ts === timestamp
       && previous.confidence === confidence && previous.subject === subject;
     // 直前の版を置き換える。以前の内容に戻っても新しい版として追記する。
     const source_event_id = unchanged ? previous.source_event_id
@@ -307,7 +309,7 @@ function migrateSnapshot(
     const result = appendFact(ledger, { source: "legacy", source_event_id, kind, subject, payload,
       source_ts: ts, confidence, ...(supersedes ? { supersedes } : {}) } as FactInput);
     if (result.status === "conflict") throw new Error(`移行の事実が衝突しました: ${table}`);
-    versions.set(versionKey, { fact_id: result.fact_id, source_event_id, digest, source_ts: ts, confidence, subject });
+    versions.set(versionKey, { fact_id: result.fact_id, source_event_id, digest, source_ts: timestamp, confidence, subject });
     report.facts[kind] = (report.facts[kind] ?? 0) + 1;
     if (confidence === "unknown") report.unknown += 1;
     if (confidence === "inferred") report.inferred += 1;

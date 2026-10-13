@@ -8,6 +8,7 @@ import { normalizeClaudeContent } from './projections/claude-content.ts';
 import { projectRuns } from './projections/runs.ts';
 import { createNativeId, projectConversationIds } from './projections/relations.ts';
 import { prepareProjectionFacts } from './projections/delegations.ts';
+import { normalizeTimestamp } from './timestamps.ts';
 
 export const SEARCH_KINDS = ['message', 'tool_output', 'diff', 'finding', 'task', 'alias'] as const;
 export type SearchKind = typeof SEARCH_KINDS[number];
@@ -432,7 +433,7 @@ export function refreshSearch(db: DatabaseSync, added?: readonly Fact[], allFact
       const row = { id, fact_id: fact.fact_id, subject: fact.subject, kind,
         body: text || null, reason: !text && hasPurgedAncestor(originalById.get(fact.fact_id)!) ? 'retention' : !text ? 'storage_scope_or_unavailable' : null,
         conversation_id: conversationId, run_id: runId, message_id: messageId,
-        project: projectId, provider, source_ts: fact.source_ts, confidence: fact.confidence,
+        project: projectId, provider, source_ts: normalizeTimestamp(fact.source_ts), confidence: fact.confidence,
         identifiers: [...new Set([fact.subject, messageId, conversationId, runId, taskId, projectId].filter(Boolean))].join(' ') };
       insert.run(...columns.map(column => row[column as keyof typeof row] as SQLInputValue));
       prepare(db, 'DELETE FROM search_body_sources WHERE document_id = ?').run(id);
@@ -478,8 +479,8 @@ export function searchLedger(db: DatabaseSync, input: SearchQuery, mode?: Search
     }
   }
   for (const field of ['project', 'provider', 'kind'] as const) if (input[field]) { conditions.push(`d.${field} = ?`); values.push(input[field]!); }
-  if (input.from) { conditions.push('julianday(d.source_ts) >= julianday(?)'); values.push(input.from); }
-  if (input.to) { conditions.push('julianday(d.source_ts) <= julianday(?)'); values.push(input.to); }
+  if (input.from) { conditions.push('julianday(d.source_ts) >= julianday(?)'); values.push(normalizeTimestamp(input.from)); }
+  if (input.to) { conditions.push('julianday(d.source_ts) <= julianday(?)'); values.push(normalizeTimestamp(input.to)); }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const total = Number(db.prepare(`SELECT count(*) AS count FROM search_documents d ${where}`).get(...values)!.count);
   const results = db.prepare(`SELECT d.* FROM search_documents d ${where} ORDER BY julianday(source_ts) DESC, id LIMIT ? OFFSET ?`)

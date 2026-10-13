@@ -4,7 +4,7 @@ import type { Language } from '../../lib/i18n.ts';
 import type { Row } from '../../lib/store.ts';
 import { formatClock } from '../../lib/format.ts';
 import { Markdown } from './Markdown.tsx';
-import { PREVIEW_LINES, readBody, readObject, readText } from './model.ts';
+import { PREVIEW_LINES, readMessageBody, readBody, readObject, readText } from './model.ts';
 import { agentReportText, visibleText } from '../../lib/message-body.ts';
 import type { Sender } from './participants.ts';
 import { Icon } from '../Icon.tsx';
@@ -18,17 +18,25 @@ const SOURCE_LABELS: Record<string, string> = {
 };
 export function sourceLabel(source: string): string { return SOURCE_LABELS[source] ?? source; }
 
+const contents = new WeakMap<Row, { blocks: Row[]; text: string }>();
+function readContent(row: Row) {
+  const cached = contents.get(row);
+  if (cached) return cached;
+  const blocks = Array.isArray(row.body) ? row.body.map(readObject) : [];
+  const text = visibleText(Array.isArray(row.body) ? blocks.filter(block => !['tool_use', 'tool_result', 'thinking'].includes(readText(block.type))).map(readBody).filter(Boolean).join('\n') : readMessageBody(row), Boolean(row.content_normalized));
+  const value = { blocks, text };
+  contents.set(row, value);
+  return value;
+}
 /** 本文がなく、道具の呼び出しか結果だけの発言。会話の中では、続くものをまとめて 1 行に畳む。 */
 export function isToolOnly(row: Row): boolean {
   if (!Array.isArray(row.body)) return false;
-  const blocks = row.body.map(readObject);
-  const text = visibleText(blocks.filter(block => !['tool_use', 'tool_result', 'thinking'].includes(readText(block.type))).map(readBody).filter(Boolean).join('\n'), Boolean(row.content_normalized));
+  const { blocks, text } = readContent(row);
   return !text && blocks.some(block => block.type === 'tool_use' || block.type === 'tool_result');
 }
 /** 画面に何も出さない発言。思考だけの行や、本文のない行である。道具の畳みを切らない。 */
 export function isBlank(row: Row): boolean {
-  const blocks = Array.isArray(row.body) ? row.body.map(readObject) : [];
-  const text = visibleText(Array.isArray(row.body) ? blocks.filter(block => !['tool_use', 'tool_result', 'thinking'].includes(readText(block.type))).map(readBody).filter(Boolean).join('\n') : readBody(row.body), Boolean(row.content_normalized));
+  const { blocks, text } = readContent(row);
   return !text && !blocks.some(block => block.type === 'tool_use' || block.type === 'tool_result') && row.body_state !== 'unavailable' && row.body_state !== 'omitted';
 }
 /** 畳んだ道具の呼び出しの数。結果だけの行は数えない。 */
@@ -47,7 +55,7 @@ function RenderMessage({ row, sender, showName = true, language = 'en', streamin
   // 裏の作業の通知は会話の中に出さない。子の報告は、エージェントの側に畳んだ報告として出す。
   if (sender.key === 'notification') return null;
   if (sender.key === 'agent_report') {
-    const report = row.content_normalized ? readBody(row.body) : agentReportText(readBody(row.body));
+    const report = row.content_normalized ? readMessageBody(row) : agentReportText(readMessageBody(row));
     const time = readText(row.source_ts);
     return <details className="message message-report" id={`message-${encodeURIComponent(String(row.id))}`} aria-label={t('agentReport')}>
       <summary><strong className="message-sender">{t('agentReport')}</strong>
@@ -56,8 +64,7 @@ function RenderMessage({ row, sender, showName = true, language = 'en', streamin
       <div className="message-bubble"><Markdown text={report}/></div>
     </details>;
   }
-  const blocks = (Array.isArray(row.body) ? row.body : []).map(readObject);
-  const rawText = visibleText(Array.isArray(row.body) ? blocks.filter(block => !['tool_use', 'tool_result', 'thinking'].includes(readText(block.type))).map(readBody).filter(Boolean).join('\n') : readBody(row.body), Boolean(row.content_normalized));
+  const { blocks, text: rawText } = readContent(row);
   const text = blocks.some(block => block.type === 'image') ? rawText.replace(/\[Image #\d+\]\s*/g, '').trim() : rawText;
   const lines = text.split('\n');
   const long = lines.length > PREVIEW_LINES;

@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ダッシュボード描画最適化 第2回</title>
+<style>
+  body { max-width: 960px; margin: 40px auto; padding: 0 24px; color: #1a1a1a; background: #fff; font: 16px/1.8 system-ui, sans-serif; }
+  h1 { font-size: 1.7rem; } h2 { margin-top: 2em; font-size: 1.25rem; }
+  table { width: 100%; border-collapse: collapse; font-size: .92rem; }
+  th, td { padding: 10px; border-bottom: 1px solid #ddd; text-align: left; vertical-align: top; }
+  th { background: #f3f5f8; } code { overflow-wrap: anywhere; }
+  pre { overflow: auto; padding: 16px; background: #f3f5f8; line-height: 1.5; }
+  .note { color: #626264; } a { color: #0031d8; }
+</style>
+<h1>ダッシュボード描画最適化 第2回</h1>
+<p>2026-10-13。作業開始時のコミットは <code>6d2c7ad</code>。
+提供された <code>perf2/out-after-prof/analysis.txt</code> と現在の実装を照合した。
+以下は計算回数と模擬通信の試験結果であり、本番ブラウザの改善時間ではない。本番の前後計測は利用者が行う。</p>
+
+<h2>変更と根拠</h2>
+<table>
+  <thead><tr><th>プロファイルの指摘</th><th>変更</th></tr></thead>
+  <tbody>
+    <tr><td>本文読取 57 ms、会話の描き直し 115 ms</td><td>発言の不変な行を WeakMap のキーにし、本文・表示用の分類・重複判定の署名を再利用する。構造化本文のブロックも再利用する。通常の文章への JSON.parse の試行を省く。別会話の patch で同じタイムラインができた場合は、グループ化を再実行しない。</td></tr>
+    <tr><td>隠れたグラフ 89 ms</td><td>現在の WorkspacePanel は既に非選択の graph を取り外す。残っていたモバイルで隠れるパネルと、非選択の会話本文について、親からの更新・投影の購読・時計を停止する。再表示で最新を読む。復元時の見出し登録、書きかけ、DOM と開閉状態は残す。タブの名前・状態は本文とは別に更新する。</td></tr>
+    <tr><td>根の一覧 70 ms、投影キャッシュ 44 ms</td><td>直前の state だけでなく、依存する表の参照の組でキャッシュする。複数の窓を交互に参照しても再計算しない。根の索引を画面間で共有し、本文時刻の索引は実行状態だけの更新では作り直さない。WorkspacePage の根の選択も、同じ依存判定に統一する。</td></tr>
+    <tr><td>毎秒の commit</td><td>Notifications と ConversationTabHeader には、現在のコードでは時計の購読がない。30 秒間の 0 commit を試験で固定した。RootStarted と LiveRelativeTime は日付だけで内容が変わるため、毎秒から現地時刻の深夜 0 時の更新へ変更した。実行中の経過秒数とタブのツールチップは毎秒更新する。</td></tr>
+    <tr><td>巻き戻し 60〜180 ms</td><td>既読の本文・分類・署名を再利用する。同じ時刻の場合だけ出所の識別子を比較する。scroll と wheel が同じフレームに届いたとき、末尾判定のレイアウト読み取りをまとめる。上へスクロールした操作は即座に追従へ反映し、古い窓を取得中の位置合わせは維持する。</td></tr>
+    <tr><td>会話を開いて最後の発言が見えるまで</td><td>snapshot の取得・解析・投影反映の後に窓を取得する直列の経路を、並行取得へ変えた。snapshot が会話の所属プロジェクトを確定すると Workbench が作り直されるため、先行取得を画面ストア単位で引き継ぐ。世代が一致した窓だけを表示し、不一致なら取り直す。変更ファイルの履歴は本文表示の後で取得する。</td></tr>
+  </tbody>
+</table>
+<p class="note">snapshot 約 2.9 MB の配信形式と api は変更していない。初回表示で snapshot の世代・所属を確認する待ちは残るが、本文窓の通信をその待ちに重ねる。</p>
+
+<h2>回数と時間の比較</h2>
+<table>
+  <thead><tr><th>同じ入力での条件</th><th>前</th><th>後</th></tr></thead>
+  <tbody>
+    <tr><td>200 発言を 30 回読む JSON.parse の呼び出し（開始時コミットの readBody と比較。失敗する試行を含む）</td><td>12,000 回</td><td>200 回</td></tr>
+    <tr><td>同じ試験のキャッシュ単体の比較（通常文の parse を省いた readBody と readMessageBody）</td><td>6,000 回</td><td>200 回。本文訂正は追加 1 回</td></tr>
+    <tr><td>2 種類の窓を交互に参照する 30 回の無関係な更新。開始時コミットの memoizeProjection と比較</td><td>60 回の計算</td><td>2 回。根の計算も 2 回、関連する run の変更で追加 1 回</td></tr>
+    <tr><td>1,000 発言、run の更新 30 回。本文時刻の索引の ID 読取</td><td>旧処理では毎回全件、計 30,000 回</td><td>初回構築後は 0 回</td></tr>
+    <tr><td>別会話の発言 patch 10 回</td><td>タイムラインの再グループ化 10 回</td><td>0 回</td></tr>
+    <tr><td>隠れたグラフに関連する patch 10 回と時計 10 秒</td><td>実ブラウザの指摘対象</td><td>行の計算 0 回。再表示で最新の failed を表示</td></tr>
+    <tr><td>非選択の会話への patch 10 回</td><td>更新のたびに描画</td><td>本文描画 0 回。再選択で seq 11 と書きかけを表示</td></tr>
+    <tr><td>30 秒の時計</td><td>RootStarted 30 commit</td><td>RootStarted 0、Notifications 0、ConversationTabHeader 0。日付切替は 1 commit。実行中のタブの時計は 30 commit</td></tr>
+    <tr><td>1 フレーム内の scroll 20 回と wheel 20 回</td><td>末尾判定 40 回</td><td>1 回</td></tr>
+    <tr><td>模擬通信：snapshot 250 ms、本文窓 100 ms</td><td>直列なら 350 ms</td><td>250 ms。本文窓は 1 回の取得</td></tr>
+  </tbody>
+</table>
+<p>開始時コミットとの比較は、同じ 200 件の本文と同じ 2 組の表を旧実装・新実装へ渡して計数した。
+時計、隠れたグラフ、送信と書きかけ、App の作業場復元を含む回帰試験は
+<code>packages/dashboard/app/src/test/render-performance-2.test.tsx</code> にある。
+世代の不一致、会話切替時の中止、snapshot 到着時の作業場再生成も検証する。</p>
+
+<h2>再実行</h2>
+<pre><code>builtin cd packages/dashboard
+node --run test:app -- src/test/render-performance-2.test.tsx src/test/render-calculations.test.ts src/test/conversation-performance.test.tsx --reporter=verbose --silent=false
+node --run test:app
+node --run build:app</code></pre>
+<p>直下の型検査は <code>node --run typecheck</code>。既存の daemon のエラーで後段が止まるため、
+dashboard、adapters、planner、scripts、dashboard/app も各 tsconfig で別途検査する。</p>
+
+<h2>受け入れ結果</h2>
+<ul>
+  <li>dashboard test:app：67 ファイル、820 件成功。負荷によるタイムアウトはなし。</li>
+  <li>dashboard build:app：成功。出力はこの作業ツリー内の dist。既存の大きなチャンクの警告あり。</li>
+  <li>直下の typecheck：既存の <code>packages/daemon/src/http/views.ts:83</code> の TS2322 のみ。後段の各パッケージも個別に検査し、新規エラーなし。</li>
+  <li>api は変更していないため、api の試験は対象外。</li>
+  <li>本番 api と runner の再起動、本番への配信、依存追加、コミットは行っていない。</li>
+</ul>
+</html>

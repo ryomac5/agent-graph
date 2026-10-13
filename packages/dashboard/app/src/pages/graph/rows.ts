@@ -1,6 +1,6 @@
 import type { DelegationTree, TreeNode } from '../tree/model.ts';
 import { toDisplayState } from '../../components/StateBadge.tsx';
-import { decodeStoredValue, readBody, readObject, readText } from '../../components/conversation/model.ts';
+import { decodeStoredValue, readMessageBody, readObject, readText } from '../../components/conversation/model.ts';
 import { isCompletedGraph, resolveChildRole, type ChildRole } from '../../lib/roots.ts';
 import type { Row, ScreenState } from '../../lib/store.ts';
 import type { Language } from '../../lib/i18n.ts';
@@ -68,7 +68,7 @@ export function readCurrentWork(state: ScreenState, conversationId: string, lang
 export function readReport(state: ScreenState, conversationId: string): string {
   const ids = new Set((state.projection.message_memberships ?? []).filter(row => row.conversation_id === conversationId && row.active !== 0 && row.active !== false).map(row => row.message_id));
   return (state.projection.messages ?? []).filter(row => ids.has(row.id) && row.role === 'assistant')
-    .toSorted((a, b) => readText(a.source_ts).localeCompare(readText(b.source_ts))).map(row => readBody(row.body).trim()).filter(Boolean).at(-1)?.split('\n')[0] ?? '';
+    .toSorted((a, b) => readText(a.source_ts).localeCompare(readText(b.source_ts))).map(row => readMessageBody(row).trim()).filter(Boolean).at(-1)?.split('\n')[0] ?? '';
 }
 export function readExpanded(values: string[]): Map<string, number> {
   return new Map(values.map(value => { const match = /^(.*)@(\d+)$/.exec(value); return match ? [match[1], Math.max(PAGE_SIZE, Number(match[2]))] : [value.replace(/^completed:/, 'today:'), PAGE_SIZE]; }));

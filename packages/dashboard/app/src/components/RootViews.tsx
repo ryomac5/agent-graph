@@ -11,7 +11,7 @@ import { dictionaries, type Language } from '../lib/i18n.ts';
 import type { DelegationTree, TreeNode } from '../pages/tree/model.ts';
 import { StatusDot, stateLabel } from './StateBadge.tsx';
 import { Icon } from './Icon.tsx';
-import { useNow } from './RelativeTime.tsx';
+import { useNow, useToday } from './RelativeTime.tsx';
 
 interface LogoShape { viewBox: string; paths: string[]; evenodd: boolean }
 const openaiShapes = new Map<string, Promise<LogoShape>>();
@@ -73,9 +73,9 @@ function RootTurnTime({ turn, language }: { turn?: WorkingTurn; language: Langua
 }
 
 function RootStarted({ start, language }: { start: number; language: Language }) {
-  const now = useNow();
+  const now = useToday();
   const iso = new Date(start).toISOString();
-  return <time className="root-time" dateTime={iso} title={formatWhen(iso, language)}>{formatStartedAt(start, now)}</time>;
+  return <time className="root-time" dateTime={iso} title={formatWhen(iso, language, now)}>{formatStartedAt(start, now)}</time>;
 }
 
 /** 根の会話の 1 行。1 行目に名前、2 行目に状態と動いている子の数と時刻を出す。 */

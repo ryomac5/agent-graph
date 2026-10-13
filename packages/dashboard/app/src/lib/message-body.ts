@@ -26,9 +26,27 @@ export function agentReportText(text: string): string {
   const end = report.search(/\n\s*That "other Claude session" is an agent/);
   return (end >= 0 ? report.slice(0, end) : report).replace(/^ {2}/gm, '').trim();
 }
+const bodies = new WeakMap<object, string>();
+const messages = new WeakMap<object, string>();
+/** 投影行は版ごとに置き換わる。古い発言を保持せず、同じ版の本文だけを再利用する。 */
+export function readMessageBody(row: { body?: unknown }): string {
+  if (messages.has(row)) return messages.get(row)!;
+  const text = readBody(row.body);
+  messages.set(row, text);
+  return text;
+}
 /** 保存済み本文と構造化レビュー結果を、一覧と会話で同じ表示にする。 */
 export function readBody(value: unknown): string {
+  if (value === null || typeof value !== 'object') return decodeBody(value);
+  if (bodies.has(value)) return bodies.get(value)!;
+  const text = decodeBody(value);
+  bodies.set(value, text);
+  return text;
+}
+function decodeBody(value: unknown): string {
   if (typeof value === 'string') {
+    // 通常の文章と数値は JSON を展開しても本文形式にならない。
+    if (!/^[\s]*["{\[]/.test(value)) return value;
     let decoded: unknown;
     try { decoded = JSON.parse(value); } catch { return value; }
     // 本文形式でない JSON（コードや道具の出力）は元の文字列を保つ。

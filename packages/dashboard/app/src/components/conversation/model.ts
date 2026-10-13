@@ -1,7 +1,7 @@
 import { compareEventOrder } from '../../../../../core/src/ledger/event-order.ts';
 import type { Row, ScreenState } from '../../lib/store.ts';
-import { readBody } from '../../lib/message-body.ts';
-export { readBody } from '../../lib/message-body.ts';
+import { readMessageBody } from '../../lib/message-body.ts';
+export { readBody, readMessageBody } from '../../lib/message-body.ts';
 
 export function decodeStoredValue(value: unknown): unknown {
   if (typeof value !== 'string') return value;
@@ -63,17 +63,22 @@ export function selectTimeline(state: ScreenState, conversationId: string): Time
 export function compareEntries(a: TimelineEntry, b: TimelineEntry): number {
   // 時刻が配られていない項目は時刻不明とし、順序を捏造しない。
   // 同じ時刻の項目は出所の識別子で並べ、旧い Codex の行の位置を数として比べる。
-  const tie = compareEventOrder(readText(a.row.source_event_id), readText(b.row.source_event_id)) || compareEventOrder(a.key, b.key);
+  const tie = () => compareEventOrder(readText(a.row.source_event_id), readText(b.row.source_event_id)) || compareEventOrder(a.key, b.key);
   // 時刻のない区切りは、会話がそこから始まったことを示すので先頭に置く。時刻のない発言は末尾に置く。
   const rank = (entry: TimelineEntry) => entry.time ? 1 : entry.kind === 'boundary' ? 0 : 2;
-  if (!a.time || !b.time) return rank(a) - rank(b) || tie;
+  if (!a.time || !b.time) return rank(a) - rank(b) || tie();
   const difference = Date.parse(a.time) - Date.parse(b.time);
-  return (Number.isFinite(difference) ? difference : a.time.localeCompare(b.time)) || tie;
+  return (Number.isFinite(difference) ? difference : a.time.localeCompare(b.time)) || tie();
 }
 
+const signatures = new WeakMap<Row, { time: string; value: string }>();
 /** テキストの格納形式が違っても、同じ発言を同じものとして扱う。 */
 export function messageSignature(row: Row, time: string): string {
+  const cached = signatures.get(row);
+  if (cached?.time === time) return cached.value;
   const body = decodeStoredValue(row.body);
-  const content = Array.isArray(body) && body.map(readObject).every(block => block.type === 'text') ? readBody(body) : body;
-  return JSON.stringify([readText(row.role) || 'assistant', content, time]);
+  const content = Array.isArray(body) && body.map(readObject).every(block => block.type === 'text') ? readMessageBody(row) : body;
+  const value = JSON.stringify([readText(row.role) || 'assistant', content, time]);
+  signatures.set(row, { time, value });
+  return value;
 }

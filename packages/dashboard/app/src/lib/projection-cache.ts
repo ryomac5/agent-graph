@@ -3,13 +3,19 @@ import type { ScreenState } from './store.ts';
 /** 不変の表をキーにする。同じ state の再計算と、無関係な patch での再計算を避ける。 */
 export function memoizeProjection<T>(tables: readonly string[], calculate: (state: ScreenState) => T): (state: ScreenState) => T {
   const cache = new WeakMap<ScreenState, T>();
-  let previous: ScreenState | undefined;
-  let value: T;
+  interface Entry { children: WeakMap<object, Entry>; result?: { value: T } }
+  const root: Entry = { children: new WeakMap() };
+  const absent = {};
   return state => {
     if (cache.has(state)) return cache.get(state)!;
-    if (!previous || previous.identities !== state.identities
-      || tables.some(table => previous!.projection[table] !== state.projection[table])) value = calculate(state);
-    previous = state;
+    // 呼び出し元が別の窓や古い state を挟んでも、同じ表の組を作り直さない。
+    let entry = root;
+    for (const key of [state.identities ?? absent, ...tables.map(table => state.projection[table] ?? absent)]) {
+      let child = entry.children.get(key);
+      if (!child) { child = { children: new WeakMap() }; entry.children.set(key, child); }
+      entry = child;
+    }
+    const value = (entry.result ??= { value: calculate(state) }).value;
     cache.set(state, value);
     return value;
   };

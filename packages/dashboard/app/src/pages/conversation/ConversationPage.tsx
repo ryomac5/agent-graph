@@ -74,6 +74,15 @@ const STICK_TO_BOTTOM_PX = 120;
 const LOAD_OLDER_THRESHOLD_PX = 80;
 const HOST_POLL_MS = 5000;
 const HOST_START_TIMEOUT_MS = 30000;
+const HOST_START_POLL_MS = 250;
+function waitForHost(signal: AbortSignal): Promise<void> {
+  return new Promise(resolve => {
+    if (signal.aborted) { resolve(); return; }
+    const finish = () => { clearTimeout(timer); signal.removeEventListener('abort', finish); resolve(); };
+    const timer = setTimeout(finish, HOST_START_POLL_MS);
+    signal.addEventListener('abort', finish, { once: true });
+  });
+}
 interface SessionHost { conversationId: string; terminalId: string; provider?: string; cwd?: string; disconnected?: boolean; projectId?: string; target?: { kind: string; id?: string } }
 function readHosts(result: unknown): SessionHost[] {
   const rows = readObject(result).hosts;
@@ -160,6 +169,12 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
   const requestedId = explicitId ?? params.conversation ?? '';
   const resolveConversation = (id: string) => state.identities?.conversations[id] ?? id;
   const conversationId = resolveConversation(requestedId);
+  const hostController = useRef<AbortController | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    hostController.current = controller;
+    return () => controller.abort();
+  }, []);
   const visibleConversation = useRef(conversationId);
   visibleConversation.current = conversationId;
   function isVisible(id: string) {
@@ -338,12 +353,14 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
   const projectId = resolveProjectId(state, readText(conversation?.project ?? task?.project ?? newSession?.projectId)
     || readText(state.projection.projects?.find(row => row.root_path === cwd.trim())?.id));
   const project = state.projection.projects?.find(row => row.id === projectId);
-  async function refreshHosts(): Promise<SessionHost[]> {
+  async function refreshHosts(signal: AbortSignal): Promise<SessionHost[]> {
     const ack = await client.command('session.hosts', {});
     if (!ack.ok) throw new Error(ack.error ?? t('failed'));
     const next = readHosts(ack.result);
-    setHosts(next);
-    setPendingHost(previous => next.some(host => host.terminalId === previous?.terminalId) ? undefined : previous);
+    if (!signal.aborted) {
+      setHosts(next);
+      setPendingHost(previous => next.some(host => host.terminalId === previous?.terminalId) ? undefined : previous);
+    }
     return next;
   }
   useEffect(() => {
@@ -578,10 +595,12 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
     setSentMessages(previous => [...previous, { id: messageId, conversationId, text: sent, acknowledged: false, known: new Set([...messageEntries.map(entry => entry.row.id), ...pendingInputs.map(row => row.id)]) }]);
     if (terminalConversation) {
       const sourceConversation = conversationId;
+      const signal = hostController.current!.signal;
       setPending(true); setError('');
       let destination = conversationId;
       try {
-        const current = await refreshHosts();
+        const current = await refreshHosts(signal);
+        if (signal.aborted) return;
         const existingPending = pendingHost?.conversationId === destination ? pendingHost : undefined;
         if (!current.some(host => host.conversationId === destination) && (starting || !existingPending)) {
           let resume: string | undefined;
@@ -593,27 +612,32 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
           let terminalId = existingPending?.terminalId;
           if (!terminalId) {
             const ack = await client.command('session.launch', { projectId, provider: provider || 'claude', ...(resume ? { resume } : {}), ...(model && model !== 'default' ? { model } : {}) });
+            if (signal.aborted) return;
             if (!ack.ok) throw new Error(ack.error ?? t('failed'));
             terminalId = readText(readObject(ack.result).terminalId);
             setPendingHost({ conversationId, terminalId });
           }
           const deadline = Date.now() + HOST_START_TIMEOUT_MS;
-          let next = await refreshHosts();
+          let next = await refreshHosts(signal);
+          if (signal.aborted) return;
           if (starting) {
             while (!next.some(host => host.terminalId === terminalId)) {
               if (!isVisible(sourceConversation)) return;
               if (Date.now() >= deadline) throw new Error(language === 'ja' ? '会話の開始を確認できません。' : 'Unable to confirm the session start.');
-              await new Promise(resolve => setTimeout(resolve, 250));
-              next = await refreshHosts();
+              await waitForHost(signal);
+              if (signal.aborted) return;
+              next = await refreshHosts(signal);
+              if (signal.aborted) return;
             }
             destination = next.find(host => host.terminalId === terminalId)!.conversationId;
           }
         }
         const ids = await attachments.upload();
-        if (!isVisible(sourceConversation)) return;
+        if (signal.aborted || !isVisible(sourceConversation)) return;
         const ack = await client.command('session.send', { conversationId: destination, text: sent, ...(ids.length ? { attachments: ids } : {}) });
         if (!ack.ok) throw new Error(['Invalid attachment', 'Invalid attachments', 'Attachment too large', 'Attachment transfer failed'].includes(ack.error ?? '') ? attachments.text.failed : ack.error ?? t('failed'));
         clearSentDraft(draftKey, sent);
+        if (signal.aborted) return;
         setSentMessages(previous => previous.map(message => message.id === messageId ? { ...message, conversationId: destination, acknowledged: true } : message));
         if (!isVisible(sourceConversation)) return;
         attachments.clear();
@@ -622,10 +646,11 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
           if (onConversation) onConversation(destination); else navigate(`/c/${encodeURIComponent(destination)}`);
         }
       } catch (reason) {
+        if (signal.aborted) return;
         if (reason instanceof Error && reason.message === 'no_host') setPendingHost(undefined);
         if (isVisible(sourceConversation)) setError(reason instanceof Error ? reason.message : String(reason));
         setSentMessages(previous => previous.filter(message => message.id !== messageId));
-      } finally { if (isVisible(sourceConversation)) setPending(false); }
+      } finally { if (!signal.aborted && isVisible(sourceConversation)) setPending(false); }
       return;
     }
     const launchPayload = { cwd: cwd.trim(), model: { model, ...(effort ? { effort } : {}) }, input: { text: sent } };

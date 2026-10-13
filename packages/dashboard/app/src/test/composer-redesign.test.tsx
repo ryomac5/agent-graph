@@ -7,7 +7,7 @@ import { ConversationPage } from '../pages/conversation/ConversationPage.tsx';
 import { createStore } from '../lib/store.ts';
 import { buildRows } from '../pages/graph/rows.ts';
 
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 it('resolves actual executor candidates before config, including legacy role arrays', () => {
   const claude = { executor: 'claude', model: 'opus' }; const codex = { executor: 'codex', model: 'gpt-6-astra' };
   expect(readRecommendedModel({ policy: { roles: { orchestrate: { standard: [codex, claude, { ...claude, model: 'sonnet' }] } } }, config: { agents: { claude: { model: 'haiku' } } } }, 'claude')).toBe('opus');
@@ -115,4 +115,37 @@ it('discards a default model response from the previous working directory', asyn
   await act(async () => first(response('Opus 5.5')));
   expect(screen.getByRole('button', { name: 'Model · Sonnet 5.5' })).toBeTruthy();
   expect(screen.queryByRole('button', { name: 'Model · Opus 5.5' })).toBeNull();
+});
+
+it.each(['poll', 'launch', 'hosts'] as const)('cancels session discovery on unmount while waiting for %s', async pending => {
+  vi.useFakeTimers();
+  const target = createStore();
+  target.setSnapshot({ seq: 1, generation: 0, projection: { projects: [{ id: 'p', root_path: '/repo' }] } });
+  target.setConnection('connected');
+  const ack = (result: unknown) => ({ type: 'ack' as const, cmd_id: 'cmd', ok: true, result });
+  let launched = false;
+  let complete: (() => void) | undefined;
+  const command = vi.fn(async (name: string) => {
+    if (name === 'session.launch') {
+      launched = true;
+      if (pending === 'launch') return new Promise<ReturnType<typeof ack>>(resolve => { complete = () => resolve(ack({ terminalId: 't' })); });
+      return ack({ terminalId: 't' });
+    }
+    if (name === 'session.hosts' && launched && pending === 'hosts') return new Promise<ReturnType<typeof ack>>(resolve => { complete = () => resolve(ack({ hosts: [] })); });
+    return ack({ hosts: [] });
+  });
+  const view = render(<MemoryRouter><ConversationPage target={target} client={{ command }} newSession={{ cwd: '/repo', projectId: 'p' }}/></MemoryRouter>);
+  await act(async () => {});
+  fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Begin' } });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
+  expect(command).toHaveBeenCalledWith('session.launch', expect.anything());
+  if (pending !== 'poll') expect(complete).toBeTypeOf('function');
+  view.unmount();
+  const calls = command.mock.calls.length;
+  await act(async () => { complete?.(); });
+  // 待機の Promise も解決し、後片付け後の再ポーリングを残さない。
+  expect(vi.getTimerCount()).toBe(0);
+  await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+  expect(command).toHaveBeenCalledTimes(calls);
+  expect(command.mock.calls.some(([name]) => name === 'session.send')).toBe(false);
 });

@@ -83,6 +83,7 @@ for (const provider of ['claude', 'codex'] as const) {
 test('startup waits for both warmup and quiet before pasting, then preserves paste and Enter spacing', async t => {
   const started = Date.now();
   t.mock.timers.enable({ apis: ['Date'], now: started });
+  t.mock.method(performance, 'now', () => Date.now() - started);
   const waits: number[] = [];
   const f = await createFixture(t, undefined, {
     quietMs: undefined, warmupMs: undefined, submitDelayMs: undefined,
@@ -105,6 +106,7 @@ test('startup waits for both warmup and quiet before pasting, then preserves pas
 test('continuous startup output uses one deadline from launch, including the first send', async t => {
   const started = Date.now();
   t.mock.timers.enable({ apis: ['Date'], now: started });
+  t.mock.method(performance, 'now', () => Date.now() - started);
   const waits: number[] = [];
   const f = await createFixture(t, undefined, {
     quietMs: undefined, warmupMs: undefined,
@@ -121,6 +123,37 @@ test('continuous startup output uses one deadline from launch, including the fir
   await f.handle('session.send', { conversationId, text: 'second' });
   assert.deepEqual(waits, []);
 });
+
+for (const output of ['none', 'startup', 'continuous'] as const) {
+  test(`a backward wall clock does not delay startup readiness with ${output} output`, async t => {
+    const started = Date.now();
+    t.mock.timers.enable({ apis: ['Date'], now: started });
+    let elapsed = 0;
+    t.mock.method(performance, 'now', () => elapsed);
+    const readyAt = output === 'continuous' ? 15_000 : output === 'startup' ? 3200 : 2500;
+    const f = await createFixture(t, undefined, {
+      quietMs: undefined, warmupMs: undefined,
+      wait: async ms => {
+        assert.ok(elapsed < readyAt, 'readiness must not wait for the wall clock to catch up');
+        assert.deepEqual(f.children[0].writes, []);
+        elapsed += ms;
+        t.mock.timers.tick(ms);
+        if (output === 'continuous' || output === 'startup' && elapsed === 2400) f.children[0].output('startup redraw');
+      },
+    });
+    await writeFile(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: SESSION }));
+    await f.launch(SESSION);
+    const result = await f.handle('session.hosts') as { hosts: { startedAt: string }[] };
+    assert.equal(result.hosts[0].startedAt, new Date(started).toISOString());
+    t.mock.timers.setTime(started - 3_600_000);
+    await f.handle('session.send', { conversationId, text: 'first' });
+    assert.equal(elapsed, readyAt);
+    assert.deepEqual(f.children[0].writes, ['\x15', '\x1b[200~first\x1b[201~', '\r']);
+    f.children[0].output('working');
+    await f.handle('session.send', { conversationId, text: 'second' });
+    assert.equal(elapsed, readyAt);
+  });
+}
 
 test('launch accepts supported providers, UUID resume and a plain model name', async t => {
   const f = await createFixture(t);

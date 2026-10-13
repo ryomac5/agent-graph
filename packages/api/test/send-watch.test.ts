@@ -15,7 +15,7 @@ import test, { type TestContext } from 'node:test';
 import { openLedger, type FactInput } from '../../core/src/ledger/index.ts';
 import { openObservationService } from '../src/service/index.ts';
 import { ProjectionFeed } from '../src/service/projection-feed.ts';
-import { SendWatch, SEND_WATCH_TIMEOUT_MS, SEND_WATCH_FAILED_RETENTION_MS, SEND_WATCH_CLOSED_RETENTION_MS, normalizeSentBody } from '../src/service/send-watch.ts';
+import { SendWatch, SEND_WATCH_TIMEOUT_MS, SEND_WATCH_FAILED_RETENTION_MS, SEND_WATCH_CLOSED_RETENTION_MS, SEND_WATCH_PENDING_MAX_AGE_MS, SEND_WATCH_CLEANUP_INTERVAL_MS, normalizeSentBody } from '../src/service/send-watch.ts';
 import { observeClaudeFile } from '../src/observe/claude/index.ts';
 
 const NOW = Date.parse('2026-10-13T10:00:00.000Z');
@@ -188,11 +188,13 @@ test('failed は24時間、closed と retried は7日で本文ごと削除する
   assert.equal(f.read('closed').state, 'closed');
   assert.equal(f.read('retried').state, 'retried');
   assert.equal(f.read('failed').state, 'failed');
+  f.watch.check(failedAt + SEND_WATCH_FAILED_RETENTION_MS - SEND_WATCH_CLEANUP_INTERVAL_MS);
   f.watch.check(failedAt + SEND_WATCH_FAILED_RETENTION_MS - 1);
   assert.ok(f.read('failed'));
   assert.equal(f.watch.check(failedAt + SEND_WATCH_FAILED_RETENTION_MS), true);
   assert.equal(f.read('failed'), undefined);
   assert.deepEqual(f.watch.list(), []);
+  f.watch.check(failedAt + SEND_WATCH_CLOSED_RETENTION_MS - SEND_WATCH_CLEANUP_INTERVAL_MS);
   f.watch.check(failedAt + SEND_WATCH_CLOSED_RETENTION_MS - 1);
   assert.ok(f.read('closed'));
   assert.ok(f.read('retried'));
@@ -402,3 +404,127 @@ for (const failure of ['busy', 'exception'] as const) {
     } finally { writer.close(); await a.api.close(); }
   });
 }
+
+test('5秒を超える BUSY はメモリに残し、次の check で記録と再送元の解消をやり直す', async t => {
+  const f = createFixture(t);
+  const errors = t.mock.method(console, 'error', () => {});
+  record(f);
+  f.watch.check(NOW + SEND_WATCH_TIMEOUT_MS);
+  const acceptedAt = NOW + SEND_WATCH_TIMEOUT_MS + 1;
+  t.mock.method(Date, 'now', () => acceptedAt);
+  const captured = f.watch.capture(CONVERSATION, NOW);
+  const writer = new DatabaseSync(join(f.directory, 'ledger.db'));
+  try {
+    writer.exec('BEGIN IMMEDIATE');
+    const started = performance.now();
+    await f.watch.recordAccepted('resend', CONVERSATION, 'Next step', captured, ['image-id'], 'send');
+    assert.ok(performance.now() - started >= 5000);
+    assert.equal(f.read('resend'), undefined);
+    assert.equal(f.watch.check(acceptedAt + 1000), false);
+    assert.equal(f.read('send').state, 'failed');
+    assert.ok(errors.mock.calls.some(call => call.arguments[0] === 'Send watch recording failed:'));
+    writer.exec('ROLLBACK');
+    assert.equal(f.watch.check(acceptedAt + 2000), true);
+    assert.equal(f.read('resend').state, 'pending');
+    assert.equal(f.read('resend').baseline_seq, captured.baseline_seq);
+    assert.equal(f.read('resend').sent_ts, new Date(acceptedAt).toISOString());
+    assert.equal(f.read('resend').deadline_ms, acceptedAt + SEND_WATCH_TIMEOUT_MS);
+    assert.deepEqual(JSON.parse(String(f.read('resend').attachments)), ['image-id']);
+    assert.equal(f.read('send').state, 'retried');
+    assert.equal(f.watch.check(acceptedAt + 2001), false);
+    assert.equal(f.watch.history(CONVERSATION).length, 2);
+  } finally { writer.close(); }
+});
+
+test('BUSY 以外の記録失敗も次の check でやり直す', async t => {
+  const f = createFixture(t);
+  t.mock.method(Date, 'now', () => NOW);
+  t.mock.method(console, 'error', () => {});
+  const record = t.mock.method(f.watch, 'record', () => { throw new Error('write unavailable'); });
+  await f.watch.recordAccepted('send', CONVERSATION, 'Next step', f.watch.capture(CONVERSATION, NOW));
+  record.mock.restore();
+  assert.equal(f.watch.check(NOW + 1), true);
+  assert.equal(f.read().state, 'pending');
+});
+
+test('壊れた行を失敗にして後続を評価し、壊れた添付も一覧の配信を止めない', t => {
+  const f = createFixture(t);
+  const errors = t.mock.method(console, 'error', () => {});
+  record(f, '');
+  f.watch.record('later', CONVERSATION, 'Delivered', f.watch.capture(CONVERSATION, NOW + 1));
+  addMessage(f, 'delivered', 'Delivered');
+  const writer = new DatabaseSync(join(f.directory, 'ledger.db'));
+  try { writer.prepare("UPDATE api_send_watches SET attachments = '{' WHERE id = 'send'").run(); }
+  finally { writer.close(); }
+  assert.equal(f.watch.check(NOW + 2), true);
+  assert.equal(f.read().state, 'failed');
+  assert.equal(f.read('later').state, 'closed');
+  assert.equal(f.read('later').message_id, 'delivered');
+  assert.deepEqual(f.watch.list()[0].attachments, []);
+  const failedAt = f.read().failed_ts;
+  f.watch.record('next', CONVERSATION, 'Next delivery', f.watch.capture(CONVERSATION, NOW + 3));
+  addMessage(f, 'next-delivered', 'Next delivery');
+  assert.equal(f.watch.check(NOW + 4), true);
+  assert.equal(f.read('next').state, 'closed');
+  assert.equal(f.read().failed_ts, failedAt);
+  assert.equal(errors.mock.callCount(), 1);
+});
+
+for (const queued of [false, true]) {
+  test(`終わらない実行の見張りは24時間で失敗にして一度だけ知らせる（待ち行列=${queued}）`, t => {
+    const f = createFixture(t, true);
+    const errors = t.mock.method(console, 'error', () => {});
+    record(f);
+    if (queued) {
+      f.append('conversation.input_queue_changed', `conversation:${CONVERSATION}`, { input_queue_event: { operation: 'enqueue', body: 'Next step' } }, NOW + 1);
+      f.feed.refresh();
+    }
+    assert.equal(f.watch.check(NOW + SEND_WATCH_PENDING_MAX_AGE_MS - 1), false);
+    assert.equal(f.read().state, 'pending');
+    assert.equal(f.watch.check(NOW + SEND_WATCH_PENDING_MAX_AGE_MS), true);
+    assert.equal(f.read().state, 'failed');
+    assert.equal(f.watch.list()[0].state, 'failed');
+    assert.match(String(errors.mock.calls[0].arguments[0]), /pending age limit exceeded/);
+    assert.equal(f.watch.check(NOW + SEND_WATCH_PENDING_MAX_AGE_MS + 1), false);
+    assert.equal(errors.mock.callCount(), 1);
+  });
+}
+
+test('掃除の DELETE は該当0件でも毎周期は走らず、1分間隔で走る', t => {
+  const f = createFixture(t);
+  const prepare = DatabaseSync.prototype.prepare;
+  let cleanups = 0;
+  t.mock.method(DatabaseSync.prototype, 'prepare', function (this: DatabaseSync, sql: string) {
+    if (sql.startsWith('DELETE FROM api_send_watches')) cleanups++;
+    return prepare.call(this, sql);
+  });
+  assert.equal(f.watch.check(NOW), false);
+  assert.equal(cleanups, 1);
+  for (let elapsed = 500; elapsed < SEND_WATCH_CLEANUP_INTERVAL_MS; elapsed += 500) f.watch.check(NOW + elapsed);
+  assert.equal(cleanups, 1);
+  f.watch.check(NOW + SEND_WATCH_CLEANUP_INTERVAL_MS);
+  assert.equal(cleanups, 2);
+});
+
+test('掃除が BUSY でも未配信の変更を返し、次の周期で掃除を繰り返さない', t => {
+  const f = createFixture(t);
+  t.mock.method(console, 'error', () => {});
+  record(f);
+  f.watch.check(NOW + SEND_WATCH_TIMEOUT_MS);
+  const retryAt = NOW + 2 * SEND_WATCH_TIMEOUT_MS;
+  f.watch.retry('send', CONVERSATION, retryAt);
+  const writer = new DatabaseSync(join(f.directory, 'ledger.db'));
+  const prepare = DatabaseSync.prototype.prepare;
+  let cleanups = 0;
+  t.mock.method(DatabaseSync.prototype, 'prepare', function (this: DatabaseSync, sql: string) {
+    if (sql.startsWith('DELETE FROM api_send_watches')) cleanups++;
+    return prepare.call(this, sql);
+  });
+  try {
+    writer.exec('BEGIN IMMEDIATE');
+    assert.equal(f.watch.check(retryAt), true);
+    assert.equal(cleanups, 1);
+    assert.equal(f.watch.check(retryAt + 500), false);
+    assert.equal(cleanups, 1);
+  } finally { writer.close(); }
+});

@@ -400,7 +400,7 @@ describe('Files explorer', () => {
   it('switches worktrees and lists the selected tree', async () => {
     const { client } = setup('?path=README.md');
     fireEvent.click(await screen.findByRole('button', { name: 'File' }));
-    await screen.findByRole('region', { name: 'Contents of README.md' }, { timeout: 3000 });
+    await screen.findByRole('region', { name: 'Contents of README.md' });
     const select = await screen.findByRole('combobox', { name: 'Worktree' });
     await waitFor(() => expect((select as HTMLSelectElement).disabled).toBe(false));
     expect(within(select).getAllByRole('option').map(option => option.textContent)).toEqual(['main · repo']);

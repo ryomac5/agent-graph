@@ -58,7 +58,7 @@ it('shows exactly eight initial lines and expands and collapses the complete mes
   expect(expand.getAttribute('aria-expanded')).toBe('false');
   fireEvent.click(expand);
   expect(shownLines().at(-1)).toBe('Line 12');
-  fireEvent.click(screen.getByRole('button', { name: 'Show first 8 lines' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Show less' }));
   expect(shownLines()).toHaveLength(8);
 });
 

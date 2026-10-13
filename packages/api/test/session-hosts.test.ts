@@ -3,8 +3,9 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
 import type { spawn } from 'node-pty';
-import { createSessionHosts, MAX_SCROLLBACK_BYTES } from '../src/terminal/hosts.ts';
+import { createSessionHosts, MAX_SCROLLBACK_BYTES, type HostOptions } from '../src/terminal/hosts.ts';
 import { escapeAttachmentPath } from '../src/terminal/attachments.ts';
 import type { TerminalNotification } from '../src/terminal/index.ts';
 
@@ -12,7 +13,7 @@ const HOST_DISCOVERY_TIMEOUT_MS = 5000;
 const HOST_DISCOVERY_POLL_MS = 10;
 const SESSION = '12345678-1234-1234-1234-123456789abc';
 const conversationId = JSON.stringify(['claude', SESSION]);
-async function createFixture(t: TestContext, waits?: number[]) {
+async function createFixture(t: TestContext, waits?: number[], options: HostOptions = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'ag session-hosts-'));
   const children: { pid: number; killed: boolean; writes: string[]; output: (data: string) => void; exit: (event: { exitCode: number }) => void }[] = [];
   const launches: { file: string; args: string[] | string; options: Parameters<typeof spawn>[2] }[] = [];
@@ -32,12 +33,94 @@ async function createFixture(t: TestContext, waits?: number[]) {
   const messages: TerminalNotification[] = [];
   const notify = (message: TerminalNotification) => messages.push(message);
   const hosts = createSessionHosts(async () => '/repo', { openTerminal, quietMs: 0, warmupMs: 0, sessionsDirectory: directory, attachments: { directory: join(directory, 'attachments') }, submitDelayMs: waits ? 500 : 0, wait: async ms => { waits?.push(ms); waitWrites.push([...children[0].writes]); },
-    listProcesses: async () => [{ pid: 2000, ppid: 1000 }, { pid: 3000, ppid: 2000 }, { pid: 9999, ppid: 1 }] });
+    listProcesses: async () => [{ pid: 2000, ppid: 1000 }, { pid: 3000, ppid: 2000 }, { pid: 9999, ppid: 1 }], ...options });
   t.after(async () => { hosts.close(); await rm(directory, { recursive: true, force: true }); });
   const handle = (command: string, payload: unknown = {}) => hosts.handle(command, payload, notify);
   const launch = (resume?: string) => handle('session.launch', { projectId: 'p', provider: 'claude', ...(resume ? { resume } : {}) }) as Promise<{ terminalId: string; pid: number }>;
   return { directory, children, launches, messages, hosts, notify, handle, launch, waitWrites };
 }
+
+for (const provider of ['claude', 'codex'] as const) {
+  test(`${provider}: a ready terminal acknowledges sends within one second during continuous output`, async t => {
+    let rollout = '';
+    const f = await createFixture(t, undefined, {
+      quietMs: undefined, warmupMs: undefined, submitDelayMs: undefined, wait: undefined,
+      targetOptions: { execute: async file => file === 'lsof' ? `n${rollout}` : '' },
+    });
+    rollout = join(f.directory, `rollout-test-${SESSION}.jsonl`);
+    await writeFile(rollout, JSON.stringify({ type: 'session_meta', payload: { id: SESSION, cwd: '/repo' } }));
+    await writeFile(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: SESSION }));
+    await f.handle('session.launch', { projectId: 'p', provider, resume: SESSION });
+    const id = JSON.stringify([provider, SESSION]);
+    const result = await f.handle('session.hosts') as { hosts: { conversationId: string }[] };
+    assert.equal(result.hosts[0].conversationId, id);
+    f.children[0].output('\x1b[?2004h');
+    // 最初のチャット送信より前に準備を終え、端末側で作業が始まった場合も含める。
+    await delay(3100);
+    let renders = 0;
+    const render = () => { renders++; f.children[0].output('\r\x1b[2K⠋ Working'); };
+    render();
+    const spinner = setInterval(render, 25);
+    t.after(() => clearInterval(spinner));
+    const image = await f.handle('attachment.put', { name: 'test.png', mime: 'image/png', dataBase64: 'iVBORw0KGgo=' }) as { attachmentId: string; path: string };
+    for (const withImage of [false, true]) {
+      const before = renders, started = performance.now();
+      const text = '日本語の入力\nsecond line';
+      const response = await f.handle('session.send', { conversationId: id, text,
+        ...(withImage ? { attachments: [image.attachmentId] } : {}) });
+      const elapsed = performance.now() - started;
+      t.diagnostic(`${provider} ${withImage ? 'image' : 'text'} send before ack: ${elapsed.toFixed(1)} ms`);
+      assert.ok(elapsed < 1100, `send took ${elapsed.toFixed(1)} ms`);
+      assert.deepEqual(response, {});
+      assert.ok(renders > before, 'output continues between paste and Enter');
+      assert.deepEqual(f.children[0].writes.splice(0), ['\x15',
+        ...(withImage ? [`\x1b[200~${escapeAttachmentPath(image.path)}\x1b[201~`] : []),
+        `\x1b[200~${withImage ? ' ' : ''}${text}\x1b[201~`, '\r']);
+    }
+  });
+}
+
+test('startup waits for both warmup and quiet before pasting, then preserves paste and Enter spacing', async t => {
+  const started = Date.now();
+  t.mock.timers.enable({ apis: ['Date'], now: started });
+  const waits: number[] = [];
+  const f = await createFixture(t, undefined, {
+    quietMs: undefined, warmupMs: undefined, submitDelayMs: undefined,
+    wait: async ms => {
+      waits.push(ms);
+      if (Date.now() - started < 3200) assert.deepEqual(f.children[0].writes, []);
+      else assert.equal(f.children[0].writes.at(-1), '\x1b[200~first\x1b[201~');
+      t.mock.timers.tick(ms);
+      if (Date.now() - started === 2400) f.children[0].output('startup redraw');
+    },
+  });
+  await f.launch(SESSION);
+  await writeFile(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: SESSION }));
+  await f.handle('session.hosts');
+  await f.handle('session.send', { conversationId, text: 'first' });
+  assert.deepEqual(waits, [...Array<number>(32).fill(100), 500]);
+  assert.deepEqual(f.children[0].writes, ['\x15', '\x1b[200~first\x1b[201~', '\r']);
+});
+
+test('continuous startup output uses one deadline from launch, including the first send', async t => {
+  const started = Date.now();
+  t.mock.timers.enable({ apis: ['Date'], now: started });
+  const waits: number[] = [];
+  const f = await createFixture(t, undefined, {
+    quietMs: undefined, warmupMs: undefined,
+    wait: async ms => { waits.push(ms); t.mock.timers.tick(ms); f.children[0].output('working'); },
+  });
+  await f.launch(SESSION);
+  await writeFile(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: SESSION }));
+  await f.handle('session.hosts');
+  t.mock.timers.tick(14_500);
+  f.children[0].output('working');
+  await f.handle('session.send', { conversationId, text: 'first' });
+  assert.deepEqual(waits, Array<number>(5).fill(100));
+  waits.length = 0;
+  await f.handle('session.send', { conversationId, text: 'second' });
+  assert.deepEqual(waits, []);
+});
 
 test('launch accepts supported providers, UUID resume and a plain model name', async t => {
   const f = await createFixture(t);

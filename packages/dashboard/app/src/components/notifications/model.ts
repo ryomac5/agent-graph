@@ -42,6 +42,13 @@ export function loadPreferences(storage?: Pick<Storage, 'getItem'>): Notificatio
     ['in_app', 'browser', 'silent'].includes(String(saved[kind])) ? saved[kind] : 'in_app'])) as NotificationPreferences;
 }
 const RECENT_MS = 2 * 60_000;
+const rowIndexes = new WeakMap<Row[], Map<unknown, Row>>();
+function indexRows(rows: Row[] | undefined): Map<unknown, Row> {
+  if (!rows) return new Map();
+  let index = rowIndexes.get(rows);
+  if (!index) { index = new Map(rows.map(row => [row.id, row])); rowIndexes.set(rows, index); }
+  return index;
+}
 export function collectNotifications(previous: ScreenState | undefined, next: ScreenState, language: Language = 'en', now = Date.now()): Notice[] {
   const notices: Notice[] = [];
   function add(kind: NotificationKind, row: Row, approvalId?: string) {
@@ -51,18 +58,23 @@ export function collectNotifications(previous: ScreenState | undefined, next: Sc
     notice.title = notificationLabel(kind, language); notice.detail = notificationDetail(notice, next, language);
     notices.push(notice);
   }
-  for (const row of next.projection.approvals ?? []) {
-    const before = previous?.projection.approvals?.find(entry => entry.id === row.id);
+  const approvalsBefore = indexRows(previous?.projection.approvals);
+  const runsBefore = indexRows(previous?.projection.runs);
+  for (const row of previous?.projection.approvals === next.projection.approvals ? [] : next.projection.approvals ?? []) {
+    const before = approvalsBefore.get(row.id);
+    if (before === row) continue;
     if (isPending(row) && (!before || !isPending(before))) add('approval', row, String(row.id));
   }
-  for (const row of next.projection.runs ?? []) {
-    const before = previous?.projection.runs?.find(entry => entry.id === row.id);
+  const pendingRuns = new Set((next.projection.approvals ?? []).filter(isPending).map(row => row.run_id));
+  for (const row of previous?.projection.runs === next.projection.runs ? [] : next.projection.runs ?? []) {
+    const before = runsBefore.get(row.id);
+    if (before === row) continue;
     if (before?.state === row.state) continue;
     // 一覧を後から読み足した古い行は、いま起きた変化ではない。前から知っている行か、直前に動いた行だけを通知する。
     const changed = Date.parse(readText(row.last_evidence_ts ?? row.ended_ts ?? row.started_ts));
     if (!before && !(Number.isFinite(changed) && now - changed < RECENT_MS)) continue;
     if (row.state === 'waiting_input') add('input', row);
-    if (row.state === 'waiting_approval' && !(next.projection.approvals ?? []).some(a => a.run_id === row.id && isPending(a))) add('approval', row);
+    if (row.state === 'waiting_approval' && !pendingRuns.has(row.id)) add('approval', row);
     // 初回の履歴取得を、新しく終了した実行として通知しない。
     const hasHistory = previous && Object.keys(previous.projection).length > 0;
     if (hasHistory && row.state === 'failed') add('failed', row);

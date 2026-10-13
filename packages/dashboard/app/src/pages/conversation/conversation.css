@@ -225,6 +225,4 @@
 .composer-provider-mark.provider-claude { color: var(--provider-claude); }
 .composer-provider-mark.provider-codex { color: var(--provider-codex); }
 
-.reply-line { display: flex; align-items: center; gap: var(--space-2); margin: 0 0 var(--space-3); padding: var(--space-3); color: var(--state-reply); background: var(--bg-3); border: 1px solid var(--state-reply); font: var(--type-ui); font-weight: 600; }
-.reply-required { color: var(--state-approval); border-color: var(--state-approval); font-weight: 600; }
 .tool-run-description { min-width: 0; color: var(--fg-2); }

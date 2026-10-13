@@ -26,7 +26,7 @@ export function rowEnd(row: GraphRow, language: Language, now: number): string {
   const state = toDisplayState(node.state);
   if (['starting', 'running'].includes(state)) return elapsed(row, now);
   if (state === 'waiting_approval') return ja ? '承認待ち' : 'Approval';
-  if (state === 'waiting_input') return ja ? 'あなたの番' : 'Your turn';
+  if (state === 'waiting_input') return ja ? '入力待ち' : 'Waiting for input';
   if (state === 'failed') return ja ? '失敗' : 'Failed';
   const verdict = String(node.delegation?.verdict ?? (/^Approved/.test(node.report ?? '') ? 'approve' : /^Changes requested/.test(node.report ?? '') ? 'request_changes' : ''));
   if (row.role === 'review' && verdict) return verdict === 'approve' ? (ja ? '合格' : 'Pass') : (ja ? '修正が必要' : 'Changes');

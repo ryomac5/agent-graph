@@ -17,15 +17,15 @@ function createFixture() {
   return target;
 }
 it('prefers user names, then the first conversation request, then the dated kit name', () => {
-  const state = createFixture().getSnapshot();
+  let state = createFixture().getSnapshot();
   let root = selectRoots(state)[0];
   expect(root.name).toBe('Custom');
   expect(root.auto_name).toBe(state.projection.conversations![0].first_request_excerpt);
   expect(root.kit_name).toBe('repo-001');
-  state.projection.roots![0].user_name = null;
+  state = { ...state, projection: { ...state.projection, roots: state.projection.roots.map(row => ({ ...row, user_name: null })) } };
   root = selectRoots(state)[0];
   expect(root.name).toBe(state.projection.conversations![0].first_request_excerpt);
-  state.projection.conversations![0].first_request_excerpt = null;
+  state = { ...state, projection: { ...state.projection, conversations: state.projection.conversations.map(row => ({ ...row, first_request_excerpt: null })) } };
   expect(selectRoots(state)[0].name).toBe('repo-20261012');
 });
 it('uses Claude evidence and Codex delegation descriptions, and ignores inactive relations', () => {
@@ -71,11 +71,11 @@ it('prefers user names, AI titles, first requests and existing names in conversa
   expect(conversationTitle({ ...conversation, user_name: null })).toBe('Generated');
   expect(conversationTitle({ ...conversation, user_name: null, ai_title: null })).toBe('Request');
   expect(conversationTitle({ ...conversation, user_name: null, ai_title: null, first_request_excerpt: null })).toBe('Existing');
-  const state = createFixture().getSnapshot();
+  let state = createFixture().getSnapshot();
   state.projection.conversations![0].ai_title = 'Generated';
   expect(selectRoots(state)[0].name).toBe('Custom');
   expect(selectRoots(state)[0].auto_name).toBe('Generated');
-  state.projection.roots![0].user_name = null;
+  state = { ...state, projection: { ...state.projection, roots: state.projection.roots.map(row => ({ ...row, user_name: null })) } };
   expect(selectRoots(state)[0].name).toBe('Generated');
   state.projection.relations = [{ type: 'delegated', to_id: 'first', evidence: { description: 'Delegated task' } }];
   expect(conversationName(state, 'first')).toBe('Delegated task');

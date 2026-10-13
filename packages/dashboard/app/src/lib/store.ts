@@ -1,4 +1,5 @@
-import { useSyncExternalStore } from 'react';
+import { useCallback, useSyncExternalStore } from 'react';
+import { shareValue } from './projection-cache.ts';
 import { mergeIdentities, resolveProjection, resolveRow, type ScreenIdentities } from './identities.ts';
 
 export type ConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'runner_unavailable';
@@ -8,20 +9,24 @@ export interface Patch { type: 'patch'; from_seq: number; seq: number; generatio
   changes: Record<string, { upsert: Row[]; remove: string[] }>; identities?: ScreenIdentities }
 export interface Delta { runId: string; text: string; conversationId?: string; messageId?: string; existingMessageIds?: string[] }
 export interface ScreenState extends Snapshot {
+  snapshotReady?: boolean;
   connection: ConnectionState;
   deltas: Record<string, Delta>;
   projectionError?: string;
 }
 export function createStore() {
-  let state: ScreenState = { seq: 0, generation: 0, projection: {}, connection: 'connecting', deltas: {} };
+  let state: ScreenState = { seq: 0, generation: 0, snapshotReady: false, projection: {}, connection: 'connecting', deltas: {} };
   const listeners = new Set<() => void>();
   function update(next: ScreenState) { state = next; for (const listener of listeners) listener(); }
   return {
     getSnapshot: () => state,
     subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
     setConnection: (connection: ConnectionState) => update({ ...state, connection }),
-    setSnapshot: (snapshot: Snapshot) => update({ ...state, ...snapshot, pages: snapshot.pages, projection: resolveProjection(snapshot.projection, snapshot.identities), deltas: {}, projectionError: undefined }),
-    setSendWatches: (rows: Row[]) => update({ ...state, projection: { ...state.projection, send_watches: rows } }),
+    setSnapshot: (snapshot: Snapshot) => update({ ...state, ...snapshot, snapshotReady: true, pages: snapshot.pages, projection: resolveProjection(snapshot.projection, snapshot.identities), deltas: {}, projectionError: undefined }),
+    setSendWatches: (rows: Row[]) => {
+      const shared = shareValue(state.projection.send_watches, rows);
+      if (shared !== state.projection.send_watches) update({ ...state, projection: { ...state.projection, send_watches: shared! } });
+    },
     clearDeltas: () => update({ ...state, deltas: {} }),
     mergeProjection(projection: Record<string, Row[]>, generation: number, identities = state.identities, pages = state.pages, projectionError = state.projectionError) {
       if (generation !== state.generation) return;
@@ -30,7 +35,7 @@ export function createStore() {
       for (const [table, incoming] of Object.entries(resolveProjection(projection, identities))) {
         const rows = new Map((next[table] ?? []).map(row => [String(row.id), row]));
         for (const row of incoming) if (!rows.has(String(row.id))) rows.set(String(row.id), row);
-        next[table] = [...rows.values()];
+        if (rows.size !== (next[table]?.length ?? 0)) next[table] = [...rows.values()];
       }
       update({ ...state, projection: next, identities, pages, projectionError });
     },
@@ -41,14 +46,16 @@ export function createStore() {
       const projection = identities === state.identities ? { ...state.projection } : resolveProjection(state.projection, identities);
       const deltas = { ...state.deltas };
       for (const [table, change] of Object.entries(patch.changes)) {
+        let changed = false;
         const rows = new Map((projection[table] ?? []).map(row => [String(row.id), row]));
-        for (const id of change.remove) rows.delete(String(resolveRow(table, { id }, state.identities).id));
+        for (const id of change.remove) if (rows.delete(String(resolveRow(table, { id }, state.identities).id))) changed = true;
         for (const source of change.upsert) {
           const row = resolveRow(table, source, identities);
-          rows.set(String(row.id), row);
+          const id = String(row.id);
+          const shared = shareValue(rows.get(id), row);
+          if (shared !== rows.get(id)) { rows.set(id, shared!); changed = true; }
         }
-        projection[table] = [...rows.values()];
-
+        if (changed) projection[table] = [...rows.values()];
       }
       const completed = patch.changes.messages?.upsert ?? [];
       for (const [key, delta] of Object.entries(deltas)) {
@@ -60,7 +67,8 @@ export function createStore() {
             && link.message_id === row.id && link.conversation_id === conversationId));
         if (messageComplete || conversationComplete) delete deltas[key];
       }
-      update({ ...state, seq: patch.seq, projection, deltas, identities });
+      update({ ...state, seq: patch.seq, projection: Object.keys(projection).every(table => projection[table] === state.projection[table]) ? state.projection : projection,
+        deltas: Object.keys(deltas).length === Object.keys(state.deltas).length ? state.deltas : deltas, identities });
       return true;
     },
     appendDelta(delta: Delta) {
@@ -76,6 +84,8 @@ export function createStore() {
 }
 export type ScreenStore = ReturnType<typeof createStore>;
 export const store = createStore();
-export function useScreenStore(target = store) {
-  return useSyncExternalStore(target.subscribe, target.getSnapshot, target.getSnapshot);
+const identity = (state: ScreenState) => state;
+export function useScreenStore<T = ScreenState>(target = store, selector: (state: ScreenState) => T = identity as (state: ScreenState) => T) {
+  const getSnapshot = useCallback(() => selector(target.getSnapshot()), [target, selector]);
+  return useSyncExternalStore(target.subscribe, getSnapshot, getSnapshot);
 }

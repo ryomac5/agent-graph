@@ -10,10 +10,13 @@ export function formatDuration(start: unknown, end: unknown, now: number): strin
   const seconds = Math.max(0, Math.floor((finish - beginning) / 1000));
   return seconds < 60 ? `${seconds}s` : seconds < 3600 ? `${Math.floor(seconds / 60)}m` : `${Math.floor(seconds / 3600)}h ${Math.floor(seconds % 3600 / 60)}m`;
 }
-export function useNow() {
+export function useNow(enabled = true) {
   const [now, setNow] = useState(Date.now);
-  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), TICK_MS); return () => clearInterval(timer); }, []);
+  useEffect(() => { if (!enabled) return; setNow(Date.now()); const timer = setInterval(() => setNow(Date.now()), TICK_MS); return () => clearInterval(timer); }, [enabled]);
   return now;
+}
+export function LiveRelativeTime(props: { value?: string; language?: Language }) {
+  return <RelativeTime {...props} now={useNow()}/>;
 }
 export function RelativeTime({ value, language = 'en', now }: { value?: string; language?: Language; now: number }) {
   const timestamp = value ? Date.parse(value) : NaN;

@@ -130,9 +130,9 @@ it('saves remapped keys through config, applies immediately and rejects duplicat
   expect(screen.getByRole('alert').textContent).toBe('Duplicate key binding');
   expect(client.command.mock.calls.filter(([name]) => name === 'settings.write')).toHaveLength(1);
 });
-it('refreshes watched bindings and prevents legacy approval keys after remapping', async () => {
+it('refreshes bindings on focus and prevents legacy approval keys after remapping', async () => {
   vi.useFakeTimers(); const { client, setKeys } = mount('/inbox'); await act(async () => {});
-  setKeys({ ...DEFAULT_KEYS, allow: 'x' }); await act(async () => vi.advanceTimersByTime(1500));
+  setKeys({ ...DEFAULT_KEYS, allow: 'x' }); await act(async () => { fireEvent.focus(window); });
   press('j'); await act(async () => press('a', document.activeElement!));
   expect(client.command.mock.calls.filter(([name]) => name === 'answer')).toHaveLength(0);
   await act(async () => press('x', document.activeElement!));
@@ -237,7 +237,7 @@ it('applies configurable sidebar and panel shortcuts', async () => {
   press('j', document, { metaKey: true });
   expect(localStorage.getItem('agent-graph-panel-collapsed')).toBe('1');
   setKeys({ ...DEFAULT_KEYS, toggleSidebar: 'Alt+L', togglePanel: 'Alt+R' });
-  await act(async () => { vi.advanceTimersByTime(1500); });
+  await act(async () => { fireEvent.focus(window); });
   press('b', document, { metaKey: true });
   expect(localStorage.getItem('agent-graph-sidebar-collapsed')).toBe('1');
   press('l', document, { altKey: true });

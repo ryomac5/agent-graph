@@ -1,7 +1,7 @@
 import { readSessionProvider, SESSION_PROVIDER_KEY } from '../../lib/session-start.ts';
 import { createPortal } from 'react-dom';
 import { SessionName } from '../../components/SessionName.tsx';
-import { useCallback, useContext, useEffect, useMemo, useLayoutEffect, useRef, useState } from 'react';
+import { memo, useCallback, useContext, useEffect, useMemo, useLayoutEffect, useRef, useState } from 'react';
 import { OpenWorkspaceConversation, OpenWorkspaceTerminal, WorkspaceConversationHeader, type ConversationTabMetadata } from '../../lib/workspace-context.ts';
 import { useAutosizeTextarea } from './useAutosizeTextarea.ts';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
@@ -14,9 +14,8 @@ import type { Language } from '../../lib/i18n.ts';
 import { dictionaries } from '../../lib/i18n.ts';
 import { approvalOutcome, approvalReasonText, type ApprovalOutcome, conversationName, conversationStart, decisionLabel, evidenceLabel, formatClock, agentName, modelName, isPositiveDecision, readApprovalRequest, readModel, runLabel, worktreeLabel } from '../../lib/format.ts';
 import { AppLink } from '../../components/AppLink.tsx';
-import { StateBadge } from '../../components/StateBadge.tsx';
 import { reasonText } from '../../lib/reasons.ts';
-import { RelativeTime } from '../../components/RelativeTime.tsx';
+import { LiveRelativeTime } from '../../components/RelativeTime.tsx';
 import { Icon } from '../../components/Icon.tsx';
 import { Fields } from '../../components/Fields.tsx';
 import { ApprovalRequestView, OutcomeChip, OutcomeIcon } from '../../components/ApprovalRequest.tsx';
@@ -24,7 +23,7 @@ import { providerName } from '../../components/ActivityRow.tsx';
 import { executionStates } from '../../components/activity.ts';
 import { isBlank, isToolOnly, Message, ToolRun } from '../../components/conversation/Message.tsx';
 import { harnessKind, readBody } from '../../lib/message-body.ts';
-import { collectToolResults } from '../../components/conversation/ToolCall.tsx';
+import { useToolResults } from '../../components/conversation/ToolCall.tsx';
 import { resolveParticipants, senderOf, type Sender } from '../../components/conversation/participants.ts';
 import { ACTIVE_STATES, compareEntries, messageSignature, PENDING_APPROVALS, readObject, readText, selectTimeline, showValue, type TimelineEntry } from '../../components/conversation/model.ts';
 import { ChoiceMenu } from '../../components/ChoiceMenu.tsx';
@@ -35,13 +34,15 @@ import { collectConversationChanges } from '../../lib/conversation-changes.ts';
 import { resolveProjectId } from '../../lib/projects.ts';
 import { ChangedFiles } from './ChangedFiles.tsx';
 import { groupToolRuns, instructionKind } from '../../components/conversation/timeline.ts';
-import { isDelegationTool, resolveDelegationNode } from '../../components/conversation/DelegationCard.tsx';
+import { isDelegationTool, useDelegationNodes } from '../../components/conversation/DelegationCard.tsx';
 import { currentRootConversation, selectRoots, useRootIndex } from '../../lib/roots.ts';
-import { resolveReplyStatus } from '../../lib/reply-status.ts';
+import { useConversationDraft } from '../../lib/conversation-draft.ts';
 import { describeTool, waitsOnBackground } from '../../components/conversation/tool-activity.ts';
 import { resolveActivity } from '../../lib/activity.ts';
-import { isWorkingTurn, useTurnConversations, useWorkingTurn, workingElapsed } from '../../lib/turns.ts';
+import { isWorkingTurn, useTurnConversations, useWorkingTurn } from '../../lib/turns.ts';
 import { useAttachments, MAX_ATTACHMENTS } from './useAttachments.ts';
+import { selectScreenTables } from '../../lib/projection-cache.ts';
+import { WorkingTimer, WorkingStateBadge } from '../../components/conversation/WorkingClock.tsx';
 import './conversation.css';
 
 export type ConversationClient = Pick<ReturnType<typeof createClient>, 'command'> & Partial<Pick<ReturnType<typeof createClient>, 'watchConversation' | 'fetchConversation' | 'subscribeTerminal' | 'subscribeConnected'>>;
@@ -68,7 +69,6 @@ function isStoppedEvidence(value: unknown): boolean {
 }
 const SUPPORTED_FORMATS = ['jsonl', 'legacy', 'paginated'];
 const EMPTY_PROJECTION: Record<string, Row[]> = {};
-const TICK_MS = 1000;
 const STICK_TO_BOTTOM_PX = 120;
 const LOAD_OLDER_THRESHOLD_PX = 80;
 const HOST_POLL_MS = 5000;
@@ -146,12 +146,13 @@ function ConversationTabHeader({ metadata, breadcrumb, actions }: { metadata: Co
     const actions = document.getElementById(`workspace-actions-${header.tabId}`);
     if (back && actions) setSlots({ back, actions });
   }, [header?.tabId]);
-  useLayoutEffect(() => { if (header) header.report(header.tabId, metadata); }, [header?.tabId, header?.report, metadata.name, metadata.state, metadata.yourTurn, metadata.title, metadata.autoName, metadata.startedAt]);
+  useLayoutEffect(() => { if (header) header.report(header.tabId, metadata); }, [header?.tabId, header?.report, metadata.name, metadata.state, metadata.title, metadata.autoName, metadata.startedAt, metadata.elapsedStarted, metadata.elapsedLabel, metadata.model]);
   return slots ? <>{breadcrumb && createPortal(<div className="conv-breadcrumb">{breadcrumb}</div>, slots.back)}{createPortal(actions, slots.actions)}</> : null;
 }
-export function ConversationPage({ client, conversationId: explicitId, target = store, language = 'en', embedded = false, seriesIds, seriesState, displayName, breadcrumb, onConversation, newSession }: ConversationPageProps) {
+function RenderConversationPage({ client, conversationId: explicitId, target = store, language = 'en', embedded = false, seriesIds, seriesState, displayName, breadcrumb, onConversation, newSession }: ConversationPageProps) {
   const params = useParams();
-  const state = useScreenStore(target);
+  const selectState = useMemo(() => selectScreenTables(['conversations', 'runs', 'relations', 'delegations', 'messages', 'message_memberships', 'approvals', 'observation_gaps', 'projects', 'tasks', 'roots', 'aliases', 'artifacts', 'send_watches'], ['connection', 'deltas']), []);
+  const state = useScreenStore(target, selectState);
   const requestedId = explicitId ?? params.conversation ?? '';
   const resolveConversation = (id: string) => state.identities?.conversations[id] ?? id;
   const conversationId = resolveConversation(requestedId);
@@ -173,7 +174,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const rootIndex = useRootIndex(state);
   const roots = selectRoots(state);
   const root = roots.find(item => item.id === search.get('root')) ?? roots.find(item => item.conversation_ids.includes(conversationId));
-  const delegationNode = (tool: Row) => resolveDelegationNode(tool, conversationId, state, rootIndex, root);
+  const delegationNodes = useDelegationNodes(conversationId, state, rootIndex, root);
   const openWorkspaceConversation = useContext(OpenWorkspaceConversation);
   const selectChildAction = useRef<(id: string) => void>(() => {});
   selectChildAction.current = (id: string) => {
@@ -204,7 +205,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const receiptConversationId = receipt ? resolveConversation(receipt.conversationId) : undefined;
   const receiptRunId = receipt ? state.identities?.runs[receipt.runId] ?? receipt.runId : undefined;
   const [continued, setContinued] = useState(false);
-  const [sentMessages, setSentMessages] = useState<{ id: string; conversationId: string; text: string; known: Set<unknown> }[]>([]);
+  const [sentMessages, setSentMessages] = useState<{ id: string; conversationId: string; text: string; known: Set<unknown>; acknowledged: boolean }[]>([]);
   const starting = Boolean(newSession && !conversationId);
   const nativeProvider = /^\["(claude|codex)",/.exec(conversationId)?.[1];
   const creatingHost = hosts.find(host => host.conversationId === conversationId);
@@ -237,7 +238,8 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const defaultCwd = cwd.trim() || savedCwd;
   const defaults = providerDefaults?.provider === provider && providerDefaults.cwd === defaultCwd ? providerDefaults.value : undefined;
   const recommendedModel = defaults?.model ?? '';
-  const [input, setInput] = useState('');
+  const draftKey = conversationId || `new:${newSession?.projectId ?? ''}:${newSession?.cwd ?? ''}`;
+  const [input, setInput, clearSentDraft] = useConversationDraft(draftKey);
   const attachments = useAttachments(conversationId, language, client);
   const [dragging, setDragging] = useState(false);
   const dragDepth = useRef(0);
@@ -246,7 +248,6 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const [error, setError] = useState('');
   const [answered, setAnswered] = useState<Set<unknown>>(new Set());
   const [appliedModel, setAppliedModel] = useState<{ model: string; effort: string }>();
-  const [now, setNow] = useState(Date.now());
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
@@ -412,9 +413,9 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     olderPending.current = false; scrollAnchor.current = undefined;
     setDetail(undefined); setMessageLimit(MESSAGE_PAGE_SIZE); following.current = !anchorId;
     const releases = historyIds.filter(Boolean).map(id => client.watchConversation?.(id));
-    if (conversationId) void loadHistory();
+    if (conversationId && state.snapshotReady !== false) void loadHistory();
     return () => { historyController.current?.abort(); for (const release of releases) release?.(); };
-  }, [conversationId, seriesKey, state.generation, client, anchorId, historyRevision]);
+  }, [conversationId, seriesKey, state.generation, state.snapshotReady, client, anchorId, historyRevision]);
   useEffect(() => {
     if (!detail || detail.id !== conversationId) return;
     const controller = new AbortController();
@@ -430,10 +431,10 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     if (element) { following.current = false; element.scrollIntoView?.({ block: 'center' }); }
   }, [detail, anchorId]);
   const displayEntries = useMemo(() => groupToolRuns(entries), [entries]);
-  const toolResults = useMemo(() => collectToolResults(entries.filter(entry => entry.kind === 'message').map(entry => entry.row)), [entries]);
+  const toolRows = useMemo(() => entries.filter(entry => entry.kind === 'message').map(entry => entry.row), [entries]);
+  const toolResults = useToolResults(toolRows);
+  const participants = useMemo(() => resolveParticipants(state, conversationId, { user: t('user'), assistant: t('assistant'), parent: t('parentAgent') }), [state, conversationId, language]);
   const deltas = Object.entries(state.deltas).filter(([, delta]) => historyIds.includes(delta.conversationId ?? '') || !delta.conversationId && delta.runId === run?.id);
-  const replyStatus = !pending && !sentMessages.some(message => resolveConversation(message.conversationId) === conversationId) && !deltas.length
-    ? resolveReplyStatus(historyState, activityIds, readText(activityRun?.state) || seriesState) : undefined;
   const streamLength = deltas.reduce((total, [, delta]) => total + delta.text.length, 0);
 
   useEffect(() => {
@@ -441,14 +442,10 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     setEdited(false);
   }, [conversationId, currentModel, currentEffort, savedCwd]);
   useEffect(() => {
-    setInput(''); setError(''); setDragging(false); dragDepth.current = 0;
+    setError(''); setDragging(false); dragDepth.current = 0;
     setPending(false); setAnswered(new Set()); setAppliedModel(undefined);
     setDetailsOpen(false); setFilesOpen(false); setEngaged(false); setHandoffBlocked(false);
   }, [conversationId]);
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), TICK_MS);
-    return () => clearInterval(timer);
-  }, []);
   // 末尾を見ている間だけ、新しい発言と幅の変化に合わせて下へ送る。利用者が上へ送ったら追わない。
   const inner = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -529,13 +526,13 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     return () => { disposed = true; };
   }, [client, provider, connected, conversationId]);
 
-  async function execute(command: string, payload: unknown): Promise<Ack | undefined> {
+  async function execute(command: string, payload: unknown, retainAck = false): Promise<Ack | undefined> {
     if (pending || !connected) return;
     const sourceConversation = conversationId;
     setPending(true); setError('');
     try {
       const ack = await client.command(command, payload);
-      if (!isVisible(sourceConversation)) return;
+      if (!isVisible(sourceConversation)) return retainAck && ack.ok ? ack : undefined;
       if (!ack.ok) { setError(ack.error ?? t('failed')); return; }
       return ack;
     } catch (reason) { if (isVisible(sourceConversation)) setError(reason instanceof Error ? reason.message : String(reason)); }
@@ -548,7 +545,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     const sent = input;
     const messageId = crypto.randomUUID();
     following.current = true;
-    setSentMessages(previous => [...previous, { id: messageId, conversationId, text: sent, known: new Set([...messageEntries.map(entry => entry.row.id), ...pendingInputs.map(row => row.id)]) }]);
+    setSentMessages(previous => [...previous, { id: messageId, conversationId, text: sent, acknowledged: false, known: new Set([...messageEntries.map(entry => entry.row.id), ...pendingInputs.map(row => row.id)]) }]);
     if (terminalConversation) {
       const sourceConversation = conversationId;
       setPending(true); setError('');
@@ -586,9 +583,10 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
         if (!isVisible(sourceConversation)) return;
         const ack = await client.command('session.send', { conversationId: destination, text: sent, ...(ids.length ? { attachments: ids } : {}) });
         if (!ack.ok) throw new Error(['Invalid attachment', 'Invalid attachments', 'Attachment too large', 'Attachment transfer failed'].includes(ack.error ?? '') ? attachments.text.failed : ack.error ?? t('failed'));
+        clearSentDraft(draftKey, sent);
+        setSentMessages(previous => previous.map(message => message.id === messageId ? { ...message, conversationId: destination, acknowledged: true } : message));
         if (!isVisible(sourceConversation)) return;
-        setInput(value => value === sent ? '' : value); attachments.clear();
-        setSentMessages(previous => previous.map(message => message.id === messageId ? { ...message, conversationId: destination } : message));
+        attachments.clear();
         if (starting) {
           setHostedConversation({ id: destination, provider: 'claude', origin: 'observed', project: projectId, cwd: cwd.trim() });
           if (onConversation) onConversation(destination); else navigate(`/c/${encodeURIComponent(destination)}`);
@@ -607,9 +605,11 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     const payload = starting ? { provider, ...launchPayload } : external
       ? { conversationId, ...launchPayload, ...(stopped ? { confirmStopped: true } : {}) }
       : { runId: run!.id, input: { text: sent } };
-    const ack = await execute(command, payload);
+    const ack = await execute(command, payload, true);
     if (!ack) { setSentMessages(previous => previous.filter(message => message.id !== messageId)); return; }
-    setInput(value => value === sent ? '' : value);
+    clearSentDraft(draftKey, sent);
+    setSentMessages(previous => previous.map(message => message.id === messageId ? { ...message, acknowledged: true } : message));
+    if (!isVisible(conversationId)) return;
     if (external) {
       const result = readObject(ack.result);
       const id = readText(result.conversationId);
@@ -640,8 +640,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     <Icon name="message" size={22}/><h1>{t('conversation')}</h1><p>{t('noConversation')}</p></div></section>;
   const Heading = embedded ? 'h2' : 'h1';
   const evidence = status === 'ended' ? run?.end_evidence : run?.last_evidence;
-  const turnElapsed = workingElapsed(workingTurn, now);
-  const elapsed = !seriesIds && isWorkingTurn(workingTurn) ? turnElapsed : '';
+  const elapsedTurn = !seriesIds && isWorkingTurn(workingTurn) ? workingTurn : undefined;
   const worktree = worktreeLabel(run);
   const shownModel = appliedModel?.model || currentModel;
   const shownEffort = appliedModel?.effort ?? currentEffort;
@@ -666,7 +665,6 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     ...models.filter(item => !isRecommended(item)).map(item => ({ value: item.model, label: displayModel(item.model, models), title: displayModel(item.model, models), older: olderModels.has(item.model), detail: matchModel(shownModel) === item.model ? t('inUse') : undefined, disabled: codexActive })),
   ];
   const hint = provider === 'codex' ? codexActive ? 'activeCodex' : 'nextTurn' : 'claudeEffort';
-  const participants = resolveParticipants(state, conversationId, { user: t('user'), assistant: t('assistant'), parent: t('parentAgent') });
   const agentSender = senderOf({ role: 'assistant' }, participants);
   const historyFormat = readText(conversation.history_format);
   // 続く同じ送り主の発言は名前を 1 回だけ出す。区切り線は流れを切る。承認はエージェントの列に属する。
@@ -689,16 +687,16 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
       </div>
     </div>;
   return <section className={`conversation-page${embedded ? ' embedded' : ''}`} aria-label={t('conversation')}>
-    {workspaceHeader ? <ConversationTabHeader metadata={{ autoName: nameRoot?.auto_name, startedAt: conversationStart(state, conversationId), name: nameRoot?.user_name || nameRoot?.name || title, state: status, yourTurn: Boolean(replyStatus), title: [nameRoot?.name || title, replyStatus ? t('yourTurn') : dictionaries[language][status], elapsed ? `${t(status.startsWith('waiting') ? 'waiting' : 'elapsed')} ${elapsed}` : '', shownModel].filter(Boolean).join(' · ') }} breadcrumb={back} actions={headerActions}/> : <header className="conv-header">
+    {workspaceHeader ? <ConversationTabHeader metadata={{ autoName: nameRoot?.auto_name, startedAt: conversationStart(state, conversationId), name: nameRoot?.user_name || nameRoot?.name || title, state: status, title: [nameRoot?.name || title, dictionaries[language][status]].filter(Boolean).join(' · '), elapsedStarted: Number.isFinite(elapsedTurn?.started) ? elapsedTurn!.started : undefined, elapsedLabel: t(status.startsWith('waiting') ? 'waiting' : 'elapsed'), model: shownModel }} breadcrumb={back} actions={headerActions}/> : <header className="conv-header">
       <div className="conv-title-row" onClick={event => {
         if (!(event.target instanceof Element) || !event.target.closest('.state-badge')) return;
         event.preventDefault(); setDetailsOpen(true);
       }}>
         {breadcrumb && <div className="conv-breadcrumb">{breadcrumb}</div>}
         <Heading className="conv-title truncate" aria-label={nameRoot?.name ?? title} title={nameRoot?.user_name ? nameRoot.auto_name : title}>{nameRoot ? <SessionName key={nameRoot.id} root={nameRoot} client={client} language={language}/> : title}</Heading>
-        <StateBadge state={status} yourTurn={Boolean(replyStatus)} language={language} evidenceUrl="#conversation-details"
+        <WorkingStateBadge turn={elapsedTurn} state={status} language={language} evidenceUrl="#conversation-details"
           evidence={evidenceLabel(evidence) || undefined}
-          reason={readText(run?.cause ?? run?.reason) || undefined} elapsed={elapsed ? `${t(status.startsWith('waiting') ? 'waiting' : 'elapsed')} ${elapsed}` : undefined}/>
+          reason={readText(run?.cause ?? run?.reason) || undefined}/>
         {provider && <span className="conv-agent truncate" title={[providerName(provider), shownModel].filter(Boolean).join(' · ')}>{agentName(provider, shownModel)}</span>}
         <span className="spacer"/>
         {headerActions}
@@ -712,7 +710,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
             {worktree ? <><span className="truncate mono">{worktree.place}</span>{worktree.branch && <span className="branch-name mono">{worktree.branch}</span>}</>
               : <span className="muted-text">{t('noWorktree')}</span>}</dd></div>
           {reasonText(run?.cause ?? run?.reason) && <div><dt>{t('reason')}</dt><dd>{reasonText(run?.cause ?? run?.reason)}</dd></div>}
-          {readText(run?.last_evidence_ts) && <div><dt>{t('lastEvidence')}</dt><dd><RelativeTime value={readText(run?.last_evidence_ts)} now={now} language={language}/></dd></div>}
+          {readText(run?.last_evidence_ts) && <div><dt>{t('lastEvidence')}</dt><dd><LiveRelativeTime value={readText(run?.last_evidence_ts)} language={language}/></dd></div>}
         </dl>
       </section>}
     {filesOpen && changedFiles.length > 0 && <ChangedFiles id={filesId} key={conversationId} files={changedFiles} language={language}/>}
@@ -733,7 +731,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
         </details>;
         if (entry.kind === 'message') {
           const sender = senderOf(entry.row, participants);
-          return <Message key={entry.key} row={entry.row} sender={sender} showName={nameShown(sender)} parentRequest={participants.child && sender.side === 'end' && entries.find(item => item.kind === 'message' && senderOf(item.row, participants).side === 'end' && !isToolOnly(item.row) && !instructionKind(item.row))?.key === entry.key} language={language} toolResults={toolResults} delegationNode={delegationNode} onSelectChild={selectChild}/>;
+          return <Message key={entry.key} row={entry.row} sender={sender} showName={nameShown(sender)} parentRequest={participants.child && sender.side === 'end' && entries.find(item => item.kind === 'message' && senderOf(item.row, participants).side === 'end' && !isToolOnly(item.row) && !instructionKind(item.row))?.key === entry.key} language={language} toolResults={toolResults} delegationNodes={delegationNodes(entry.row)} onSelectChild={selectChild}/>;
         }
         if (entry.kind === 'approval') return <ApprovalCard screen={historyState} key={entry.key} entry={entry} t={t} disabled={!writable} answered={answered.has(entry.row.id)} onAnswer={decision => void answer(entry.row.id, decision)}/>;
         nameShown(undefined);
@@ -748,16 +746,15 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
       {failedDeliveries.map(row => <Message key={'delivery:' + row.id} language={language} sender={senderOf({ role: 'user' }, participants)} row={{ ...row, source_ts: row.sent_ts, role: 'user', body_state: 'stored', delivery_state: 'failed', retry_pending: pending }} onRetry={retryDelivery}/>)}
       {sentMessages.filter(message => resolveConversation(message.conversationId) === conversationId
         && !failedDeliveries.some(row => row.body === message.text)
-        && !pendingInputs.some(row => !message.known.has(row.id) && sameSent(readBody(row.body), message.text))).map(message => <Message key={message.id} language={language} sender={senderOf({ role: 'user' }, participants)} row={{ id: message.id, role: 'user', body: message.text, body_state: 'stored', delivery_state: 'sending' }}/>) }
+        && !pendingInputs.some(row => !message.known.has(row.id) && sameSent(readBody(row.body), message.text))).map(message => <Message key={message.id} language={language} sender={senderOf({ role: 'user' }, participants)} row={{ id: message.id, role: 'user', body: message.text, body_state: 'stored', delivery_state: message.acknowledged ? undefined : 'sending' }}/>) }
       {deltas.map(([key, delta]) => <Message key={key} language={language} streaming sender={agentSender} showName={nameShown(agentSender)}
         row={{ id: delta.messageId ?? key, role: 'assistant', body: delta.text, body_state: 'stored' } satisfies Row}/>)}
     </div></div>
     {/* 外の会話には、runner が応答できる続きを用意する。 */}
     <footer className="composer" onFocusCapture={() => setEngaged(true)} onPointerDownCapture={() => setEngaged(true)}>
-      {replyStatus && <p className={`reply-line${replyStatus === 'answer' ? ' reply-required' : ''}`} role="status"><Icon name={replyStatus === 'answer' ? 'alert' : 'message'} size={16}/>{t(replyStatus === 'answer' ? 'needsAnswer' : 'waitingReply')}</p>}
       {isWorkingTurn(workingTurn) && <div className="working-line" role="status" aria-label={t('working')}>
         <div className="working-summary"><span className="working-spinner" aria-hidden="true"/>{t('working')}
-          {turnElapsed && <span role="timer" aria-live="off"> · {turnElapsed}</span>}</div>
+          <WorkingTimer turn={workingTurn}/></div>
         {lastTool && <span className="working-tool" title={lastTool}>{backgroundWait ? `${t('backgroundWait')}: ${toolDescription || readText(lastToolBlock?.name)}` : lastTool}</span>}
       </div>}
       {(host?.disconnected || run?.reason === 'disconnected') && <p role="status" className="status-line">{language === 'ja' ? '接続が切れました' : 'Connection lost'}</p>}
@@ -823,4 +820,5 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   </section>;
 }
 
+export const ConversationPage = memo(RenderConversationPage);
 export default ConversationPage;

@@ -1,3 +1,12 @@
+import { Profiler } from 'react';
+import * as rootModel from '../lib/roots.ts';
+import * as noticeModel from '../components/notifications/model.ts';
+import { RootList } from '../components/RootViews.tsx';
+import { Workbench } from '../pages/workspace/Workbench.tsx';
+import { Notifications } from '../components/notifications/Notifications.tsx';
+import { useDelegationNodes } from '../components/conversation/DelegationCard.tsx';
+import { useToolResults } from '../components/conversation/ToolCall.tsx';
+import type { Row } from '../lib/store.ts';
 import { afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
@@ -14,7 +23,7 @@ vi.mock('../components/conversation/Markdown.tsx', () => ({ Markdown: ({ text }:
   renderMarkdown(text);
   return <span>{text}</span>;
 } }));
-afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); localStorage.clear(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 it('does not render unchanged messages on clock ticks or unrelated websocket patches', async () => {
   vi.useFakeTimers(); renderMarkdown.mockClear();
@@ -57,6 +66,7 @@ it('does not render unchanged messages on clock ticks or unrelated websocket pat
 });
 
 it.each(['detached', 'moved'])('pages to the oldest message and stops when the cursor message is %s', async mode => {
+  renderMarkdown.mockClear();
   const target = createStore();
   target.setSnapshot({ seq: 1, generation: 0, projection: {
     conversations: [{ id: 'c', provider: 'codex', origin: 'managed' }],
@@ -107,6 +117,8 @@ it.each(['detached', 'moved'])('pages to the oldest message and stops when the c
   const bodies = [...timeline.querySelectorAll('.message-bubble')].map(element => element.textContent).sort();
   expect(bodies).toEqual(Array.from({ length: 450 }, (_, index) => `Body ${index}`)
     .filter(body => mode !== 'detached' || body !== 'Body 250').sort());
+  for (let index = 252; index < 450; index++) expect(renderMarkdown.mock.calls.filter(([text]) => text === `Body ${index}`)).toHaveLength(1);
+  console.info(`history ${mode}: 198 unchanged messages each render once across 3 windows`);
   const calls = fetchConversation.mock.calls.length;
   await act(async () => { fireEvent.scroll(timeline, { target: { scrollTop: 0 } }); });
   expect(fetchConversation).toHaveBeenCalledTimes(calls);
@@ -159,11 +171,11 @@ it('keeps delegation messages unchanged when rebuilt nodes have the same display
   const select = vi.fn();
   const node = (state: string): TreeNode => ({ id: 'child', kind: 'conversation', label: 'Child', conversationId: 'child',
     provider: 'claude', state, role: 'child', model: '', attempts: [], children: [] });
-  const view = render(<Message row={row} sender={sender} delegationNode={() => node('running')} onSelectChild={select}/>);
+  const view = render(<Message row={row} sender={sender} delegationNodes={new Map([[0, node('running')]])} onSelectChild={select}/>);
   const calls = renderMarkdown.mock.calls.length;
-  view.rerender(<Message row={row} sender={sender} delegationNode={() => node('running')} onSelectChild={select}/>);
+  view.rerender(<Message row={row} sender={sender} delegationNodes={new Map([[0, node('running')]])} onSelectChild={select}/>);
   expect(renderMarkdown).toHaveBeenCalledTimes(calls);
-  view.rerender(<Message row={row} sender={sender} delegationNode={() => node('ended')} onSelectChild={select}/>);
+  view.rerender(<Message row={row} sender={sender} delegationNodes={new Map([[0, node('ended')]])} onSelectChild={select}/>);
   expect(renderMarkdown.mock.calls.length).toBeGreaterThan(calls);
   fireEvent.click(screen.getByRole('button', { name: /Child task/ }));
   expect(select).toHaveBeenCalledWith('child');
@@ -176,4 +188,254 @@ it('shows Not delivered and resend even when the failed message contained only a
   expect(screen.getByText('Not delivered')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Resend' }));
   expect(retry).toHaveBeenCalledWith(row);
+});
+
+it('renders only the clock leaves over 30 seconds, including the workspace tab title', async () => {
+  vi.useFakeTimers();
+  const now = Date.parse('2026-10-13T00:00:10Z');
+  vi.setSystemTime(now);
+  const target = createStore();
+  target.setSnapshot({ seq: 1, generation: 1, projection: {
+    roots: [{ id: 'root', name: 'Clock test', state: 'running', conversation_ids: ['c'], project: 'p' }],
+    conversations: [{ id: 'c', name: 'Clock test', provider: 'codex', origin: 'managed' }],
+    runs: [{ id: 'run', conversation_id: 'c', state: 'running', turn_started_ts: '2026-10-13T00:00:00Z' }],
+    messages: [{ id: 'message', role: 'assistant', body: 'Keep this message', source_ts: '2026-10-13T00:00:01Z' }],
+    message_memberships: [{ id: 'link', message_id: 'message', conversation_id: 'c', active: 1 }],
+  } });
+  const client = { command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'cmd', ok: true, result: [] })),
+    fetchConversation: vi.fn(async () => ({ generation: 1, projection: {}, next: null })) };
+  const roots = rootModel.selectRoots(target.getSnapshot());
+  const selectRoots = vi.spyOn(rootModel, 'selectRoots');
+  const startedAt = vi.spyOn(rootModel, 'startedAt');
+  const commits = vi.fn();
+  render(<MemoryRouter><Profiler id="clocks" onRender={commits}>
+    <RootList roots={roots} state={target.getSnapshot()}/>
+    <Workbench project="clock" session="perf" conversationId="c" client={client} language="en"
+      renderConversation={id => <ConversationPage conversationId={id} target={target} client={client}/>}/>
+  </Profiler></MemoryRouter>);
+  await act(async () => {});
+  selectRoots.mockClear(); startedAt.mockClear(); renderMarkdown.mockClear(); commits.mockClear();
+  for (let i = 0; i < 30; i++) await act(async () => { vi.advanceTimersByTime(1000); });
+  expect(commits).toHaveBeenCalledTimes(30);
+  expect(selectRoots).not.toHaveBeenCalled();
+  expect(startedAt).not.toHaveBeenCalled();
+  expect(renderMarkdown).not.toHaveBeenCalled();
+  expect(screen.getByRole('timer').textContent).toContain('40s');
+  expect(screen.getByLabelText('Elapsed time').textContent).toBe('40s');
+  expect(screen.getByRole('tab', { name: 'Clock test' }).title).toContain('40s');
+  console.info('30 ticks: conversation calculations 30 -> 0, sidebar calculations 30 -> 0; clock commits 30');
+});
+
+it('skips unrelated and identical patches but refreshes changed messages and delegation cards', async () => {
+  renderMarkdown.mockClear();
+  const target = createStore();
+  target.setSnapshot({ seq: 1, generation: 1, identities: { conversations: {}, runs: {} }, projection: {
+    conversations: [{ id: 'c', provider: 'codex', origin: 'managed' }, { id: 'child', provider: 'claude' }],
+    runs: [{ id: 'run', conversation_id: 'c', state: 'idle' }, { id: 'child-run', conversation_id: 'child', state: 'running' }],
+    relations: [{ id: 'rel', type: 'delegated', from_id: 'c', to_id: 'child', active: 1, evidence: { tool_use_id: 'tool' } }],
+    messages: [{ id: 'm', role: 'assistant', body: [{ type: 'text', text: 'Delegating once' },
+      { type: 'tool_use', id: 'tool', name: 'Agent', input: { description: 'Review work' } }] }],
+    message_memberships: [{ id: 'link', message_id: 'm', conversation_id: 'c', active: 1 }],
+  } });
+  const client = { command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'cmd', ok: true, result: [] })),
+    fetchConversation: vi.fn(async () => ({ generation: 1, projection: {}, next: null })) };
+  const conversationCommits = vi.fn();
+  const noticeCommits = vi.fn();
+  render(<MemoryRouter><Profiler id="conversation" onRender={conversationCommits}><ConversationPage target={target} client={client} conversationId="c"/></Profiler>
+    <Profiler id="notices" onRender={noticeCommits}><Notifications target={target} client={client}/></Profiler></MemoryRouter>);
+  await act(async () => {});
+  const collect = vi.spyOn(noticeModel, 'collectNotifications');
+  const buildTree = vi.spyOn(rootModel, 'buildRootTree');
+  conversationCommits.mockClear(); noticeCommits.mockClear(); renderMarkdown.mockClear();
+  const before = target.getSnapshot();
+  for (let seq = 2; seq <= 10; seq++) await act(async () => {
+    target.applyPatch({ type: 'patch', generation: 1, seq, from_seq: seq - 1, identities: { conversations: {}, runs: {} }, changes: {
+      findings: { upsert: [{ id: 'unrelated', revision: seq }], remove: [] },
+      messages: { upsert: JSON.parse(JSON.stringify(before.projection.messages)), remove: [] },
+      runs: { upsert: JSON.parse(JSON.stringify(before.projection.runs)), remove: [] },
+    } });
+  });
+  expect(target.getSnapshot().projection.messages).toBe(before.projection.messages);
+  expect(target.getSnapshot().projection.runs).toBe(before.projection.runs);
+  expect(target.getSnapshot().identities).toBe(before.identities);
+  expect(conversationCommits).not.toHaveBeenCalled(); expect(noticeCommits).not.toHaveBeenCalled();
+  expect(collect).not.toHaveBeenCalled(); expect(buildTree).not.toHaveBeenCalled(); expect(renderMarkdown).not.toHaveBeenCalled();
+  await act(async () => { target.applyPatch({ type: 'patch', generation: 1, from_seq: 10, seq: 11, changes: {
+    runs: { upsert: [{ id: 'child-run', conversation_id: 'child', state: 'ended' }], remove: [] },
+  } }); });
+  expect(screen.getByRole('button', { name: /Review work/ }).querySelector('[data-state="ended"]')).toBeTruthy();
+  expect(renderMarkdown).toHaveBeenCalledTimes(1);
+  expect(buildTree).toHaveBeenCalledTimes(1);
+  await act(async () => { target.applyPatch({ type: 'patch', generation: 1, from_seq: 11, seq: 12, changes: {
+    messages: { upsert: [{ id: 'm', role: 'assistant', body: 'Updated content' }], remove: [] },
+  } }); });
+  expect(screen.getByText('Updated content')).toBeTruthy();
+  console.info('9 unrelated/no-op patches: conversation commits 9 -> 0, notification effects 9 -> 0, tree builds 0');
+});
+
+it.each([0, 3])('waits for snapshot generation %s and fetches each history window once', async generation => {
+  const target = createStore();
+  const client = { command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'cmd', ok: true, result: [] })),
+    fetchConversation: vi.fn(async (_path: string) => ({ generation, projection: {}, next: null })) };
+  render(<MemoryRouter><ConversationPage target={target} client={client} conversationId="c"/></MemoryRouter>);
+  await act(async () => {});
+  expect(client.fetchConversation).not.toHaveBeenCalled();
+  await act(async () => { target.setSnapshot({ seq: 1, generation, projection: { conversations: [{ id: 'c', provider: 'codex' }] } }); });
+  const windows = () => client.fetchConversation.mock.calls.filter(args => !String(args[0]).includes('edits='));
+  expect(windows()).toHaveLength(1);
+  await act(async () => { target.setConnection('connected'); });
+  expect(windows()).toHaveLength(1);
+  generation++;
+  await act(async () => { target.setSnapshot({ seq: 2, generation, projection: { conversations: [{ id: 'c', provider: 'codex' }] } }); });
+  expect(windows()).toHaveLength(2);
+  console.info('initial history windows: 2 -> 1; fetches before snapshot: 0; resync adds exactly 1');
+});
+
+it('builds one delegation tree for 200 messages and none when those messages are compared again', () => {
+  const target = createStore();
+  target.setSnapshot({ seq: 1, generation: 1, projection: {
+    conversations: [{ id: 'c' }, { id: 'child', provider: 'claude' }],
+    relations: [{ id: 'rel', type: 'delegated', from_id: 'c', to_id: 'child', active: 1, evidence: { tool_use_id: 'tool' } }],
+  } });
+  const state = target.getSnapshot();
+  const rows = Array.from({ length: 200 }, (_, i) => ({ id: `m${i}`, role: 'assistant', body: [
+    { type: 'text', text: `Delegation ${i}` }, { type: 'tool_use', name: 'Agent', id: 'tool', input: { description: 'Child task' } },
+  ] }));
+  let resources: ReturnType<typeof useDelegationNodes>;
+  function Messages() {
+    const index = rootModel.useRootIndex(state);
+    resources = useDelegationNodes('c', state, index);
+    return rows.map(row => <Message key={row.id} row={row} sender={{ key: 'start', name: 'Claude', side: 'start' }} delegationNodes={resources(row)}/>);
+  }
+  const buildTree = vi.spyOn(rootModel, 'buildRootTree');
+  renderMarkdown.mockClear();
+  const view = render(<Messages/>);
+  const first = resources!(rows[0]);
+  expect(buildTree).toHaveBeenCalledTimes(1);
+  expect(renderMarkdown).toHaveBeenCalledTimes(200);
+  view.rerender(<Messages/>);
+  expect(resources!(rows[0])).toBe(first);
+  expect(buildTree).toHaveBeenCalledTimes(1);
+  expect(renderMarkdown).toHaveBeenCalledTimes(200);
+  console.info('200 delegation messages: tree builds 200 -> 1; unchanged comparison builds 400 -> 0; extra Markdown renders 0');
+});
+
+it('keeps tool result props stable when history gains only text and updates only the result owner', () => {
+  const tool = { id: 'tool-message', role: 'assistant', body: [{ type: 'text', text: 'Tool owner' }, { type: 'tool_use', name: 'Bash', id: 'tool', input: {} }] };
+  const result = { id: 'result', role: 'user', body: [{ type: 'tool_result', tool_use_id: 'tool', content: 'First result' }] };
+  const unchanged = { id: 'text', role: 'assistant', body: 'Unchanged text' };
+  let results: Map<string, unknown>;
+  function Messages({ rows }: { rows: Row[] }) {
+    results = useToolResults(rows);
+    return rows.map(row => <Message key={String(row.id)} row={row} sender={{ key: 'start', name: 'Agent', side: 'start' }} toolResults={results}/>);
+  }
+  renderMarkdown.mockClear();
+  const view = render(<Messages rows={[tool, result, unchanged]}/>);
+  const original = results!;
+  const earlier = { id: 'earlier', role: 'assistant', body: 'Earlier text' };
+  renderMarkdown.mockClear();
+  view.rerender(<Messages rows={[earlier, tool, result, unchanged]}/>);
+  expect(results!).toBe(original);
+  expect(renderMarkdown.mock.calls.map(([text]) => text)).toEqual(['Earlier text']);
+  renderMarkdown.mockClear();
+  view.rerender(<Messages rows={[earlier, tool, { ...result, body: [{ type: 'tool_result', tool_use_id: 'tool', content: 'Second result' }] }, unchanged]}/>);
+  expect(screen.getByText('Second result')).toBeTruthy();
+  expect(renderMarkdown.mock.calls.map(([text]) => text)).toEqual(['Tool owner']);
+  console.info('history prepend: unchanged Markdown renders 2 -> 0; result update: only its owner renders (1)');
+});
+
+it('keeps multiple delegation tools without ids distinct and refreshes their selected child', () => {
+  const target = createStore();
+  target.setSnapshot({ seq: 1, generation: 1, projection: {
+    conversations: [{ id: 'c' }, { id: 'a', provider: 'claude' }, { id: 'b', provider: 'claude' }],
+    relations: [{ id: 'ra', type: 'delegated', from_id: 'c', to_id: 'a', active: 1, evidence: { description: 'First child' } },
+      { id: 'rb', type: 'delegated', from_id: 'c', to_id: 'b', active: 1, evidence: { description: 'Second child' } }],
+  } });
+  const row = { id: 'm', role: 'assistant', body: [
+    { type: 'tool_use', name: 'Agent', input: { description: 'First child' } },
+    { type: 'tool_use', name: 'Agent', input: { description: 'Second child' } },
+  ] };
+  const select = vi.fn();
+  function Delegations() {
+    const state = useScreenStore(target);
+    const nodes = useDelegationNodes('c', state, rootModel.useRootIndex(state));
+    return <Message row={row} sender={{ key: 'start', name: 'Agent', side: 'start' }} delegationNodes={nodes(row)} onSelectChild={select}/>;
+  }
+  render(<MemoryRouter><Delegations/></MemoryRouter>);
+  fireEvent.click(screen.getByRole('button', { name: /First child/ }));
+  fireEvent.click(screen.getByRole('button', { name: /Second child/ }));
+  expect(select.mock.calls).toEqual([['a'], ['b']]);
+  act(() => { target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 1, changes: {
+    relations: { remove: ['ra'], upsert: [] },
+  } }); });
+  expect((screen.getByRole('button', { name: /First child/ }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole('button', { name: /Second child/ }) as HTMLButtonElement).disabled).toBe(false);
+});
+
+it('refreshes delivery status, retry availability and the retry handler through Message memo', () => {
+  const sender = { key: 'user', side: 'end' as const, name: 'You' };
+  const row = { id: 'delivery', role: 'user', body: 'Retry this message' };
+  const firstRetry = vi.fn();
+  const nextRetry = vi.fn();
+  const view = render(<Message row={{ ...row, delivery_state: 'sending' }} sender={sender} onRetry={firstRetry}/>);
+  expect(screen.getByText('Sending…')).toBeTruthy();
+  const failed = { ...row, delivery_state: 'failed' };
+  view.rerender(<Message row={failed} sender={sender} onRetry={firstRetry}/>);
+  expect(screen.getByText('Not delivered')).toBeTruthy();
+  expect(screen.queryByText('Sending…')).toBeNull();
+  view.rerender(<Message row={{ ...failed, retry_pending: true }} sender={sender} onRetry={firstRetry}/>);
+  expect((screen.getByRole('button', { name: 'Resend' }) as HTMLButtonElement).disabled).toBe(true);
+  view.rerender(<Message row={failed} sender={sender} onRetry={firstRetry}/>);
+  view.rerender(<Message row={failed} sender={sender} onRetry={nextRetry}/>);
+  fireEvent.click(screen.getByRole('button', { name: 'Resend' }));
+  expect(firstRetry).not.toHaveBeenCalled();
+  expect(nextRetry).toHaveBeenCalledWith(failed);
+  view.rerender(<Message row={row} sender={sender} onRetry={nextRetry}/>);
+  expect(screen.queryByText('Not delivered')).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Resend' })).toBeNull();
+});
+
+it('updates failed delivery and notifications without advancing seq, and resends to the current run', async () => {
+  const target = createStore();
+  target.setSnapshot({ seq: 1, generation: 1, projection: {
+    conversations: [{ id: 'c', provider: 'codex', origin: 'managed' }],
+    runs: [{ id: 'run', conversation_id: 'c', state: 'idle', generation: 1 }],
+    messages: [{ id: 'm', role: 'assistant', body: 'Keep this rendered' }],
+    message_memberships: [{ id: 'link', message_id: 'm', conversation_id: 'c', active: 1 }],
+  } });
+  target.setConnection('connected');
+  let finish!: (value: { type: 'ack'; cmd_id: string; ok: boolean }) => void;
+  const client = {
+    command: vi.fn((command: string, _payload: unknown) => command === 'send'
+      ? new Promise<{ type: 'ack'; cmd_id: string; ok: boolean }>(resolve => { finish = resolve; })
+      : Promise.resolve({ type: 'ack' as const, cmd_id: 'cmd', ok: true, result: [] })),
+    fetchConversation: vi.fn(async () => ({ generation: 1, projection: {}, next: null })),
+  };
+  render(<MemoryRouter><ConversationPage target={target} client={client} conversationId="c"/>
+    <Notifications target={target} client={client}/></MemoryRouter>);
+  await act(async () => {});
+  const watch = { id: 'delivery', conversation_id: 'c', body: 'Lost message', state: 'pending', attachments: [] };
+  act(() => target.setSendWatches([watch]));
+  renderMarkdown.mockClear();
+  act(() => target.setSendWatches([{ ...watch, state: 'failed' }]));
+  expect(target.getSnapshot().seq).toBe(1);
+  expect(screen.getByText('Not delivered')).toBeTruthy();
+  expect(screen.getByRole('heading', { name: 'A message you sent did not reach the conversation' })).toBeTruthy();
+  expect(renderMarkdown.mock.calls.map(([text]) => text)).not.toContain('Keep this rendered');
+  const collect = vi.spyOn(noticeModel, 'collectNotifications');
+  act(() => target.setSendWatches([{ ...watch, state: 'failed' }]));
+  expect(collect).not.toHaveBeenCalled();
+  act(() => { target.applyPatch({ type: 'patch', generation: 1, from_seq: 1, seq: 2, changes: {
+    runs: { upsert: [{ id: 'new-run', conversation_id: 'c', state: 'idle', generation: 2 }], remove: ['run'] },
+  } }); });
+  fireEvent.click(screen.getByRole('button', { name: 'Resend' }));
+  expect(client.command).toHaveBeenCalledWith('send', { runId: 'new-run', input: { text: 'Lost message' }, retryOf: 'delivery' });
+  expect((screen.getByRole('button', { name: 'Resend' }) as HTMLButtonElement).disabled).toBe(true);
+  await act(async () => finish({ type: 'ack', cmd_id: 'cmd', ok: true }));
+  expect((screen.getByRole('button', { name: 'Resend' }) as HTMLButtonElement).disabled).toBe(false);
+  act(() => target.setSendWatches([]));
+  expect(target.getSnapshot().seq).toBe(2);
+  expect(screen.queryByText('Not delivered')).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Resend' })).toBeNull();
+  expect(screen.queryByRole('heading', { name: 'A message you sent did not reach the conversation' })).toBeNull();
 });

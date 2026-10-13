@@ -4,6 +4,8 @@ import { decodeStoredValue } from '../components/activity.ts';
 export interface ScreenIdentities { conversations: Record<string, string>; runs: Record<string, string> }
 export function mergeIdentities(previous?: ScreenIdentities, incoming?: ScreenIdentities): ScreenIdentities | undefined {
   if (!incoming || incoming === previous) return previous;
+  if (previous && Object.entries(incoming.conversations).every(([key, value]) => previous.conversations[key] === value)
+    && Object.entries(incoming.runs).every(([key, value]) => previous.runs[key] === value)) return previous;
   return { conversations: { ...previous?.conversations, ...incoming.conversations }, runs: { ...previous?.runs, ...incoming.runs } };
 }
 export function resolveRow(table: string, row: Row, identities?: ScreenIdentities): Row {
@@ -20,10 +22,13 @@ export function resolveRow(table: string, row: Row, identities?: ScreenIdentitie
   }
   if (table === 'delegations') {
     const attempts = decodeStoredValue(row.attempts);
-    if (Array.isArray(attempts)) result.attempts = attempts.map(attempt => ({ ...attempt, run_id: run(attempt.run_id) }));
+    if (Array.isArray(attempts) && attempts.some(attempt => run(attempt.run_id) !== attempt.run_id)) result.attempts = attempts.map(attempt => ({ ...attempt, run_id: run(attempt.run_id) }));
   }
   return Object.keys(result).every(key => result[key] === row[key]) ? row : result;
 }
 export function resolveProjection(projection: Record<string, Row[]>, identities?: ScreenIdentities) {
-  return Object.fromEntries(Object.entries(projection).map(([table, rows]) => [table, rows.map(row => resolveRow(table, row, identities))]));
+  return Object.fromEntries(Object.entries(projection).map(([table, rows]) => {
+    const resolved = rows.map(row => resolveRow(table, row, identities));
+    return [table, resolved.every((row, index) => row === rows[index]) ? rows : resolved];
+  }));
 }

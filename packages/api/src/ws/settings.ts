@@ -7,6 +7,8 @@ import type { SettingsStatus } from "../../../core/src/settings/index.ts";
 import { defaultConfig, validateSettings } from "../../../core/src/settings/index.ts";
 import { parseSettingsToml } from "../settings/toml.ts";
 import type { DelegateRequest } from "../../../core/src/delegate/types.ts";
+import { ROLES } from "../../../core/src/assign/policy.ts";
+import { POLICY_HISTORY_LIMIT } from "../settings/policy-preview.ts";
 import { SettingsService, settingsPaths, type KeychainPort, type PastDelegation } from "../settings/index.ts";
 import { createKeychain } from "../settings/keychain.ts";
 import { createRunnerSettingsTransport } from "../settings/runner.ts";
@@ -39,19 +41,34 @@ export function createServeSettings(observation: ReturnType<typeof openObservati
     ...transport,
     history() {
       const rows: PastDelegation[] = [];
-      for (const row of db.prepare("SELECT subject, payload FROM facts WHERE kind = 'delegation.created' AND payload IS NOT NULL ORDER BY seq").iterate()) {
+      // SQLite が読める時差にそろえ、取り込み順によらず最近の依頼を選ぶ。
+      for (const row of db.prepare(`SELECT subject, payload, source_ts FROM facts
+        WHERE kind = 'delegation.created' AND payload IS NOT NULL
+        ORDER BY julianday(CASE WHEN source_ts GLOB '*[+-][0-9][0-9][0-9][0-9]'
+          THEN substr(source_ts, 1, length(source_ts) - 2) || ':' || substr(source_ts, -2)
+          ELSE source_ts END) DESC, seq DESC`).iterate()) {
         const payload = readObject(JSON.parse(String(row.payload)));
-        const request = readObject(payload.request);
-        if (typeof request.role !== "string" || typeof request.task !== "string" || !Array.isArray(request.accept)) continue;
+        // 移行済みの元依頼は constraints.request にあり、除外条件もそこから復元する。
+        const legacyRequest = readObject(readObject(payload.constraints).request);
+        const request = { ...payload, ...legacyRequest, ...readObject(payload.request) };
+        if (!ROLES.includes(request.role as DelegateRequest["role"]) || typeof request.task !== "string") continue;
+        request.title = typeof request.title === "string" ? request.title : "";
+        request.accept = Array.isArray(request.accept) ? request.accept : [];
+        const kit = readObject(payload.kit);
+        // kit は説明がないと node_id を題名に使う。人向けの確認にはその代替値を出さない。
+        const description = [request.description, payload.description, request.title, payload.title, request.task, payload.task]
+          .find(value => typeof value === "string" && value.trim() && value !== kit.node_id && value !== payload.request_id && value !== row.subject);
         const context = readObject(payload.context);
         const quota = readObject(context.quota);
         const performance = readObject(context.performance);
-        rows.push({ id: String(payload.request_id ?? row.subject), request: request as unknown as DelegateRequest, context: {
+        rows.push({ id: String(payload.request_id ?? row.subject), description: typeof description === "string" ? description : "",
+          timestamp: String(row.source_ts), request: request as unknown as DelegateRequest, context: {
           quota: candidate => quota[candidate.model] as ReturnType<PastDelegation["context"]["quota"]>,
           performance: (role, model) => performance[`${role}:${model}`] as ReturnType<PastDelegation["context"]["performance"]>,
           orchestratorModel: typeof context.orchestratorModel === "string" ? context.orchestratorModel : undefined,
           implementerFamily: context.implementerFamily === "anthropic" || context.implementerFamily === "openai" ? context.implementerFamily : undefined,
         } });
+        if (rows.length === POLICY_HISTORY_LIMIT) break;
       }
       return rows;
     },

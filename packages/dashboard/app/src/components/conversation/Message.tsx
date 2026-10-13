@@ -9,8 +9,7 @@ import { agentReportText, visibleText } from '../../lib/message-body.ts';
 import type { Sender } from './participants.ts';
 import { Icon } from '../Icon.tsx';
 import { toolsLabel, translate } from './text.ts';
-import { DelegationCard, isDelegationTool } from './DelegationCard.tsx';
-import type { TreeNode } from '../../pages/tree/model.ts';
+import { DelegationCard, isDelegationTool, sameDelegationNodes, type DelegationNodes } from './DelegationCard.tsx';
 import { ToolCall } from './ToolCall.tsx';
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -40,8 +39,8 @@ export function countTools(rows: Row[]): number {
  * 発言を 1 つ描く。右の列は利用者の吹き出し、左の列はエージェントの吹き出しにする。
  * 送り主の名前は、続く同じ送り主の発言では省く。時刻は常に出す。
  */
-function RenderMessage({ row, sender, showName = true, language = 'en', streaming = false, parentRequest = false, toolResults, delegationNode, onSelectChild, onRetry }: {
-  onRetry?: (row: Row) => void; row: Row; sender: Sender; showName?: boolean; language?: Language; streaming?: boolean; parentRequest?: boolean; toolResults?: Map<string, unknown>; delegationNode?: (tool: Row) => TreeNode | undefined; onSelectChild?: (id: string) => void;
+function RenderMessage({ row, sender, showName = true, language = 'en', streaming = false, parentRequest = false, toolResults, delegationNodes, onSelectChild, onRetry }: {
+  onRetry?: (row: Row) => void; row: Row; sender: Sender; showName?: boolean; language?: Language; streaming?: boolean; parentRequest?: boolean; toolResults?: Map<string, unknown>; delegationNodes?: DelegationNodes; onSelectChild?: (id: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const t = (key: Parameters<typeof translate>[1]) => translate(language, key);
@@ -92,7 +91,7 @@ function RenderMessage({ row, sender, showName = true, language = 'en', streamin
   const toolOutput = row.tool_output !== undefined && row.tool_output !== null;
   const hasTools = (!hasDelegations && tools.length > 0) || orphanResults.length > 0 || toolOutput;
   const renderTool = (tool: Row, index: number) => isDelegationTool(tool)
-    ? <DelegationCard key={readText(tool.id) || index} tool={tool} node={delegationNode?.(tool)} language={language} onSelect={onSelectChild}/>
+    ? <DelegationCard key={readText(tool.id) || index} tool={tool} node={delegationNodes?.get(tools.indexOf(tool))} language={language} onSelect={onSelectChild}/>
     : <ToolCall key={readText(tool.id) || index} language={language} name={readText(tool.name) || 'Tool'} input={tool.input}
       result={typeof tool.id === 'string' ? toolResults?.get(tool.id) : undefined}/>;
   return <article className={`message ${end ? 'message-user' : 'message-agent'}${showName ? ' message-first' : ''}${streaming ? ' streaming' : ''}`}
@@ -166,13 +165,7 @@ export const Message = memo(RenderMessage, (a, b) => {
   if (!sameValue(a.row, b.row) || !sameValue(a.sender, b.sender) || a.showName !== b.showName
     || a.language !== b.language || a.streaming !== b.streaming || a.parentRequest !== b.parentRequest
     || a.onRetry !== b.onRetry || a.onSelectChild !== b.onSelectChild || !sameResults([b.row], a.toolResults, b.toolResults)) return false;
-  const tools = Array.isArray(b.row.body) ? b.row.body.map(readObject).filter(isDelegationTool) : [];
-  return tools.every(tool => {
-    const left = a.delegationNode?.(tool);
-    const right = b.delegationNode?.(tool);
-    // 委譲カードが表示・選択に使う項目だけを比べる。
-    return left?.conversationId === right?.conversationId && left?.provider === right?.provider && left?.state === right?.state;
-  });
+  return sameDelegationNodes(a.delegationNodes, b.delegationNodes);
 });
 export const ToolRun = memo(RenderToolRun, (a, b) => a.language === b.language
   && a.rows.length === b.rows.length && a.rows.every((row, index) => sameValue(row, b.rows[index]))

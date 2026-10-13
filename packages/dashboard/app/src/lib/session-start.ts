@@ -18,7 +18,8 @@ export async function startSession(client: ConversationClient, payload: object, 
     const result = await request<{ hosts: SessionHost[] }>(client, 'session.hosts');
     const host = result.hosts.find(row => row.terminalId === terminalId);
     if (host?.disconnected) throw new Error('Connection lost');
-    if (host) return host;
+    const model = (payload as { model?: string }).model;
+    if (host) return model ? { ...host, launchModel: host.launchModel || model } : host;
     if (Date.now() >= deadline) throw new Error('Start timed out');
     await new Promise(resolve => setTimeout(resolve, DISCOVERY_POLL_MS));
   }

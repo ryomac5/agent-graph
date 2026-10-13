@@ -1,3 +1,4 @@
+import { promptFrame } from './terminal-screen-fixture.ts';
 import { EventEmitter } from 'node:events';
 import http from 'node:http';
 import { syncBuiltinESMExports } from 'node:module';
@@ -202,13 +203,13 @@ test('failed は24時間、closed と retried は7日で本文ごと削除する
   assert.deepEqual(f.watch.history(CONVERSATION), []);
 });
 
-test('スラッシュコマンドは見張りから外し、配達失敗を出さない', async t => {
+test('compact は履歴の command-name で配達を照合する', async t => {
   const f = createFixture(t);
   const errors = t.mock.method(console, 'error', () => {});
   await f.watch.recordAccepted('compact', CONVERSATION, ' /compact', f.watch.capture(CONVERSATION, NOW));
   addMessage(f, 'command', '<command-name>/compact</command-name><command-message>compact</command-message><command-args></command-args>');
-  assert.equal(f.watch.check(NOW + 2 * SEND_WATCH_TIMEOUT_MS), false);
-  assert.deepEqual(f.watch.history(CONVERSATION), []);
+  assert.equal(f.watch.check(NOW + 2 * SEND_WATCH_TIMEOUT_MS), true);
+  assert.equal(f.read('compact').state, 'closed');
   assert.equal(errors.mock.callCount(), 0);
 });
 
@@ -374,7 +375,7 @@ for (const failure of ['busy', 'exception'] as const) {
     const a = await createApiFixture(t, f, {
       sessionsDirectory: f.directory, listProcesses: async () => [], quietMs: 0, warmupMs: 0, submitDelayMs: 0,
       openTerminal: () => ({ pid: 1000, write: (body: string) => writes.push(body), resize() {}, kill() {},
-        onData: () => ({ dispose() {} }), onExit: () => ({ dispose() {} }) }) as unknown as IPty,
+        onData: (output: (data: string) => void) => { queueMicrotask(() => output(promptFrame())); return { dispose() {} }; }, onExit: () => ({ dispose() {} }) }) as unknown as IPty,
     });
     const writer = new DatabaseSync(join(f.directory, 'ledger.db'));
     try {
@@ -531,4 +532,56 @@ test('掃除が BUSY でも未配信の変更を返し、次の周期で掃除�
     assert.equal(f.watch.check(retryAt + 500), false);
     assert.equal(cleanups, 1);
   } finally { writer.close(); }
+});
+
+test('履歴に届かない skill コマンドも削除せず配達失敗になる', t => {
+  const f = createFixture(t);
+  t.mock.method(console, 'error', () => {});
+  record(f, '/custom-skill work');
+  assert.equal(f.watch.check(NOW + SEND_WATCH_TIMEOUT_MS), true);
+  assert.equal(f.read().state, 'failed');
+  assert.equal(f.watch.list()[0].body, '/custom-skill work');
+});
+
+test('WebSocket returns panel output once and rejects subsequent sends into a model picker', async t => {
+  const f = createFixture(t);
+  const session = '12345678-1234-1234-1234-123456789abc';
+  const conversationId = JSON.stringify(['claude', session]);
+  f.append('project.created', 'project:project', { repository_id: 'project', root_path: f.directory, state: 'registered', display_name: 'Fixture' });
+  writeFileSync(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: session }));
+  const { HELP_PANEL, MODEL_PANEL } = await import('./terminal-screen-fixture.ts');
+  let output = (_data: string) => {};
+  let text = '';
+  const writes: string[] = [];
+  const a = await createApiFixture(t, f, {
+    sessionsDirectory: f.directory, listProcesses: async () => [], quietMs: 0, warmupMs: 0, submitDelayMs: 0, wait: async () => {},
+    openTerminal: () => ({ pid: 1000, resize() {}, kill() {},
+      onData(callback: (data: string) => void) { output = callback; queueMicrotask(() => output(promptFrame())); return { dispose() {} }; },
+      onExit: () => ({ dispose() {} }), write(data: string) {
+        writes.push(data);
+        if (data.includes('[200~')) text = data;
+        if (data === '\r') output(text.includes('/help') ? HELP_PANEL : MODEL_PANEL);
+        if (data === '\x1b') output(promptFrame());
+      },
+    }) as unknown as IPty,
+  });
+  try {
+    assert.equal((await a.command('launch', 'session.launch', { projectId: 'project', provider: 'claude', resume: session })).ok, true);
+    const help = await a.command('help', 'session.send', { conversationId, text: '/help' });
+    assert.equal(help.ok, true);
+    assert.match(help.result.command.output, /Claude understands/);
+    assert.equal(help.result.command.status, 'completed');
+    assert.equal(f.read('help'), undefined, 'a captured panel is not falsely timed out by the transcript watch');
+    const before = writes.length;
+    assert.deepEqual(await a.command('help', 'session.send', { conversationId, text: '/help' }), help);
+    assert.equal(writes.length, before);
+    const model = await a.command('model', 'session.send', { conversationId, text: '/model' });
+    assert.equal(model.result.command.status, 'interactive');
+    const blocked = await a.command('blocked', 'session.send', { conversationId, text: 'not lost' });
+    assert.equal(blocked.ok, false);
+    assert.match(blocked.error, /Terminal is not ready/);
+    assert.equal(blocked.result.terminalId, model.result.terminalId);
+    assert.ok(!writes.some(value => value.includes('not lost')));
+    assert.equal(f.read('blocked'), undefined);
+  } finally { await a.api.close(); }
 });

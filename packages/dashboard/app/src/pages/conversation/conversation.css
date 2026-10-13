@@ -226,3 +226,10 @@
 .composer-provider-mark.provider-codex { color: var(--provider-codex); }
 
 .tool-run-description { min-width: 0; color: var(--fg-2); }
+.composer-box { position: relative; }
+.slash-commands { position: absolute; bottom: calc(100% + 4px); left: 0; width: min(100%, 560px); }
+.slash-commands .choice-options { max-height: 260px; overflow-y: auto; }
+.slash-commands .choice-option { align-items: flex-start; flex-direction: column; height: auto; min-height: 32px; padding: var(--space-2); }
+.slash-commands .choice-option[aria-selected="true"] { background: var(--bg-3); }
+.command-result { margin: var(--space-4) 0; padding: var(--space-3) var(--space-4); border: var(--border); border-radius: var(--radius-2); }
+.command-result pre { font: var(--type-mono); white-space: pre-wrap; overflow-wrap: anywhere; margin: var(--space-2) 0 0; }

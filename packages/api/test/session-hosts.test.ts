@@ -1,3 +1,4 @@
+import { promptFrame, HELP_PANEL, MODEL_PANEL } from './terminal-screen-fixture.ts';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -15,17 +16,17 @@ const SESSION = '12345678-1234-1234-1234-123456789abc';
 const conversationId = JSON.stringify(['claude', SESSION]);
 async function createFixture(t: TestContext, waits?: number[], options: HostOptions = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'ag session-hosts-'));
-  const children: { pid: number; killed: boolean; writes: string[]; output: (data: string) => void; exit: (event: { exitCode: number }) => void }[] = [];
+  const children: { pid: number; killed: boolean; writes: string[]; onWrite: (data: string) => void; output: (data: string) => void; exit: (event: { exitCode: number }) => void }[] = [];
   const launches: { file: string; args: string[] | string; options: Parameters<typeof spawn>[2] }[] = [];
   const openTerminal: typeof spawn = (file, args, options) => {
     launches.push({ file, args, options });
-    const child = { pid: 1000 + children.length, killed: false, writes: [] as string[], output: (_data: string) => {}, exit: (_event: { exitCode: number }) => {} };
+    const child = { pid: 1000 + children.length, killed: false, writes: [] as string[], onWrite: (_data: string) => {}, output: (_data: string) => {}, exit: (_event: { exitCode: number }) => {} };
     children.push(child);
     return {
       pid: child.pid,
-      write(data: string) { child.writes.push(data); }, resize() {},
+      write(data: string) { child.writes.push(data); child.onWrite(data); }, resize() {},
       kill() { child.killed = true; child.exit({ exitCode: 0 }); },
-      onData(callback: typeof child.output) { child.output = callback; return { dispose() {} }; },
+      onData(callback: typeof child.output) { child.output = callback; queueMicrotask(() => callback(promptFrame(file))); return { dispose() {} }; },
       onExit(callback: typeof child.exit) { child.exit = callback; return { dispose() {} }; },
     } as unknown as ReturnType<typeof spawn>;
   };
@@ -58,7 +59,7 @@ for (const provider of ['claude', 'codex'] as const) {
     // 最初のチャット送信より前に準備を終え、端末側で作業が始まった場合も含める。
     await delay(3100);
     let renders = 0;
-    const render = () => { renders++; f.children[0].output('\r\x1b[2K⠋ Working'); };
+    const render = () => { renders++; f.children[0].output(promptFrame(provider).replace('Claude Code', '⠋ Working'));  };
     render();
     const spinner = setInterval(render, 25);
     t.after(() => clearInterval(spinner));
@@ -91,7 +92,7 @@ test('startup waits for both warmup and quiet before pasting, then preserves pas
       if (Date.now() - started < 3200) assert.deepEqual(f.children[0].writes, []);
       else assert.equal(f.children[0].writes.at(-1), '\x1b[200~first\x1b[201~');
       t.mock.timers.tick(ms);
-      if (Date.now() - started === 2400) f.children[0].output('startup redraw');
+      if (Date.now() - started === 2400) f.children[0].output(promptFrame());
     },
   });
   await f.launch(SESSION);
@@ -102,24 +103,18 @@ test('startup waits for both warmup and quiet before pasting, then preserves pas
   assert.deepEqual(f.children[0].writes, ['\x15', '\x1b[200~first\x1b[201~', '\r']);
 });
 
-test('continuous startup output uses one deadline from launch, including the first send', async t => {
+test('continuous startup output fails at the deadline instead of assuming readiness', async t => {
   const started = Date.now();
   t.mock.timers.enable({ apis: ['Date'], now: started });
-  const waits: number[] = [];
   const f = await createFixture(t, undefined, {
     quietMs: undefined, warmupMs: undefined,
-    wait: async ms => { waits.push(ms); t.mock.timers.tick(ms); f.children[0].output('working'); },
+    wait: async ms => { t.mock.timers.tick(ms); f.children[0].output('\x1b[2J\x1b[HStarting'); },
   });
   await f.launch(SESSION);
-  await writeFile(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: SESSION }));
-  await f.handle('session.hosts');
   t.mock.timers.tick(14_500);
-  f.children[0].output('working');
-  await f.handle('session.send', { conversationId, text: 'first' });
-  assert.deepEqual(waits, Array<number>(5).fill(100));
-  waits.length = 0;
-  await f.handle('session.send', { conversationId, text: 'second' });
-  assert.deepEqual(waits, []);
+  f.children[0].output('\x1b[2J\x1b[HStarting');
+  await assert.rejects(f.handle('session.send', { conversationId, text: 'first' }), /Terminal is not ready/);
+  assert.deepEqual(f.children[0].writes, []);
 });
 
 test('launch accepts supported providers, UUID resume and a plain model name', async t => {
@@ -149,13 +144,13 @@ test('launch accepts supported providers, UUID resume and a plain model name', a
   }
 });
 
-test('session files bind descendants, queue input in order and send paste followed by CR', async t => {
+test('session files bind descendants and undiscovered resume sends are awaited in order', async t => {
   const f = await createFixture(t);
   const launched = await f.launch(SESSION);
   await f.handle('session.hosts');
   await f.handle('session.send', { conversationId, text: 'first\nline' });
   await f.handle('session.send', { conversationId, text: 'second' });
-  assert.deepEqual(f.children[0].writes, []);
+  assert.deepEqual(f.children[0].writes, ['\x15', '\x1b[200~first\nline\x1b[201~', '\r', '\x15', '\x1b[200~second\x1b[201~', '\r']);
   await writeFile(join(f.directory, '9999.json'), JSON.stringify({ pid: 9999, sessionId: SESSION }));
   await writeFile(join(f.directory, '1000.json'), '{');
   assert.deepEqual(await f.handle('session.hosts'), { hosts: [] });
@@ -248,4 +243,98 @@ test('image sends paste each escaped path, wait 300ms, paste body, wait 500ms an
   await assert.rejects(f.handle('session.send', { conversationId, text: 'bad', attachments: ['../bad'] }), /Invalid attachments/);
   await f.handle('session.send', { conversationId, text: 'recovery' });
   assert.equal(f.children[0].writes.at(-1), '\r');
+});
+
+test('a panel, a menu and an unknown screen reject sends without writing any input', async t => {
+  const f = await createFixture(t);
+  await f.launch(SESSION);
+  await writeFile(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: SESSION }));
+  await f.handle('session.hosts');
+  for (const frame of [HELP_PANEL, MODEL_PANEL, '\x1b[2J\x1b[HStarting…']) {
+    f.children[0].output(frame);
+    await assert.rejects(f.handle('session.send', { conversationId, text: 'must not disappear' }), /Terminal is not ready/);
+    assert.deepEqual(f.children[0].writes, []);
+  }
+  f.children[0].output(promptFrame());
+  await f.handle('session.send', { conversationId, text: 'recovered' });
+  assert.equal(f.children[0].writes.at(-1), '\r');
+});
+
+test('a read-only command returns the rendered panel and closes it before the next send', async t => {
+  const f = await createFixture(t);
+  await f.launch(SESSION);
+  await writeFile(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: SESSION }));
+  await f.handle('session.hosts');
+  let submitted = false;
+  f.children[0].onWrite = data => {
+    if (data === '\r' && !submitted) { submitted = true; f.children[0].output(HELP_PANEL); }
+    if (data === '\x1b') f.children[0].output(promptFrame());
+  };
+  const result = await f.handle('session.send', { conversationId, text: '/help' }) as { delivery: string; command: { output: string; status: string } };
+  assert.equal(result.delivery, 'terminal');
+  assert.equal(result.command.status, 'completed');
+  assert.match(result.command.output, /Claude understands your codebase/);
+  assert.ok(!result.command.output.includes('\x1b'));
+  assert.ok(f.children[0].writes.includes('\x1b[200~/help \x1b[201~'), 'a space prevents fuzzy completion from executing another command');
+  assert.equal(f.children[0].writes.at(-1), '\x1b');
+  await f.handle('session.send', { conversationId, text: 'after help' });
+  assert.equal(f.children[0].writes.at(-1), '\r');
+});
+
+test('a selection stays open and a concurrent following message fails before paste', async t => {
+  const f = await createFixture(t);
+  const launch = await f.launch(SESSION);
+  await writeFile(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: SESSION }));
+  await f.handle('session.hosts');
+  f.children[0].onWrite = data => { if (data === '\r') f.children[0].output(MODEL_PANEL); };
+  const command = f.handle('session.send', { conversationId, text: '/model' });
+  const next = assert.rejects(f.handle('session.send', { conversationId, text: 'do not swallow' }), /Terminal is not ready/);
+  const result = await command as { terminalId: string; command: { output: string; status: string } };
+  await next;
+  assert.equal(result.terminalId, launch.terminalId);
+  assert.equal(result.command.status, 'interactive');
+  assert.match(result.command.output, /Select model/);
+  assert.deepEqual(f.children[0].writes, ['\x15', '\x1b[200~/model \x1b[201~', '\r']);
+});
+
+test('an unrecognized panel is never dismissed just because the command is /help', async t => {
+  const f = await createFixture(t);
+  await f.launch(SESSION);
+  await writeFile(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: SESSION }));
+  await f.handle('session.hosts');
+  f.children[0].onWrite = data => { if (data === '\r') f.children[0].output(MODEL_PANEL); };
+  const result = await f.handle('session.send', { conversationId, text: '/help' }) as { command: { status: string } };
+  assert.equal(result.command.status, 'interactive');
+  assert.ok(!f.children[0].writes.includes('\x1b'));
+});
+
+test('a modal appearing during the paste delay prevents Enter', async t => {
+  const f = await createFixture(t, [], { wait: async () => { f.children[0].output(MODEL_PANEL); } });
+  await f.launch(SESSION);
+  await writeFile(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: SESSION }));
+  await f.handle('session.hosts');
+  await assert.rejects(f.handle('session.send', { conversationId, text: 'not a menu selection' }), /Terminal is not ready/);
+  assert.ok(!f.children[0].writes.includes('\r'));
+});
+
+test('/clear rebinds the terminal and rejects sends still addressed to the previous conversation', async t => {
+  const f = await createFixture(t);
+  await writeFile(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: SESSION }));
+  await f.launch(SESSION);
+  await writeFile(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: SESSION }));
+  await f.handle('session.hosts');
+  await f.handle('session.hosts');
+  const next = 'abcdefab-1234-1234-1234-123456789abc';
+  const nextId = JSON.stringify(['claude', next]);
+  let changed: Promise<void> | undefined;
+  f.children[0].onWrite = data => { if (data === '\r') {
+    f.children[0].output(promptFrame());
+    changed = writeFile(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: next }));
+  } };
+  const result = await f.handle('session.send', { conversationId, text: '/clear' }) as { conversationId: string };
+  await changed;
+  assert.equal(result.conversationId, nextId);
+  await assert.rejects(f.handle('session.send', { conversationId, text: 'stale send' }), /no_host/);
+  await f.handle('session.send', { conversationId: nextId, text: 'new context' });
+  assert.ok(f.children[0].writes.includes('\x1b[200~new context\x1b[201~'));
 });

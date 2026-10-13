@@ -30,6 +30,8 @@ function readAttachments(value: SQLOutputValue | undefined): string[] {
 
 export function normalizeSentBody(body: unknown): string {
   const text = getMessageText(body as JsonValue);
+  const command = /<command-name>([^<]+)<\/command-name>/u.exec(text)?.[1];
+  if (command) return `${command} ${/<command-args>([\s\S]*?)<\/command-args>/u.exec(text)?.[1] ?? ''}`.trim();
   return text.replace(/<\/?pasted_content\b[^>]*>/gu, '').replace(/\[Image #\d+\]/gu, '').trim();
 }
 
@@ -64,7 +66,6 @@ export class SendWatch {
       busy_run: run && BUSY_STATES.has(String(run.state)) ? String(run.id) : null };
   }
   record(id: string, conversation: string, body: string, captured: ReturnType<SendWatch['capture']>, attachments: string[] = []) {
-    if (body.trimStart().startsWith('/')) return;
     this.db.prepare('INSERT OR IGNORE INTO api_send_watches VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)')
       .run(id, conversation, redact(body, this.rules()).text, captured.sent_ts, captured.baseline_seq, captured.busy_run,
         captured.busy_run ? null : Date.parse(captured.sent_ts) + SEND_WATCH_TIMEOUT_MS, 'pending', JSON.stringify(attachments));
@@ -136,8 +137,7 @@ export class SendWatch {
       try {
         const removed = this.db.prepare(`DELETE FROM api_send_watches WHERE
           (state = 'failed' AND failed_ts <= ?) OR
-          (state IN ('closed', 'retried') AND coalesce(closed_ts, failed_ts, sent_ts) <= ?) OR
-          ltrim(body) LIKE '/%'`).run(new Date(now - SEND_WATCH_FAILED_RETENTION_MS).toISOString(),
+          (state IN ('closed', 'retried') AND coalesce(closed_ts, failed_ts, sent_ts) <= ?)`).run(new Date(now - SEND_WATCH_FAILED_RETENTION_MS).toISOString(),
             new Date(now - SEND_WATCH_CLOSED_RETENTION_MS).toISOString());
         if (removed.changes) this.dirty = true;
       } catch (error) {
@@ -157,7 +157,6 @@ export class SendWatch {
     console.error(`Message delivery failed: ${JSON.stringify({ id: watch.id, conversation_id: watch.conversation_id, reason, excerpt: String(watch.body).slice(0, EXCERPT_LENGTH) })}`);
   }
   private checkRow(watch: WatchRow, now: number) {
-    if (String(watch.body).trimStart().startsWith('/')) return;
     const conversation = this.canonical(String(watch.conversation_id));
     const expected = normalizeSentBody(watch.body);
     // seq で過去の同文を除き、所属と利用者の役割の両方を確かめる。

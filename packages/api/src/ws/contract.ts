@@ -39,7 +39,7 @@ export interface ReviewCommand extends ScreenCommand {
 
 export const MAX_FRAME_BYTES = 14 * 1024 * 1024;
 
-export const TERMINAL_COMMANDS = ["attachment.put", "terminal.open", "terminal.input", "terminal.resize", "terminal.close", "terminal.attach", "session.launch", "session.send", "session.interrupt", "session.hosts", "ssh.read", "ssh.write", "ssh.test", "worktree.create", "git.branches"] as const;
+export const TERMINAL_COMMANDS = ["attachment.put", "terminal.open", "terminal.input", "terminal.resize", "terminal.close", "terminal.attach", "session.launch", "session.send", "session.interrupt", "session.hosts", "session.commands", "ssh.read", "ssh.write", "ssh.test", "worktree.create", "git.branches"] as const;
 export type { TerminalNotification } from "../terminal/index.ts";
 
 /**
@@ -54,6 +54,10 @@ export type { TerminalNotification } from "../terminal/index.ts";
 export type { ExecutionTarget, SshConnection } from "../remote/index.ts";
 
 /** attachment.put: {name, mime, dataBase64} → {attachmentId, path}。session.send: {conversationId, text, attachments?: string[], retryOf?: string}。 */
+/** session.commands: {conversationId?, projectId?, provider?} → {commands: SlashCommand[]}。 */
+export type { SlashCommand } from '../terminal/slash-commands.ts';
+/** session.send は画面から得た一時結果と端末への引き継ぎ先も返す。台帳の発言にはしない。 */
+export type { SessionSendResult } from '../terminal/hosts.ts';
 
 /** session.rename: {rootId, name}。名前は 80 文字まで。空欄で自動の名前に戻す。 */
 export interface SessionRenameRequest { rootId: string; name: string }

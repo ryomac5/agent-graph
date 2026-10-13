@@ -1,3 +1,4 @@
+import type { Fact } from "../../../core/src/ledger/index.ts";
 import assert from "node:assert/strict";
 import { appendFileSync, cpSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -9,6 +10,10 @@ import type { FactInput, Ledger, LedgerOptions } from "../../../core/src/ledger/
 import { observeClaudeFile, observeClaudeProjects } from "../../src/observe/claude/index.ts";
 import type { ClaudeUnsupportedPayload } from "../../src/observe/claude/index.ts";
 
+// 既存の未対応診断の識別と集約は、新しい未分類診断と分けて検証する。
+function isLegacyUnsupported(fact: Fact): fact is Extract<Fact, { kind: "observation.unsupported" }> {
+  return fact.kind === "observation.unsupported" && !String((fact.payload as { reason?: string } | null)?.reason).startsWith("Unclassified history kinds:");
+}
 const TS = "2026-10-06T10:00:00.000Z";
 function createFixture(t: TestContext, options: LedgerOptions = {}): { ledger: Ledger; directory: string } {
   const directory = mkdtempSync(join(tmpdir(), "agent-graph-claude-"));
@@ -209,11 +214,11 @@ test("未知の構造・種類・JSON を未対応とし、会話を隠さず、
   const path = join(directory, "future.jsonl");
   writeFileSync(path, [createMessage("future", "Future body.", "99.0.0"),
     JSON.stringify({ type: "future-record" }), JSON.stringify({ type: "user", uuid: "missing-body" }), "{bad-json}"].join("\n") + "\n");
-  assert.equal(observeClaudeFile(ledger, path, { observedTs: TS }).appended, 6);
+  assert.equal(observeClaudeFile(ledger, path, { observedTs: TS }).appended, 7);
   const projection = project(readFacts(ledger));
   assert.equal(projection.conversations.length, 1);
   assert.equal(projection.messages.length, 1);
-  assert.equal(projection.unsupported_observations.reduce((sum, row) => sum + row.count, 0), 3);
+  assert.equal(projection.unsupported_observations.reduce((sum, row) => sum + row.count, 0), 4);
   assert.equal(observeClaudeFile(ledger, path).appended, 0);
 });
 test("旧い版と新しい版の発言を構造で取り込む", (t) => {
@@ -249,9 +254,9 @@ test("未対応はファイル・種類・理由ごとに件数を集約し、�
   writeFileSync(path, [unknown, otherVersion, subtype, subtype,
     JSON.stringify({ type: "continued-in" }), JSON.stringify({ type: "system", subtype: "compact_boundary" })].join("\n") + "\n");
   const first = observeClaudeFile(ledger, path);
-  assert.equal(first.appended, 5);
+  assert.equal(first.appended, 7);
   assert.deepEqual(first.conflicts, []);
-  const unsupported = readFacts(ledger).filter((fact) => fact.kind === "observation.unsupported");
+  const unsupported = readFacts(ledger).filter((fact) => isLegacyUnsupported(fact));
   const payloads = unsupported.map((fact) => fact.payload as Partial<ClaudeUnsupportedPayload>);
   assert.deepEqual(payloads.map((payload) => payload.count), [2, 2, 1, 1]);
   assert.deepEqual(payloads.map((payload) => payload.record_type), ["future-record", "system", "continued-in", "system"]);
@@ -270,11 +275,11 @@ test("未対応はファイル・種類・理由ごとに件数を集約し、�
   assert.equal(replaced.appended, 0);
   assert.deepEqual(replaced.conflicts, []);
   appendFileSync(path, JSON.stringify({ type: "another-future-record" }) + "\n");
-  assert.equal(observeClaudeFile(ledger, path).appended, 1);
+  assert.equal(observeClaudeFile(ledger, path).appended, 2);
   const otherPath = join(directory, "another.jsonl");
   writeFileSync(otherPath, unknown + "\n" + otherVersion + "\n");
-  assert.equal(observeClaudeFile(ledger, otherPath).appended, 2);
-  assert.equal(readFacts(ledger).filter((fact) => fact.kind === "observation.unsupported").length, 6);
+  assert.equal(observeClaudeFile(ledger, otherPath).appended, 3);
+  assert.equal(readFacts(ledger).filter((fact) => isLegacyUnsupported(fact)).length, 6);
 });
 for (const includeNewGroup of [false, true]) {
   test(`保存済みの未対応が再登場しても cursor が進む（新規の組: ${includeNewGroup}）`, (t) => {
@@ -283,18 +288,18 @@ for (const includeNewGroup of [false, true]) {
     const known = JSON.stringify({ type: "system", subtype: "fictional-unknown" });
     writeFileSync(path, [known, createMessage("first")].join("\n") + "\n");
     const first = observeClaudeFile(ledger, path);
-    const initialUnsupported = readFacts(ledger).filter((fact) => fact.kind === "observation.unsupported");
+    const initialUnsupported = readFacts(ledger).filter((fact) => isLegacyUnsupported(fact));
     const addedLines = [...(includeNewGroup ? [JSON.stringify({ type: "fictional-new" })] : []),
       known, createMessage("second")];
     appendFileSync(path, addedLines.join("\n") + "\n");
     const second = observeClaudeFile(ledger, path);
     assert.equal(second.lines.length, addedLines.length);
-    assert.equal(second.appended, includeNewGroup ? 3 : 2);
+    assert.equal(second.appended, includeNewGroup ? 4 : 2);
     assert.deepEqual(second.conflicts, []);
     assert.ok(second.cursor.offset > first.cursor.offset);
     const savedCursor = readFacts(ledger).filter((fact) => fact.cursor).at(-1)!.cursor!;
     assert.deepEqual(JSON.parse(savedCursor), second.cursor);
-    assert.deepEqual(readFacts(ledger).filter((fact) => fact.kind === "observation.unsupported")
+    assert.deepEqual(readFacts(ledger).filter((fact) => isLegacyUnsupported(fact))
       .slice(0, initialUnsupported.length), initialUnsupported);
     appendFileSync(path, createMessage("third") + "\n");
     const third = observeClaudeFile(ledger, path);
@@ -304,7 +309,7 @@ for (const includeNewGroup of [false, true]) {
     assert.equal(observeClaudeFile(ledger, path).lines.length, 0);
     const projection = project(readFacts(ledger));
     assert.equal(projection.messages.length, 3);
-    assert.equal(readFacts(ledger).filter((fact) => fact.kind === "observation.unsupported").length,
+    assert.equal(readFacts(ledger).filter((fact) => isLegacyUnsupported(fact)).length,
       includeNewGroup ? 2 : 1);
   });
 }
@@ -335,10 +340,10 @@ test("未対応の集約保存前に停止しても後続の発言の cursor で
   };
   assert.throws(() => observeClaudeFile(failingLedger, path), /Simulated interrupted aggregate/);
   const result = observeClaudeFile(ledger, path);
-  assert.equal(result.appended, 2);
+  assert.equal(result.appended, 4);
   assert.deepEqual(result.conflicts, []);
   assert.equal(project(readFacts(ledger)).messages.length, 1);
-  assert.equal(readFacts(ledger).filter((fact) => fact.kind === "observation.unsupported").length, 2);
+  assert.equal(readFacts(ledger).filter((fact) => isLegacyUnsupported(fact)).length, 2);
   assert.equal(observeClaudeFile(ledger, path).appended, 0);
 });
 test("取り込む発言は uuid と本文の構造を必要とし、任意の時刻欄は判定に使わない", (t) => {
@@ -349,7 +354,7 @@ test("取り込む発言は uuid と本文の構造を必要とし、任意の�
     JSON.stringify({ type: "user", uuid: "missing-content", message: {} }),
     JSON.stringify(valid)].join("\n") + "\n");
   observeClaudeFile(ledger, path, { observedTs: TS });
-  const unsupported = readFacts(ledger).filter((fact) => fact.kind === "observation.unsupported");
+  const unsupported = readFacts(ledger).filter((fact) => isLegacyUnsupported(fact));
   assert.equal(unsupported.length, 1);
   assert.equal((unsupported[0].payload as Partial<ClaudeUnsupportedPayload>).count, 2);
   assert.equal(project(readFacts(ledger)).messages.length, 1);

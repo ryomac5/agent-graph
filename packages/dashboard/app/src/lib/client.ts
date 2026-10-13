@@ -110,6 +110,7 @@ export function createClient(options: ClientOptions) {
         for (const listener of terminalListeners) listener(message);
         return;
       }
+      if (message.type === 'send_watches' && Array.isArray(message.rows)) { target.setSendWatches(message.rows); return; }
       if (message.type === 'resync') { void resync(); return; }
       if (message.type === 'ack') {
         const item = pending.get(message.cmd_id);

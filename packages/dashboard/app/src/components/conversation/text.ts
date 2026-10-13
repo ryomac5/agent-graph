@@ -15,6 +15,7 @@ const text = {
     stopped: 'Have you stopped the external terminal?', confirm: 'Yes, resume here', branchInstead: 'No, continue in a branch', cancel: 'Cancel',
     cwd: 'Working directory', empty: 'No messages yet', pending: 'Sending…',
     failed: 'Command failed', noModels: 'No models available', chooseModel: 'Choose a model', noConversation: 'Conversation not found',
+    deliveryFailed: 'A message you sent did not reach the conversation', notDelivered: 'Not delivered', resend: 'Resend',
     backgroundWait: 'Waiting on a background task', working: 'Working', elapsed: 'Elapsed', waiting: 'Waiting', noCoverage: 'Source unknown', launchReady: 'Select a model and working directory.',
     user: 'User', assistant: 'Assistant', defaultEffort: 'Auto', applyShort: 'Apply', branchShort: 'Branch', takeOverShort: 'Take over',
     noModel: 'Not recorded', managedCoverage: 'Started here', observedCoverage: 'Terminal history', toolInput: 'Input', toolResult: 'Output',
@@ -24,6 +25,7 @@ const text = {
     filesChanged: 'Files changed', difference: 'Diff', details: 'Details', historyFormat: 'History format', access: 'Access', parentAgent: 'Requesting agent', handoffUnsupported: 'Take over not supported',
   },
   ja: {
+    deliveryFailed: '送った発言が会話に届きませんでした', notDelivered: '未配達', resend: '再送',
     backgroundWait: '裏の作業を待っています', working: '作業中',
     loadOlder: '古い発言を読み込む', agentReport: 'エージェントの報告', command: 'コマンド', oldHistory: '古い記録は読めません', projectInstructions: 'プロジェクトの指示', settingsInstructions: '設定の指示', defaultModel: 'おすすめ', recommended: 'おすすめ', inUse: '使用中', toolsUsed: 'ツールを使用',
     conversation: '会話', unknown: '不明', source: '送信元', confidence: '確かさ', streaming: '出力中', toolOutput: 'ツールの出力',

@@ -1,11 +1,12 @@
 import type { Row, ScreenState } from './store.ts';
 import { readText } from '../components/conversation/model.ts';
 
-const indexes = new WeakMap<ScreenState, Map<string, Row>>();
+const indexes = new WeakMap<Row[], Map<string, Row>>();
 
 /** 同じ系列の最新世代から状態と時計を選ぶ。子の状態は親に混ぜない。 */
 export function resolveActivity(state: ScreenState | undefined, conversationIds: string[], fallback = 'unknown', turns = new Set<string>()): { state: string; run?: Row } {
-  let latest = state && indexes.get(state);
+  const rows = state?.projection.runs;
+  let latest = rows && indexes.get(rows);
   if (!latest) {
     latest = new Map<string, Row>();
     for (const run of state?.projection.runs ?? []) {
@@ -13,7 +14,7 @@ export function resolveActivity(state: ScreenState | undefined, conversationIds:
       const previous = latest.get(id);
       if (!previous || Number(run.generation ?? 0) > Number(previous.generation ?? 0)) latest.set(id, run);
     }
-    if (state) indexes.set(state, latest);
+    if (rows) indexes.set(rows, latest);
   }
   const rank = (run: Row) => ['waiting_approval', 'waiting_input'].includes(readText(run.state)) ? 2
     : ['starting', 'running'].includes(readText(run.state)) ? 1 : 0;

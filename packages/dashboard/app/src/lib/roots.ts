@@ -1,6 +1,5 @@
 import { memoizeProjection } from './projection-cache.ts';
 import { resolveActivity } from './activity.ts';
-import { useMemo } from 'react';
 import type { Row, ScreenState } from './store.ts';
 import { readObject, readText } from '../components/conversation/model.ts';
 import { getRegisteredProjects, OTHER_PROJECT } from './projects.ts';
@@ -17,7 +16,7 @@ export interface Root {
   auto_name?: string;
 }
 interface ConversationTimes { first?: number; last?: string }
-const readConversationTimes = memoizeProjection(['messages', 'message_memberships', 'runs', 'conversations'], (state): Map<string, ConversationTimes> => {
+const readSpokenTimes = memoizeProjection(['messages', 'message_memberships'], state => {
   const messages = new Map((state.projection.messages ?? []).map(row => [row.id, row]));
   const spoken = new Map<string, Map<unknown, string>>();
   for (const link of state.projection.message_memberships ?? []) {
@@ -28,6 +27,10 @@ const readConversationTimes = memoizeProjection(['messages', 'message_membership
     if (!spoken.has(id)) spoken.set(id, new Map());
     spoken.get(id)!.set(link.message_id, ts);
   }
+  return new Map([...spoken].map(([id, times]) => [id, [...times.values()].sort()]));
+});
+const readConversationTimes = memoizeProjection(['messages', 'message_memberships', 'runs', 'conversations'], (state): Map<string, ConversationTimes> => {
+  const spoken = readSpokenTimes(state);
   const starts = new Map<string, number>();
   for (const run of state.projection.runs ?? []) {
     const time = Date.parse(String(run.started_ts ?? ''));
@@ -37,7 +40,7 @@ const readConversationTimes = memoizeProjection(['messages', 'message_membership
   }
   return new Map((state.projection.conversations ?? []).map(row => {
     const id = String(row.id);
-    const times = [...(spoken.get(id)?.values() ?? [])].sort();
+    const times = spoken.get(id) ?? [];
     // 最近の発言だけの窓を、系列の最初の発言と取り違えない。
     const complete = row.message_count === undefined || times.length >= Number(row.message_count);
     const firstMessage = Date.parse(String(row.first_message_ts ?? (complete ? times[0] : '') ?? ''));
@@ -99,7 +102,7 @@ export function reviewConversations(state: ScreenState): Set<string> {
 export function rootProject(root: { project: string | null }, registered: Set<string>): string {
   return root.project !== null && registered.has(root.project) ? root.project : OTHER_PROJECT;
 }
-const readRootsCache = memoizeProjection(['messages', 'message_memberships', 'runs', 'conversations', 'relations', 'roots', 'projects', 'aliases', 'delegations'], () => new Map<string | undefined, Root[]>());
+const readRootsCache = memoizeProjection(['messages', 'message_memberships', 'runs', 'conversations', 'relations', 'roots', 'projects', 'delegations'], () => new Map<string | undefined, Root[]>());
 export function selectRoots(state: ScreenState, project?: string): Root[] {
   const cache = readRootsCache(state);
   if (!cache.has(project)) cache.set(project, calculateRoots(state, project));
@@ -121,32 +124,31 @@ function calculateRoots(state: ScreenState, project?: string): Root[] {
     .toSorted((a, b) => Number(isRunning(b.state) || ['waiting_approval', 'waiting_input'].includes(b.state)) - Number(isRunning(a.state) || ['waiting_approval', 'waiting_input'].includes(a.state))
       || (b.last_activity_ts ?? '').localeCompare(a.last_activity_ts ?? '') || a.id.localeCompare(b.id));
 }
-export function useRootIndex(state: ScreenState) {
-  return useMemo(() => {
-    const conversations = new Map((state.projection.conversations ?? []).map(row => [readText(row.id), row]));
-    const runs = new Map<string, Row>();
-    for (const run of state.projection.runs ?? []) {
-      const id = readText(run.conversation_id);
-      if (!runs.has(id) || Number(run.generation ?? 0) >= Number(runs.get(id)?.generation ?? 0)) runs.set(id, run);
-    }
-    const runsById = new Map((state.projection.runs ?? []).map(row => [readText(row.id), row]));
-    const children = new Map<string, Row[]>();
-    for (const relation of state.projection.relations ?? []) {
-      if (relation.type !== 'delegated' || relation.active === 0 || relation.active === false) continue;
-      const parent = readText(relation.from_id);
-      if (!children.has(parent)) children.set(parent, []);
-      children.get(parent)!.push(relation);
-    }
-    const delegations = new Map<string, Row[]>();
-    for (const delegation of state.projection.delegations ?? []) {
-      const root = readText(delegation.root_id);
-      if (!delegations.has(root)) delegations.set(root, []);
-      delegations.get(root)!.push(delegation);
-    }
-    const requests = new Map((state.projection.delegations ?? []).map(row => [readText(row.request_id ?? row.id), row]));
-    return { conversations, runs, runsById, children, delegations, requests };
-  }, [state.projection.conversations, state.projection.runs, state.projection.relations, state.projection.delegations]);
-}
+const readRootIndex = memoizeProjection(['conversations', 'runs', 'relations', 'delegations'], state => {
+  const conversations = new Map((state.projection.conversations ?? []).map(row => [readText(row.id), row]));
+  const runs = new Map<string, Row>();
+  for (const run of state.projection.runs ?? []) {
+    const id = readText(run.conversation_id);
+    if (!runs.has(id) || Number(run.generation ?? 0) >= Number(runs.get(id)?.generation ?? 0)) runs.set(id, run);
+  }
+  const runsById = new Map((state.projection.runs ?? []).map(row => [readText(row.id), row]));
+  const children = new Map<string, Row[]>();
+  for (const relation of state.projection.relations ?? []) {
+    if (relation.type !== 'delegated' || relation.active === 0 || relation.active === false) continue;
+    const parent = readText(relation.from_id);
+    if (!children.has(parent)) children.set(parent, []);
+    children.get(parent)!.push(relation);
+  }
+  const delegations = new Map<string, Row[]>();
+  for (const delegation of state.projection.delegations ?? []) {
+    const root = readText(delegation.root_id);
+    if (!delegations.has(root)) delegations.set(root, []);
+    delegations.get(root)!.push(delegation);
+  }
+  const requests = new Map((state.projection.delegations ?? []).map(row => [readText(row.request_id ?? row.id), row]));
+  return { conversations, runs, runsById, children, delegations, requests };
+});
+export function useRootIndex(state: ScreenState) { return readRootIndex(state); }
 export type RootIndex = ReturnType<typeof useRootIndex>;
 /** 継続元も再開できるため、末尾でなく投影が選んだ操作先を使う。旧い配信では最新世代の状態と時刻で補う。 */
 export function currentRootConversation(root: Root, index?: RootIndex): string | undefined {

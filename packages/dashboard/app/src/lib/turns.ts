@@ -1,4 +1,5 @@
-import { useSyncExternalStore } from 'react';
+import { useCallback, useContext, useRef, useSyncExternalStore } from 'react';
+import { ViewVisible } from './visibility.tsx';
 import { readObject, readText } from '../components/conversation/model.ts';
 import { senderOf } from '../components/conversation/participants.ts';
 import { formatSeconds } from './format.ts';
@@ -98,7 +99,15 @@ export function useTurns() {
 }
 
 export function useTurnConversations(): Set<string> {
-  const ids = useSyncExternalStore(listener => { listeners.add(listener); return () => { listeners.delete(listener); }; },
-    () => JSON.stringify([...new Set(snapshot.turns.map(turn => turn.conversationId))].sort()), () => '[]');
+  const visible = useContext(ViewVisible);
+  const previous = useRef('[]');
+  const subscribe = useCallback((listener: () => void) => {
+    if (visible) listeners.add(listener);
+    return () => { listeners.delete(listener); };
+  }, [visible]);
+  const ids = useSyncExternalStore(subscribe, () => {
+    if (visible) previous.current = JSON.stringify([...new Set(snapshot.turns.map(turn => turn.conversationId))].sort());
+    return previous.current;
+  }, () => '[]');
   return new Set(JSON.parse(ids) as string[]);
 }

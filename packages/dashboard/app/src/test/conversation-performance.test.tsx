@@ -273,13 +273,13 @@ it('skips unrelated and identical patches but refreshes changed messages and del
   console.info('9 unrelated/no-op patches: conversation commits 9 -> 0, notification effects 9 -> 0, tree builds 0');
 });
 
-it.each([0, 3])('waits for snapshot generation %s and fetches each history window once', async generation => {
+it.each([0, 3])('prefetches before snapshot generation %s and consumes each history window once', async generation => {
   const target = createStore();
   const client = { command: vi.fn(async () => ({ type: 'ack' as const, cmd_id: 'cmd', ok: true, result: [] })),
     fetchConversation: vi.fn(async (_path: string) => ({ generation, projection: {}, next: null })) };
   render(<MemoryRouter><ConversationPage target={target} client={client} conversationId="c"/></MemoryRouter>);
   await act(async () => {});
-  expect(client.fetchConversation).not.toHaveBeenCalled();
+  expect(client.fetchConversation).toHaveBeenCalledTimes(1);
   await act(async () => { target.setSnapshot({ seq: 1, generation, projection: { conversations: [{ id: 'c', provider: 'codex' }] } }); });
   const windows = () => client.fetchConversation.mock.calls.filter(args => !String(args[0]).includes('edits='));
   expect(windows()).toHaveLength(1);
@@ -288,7 +288,7 @@ it.each([0, 3])('waits for snapshot generation %s and fetches each history windo
   generation++;
   await act(async () => { target.setSnapshot({ seq: 2, generation, projection: { conversations: [{ id: 'c', provider: 'codex' }] } }); });
   expect(windows()).toHaveLength(2);
-  console.info('initial history windows: 2 -> 1; fetches before snapshot: 0; resync adds exactly 1');
+  console.info('initial history windows: 1; fetches before snapshot: 0 -> 1; resync adds exactly 1');
 });
 
 it('builds one delegation tree for 200 messages and none when those messages are compared again', () => {

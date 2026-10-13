@@ -1,3 +1,5 @@
+import { VisibleView } from '../../lib/visibility.tsx';
+import { shareValue } from '../../lib/projection-cache.ts';
 import { WorkspaceTabButton } from '../../components/conversation/WorkingClock.tsx';
 import { FeatureErrorBoundary } from '../../components/FeatureErrorBoundary.tsx';
 import { StatusDot } from '../../components/StateBadge.tsx';
@@ -64,16 +66,17 @@ function CodeLabel({ document, name, language }: { document: CodeDocument; name:
   const state = useSyncExternalStore(document.subscribe, document.getSnapshot);
   return <>{name}{state.dirty && <span aria-label={language === 'ja' ? '未保存' : 'Unsaved'}> ●</span>}{state.external && <span aria-label={language === 'ja' ? '外で変更' : 'Changed on disk'}> !</span>}</>;
 }
-export function Workbench({ project, session, unresolvedConversationId, conversationId, client, language, bindings = DEFAULT_KEYS, renderConversation, registerOpenFile, newSession, openConversationId }: {
+export function Workbench({ project, session, unresolvedConversationId, conversationId, client, language, bindings = DEFAULT_KEYS, renderConversation, registerOpenFile, newSession, openConversationId, refreshTab }: {
   project: string; session?: string; conversationId: string; client: ConversationClient; language: Language; bindings?: KeyBindings;
   unresolvedConversationId?: string;
+  refreshTab?: (conversationId: string, previous: ConversationTabMetadata) => ConversationTabMetadata;
   openConversationId?: string; newSession?: string; renderConversation: (conversationId: string, onConversation: (id: string) => void) => ReactNode; registerOpenFile?: RefObject<(path: string, worktree?: string) => void>;
 }) {
-  const [conversationTabs, setConversationTabs] = useState<Record<string, ConversationTabMetadata>>({});
+  const [reportedConversationTabs, setConversationTabs] = useState<Record<string, ConversationTabMetadata>>({});
   const reportConversation = useCallback((tabId: string, metadata: ConversationTabMetadata) => {
     setConversationTabs(previous => {
       const current = previous[tabId];
-      return current?.name === metadata.name && current.state === metadata.state && current.title === metadata.title && current.autoName === metadata.autoName && current.startedAt === metadata.startedAt && current.elapsedStarted === metadata.elapsedStarted && current.elapsedLabel === metadata.elapsedLabel && current.model === metadata.model ? previous : { ...previous, [tabId]: metadata };
+      return current?.name === metadata.name && current.state === metadata.state && current.title === metadata.title && current.autoName === metadata.autoName && current.startedAt === metadata.startedAt && current.elapsedEnabled === metadata.elapsedEnabled && current.elapsedStarted === metadata.elapsedStarted && current.elapsedLabel === metadata.elapsedLabel && current.model === metadata.model ? previous : { ...previous, [tabId]: metadata };
     });
   }, []);
   const key = session === undefined ? undefined : workspaceKey(project, session);
@@ -136,6 +139,14 @@ export function Workbench({ project, session, unresolvedConversationId, conversa
     return () => window.removeEventListener('keydown', escape, true);
   }, [menu]);
   const panes = tree ? listPanes(tree) : [];
+  const previousTabs = useRef<Record<string, ConversationTabMetadata>>({});
+  const conversationTabs = useMemo(() => {
+    const next = { ...reportedConversationTabs };
+    if (refreshTab) for (const pane of tree ? listPanes(tree) : []) for (const tab of pane.tabs) {
+      if (tab.kind === 'conversation' && tab.id !== pane.active && next[tab.id]) next[tab.id] = refreshTab(tab.conversationId, next[tab.id]);
+    }
+    return previousTabs.current = shareValue(previousTabs.current, next);
+  }, [tree, reportedConversationTabs, refreshTab]);
   const focusedPane = panes.find(pane => pane.id === focused) ?? panes[0];
   const activeTab = focusedPane?.tabs.find(tab => tab.id === focusedPane.active);
   useEffect(() => {
@@ -283,12 +294,12 @@ export function Workbench({ project, session, unresolvedConversationId, conversa
     setTree(current => current && splitAndMoveTab(current, tab.id, pane, edge, paneId, splitId));
     setFocused(paneId); setTabMenu(undefined);
   }
-  function openConversation(conversationId: string): boolean {
+  const openConversation = useCallback((conversationId: string): boolean => {
     if (!focusedPane || focusedPane.tabs.length) return false;
     const tab: WorkspaceTab = { kind: 'conversation', id: id(), conversationId };
     setTree(tree => tree && updatePane(tree, focusedPane.id, pane => ({ ...pane, tabs: [tab], active: tab.id })));
     return true;
-  }
+  }, [tree, focused]);
   function focusPane(paneId: string, target: EventTarget) {
     if (focusedPane?.tabs.length === 0 && target instanceof Element && target.closest('.delegation-card')) return;
     setFocused(paneId);
@@ -367,7 +378,7 @@ export function Workbench({ project, session, unresolvedConversationId, conversa
   }
   return <OpenWorkspaceConversation.Provider value={openConversation}><OpenWorkspaceFile.Provider value={openFile}><div className="workbench workspace-conversation" tabIndex={-1} ref={root} aria-label={ja ? 'ワークスペース' : 'Workbench'} onKeyDownCapture={event => { if (handler(event.nativeEvent)) { event.preventDefault(); event.stopPropagation(); } }}>
     {tree ? renderTree(tree) : <div className="empty-state"><button className="btn btn-secondary" onClick={() => { setTree(createWorkspace(conversationId)); setFocused('initial-pane'); }}>{ja ? '会話を開く' : 'Open conversation'}</button><button className="btn btn-ghost" onClick={() => setPicker({ pane: id() })}>{ja ? 'ファイルを開く' : 'Open file'}</button></div>}
-    {panes.flatMap(node => node.tabs.map(tab => createPortal(<div className="workbench-content" style={{ display: 'contents' }} onFocusCapture={event => focusPane(node.id, event.target)} onPointerDownCapture={event => focusPane(node.id, event.target)}>{tab.kind === 'conversation' ? <WorkspaceConversationHeader.Provider value={{ tabId: tab.id, report: reportConversation }}><OpenWorkspaceTerminal.Provider value={terminalId => openTerminal(terminalId, node.id)}>{renderConversation(tab.conversationId, conversationId => replaceConversation(node.id, tab.id, conversationId))}</OpenWorkspaceTerminal.Provider></WorkspaceConversationHeader.Provider> : tab.kind === 'code' ? <FeatureErrorBoundary><Suspense fallback={<LoadingFeature language={language}/>}><CodeTab path={tab.path} document={getDocument(tab)} language={language}/></Suspense></FeatureErrorBoundary> : <TerminalTab key={`${tab.id}:${restart}`} session={getTerminal(tab)} language={language} reopen={() => { terminals.current.get(tab.id)?.dispose(); terminals.current.delete(tab.id); setRestart(value => value + 1); }}/>}</div>, getBody(tab.id), tab.id)))}
+    {panes.flatMap(node => node.tabs.map(tab => createPortal(<VisibleView mountHidden visible={tab.id === node.active}><div className="workbench-content" style={{ display: 'contents' }} onFocusCapture={event => focusPane(node.id, event.target)} onPointerDownCapture={event => focusPane(node.id, event.target)}>{tab.kind === 'conversation' ? <WorkspaceConversationHeader.Provider value={{ tabId: tab.id, report: reportConversation }}><OpenWorkspaceTerminal.Provider value={terminalId => openTerminal(terminalId, node.id)}>{renderConversation(tab.conversationId, conversationId => replaceConversation(node.id, tab.id, conversationId))}</OpenWorkspaceTerminal.Provider></WorkspaceConversationHeader.Provider> : tab.kind === 'code' ? <FeatureErrorBoundary><Suspense fallback={<LoadingFeature language={language}/>}><CodeTab path={tab.path} document={getDocument(tab)} language={language}/></Suspense></FeatureErrorBoundary> : <TerminalTab key={`${tab.id}:${restart}`} session={getTerminal(tab)} language={language} reopen={() => { terminals.current.get(tab.id)?.dispose(); terminals.current.delete(tab.id); setRestart(value => value + 1); }}/>}</div></VisibleView>, getBody(tab.id), tab.id)))}
     {tabDrag.dragging && tabDrag.point && <div className="workbench-drag-ghost" data-valid={!!tabDrag.preview} aria-hidden="true" style={{ left: tabDrag.point.x + 12, top: tabDrag.point.y + 12 }}>{displayLabel(panes.flatMap(pane => pane.tabs).find(tab => tab.id === tabDrag.dragging)!)}</div>}
     {picker && <FilePicker projectId={project} worktree={picker.worktree} client={client} language={language} close={() => { setPicker(undefined); root.current?.focus(); }} open={path => openFile(path, picker.worktree, picker.pane)}/>}
   </div></OpenWorkspaceFile.Provider></OpenWorkspaceConversation.Provider>;

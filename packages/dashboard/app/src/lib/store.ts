@@ -1,4 +1,5 @@
-import { useCallback, useSyncExternalStore } from 'react';
+import { useCallback, useContext, useRef, useSyncExternalStore } from 'react';
+import { ViewVisible } from './visibility.tsx';
 import { shareValue } from './projection-cache.ts';
 import { mergeIdentities, resolveProjection, resolveRow, type ScreenIdentities } from './identities.ts';
 
@@ -85,7 +86,13 @@ export function createStore() {
 export type ScreenStore = ReturnType<typeof createStore>;
 export const store = createStore();
 const identity = (state: ScreenState) => state;
+const noSubscribe = () => () => {};
 export function useScreenStore<T = ScreenState>(target = store, selector: (state: ScreenState) => T = identity as (state: ScreenState) => T) {
-  const getSnapshot = useCallback(() => selector(target.getSnapshot()), [target, selector]);
-  return useSyncExternalStore(target.subscribe, getSnapshot, getSnapshot);
+  const visible = useContext(ViewVisible);
+  const cached = useRef<{ value: T }>(undefined);
+  const getSnapshot = useCallback(() => {
+    if (visible || !cached.current) cached.current = { value: selector(target.getSnapshot()) };
+    return cached.current.value;
+  }, [target, selector, visible]);
+  return useSyncExternalStore(visible ? target.subscribe : noSubscribe, getSnapshot, getSnapshot);
 }

@@ -104,6 +104,27 @@ it('reads message times once for repeated root selections and elapsed rows', () 
   console.info(`root time message reads for ${REPEATS} selections + ${REPEATS} rows: ${before} -> ${ROWS}`);
 });
 
+it('does not scan message times again when only run evidence changes', () => {
+  let reads = 0;
+  const state = createState({
+    conversations: [{ id: 'c', provider: 'claude' }],
+    roots: [{ id: 'root', name: 'Work', conversation_ids: ['c'], state: 'idle', project: null }],
+    messages: Array.from({ length: ROWS }, (_, i) => ({ get id() { reads++; return `m${i}`; }, source_ts: TIME })),
+    message_memberships: Array.from({ length: ROWS }, (_, i) => ({ message_id: `m${i}`, conversation_id: 'c', active: 1 })),
+  });
+  selectRoots(state);
+  reads = 0;
+  for (let i = 0; i < REPEATS; i++) {
+    const next = { ...state, seq: i + 2, projection: { ...state.projection,
+      runs: [{ id: 'r', conversation_id: 'c', state: 'running', last_evidence_ts: new Date(Date.parse(TIME) + i * 1000).toISOString() }],
+    } };
+    expect(selectRoots(next)[0].state).toBe('running');
+    expect(startedAt(next, selectRoots(next)[0])).toBe(Date.parse(TIME));
+  }
+  expect(reads).toBe(0);
+  console.info(`${REPEATS} run updates: message-time index reads ${ROWS * REPEATS} -> ${reads}`);
+});
+
 it('compares 1000 notification runs by id and checks state only for changed rows', () => {
   let reads = 0;
   let states = 0;

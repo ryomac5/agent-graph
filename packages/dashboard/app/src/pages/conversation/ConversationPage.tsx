@@ -6,7 +6,7 @@ import { OpenWorkspaceConversation, OpenWorkspaceTerminal, WorkspaceConversation
 import { useAutosizeTextarea } from './useAutosizeTextarea.ts';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import { getRegisteredProjects, OTHER_PROJECT } from '../../lib/projects.ts';
-import { loadConversationEdits, loadConversationWindow, MESSAGE_PAGE_SIZE } from '../../lib/projection-client.ts';
+import { loadConversationEdits, loadConversationWindow, prefetchConversationWindow, takePrefetchedConversationWindow, MESSAGE_PAGE_SIZE } from '../../lib/projection-client.ts';
 import { staleApprovalText } from '../changes/model.ts';
 import type { Ack, createClient } from '../../lib/client.ts';
 import { store, useScreenStore, type Row, type ScreenState, type ScreenStore } from '../../lib/store.ts';
@@ -22,7 +22,7 @@ import { ApprovalRequestView, OutcomeChip, OutcomeIcon } from '../../components/
 import { providerName } from '../../components/ActivityRow.tsx';
 import { executionStates } from '../../components/activity.ts';
 import { isBlank, isToolOnly, Message, ToolRun } from '../../components/conversation/Message.tsx';
-import { harnessKind, readBody } from '../../lib/message-body.ts';
+import { harnessKind, readMessageBody } from '../../lib/message-body.ts';
 import { useToolResults } from '../../components/conversation/ToolCall.tsx';
 import { resolveParticipants, senderOf, type Sender } from '../../components/conversation/participants.ts';
 import { ACTIVE_STATES, compareEntries, messageSignature, PENDING_APPROVALS, readObject, readText, selectTimeline, showValue, type TimelineEntry } from '../../components/conversation/model.ts';
@@ -42,6 +42,7 @@ import { resolveActivity } from '../../lib/activity.ts';
 import { isWorkingTurn, useTurnConversations, useWorkingTurn } from '../../lib/turns.ts';
 import { useAttachments, MAX_ATTACHMENTS } from './useAttachments.ts';
 import { selectScreenTables } from '../../lib/projection-cache.ts';
+import { ViewVisible } from '../../lib/visibility.tsx';
 import { WorkingTimer, WorkingStateBadge } from '../../components/conversation/WorkingClock.tsx';
 import './conversation.css';
 
@@ -137,7 +138,7 @@ export function sameSent(recorded: string, sent: string): boolean {
   const a = recorded.trim().replace(/^(?:\[Image #\d+\]\s*)+/, ''); const b = sent.trim();
   return a === b || Boolean(b) && a.endsWith(b) && /^(?:\S+\.(?:png|jpe?g|gif|webp)\s+)+$/i.test(a.slice(0, a.length - b.length));
 }
-function ConversationTabHeader({ metadata, breadcrumb, actions }: { metadata: ConversationTabMetadata; breadcrumb?: React.ReactNode; actions: React.ReactNode }) {
+export function ConversationTabHeader({ metadata, breadcrumb, actions }: { metadata: ConversationTabMetadata; breadcrumb?: React.ReactNode; actions: React.ReactNode }) {
   const header = useContext(WorkspaceConversationHeader);
   const [slots, setSlots] = useState<{ back: HTMLElement; actions: HTMLElement }>();
   useLayoutEffect(() => {
@@ -146,10 +147,13 @@ function ConversationTabHeader({ metadata, breadcrumb, actions }: { metadata: Co
     const actions = document.getElementById(`workspace-actions-${header.tabId}`);
     if (back && actions) setSlots({ back, actions });
   }, [header?.tabId]);
-  useLayoutEffect(() => { if (header) header.report(header.tabId, metadata); }, [header?.tabId, header?.report, metadata.name, metadata.state, metadata.title, metadata.autoName, metadata.startedAt, metadata.elapsedStarted, metadata.elapsedLabel, metadata.model]);
+  useLayoutEffect(() => { if (header) header.report(header.tabId, metadata); }, [header?.tabId, header?.report, metadata.name, metadata.state, metadata.title, metadata.autoName, metadata.startedAt, metadata.elapsedEnabled, metadata.elapsedStarted, metadata.elapsedLabel, metadata.model]);
   return slots ? <>{breadcrumb && createPortal(<div className="conv-breadcrumb">{breadcrumb}</div>, slots.back)}{createPortal(actions, slots.actions)}</> : null;
 }
 function RenderConversationPage({ client, conversationId: explicitId, target = store, language = 'en', embedded = false, seriesIds, seriesState, displayName, breadcrumb, onConversation, newSession }: ConversationPageProps) {
+  const visible = useContext(ViewVisible);
+  const hasBeenVisible = useRef(visible);
+  if (visible) hasBeenVisible.current = true;
   const params = useParams();
   const selectState = useMemo(() => selectScreenTables(['conversations', 'runs', 'relations', 'delegations', 'messages', 'message_memberships', 'approvals', 'observation_gaps', 'projects', 'tasks', 'roots', 'aliases', 'artifacts', 'send_watches'], ['connection', 'deltas']), []);
   const state = useScreenStore(target, selectState);
@@ -167,6 +171,7 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
   const olderPending = useRef(false);
   const scrollAnchor = useRef<{ height: number; top: number; id?: string; offset?: number } | undefined>(undefined);
   const timeline = useRef<HTMLDivElement>(null);
+  const scrollPosition = useRef(0);
   const following = useRef(true);
   const location = useLocation();
   const navigate = useNavigate();
@@ -185,6 +190,11 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
   };
   const selectChild = useCallback((id: string) => selectChildAction.current(id), []);
   const anchorId = location.hash.startsWith('#message-') ? decodeURIComponent(location.hash.slice(9)) : undefined;
+  useEffect(() => {
+    if (!visible || !requestedId || target.getSnapshot().snapshotReady !== false) return;
+    // snapshot と窓の転送を重ね、表示に使う前に世代を照合する。
+    return prefetchConversationWindow(target, requestedId, anchorId, client.fetchConversation?.bind(client));
+  }, [requestedId, anchorId, client, target, visible]);
   const [detail, setDetail] = useState<{ id: string; projection: Record<string, Row[]>; hasOlder: boolean; windows: Record<string, boolean>; cursors: Record<string, Row | undefined> }>();
   const [editHistory, setEditHistory] = useState<{ id: string; rows: Row[] }>();
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -280,6 +290,7 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
   const historyIds = seriesIds?.length ? seriesIds.map(resolveConversation) : [conversationId];
   const seriesKey = historyIds.join('|');
   const timelineRuns = (state.projection.runs ?? []).filter(row => historyIds.includes(readText(row.conversation_id))).map(row => row.id).join('|');
+  const previousTimeline = useRef<{ allEntries: TimelineEntry[]; owner: Map<string, string> }>(undefined);
   const { allEntries, owner } = useMemo(() => {
     const seenMessages = new Set<string>();
     // 系列の発言は会話をまたいで時刻順に並べる。最新の発言が末尾に来る。会話が替わる所に区切りを 1 つ置く。
@@ -300,7 +311,12 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
       seriesStarted.add(id);
       return first ? [entry] : [{ kind: 'boundary', key: 'series:' + id, time: entry.time, row: { type: 'continued', series: true } } satisfies TimelineEntry, entry];
     });
-    return { allEntries, owner };
+    const previous = previousTimeline.current;
+    if (previous && previous.allEntries.length === allEntries.length && allEntries.every((entry, index) => {
+      const before = previous.allEntries[index];
+      return before.row === entry.row && before.key === entry.key && before.time === entry.time && previous.owner.get(entry.key) === owner.get(entry.key);
+    })) return previous;
+    return previousTimeline.current = { allEntries, owner };
   }, [historyMessages, historyMemberships, state.projection.approvals, state.projection.relations, state.projection.observation_gaps, timelineRuns, seriesKey, Boolean(seriesIds)]);
   const messageEntries = useMemo(() => allEntries.filter(entry => entry.kind === 'message'), [allEntries]);
   const failedDeliveries = (state.projection.send_watches ?? []).filter(row => row.state === 'failed' && resolveConversation(readText(row.conversation_id)) === conversationId);
@@ -310,8 +326,8 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
     setSentMessages(previous => {
       const remaining = previous.filter(message => {
         if (resolveConversation(message.conversationId) !== conversationId) return true;
-        const match = messageEntries.find(entry => !message.known.has(entry.row.id) && !reconciled.has(entry.row.id) && entry.row.role === 'user' && sameSent(readBody(entry.row.body), message.text))?.row
-          ?? pendingInputs.find(row => !message.known.has(row.id) && !reconciled.has(row.id) && sameSent(readBody(row.body), message.text));
+        const match = messageEntries.find(entry => !message.known.has(entry.row.id) && !reconciled.has(entry.row.id) && entry.row.role === 'user' && sameSent(readMessageBody(entry.row), message.text))?.row
+          ?? pendingInputs.find(row => !message.known.has(row.id) && !reconciled.has(row.id) && sameSent(readMessageBody(row), message.text));
         if (match) reconciled.add(match.id);
         return !match;
       });
@@ -331,7 +347,7 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
     return next;
   }
   useEffect(() => {
-    if ((!nativeProvider && provider !== 'claude') || !['connected', 'runner_unavailable'].includes(state.connection)) return;
+    if (!visible || (!nativeProvider && provider !== 'claude') || !['connected', 'runner_unavailable'].includes(state.connection)) return;
     let disposed = false;
     const poll = async () => {
       try {
@@ -346,7 +362,7 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
     void poll();
     const timer = setInterval(() => { void poll(); }, HOST_POLL_MS);
     return () => { disposed = true; clearInterval(timer); };
-  }, [client, nativeProvider, provider, conversationId, state.connection]);
+  }, [client, nativeProvider, provider, conversationId, state.connection, visible]);
   // 画面に出す発言は新しい窓だけだが、変えたファイルは読み込みで残した古い発言も含めて数える。
   const changedFiles = useMemo(() => {
     const editRows = [...new Map([...(editHistory?.id === conversationId ? editHistory.rows : []), ...messageEntries.map(entry => entry.row)]
@@ -387,7 +403,10 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
       const cursors = { ...previous?.cursors };
       const pages: Awaited<ReturnType<typeof loadConversationWindow>>[] = [];
       for (const id of order) {
-        const part = await loadConversationWindow(id, controller.signal,
+        const prefetch = !older && takePrefetchedConversationWindow(target, id, anchorId, controller.signal);
+        const early = prefetch ? await prefetch : undefined;
+        controller.signal.throwIfAborted();
+        const part = early?.generation === target.getSnapshot().generation ? early : await loadConversationWindow(id, controller.signal,
           older ? cursors[id] : undefined,
           older ? undefined : anchorId, client.fetchConversation ? path => client.fetchConversation!(path, controller.signal) : undefined);
         if (controller.signal.aborted || !isVisible(conversationId)) return;
@@ -410,12 +429,13 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
     finally { if (!controller.signal.aborted) setHistoryLoading(false); }
   }
   useEffect(() => {
+    if (!hasBeenVisible.current) return;
     olderPending.current = false; scrollAnchor.current = undefined;
     setDetail(undefined); setMessageLimit(MESSAGE_PAGE_SIZE); following.current = !anchorId;
     const releases = historyIds.filter(Boolean).map(id => client.watchConversation?.(id));
     if (conversationId && state.snapshotReady !== false) void loadHistory();
     return () => { historyController.current?.abort(); for (const release of releases) release?.(); };
-  }, [conversationId, seriesKey, state.generation, state.snapshotReady, client, anchorId, historyRevision]);
+  }, [conversationId, seriesKey, state.generation, state.snapshotReady, client, anchorId, historyRevision, hasBeenVisible.current]);
   useEffect(() => {
     if (!detail || detail.id !== conversationId) return;
     const controller = new AbortController();
@@ -459,20 +479,22 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
       scrollAnchor.current = { ...anchor, height: element.scrollHeight, top: element.scrollTop };
       if (!historyLoading) { scrollAnchor.current = undefined; olderPending.current = false; }
     } else if (element && following.current) element.scrollTop = element.scrollHeight;
+    if (element) scrollPosition.current = element.scrollTop;
   }, [entries.length, streamLength, conversationId, sentMessages.length, historyLoading, messageLimit, detail]);
   useEffect(() => {
     const element = timeline.current;
     if (!element || !inner.current || typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(() => { if (following.current) element.scrollTop = element.scrollHeight; });
+    const observer = new ResizeObserver(() => { if (following.current) { element.scrollTop = element.scrollHeight; scrollPosition.current = element.scrollTop; } });
     observer.observe(inner.current); observer.observe(element);
     return () => observer.disconnect();
   }, [conversation !== undefined]);
   function captureScrollAnchor(element: HTMLDivElement) {
     const top = element.getBoundingClientRect().top;
-    const viewed = [...element.querySelectorAll<HTMLElement>('[id^="message-"]')]
-      .find(row => row.getBoundingClientRect().height > 0 && row.getBoundingClientRect().bottom > top);
-    return { height: element.scrollHeight, top: element.scrollTop, id: viewed?.id,
-      offset: viewed ? viewed.getBoundingClientRect().top - top : undefined };
+    for (const row of element.querySelectorAll<HTMLElement>('[id^="message-"]')) {
+      const bounds = row.getBoundingClientRect();
+      if (bounds.height > 0 && bounds.bottom > top) return { height: element.scrollHeight, top: element.scrollTop, id: row.id, offset: bounds.top - top };
+    }
+    return { height: element.scrollHeight, top: element.scrollTop };
   }
   function loadOlderNearTop(element: HTMLDivElement) {
     if (element.scrollTop > LOAD_OLDER_THRESHOLD_PX || historyLoading || historyError || olderPending.current || !(detail?.hasOlder || messageEntries.length > shownMessages.size)) return;
@@ -483,9 +505,17 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
     else void loadHistory(true);
   }
   function nearBottom(element: HTMLElement) { return element.scrollHeight - element.scrollTop - element.clientHeight < STICK_TO_BOTTOM_PX; }
+  const scrollFrame = useRef<number | undefined>(undefined);
   function userScrolled() {
-    requestAnimationFrame(() => { if (timeline.current && !scrollAnchor.current) following.current = nearBottom(timeline.current); });
+    if (scrollFrame.current !== undefined) return;
+    scrollFrame.current = requestAnimationFrame(() => {
+      scrollFrame.current = undefined;
+      const element = timeline.current;
+      if (!element) return;
+      if (!scrollAnchor.current) following.current = nearBottom(element);
+    });
   }
+  useEffect(() => () => { if (scrollFrame.current !== undefined) cancelAnimationFrame(scrollFrame.current); }, []);
   useEffect(() => {
     let disposed = false;
     setModels([]); setModelsError('');
@@ -687,7 +717,7 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
       </div>
     </div>;
   return <section className={`conversation-page${embedded ? ' embedded' : ''}`} aria-label={t('conversation')}>
-    {workspaceHeader ? <ConversationTabHeader metadata={{ autoName: nameRoot?.auto_name, startedAt: conversationStart(state, conversationId), name: nameRoot?.user_name || nameRoot?.name || title, state: status, title: [nameRoot?.name || title, dictionaries[language][status]].filter(Boolean).join(' · '), elapsedStarted: Number.isFinite(elapsedTurn?.started) ? elapsedTurn!.started : undefined, elapsedLabel: t(status.startsWith('waiting') ? 'waiting' : 'elapsed'), model: shownModel }} breadcrumb={back} actions={headerActions}/> : <header className="conv-header">
+    {workspaceHeader ? <ConversationTabHeader metadata={{ autoName: nameRoot?.auto_name, startedAt: conversationStart(state, conversationId), name: nameRoot?.user_name || nameRoot?.name || title, state: status, title: [nameRoot?.name || title, dictionaries[language][status]].filter(Boolean).join(' · '), elapsedEnabled: !seriesIds, elapsedStarted: Number.isFinite(elapsedTurn?.started) ? elapsedTurn!.started : undefined, elapsedLabel: t(status.startsWith('waiting') ? 'waiting' : 'elapsed'), model: shownModel }} breadcrumb={back} actions={headerActions}/> : <header className="conv-header">
       <div className="conv-title-row" onClick={event => {
         if (!(event.target instanceof Element) || !event.target.closest('.state-badge')) return;
         event.preventDefault(); setDetailsOpen(true);
@@ -715,7 +745,13 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
       </section>}
     {filesOpen && changedFiles.length > 0 && <ChangedFiles id={filesId} key={conversationId} files={changedFiles} language={language}/>}
     <div className="conv-timeline" ref={timeline} aria-label={t('conversation')} tabIndex={0}
-      onScroll={event => { if (scrollAnchor.current) scrollAnchor.current = captureScrollAnchor(event.currentTarget); else following.current = nearBottom(event.currentTarget); loadOlderNearTop(event.currentTarget); }}
+      onScroll={event => {
+        const element = event.currentTarget;
+        if (element.scrollTop < scrollPosition.current) following.current = false;
+        scrollPosition.current = element.scrollTop;
+        if (scrollAnchor.current) scrollAnchor.current = captureScrollAnchor(element);
+        userScrolled(); loadOlderNearTop(element);
+      }}
       onWheel={userScrolled} onTouchMove={userScrolled} onKeyDown={userScrolled} onPointerUp={userScrolled}><div className="conv-timeline-inner" ref={inner}>
       {anchorId && <AppLink to={`/c/${encodeURIComponent(conversationId)}`}>Latest</AppLink>}
       {historyLoading && <div role="status" aria-label={language === 'ja' ? '発言を読み込み中' : 'Loading messages…'} className="history-loading"/>}
@@ -727,7 +763,7 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
         }
         if (entry.kind === 'instructions' || entry.kind === 'project') return <details className="timeline-instructions" key={entry.key}>
           <summary>{entry.kind === 'project' ? t('projectInstructions') : language === 'ja' ? `${t('settingsInstructions')} ${entry.rows.length} 件` : `${t('settingsInstructions')}: ${entry.rows.length}`}</summary>
-          {entry.rows.map(item => <pre className="code-block" key={item.key}>{readBody(item.row.body)}</pre>)}
+          {entry.rows.map(item => <pre className="code-block" key={item.key}>{readMessageBody(item.row)}</pre>)}
         </details>;
         if (entry.kind === 'message') {
           const sender = senderOf(entry.row, participants);
@@ -746,7 +782,7 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
       {failedDeliveries.map(row => <Message key={'delivery:' + row.id} language={language} sender={senderOf({ role: 'user' }, participants)} row={{ ...row, source_ts: row.sent_ts, role: 'user', body_state: 'stored', delivery_state: 'failed', retry_pending: pending }} onRetry={retryDelivery}/>)}
       {sentMessages.filter(message => resolveConversation(message.conversationId) === conversationId
         && !failedDeliveries.some(row => row.body === message.text)
-        && !pendingInputs.some(row => !message.known.has(row.id) && sameSent(readBody(row.body), message.text))).map(message => <Message key={message.id} language={language} sender={senderOf({ role: 'user' }, participants)} row={{ id: message.id, role: 'user', body: message.text, body_state: 'stored', delivery_state: message.acknowledged ? undefined : 'sending' }}/>) }
+        && !pendingInputs.some(row => !message.known.has(row.id) && sameSent(readMessageBody(row), message.text))).map(message => <Message key={message.id} language={language} sender={senderOf({ role: 'user' }, participants)} row={{ id: message.id, role: 'user', body: message.text, body_state: 'stored', delivery_state: message.acknowledged ? undefined : 'sending' }}/>) }
       {deltas.map(([key, delta]) => <Message key={key} language={language} streaming sender={agentSender} showName={nameShown(agentSender)}
         row={{ id: delta.messageId ?? key, role: 'assistant', body: delta.text, body_state: 'stored' } satisfies Row}/>)}
     </div></div>

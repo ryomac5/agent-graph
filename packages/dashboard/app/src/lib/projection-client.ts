@@ -1,5 +1,5 @@
 import { compareEventOrder } from '../../../../core/src/ledger/event-order.ts';
-import type { Row } from './store.ts';
+import type { Row, ScreenStore } from './store.ts';
 import { changesFiles } from './conversation-changes.ts';
 
 export const MESSAGE_PAGE_SIZE = 200;
@@ -29,6 +29,46 @@ export async function loadConversationWindow(id: string, signal: AbortSignal, be
     message_memberships: page.projection.message_memberships ?? [], edit_messages: [] as Row[] },
     hasOlder: page.hasOlder ?? false, olderCursor: page.olderCursor ?? page.projection.messages?.toSorted(compareMessages)[0],
     conversation: page.projection.conversations?.[0] };
+}
+
+interface PrefetchedWindow {
+  id: string; messageId?: string; controller: AbortController; readers: number;
+  page: Promise<Awaited<ReturnType<typeof loadConversationWindow>> | undefined>;
+}
+const prefetchedWindows = new WeakMap<ScreenStore, Map<string, PrefetchedWindow>>();
+/** snapshot による作業場の作り直しをまたいで、先行取得した窓を渡す。 */
+export function prefetchConversationWindow(target: ScreenStore, id: string, messageId?: string, fetchPage?: (path: string, signal: AbortSignal) => Promise<ConversationPageData>) {
+  let windows = prefetchedWindows.get(target);
+  if (!windows) { windows = new Map(); prefetchedWindows.set(target, windows); }
+  const key = JSON.stringify([id, messageId]);
+  let window = windows.get(key);
+  if (!window) {
+    const controller = new AbortController();
+    window = { id, messageId, controller, readers: 0, page: loadConversationWindow(id, controller.signal, undefined, messageId,
+      fetchPage ? path => fetchPage(path, controller.signal) : undefined).catch(() => undefined) };
+    windows.set(key, window);
+  }
+  window.readers++;
+  const current = window;
+  return () => {
+    current.readers--;
+    // 同じ React commit で差し替わる作業場には、取得中の窓を先に渡す。
+    queueMicrotask(() => {
+      if (current.readers === 0 && windows.get(key) === current) { windows.delete(key); current.controller.abort(); }
+    });
+  };
+}
+export function takePrefetchedConversationWindow(target: ScreenStore, id: string, messageId: string | undefined, signal: AbortSignal) {
+  const windows = prefetchedWindows.get(target);
+  const identities = target.getSnapshot().identities;
+  for (const [key, window] of windows ?? []) {
+    if ((identities?.conversations[window.id] ?? window.id) !== id || window.messageId !== messageId) continue;
+    windows!.delete(key);
+    const abort = () => window.controller.abort();
+    if (signal.aborted) abort();
+    else signal.addEventListener('abort', abort, { once: true });
+    return window.page.finally(() => signal.removeEventListener('abort', abort));
+  }
 }
 
 // 変更ファイルの要求は本文の表示を待たせない。

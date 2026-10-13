@@ -1,13 +1,13 @@
 import { harnessKind } from '../../lib/message-body.ts';
 import { isBlank, isToolOnly } from './Message.tsx';
 import { isDelegationTool } from './DelegationCard.tsx';
-import { messageSignature, readBody, readObject, readText, type TimelineEntry } from './model.ts';
+import { messageSignature, readMessageBody, readObject, readText, type TimelineEntry } from './model.ts';
 import type { Row } from '../../lib/store.ts';
 
 export type DisplayEntry = TimelineEntry | { [Kind in 'tools' | 'instructions' | 'project']: { kind: Kind; key: string; rows: TimelineEntry[] } }['tools' | 'instructions' | 'project'];
 export function instructionKind(row: Row): 'instructions' | 'project' | undefined {
   if (['developer', 'system'].includes(readText(row.role))) return 'instructions';
-  if (row.role === 'user' && /^(?:# AGENTS\.md\b|<INSTRUCTIONS>)/.test(readBody(row.body).trimStart())) return 'project';
+  if (row.role === 'user' && /^(?:# AGENTS\.md\b|<INSTRUCTIONS>)/.test(readMessageBody(row).trimStart())) return 'project';
 }
 /** 見える発言を基準に、空の区切りと内部の履歴を整理する。 */
 export function groupToolRuns(entries: TimelineEntry[]): DisplayEntry[] {
@@ -22,7 +22,7 @@ export function groupToolRuns(entries: TimelineEntry[]): DisplayEntry[] {
       const signature = messageSignature(entry.row, entry.time);
       if (seen.has(signature)) continue;
       seen.add(signature);
-      if (isBlank(entry.row) || entry.row.role === 'notification' || !entry.row.content_normalized && harnessKind(readBody(entry.row.body)) === 'notification') continue;
+      if (isBlank(entry.row) || entry.row.role === 'notification' || !entry.row.content_normalized && harnessKind(readMessageBody(entry.row)) === 'notification') continue;
       if (isToolOnly(entry.row) && Array.isArray(entry.row.body) && entry.row.body.map(readObject).every(block => block.type === 'tool_result' && calls.has(block.tool_use_id))) continue;
       const instruction = instructionKind(entry.row);
       if (instruction) {

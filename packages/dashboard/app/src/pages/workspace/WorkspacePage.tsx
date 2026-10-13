@@ -1,3 +1,6 @@
+import { VisibleView } from '../../lib/visibility.tsx';
+import { refreshConversationTab } from '../../lib/conversation-tab.ts';
+import { useTurnConversations } from '../../lib/turns.ts';
 import { useMemo, useState, useRef, type ReactNode } from 'react';
 import { NavLink, useNavigate, useParams, useSearchParams } from 'react-router';
 import { store, useScreenStore, type ScreenStore } from '../../lib/store.ts';
@@ -26,10 +29,10 @@ export function ProjectHeader({ route, name, language = 'en', actions }: { route
     <span className="spacer"/>{actions}</header>;
 }
 
-export function WorkspacePage({ project: suppliedProject, target = store, client, renderConversation, language = 'en', showRootList = true, conversationId: suppliedConversation, bindings }: {
+export function WorkspacePage({ project: suppliedProject, target = store, client, renderConversation, language = 'en', showRootList = true, panelVisible = true, conversationVisible = true, conversationId: suppliedConversation, bindings }: {
   project?: string; target?: ScreenStore; client: ConversationClient; language?: Language; renderConversation?: (conversationId: string) => ReactNode;
   /** 会話の一覧を作業場に出すか。サイドバーに一覧があるアプリの画面では出さない。 */
-  showRootList?: boolean; conversationId?: string; bindings?: KeyBindings;
+  showRootList?: boolean; panelVisible?: boolean; conversationVisible?: boolean; conversationId?: string; bindings?: KeyBindings;
 }) {
   const t = dictionaries[language];
   const openFile = useRef<(path: string, worktree?: string) => void>(() => {});
@@ -39,8 +42,9 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
   const route = suppliedProject ?? params.project ?? '';
   const state = useScreenStore(target);
   const project = resolveProjectId(state, route);
-  const roots = useMemo(() => selectRoots(state, project), [state.projection.roots, state.projection.conversations, project]);
+  const roots = selectRoots(state, project);
   const index = useRootIndex(state);
+  const turns = useTurnConversations();
   // URL の会話が未配信でも、別の根の作業場に切り替えない。
   const selected = suppliedConversation
     ? roots.find(root => root.conversation_ids.includes(suppliedConversation) || buildRootTree(root, index).nodes.some(node => node.conversationId === suppliedConversation))
@@ -81,16 +85,16 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
           const next = new URLSearchParams(search); next.set('root', root.id); next.delete('path'); next.delete('child'); next.delete('session'); setSearch(next);
         }}/></div></section>}
       {conversationNotFound ? <section className="workspace-conversation" aria-label={t.conversation}><p role="status" className="status-line">{language === 'ja' ? '会話が見つかりません' : 'Conversation not found'}</p></section>
-        : (conversationId || newSession) ? <Workbench key={project} project={project} session={pendingWorkspace ? undefined : workspaceSession} unresolvedConversationId={unresolvedConversationId} conversationId={conversationId ?? ''} openConversationId={search.get('conversation') ?? suppliedConversation ?? undefined} newSession={newSession} client={client} language={language} bindings={bindings} registerOpenFile={openFile}
-        renderConversation={(tabConversation, onConversation) => <>
+        : (conversationId || newSession) ? <VisibleView visible={conversationVisible}><Workbench key={project} project={project} session={pendingWorkspace ? undefined : workspaceSession} unresolvedConversationId={unresolvedConversationId} conversationId={conversationId ?? ''} openConversationId={search.get('conversation') ?? suppliedConversation ?? undefined} newSession={newSession} client={client} language={language} bindings={bindings} registerOpenFile={openFile}
+        refreshTab={(id, previous) => refreshConversationTab(state, roots, id, previous, language, turns)} renderConversation={(tabConversation, onConversation) => <>
           {tabConversation === conversationId && childNode?.delegation?.state === 'failed' && <div className="request-detail-actions"><strong>{childTitle || childNode.label}</strong><button className="btn btn-secondary btn-sm" disabled={state.connection !== 'connected'} onClick={() => void retry(childNode)}>{t.retry}</button></div>}
           {retryError && <p role="alert" className="status-line danger">{retryError}</p>}
           {renderConversation && (tabConversation !== conversationId || childId || selected?.conversation_ids.length === 1) ? <>{childId && <header className="conv-header"><div className="conv-title-row conv-breadcrumb">{breadcrumb}</div></header>}{renderConversation(tabConversation)}</>
             : <ConversationPage onConversation={onConversation} newSession={{ projectId: project, cwd: String(state.projection.projects?.find(row => row.id === project)?.root_path ?? '') }} target={target} client={client} conversationId={tabConversation} embedded language={language}
                 breadcrumb={childId ? breadcrumb : undefined} seriesIds={tabConversation === conversationId && !childId ? series : undefined} seriesState={tabConversation === conversationId ? childId ? childNode?.state : selected?.state : undefined} displayName={tabConversation === conversationId ? childId ? childTitle : selected?.name : undefined}/>}
-        </>}/>
+        </>}/></VisibleView>
         : <section className="workspace-conversation" aria-label={t.conversation}/>}
-      <WorkspacePanel bindings={bindings} project={project} target={target} client={client} language={language} rootId={selected?.id}/>
+      <VisibleView visible={panelVisible}><WorkspacePanel bindings={bindings} project={project} target={target} client={client} language={language} rootId={selected?.id}/></VisibleView>
     </div>
   </div></OpenWorkspaceFile.Provider>;
 }

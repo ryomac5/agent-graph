@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { ViewVisible } from '../../lib/visibility.tsx';
+import { selectScreenTables } from '../../lib/projection-cache.ts';
 import { useParams, useSearchParams } from 'react-router';
 import { store, useScreenStore, type Row, type ScreenStore } from '../../lib/store.ts';
 import type { Language } from '../../lib/i18n.ts';
@@ -25,7 +27,8 @@ export function GraphPage({ project: suppliedProject, target = store, client, la
 }) {
   const params = useParams(); const [search, setSearch] = useSearchParams();
   const route = suppliedProject ?? params.project ?? '';
-  const state = useScreenStore(target); const project = resolveProjectId(state, route);
+  const selectState = useMemo(() => selectScreenTables(['roots', 'conversations', 'runs', 'relations', 'delegations', 'approvals', 'messages', 'message_memberships', 'projects'], ['connection', 'pages', 'projectionError']), []);
+  const state = useScreenStore(target, selectState); const project = resolveProjectId(state, route);
   const roots = useMemo(() => selectRoots(state, project), [state, project]);
   const root = roots.find(item => item.id === (rootId ?? search.get('root'))) ?? roots[0];
   const index = useRootIndex(state);
@@ -62,15 +65,17 @@ export function GraphPage({ project: suppliedProject, target = store, client, la
     return { ...built, nodes };
   }, [root, index, state, language]);
   const [now, setNow] = useState(Date.now);
-  useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 10_000); return () => clearInterval(timer); }, []);
+  const visible = useContext(ViewVisible);
+  useEffect(() => { if (!visible) return; setNow(Date.now()); const timer = window.setInterval(() => setNow(Date.now()), 10_000); return () => clearInterval(timer); }, [visible]);
   const [role, setRole] = useState<ChildRole>(); const [range, setRange] = useState<TimeRange>('6h');
   const requested = tree.nodes.find(node => node.conversationId === search.get('child'))?.id;
   const [detail, setDetail] = useState<string>();
   useEffect(() => { setDetail(undefined); }, [requested, root?.id]);
   const selected = detail ?? requested ?? root?.id ?? '';
-  const expanded = readExpanded(search.getAll('expanded'));
+  const expandedKey = JSON.stringify(search.getAll('expanded'));
+  const expanded = useMemo(() => readExpanded(JSON.parse(expandedKey)), [expandedKey]);
   const [compact, setCompact] = useState(true);
-  const model = buildRows(tree, { now, expanded, selected, role, state, compact });
+  const model = useMemo(() => buildRows(tree, { now, expanded, selected, role, state, compact }), [tree, now, expanded, selected, role, state, compact]);
   const surface = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const element = surface.current;
@@ -131,14 +136,14 @@ export function GraphPage({ project: suppliedProject, target = store, client, la
 
 export function AssignedGraphPage(props: Parameters<typeof GraphPage>[0]) {
   const { client, target = store } = props;
-  const state = useScreenStore(target);
+  const connection = useScreenStore(target, state => state.connection);
   const [rootAssignment, setRootAssignment] = useState<OutlineProps['rootAssignment']>();
   const [catalogs, setCatalogs] = useState<ModelCatalog>({});
   useEffect(() => {
     let active = true;
     setRootAssignment(undefined);
     setCatalogs({});
-    if (state.connection !== 'connected') return;
+    if (connection !== 'connected') return;
     const available = new Map(['claude', 'codex', 'antigravity'].map(provider => [provider,
       requestSettings<ModelCatalog[string]>(client, 'settings.models', { provider }).then(catalog => {
         if (active) setCatalogs(previous => ({ ...previous, [provider]: catalog }));
@@ -153,6 +158,6 @@ export function AssignedGraphPage(props: Parameters<typeof GraphPage>[0]) {
       if (active) setRootAssignment({ provider: candidate.executor, model: name, modelId: candidate.model });
     }).catch(() => undefined);
     return () => { active = false; };
-  }, [client, state.connection, props.rootId]);
+  }, [client, connection, props.rootId]);
   return <GraphPage {...props} rootAssignment={rootAssignment} catalogs={catalogs}/>;
 }

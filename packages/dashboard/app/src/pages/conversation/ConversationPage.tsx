@@ -1,3 +1,4 @@
+import { LoadingFeature } from '../../components/LoadingFeature.tsx';
 import { readSessionProvider, SESSION_PROVIDER_KEY } from '../../lib/session-start.ts';
 import { createPortal } from 'react-dom';
 import { SessionName } from '../../components/SessionName.tsx';
@@ -74,7 +75,7 @@ const STICK_TO_BOTTOM_PX = 120;
 const LOAD_OLDER_THRESHOLD_PX = 80;
 const HOST_POLL_MS = 5000;
 const HOST_START_TIMEOUT_MS = 30000;
-interface SessionHost { conversationId: string; terminalId: string; provider?: string; cwd?: string; disconnected?: boolean; projectId?: string; target?: { kind: string; id?: string } }
+export interface SessionHost { conversationId: string; terminalId: string; provider?: string; cwd?: string; disconnected?: boolean; projectId?: string; target?: { kind: string; id?: string } }
 function readHosts(result: unknown): SessionHost[] {
   const rows = readObject(result).hosts;
   return (Array.isArray(rows) ? rows : []).flatMap(row => {
@@ -208,7 +209,9 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
   const t = (key: ConversationText) => translate(language, key);
   const [sessionProvider, setSessionProvider] = useState(readSessionProvider);
   const openTerminal = useContext(OpenWorkspaceTerminal);
-  const [hosts, setHosts] = useState<SessionHost[]>([]);
+  // 起動時に確認済みの host を、投影と次の一覧応答が届くまで引き継ぐ。
+  const [hosts, setHosts] = useState<SessionHost[]>(() => readHosts({ hosts: [location.state?.sessionHost] }));
+  const [hostsLoadedFor, setHostsLoadedFor] = useState<string>();
   const [pendingHost, setPendingHost] = useState<SessionHost>();
   const [hostedConversation, setHostedConversation] = useState<Row>();
   const [receipt, setReceipt] = useState<{ conversationId: string; runId: string; provider: string; cwd: string; model: string; effort: string }>();
@@ -232,6 +235,7 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
   }, [receipt, receiptRunId, projectedRun?.id, projectedConversation?.origin]);
   // 会話の行がまだ届いていなくても、会話の id の先頭から提供元を読む。読めないと古い経路に落ちて送れなくなるからである。
   const provider = readText(conversation?.provider) || providerFromId(conversationId);
+  const shouldDiscoverHosts = Boolean(nativeProvider || provider === 'claude' || !conversation && conversationId);
   const launch = readObject(run?.launch);
   const saved = readModel(run);
   const currentModel = readText(run?.model) || saved.model;
@@ -347,7 +351,7 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
     return next;
   }
   useEffect(() => {
-    if (!visible || (!nativeProvider && provider !== 'claude') || !['connected', 'runner_unavailable'].includes(state.connection)) return;
+    if (!visible || !shouldDiscoverHosts || !['connected', 'runner_unavailable'].includes(state.connection)) return;
     let disposed = false;
     const poll = async () => {
       try {
@@ -355,6 +359,7 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
         if (!disposed && ack.ok) {
           const next = readHosts(ack.result);
           setHosts(next);
+          setHostsLoadedFor(conversationId);
           setPendingHost(previous => next.some(host => host.terminalId === previous?.terminalId) ? undefined : previous);
         }
       } catch { /* 接続の復帰後に一覧を取り直す。 */ }
@@ -362,7 +367,7 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
     void poll();
     const timer = setInterval(() => { void poll(); }, HOST_POLL_MS);
     return () => { disposed = true; clearInterval(timer); };
-  }, [client, nativeProvider, provider, conversationId, state.connection, visible]);
+  }, [client, shouldDiscoverHosts, conversationId, state.connection, visible]);
   // 画面に出す発言は新しい窓だけだが、変えたファイルは読み込みで残した古い発言も含めて数える。
   const changedFiles = useMemo(() => {
     const editRows = [...new Map([...(editHistory?.id === conversationId ? editHistory.rows : []), ...messageEntries.map(entry => entry.row)]
@@ -667,7 +672,8 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
   }
 
   if (!conversation) return <section className={`conversation-page missing${embedded ? ' embedded' : ''}`}><div className="empty-state">
-    <Icon name="message" size={22}/><h1>{t('conversation')}</h1><p>{t('noConversation')}</p></div></section>;
+    <Icon name="message" size={22}/><h1>{t('conversation')}</h1>{conversationId && hostsLoadedFor !== conversationId
+      ? <LoadingFeature language={language}/> : <p>{t('noConversation')}</p>}</div></section>;
   const Heading = embedded ? 'h2' : 'h1';
   const evidence = status === 'ended' ? run?.end_evidence : run?.last_evidence;
   const elapsedTurn = !seriesIds && isWorkingTurn(workingTurn) ? workingTurn : undefined;

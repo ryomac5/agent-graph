@@ -16,6 +16,13 @@ vi.mock('@xterm/xterm', () => ({ Terminal: class {
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { fit() {} } }));
 
 const newId = '["claude","new-conversation"]';
+function deferAck() {
+  let resolve!: (ack: Ack) => void;
+  const promise = new Promise<Ack>(accept => { resolve = accept; });
+  return { promise, resolve };
+}
+const host = { terminalId: 'terminal', conversationId: newId, provider: 'claude', cwd: '/repo', projectId: 'p' };
+const hostsAck: Ack = { type: 'ack', cmd_id: 'cmd', ok: true, result: { hosts: [host] } };
 const projects = [{ id: 'p', display_name: 'Project', root_path: '/repo', state: 'registered' }];
 beforeEach(() => {
   localStorage.clear(); sessionStorage.clear();
@@ -34,12 +41,20 @@ it.each([false, true])('shows the new + conversation before its root and merges 
     message_memberships: [{ id: 'old-link', message_id: 'old-message', conversation_id: 'old', active: 1 }],
   }, pages: paginated ? { roots: { total: 2, next: 'next-root' } } : undefined });
   target.setConnection('connected');
-  const command = vi.fn(async (name: string): Promise<Ack> => ({ type: 'ack', cmd_id: 'cmd', ok: true,
+  const discovery = deferAck(), pageHosts = deferAck();
+  let launched = false, discovered = false;
+  const command = vi.fn(async (name: string): Promise<Ack> => {
+    if (name === 'session.launch') launched = true;
+    if (name === 'session.hosts') {
+      if (!launched) return { ...hostsAck, result: { hosts: [] } };
+      if (!discovered) { discovered = true; return discovery.promise; }
+      return pageHosts.promise;
+    }
+    return { type: 'ack', cmd_id: 'cmd', ok: true,
     result: name === 'session.launch' || name === 'terminal.open' ? { terminalId: 'terminal' }
-      : name === 'session.hosts' ? { hosts: [{ terminalId: 'terminal', conversationId: newId, provider: 'claude', cwd: '/repo', projectId: 'p' }] }
       : name === 'list_models' ? [{ model: 'opus', displayName: 'Opus' }]
       : name === 'settings.read' ? { config: {} } : {},
-  }));
+  }; });
   const client = { command, subscribeTerminal: () => () => {} };
   function Page() {
     const [creating, setCreating] = useState(false);
@@ -47,8 +62,8 @@ it.each([false, true])('shows the new + conversation before its root and merges 
     const location = useLocation();
     return <><button aria-label="Create session" onClick={() => setCreating(true)}>+</button>
       <output data-testid="url">{location.search}</output>
-      {creating && <SessionCreate client={client} projects={projects} onClose={() => setCreating(false)} onCreated={(project, conversation) => {
-        setCreating(false); navigate(`/p/${project}?conversation=${encodeURIComponent(conversation)}`);
+      {creating && <SessionCreate client={client} projects={projects} onClose={() => setCreating(false)} onCreated={(project, conversation, host) => {
+        setCreating(false); navigate(`/p/${project}?conversation=${encodeURIComponent(conversation)}`, { state: { sessionHost: host } });
       }}/>}
       <WorkspacePage project="p" target={target} client={client} panelVisible={false}/></>;
   }
@@ -58,12 +73,17 @@ it.each([false, true])('shows the new + conversation before its root and merges 
   const previousWorkspace = localStorage.getItem(workspaceKey('p', 'old-root'));
   fireEvent.click(screen.getByRole('button', { name: 'Create session' }));
   fireEvent.click(screen.getByRole('button', { name: /^Create ⌘/ }));
+  await vi.waitFor(() => expect(discovered).toBe(true));
+  await act(async () => discovery.resolve(hostsAck));
   await vi.waitFor(() => expect(screen.getByTestId('url').textContent).toBe(`?conversation=${encodeURIComponent(newId)}`));
   expect(screen.queryByText('Previous history')).toBeNull();
   expect(screen.queryByRole('tab', { name: 'Previous root' })).toBeNull();
   expect(screen.queryByText('Conversation not found')).toBeNull();
   expect(screen.getByLabelText('Workbench')).toBe(workbench);
   const message = screen.getByRole('textbox', { name: 'Message' });
+  await act(async () => pageHosts.resolve(hostsAck));
+  expect(screen.queryByText('Conversation not found')).toBeNull();
+  expect(screen.getByRole('textbox', { name: 'Message' })).toBe(message);
   fireEvent.change(message, { target: { value: 'Unsent new message' } });
   const tabId = screen.getByRole('tab', { name: 'Conversation' }).id;
   const saved: PaneTree = { kind: 'split', id: 'saved-split', direction: 'horizontal', ratio: 0.7,
@@ -107,4 +127,27 @@ it.each([false, true])('shows the new + conversation before its root and merges 
   fireEvent.click(screen.getByRole('link', { name: 'Previous root' }));
   expect(await screen.findByText('Previous history')).toBeTruthy();
   expect(screen.getByTestId('url').textContent).toBe('?root=old-root');
+});
+
+it.each([[newId, true], [newId, false], ['missing-conversation', false]] as const)('waits for the first host response before deciding whether a URL conversation exists (%s, exists: %s)', async (conversationId, exists) => {
+  const target = createStore();
+  target.setSnapshot({ seq: 1, generation: 1, projection: { projects, conversations: [], roots: [] } });
+  target.setConnection('connected');
+  const pending = deferAck();
+  const command = vi.fn(async (name: string): Promise<Ack> => name === 'session.hosts' ? pending.promise
+    : { type: 'ack', cmd_id: 'cmd', ok: true, result: {} });
+  render(<MemoryRouter initialEntries={[`/p/p?conversation=${encodeURIComponent(conversationId)}`]}><WorkspacePage project="p" target={target} client={{ command }} panelVisible={false}/></MemoryRouter>);
+  await vi.waitFor(() => expect(command).toHaveBeenCalledWith('session.hosts', {}));
+  expect(screen.queryByText('Conversation not found')).toBeNull();
+  expect(screen.getByText('Loading…').getAttribute('role')).toBe('status');
+  expect(screen.queryByRole('textbox', { name: 'Message' })).toBeNull();
+  await act(async () => pending.resolve({ ...hostsAck, result: { hosts: exists ? [host] : [] } }));
+  expect(screen.queryByText('Loading…')).toBeNull();
+  if (exists) {
+    expect(screen.queryByText('Conversation not found')).toBeNull();
+    expect(screen.getByRole('textbox', { name: 'Message' })).toBeTruthy();
+  } else {
+    expect(screen.getByText('Conversation not found')).toBeTruthy();
+    expect(screen.queryByRole('textbox', { name: 'Message' })).toBeNull();
+  }
 });

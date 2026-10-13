@@ -29,7 +29,7 @@ it.each(['en', 'ja'] as const)('shows creation fields and creates a worktree on 
   fireEvent.change(screen.getByLabelText(ja ? 'ワークツリー名' : 'Worktree name'), { target: { value: 'feature' } });
   expect(document.querySelector('.provider-claude')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: /^(作成|Create) / }));
-  await waitFor(() => expect(f.onCreated).toHaveBeenCalledWith('demo', 'conversation'));
+  await waitFor(() => expect(f.onCreated).toHaveBeenCalledWith('demo', 'conversation', expect.objectContaining({ conversationId: 'conversation', terminalId: 'terminal' })));
   expect(f.command).toHaveBeenCalledWith('worktree.create', { projectId: 'demo', target: { kind: 'ssh', id: 'server' }, base: 'origin/main', name: 'feature' });
   expect(f.command).toHaveBeenCalledWith('session.launch', { projectId: 'demo', target: { kind: 'ssh', id: 'server' }, provider: 'claude', worktree: '/cache/tree' });
 });

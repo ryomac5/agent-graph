@@ -140,10 +140,10 @@ export function App({ target = store, client = unavailableClient, searchClient =
     if (launching.current.has(id)) return;
     launching.current.add(id); setStartingProjects(new Set(launching.current)); setCommandError('');
     try {
-      const conversation = await startSession(client, { projectId: id, target: { kind: 'local' }, provider: readSessionProvider() }, {
+      const host = await startSession(client, { projectId: id, target: { kind: 'local' }, provider: readSessionProvider() }, {
         terminalId: pendingTerminals.current.get(id), onLaunched: terminal => pendingTerminals.current.set(id, terminal), active: () => mounted.current,
       });
-      if (conversation && mounted.current) { pendingTerminals.current.delete(id); navigate('/p/' + encodeURIComponent(id) + '?conversation=' + encodeURIComponent(conversation)); setMobileView('conversation'); }
+      if (host && mounted.current) { pendingTerminals.current.delete(id); navigate('/p/' + encodeURIComponent(id) + '?conversation=' + encodeURIComponent(host.conversationId), { state: { sessionHost: host } }); setMobileView('conversation'); }
     } catch { if (mounted.current) setCommandError(language === 'ja' ? '会話を始められません' : 'Unable to start conversation'); }
     finally { launching.current.delete(id); if (mounted.current) setStartingProjects(new Set(launching.current)); }
   }
@@ -297,7 +297,7 @@ export function App({ target = store, client = unavailableClient, searchClient =
       <Route path="*" element={<EmptyView title="notFound" t={t}/>}/>
     </Routes>{commandError && <p role="alert" className="banner banner-danger">{commandError}</p>}</main></div>
     {addingProject && <ProjectAdd client={client} language={language} onClose={() => setAddingProject(false)} onAdded={id => { setAddingProject(false); setRevealedProject(id); setCollapsedProjects(value => ({ ...value, [id]: false })); navigate('/p/' + encodeURIComponent(id)); }}/> }
-    {creatingSession !== undefined && <SessionCreate client={client} projects={getRegisteredProjects(state)} initialProject={creatingSession} language={language} onClose={() => setCreatingSession(undefined)} onCreated={(project, conversation) => { setCreatingSession(undefined); navigate(`/p/${encodeURIComponent(project)}?conversation=${encodeURIComponent(conversation)}`); setMobileView('conversation'); }}/>}
+    {creatingSession !== undefined && <SessionCreate client={client} projects={getRegisteredProjects(state)} initialProject={creatingSession} language={language} onClose={() => setCreatingSession(undefined)} onCreated={(project, conversation, host) => { setCreatingSession(undefined); navigate(`/p/${encodeURIComponent(project)}?conversation=${encodeURIComponent(conversation)}`, { state: { sessionHost: host } }); setMobileView('conversation'); }}/>}
     {overlay === 'commands' && <CommandPalette language={language} commands={commands} onClose={() => setOverlay(undefined)}/>}
     {overlay === 'help' && <CommandDialog language={language} title={language === 'ja' ? 'キーボードショートカット' : 'Shortcuts'} onClose={() => setOverlay(undefined)}><dl>{Object.entries(bindings).map(([key, value]) => <div key={key}><dt>{keyLabel(key as KeyAction, language)}</dt><dd><kbd>{value}</kbd></dd></div>)}</dl></CommandDialog>}
     {overlay === 'interrupt' && <CommandDialog language={language} title={language === 'ja' ? '実行を中断しますか？' : 'Interrupt run?'} onClose={() => setOverlay(undefined)}><button className="btn btn-primary" onClick={() => { if (stopButton?.isConnected && !stopButton.disabled) stopButton.click(); setOverlay(undefined); }}>{language === 'ja' ? '中断' : 'Confirm interrupt'}</button><button className="btn btn-secondary" onClick={() => setOverlay(undefined)}>{language === 'ja' ? 'キャンセル' : 'Cancel'}</button></CommandDialog>}

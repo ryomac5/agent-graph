@@ -76,6 +76,7 @@ const STICK_TO_BOTTOM_PX = 120;
 const LOAD_OLDER_THRESHOLD_PX = 80;
 const HOST_POLL_MS = 5000;
 const HOST_START_TIMEOUT_MS = 30000;
+const HOST_DISCOVERY_POLL_MS = 250;
 export interface SessionHost { conversationId: string; terminalId: string; provider?: string; cwd?: string; disconnected?: boolean; projectId?: string; target?: { kind: string; id?: string } }
 function readHosts(result: unknown): SessionHost[] {
   const rows = readObject(result).hosts;
@@ -164,9 +165,11 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
   const conversationId = resolveConversation(requestedId);
   const visibleConversation = useRef(conversationId);
   visibleConversation.current = conversationId;
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   function isVisible(id: string) {
     const identities = target.getSnapshot().identities;
-    return (identities?.conversations[visibleConversation.current] ?? visibleConversation.current) === (identities?.conversations[id] ?? id);
+    return mounted.current && (identities?.conversations[visibleConversation.current] ?? visibleConversation.current) === (identities?.conversations[id] ?? id);
   }
   useEffect(() => { if (requestedId !== conversationId) onConversation?.(conversationId); }, [requestedId, conversationId]);
   const workspaceHeader = useContext(WorkspaceConversationHeader);
@@ -347,8 +350,10 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
     const ack = await client.command('session.hosts', {});
     if (!ack.ok) throw new Error(ack.error ?? t('failed'));
     const next = readHosts(ack.result);
-    setHosts(next);
-    setPendingHost(previous => next.some(host => host.terminalId === previous?.terminalId) ? undefined : previous);
+    if (isVisible(conversationId)) {
+      setHosts(next);
+      setPendingHost(previous => next.some(host => host.terminalId === previous?.terminalId) ? undefined : previous);
+    }
     return next;
   }
   useEffect(() => {
@@ -607,26 +612,24 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
             const ack = await client.command('session.launch', { projectId, provider: provider || 'claude', ...(resume ? { resume } : {}), ...(model && model !== 'default' ? { model } : {}) });
             if (!ack.ok) throw new Error(ack.error ?? t('failed'));
             terminalId = readText(readObject(ack.result).terminalId);
-            setPendingHost({ conversationId, terminalId });
+            if (isVisible(sourceConversation)) setPendingHost({ conversationId, terminalId });
           }
           const deadline = Date.now() + HOST_START_TIMEOUT_MS;
           let next = await refreshHosts();
           if (starting) {
             while (!next.some(host => host.terminalId === terminalId)) {
-              if (!isVisible(sourceConversation)) return;
               if (Date.now() >= deadline) throw new Error(language === 'ja' ? '会話の開始を確認できません。' : 'Unable to confirm the session start.');
-              await new Promise(resolve => setTimeout(resolve, 250));
+              await new Promise(resolve => setTimeout(resolve, HOST_DISCOVERY_POLL_MS));
               next = await refreshHosts();
             }
             destination = next.find(host => host.terminalId === terminalId)!.conversationId;
           }
         }
         const ids = await attachments.upload();
-        if (!isVisible(sourceConversation)) return;
         const ack = await client.command('session.send', { conversationId: destination, text: sent, ...(ids.length ? { attachments: ids } : {}) });
         if (!ack.ok) throw new Error(['Invalid attachment', 'Invalid attachments', 'Attachment too large', 'Attachment transfer failed'].includes(ack.error ?? '') ? attachments.text.failed : ack.error ?? t('failed'));
         clearSentDraft(draftKey, sent);
-        setSentMessages(previous => previous.map(message => message.id === messageId ? { ...message, conversationId: destination, acknowledged: true } : message));
+        if (mounted.current) setSentMessages(previous => previous.map(message => message.id === messageId ? { ...message, conversationId: destination, acknowledged: true } : message));
         if (!isVisible(sourceConversation)) return;
         attachments.clear();
         if (starting) {
@@ -634,9 +637,10 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
           if (onConversation) onConversation(destination); else navigate(`/c/${encodeURIComponent(destination)}`);
         }
       } catch (reason) {
+        if (mounted.current) setSentMessages(previous => previous.filter(message => message.id !== messageId));
+        if (!isVisible(sourceConversation)) return;
         if (reason instanceof Error && reason.message === 'no_host') setPendingHost(undefined);
-        if (isVisible(sourceConversation)) setError(reason instanceof Error ? reason.message : String(reason));
-        setSentMessages(previous => previous.filter(message => message.id !== messageId));
+        setError(reason instanceof Error ? reason.message : String(reason));
       } finally { if (isVisible(sourceConversation)) setPending(false); }
       return;
     }
@@ -648,9 +652,9 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
       ? { conversationId, ...launchPayload, ...(stopped ? { confirmStopped: true } : {}) }
       : { runId: run!.id, input: { text: sent } };
     const ack = await execute(command, payload, true);
-    if (!ack) { setSentMessages(previous => previous.filter(message => message.id !== messageId)); return; }
+    if (!ack) { if (mounted.current) setSentMessages(previous => previous.filter(message => message.id !== messageId)); return; }
     clearSentDraft(draftKey, sent);
-    setSentMessages(previous => previous.map(message => message.id === messageId ? { ...message, acknowledged: true } : message));
+    if (mounted.current) setSentMessages(previous => previous.map(message => message.id === messageId ? { ...message, acknowledged: true } : message));
     if (!isVisible(conversationId)) return;
     if (external) {
       const result = readObject(ack.result);

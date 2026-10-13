@@ -40,7 +40,8 @@ it('focuses the selected menu row and supports arrows, Enter, Escape and older v
 it.each(['en', 'ja'] as const)('preserves the provider default until the policy recommendation is explicitly chosen in %s', async language => {
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ projection: {}, generation: 0, next: null }) })));
   const target = createStore(); target.setSnapshot({ seq: 1, generation: 0, projection: { projects: [{ id: 'p', root_path: '/repo' }] } }); target.setConnection('connected');
-  const command = vi.fn(async (name: string) => ({ type: 'ack' as const, cmd_id: 'cmd', ok: true, result: name === 'settings.models' ? { defaults: { model: 'claude-sonnet-5-5', displayName: 'Sonnet 5.5', effort: 'medium', modelSource: { kind: 'file', path: '/repo/.claude/settings.local.json', key: 'model' }, effortSource: { kind: 'provider', key: 'model default effort' } } } : name === 'settings.read' ? { policy: { roles: { orchestrate: { standard: [{ executor: 'claude', model: 'claude-opus-5-5' }] } } } } : name === 'list_models' ? [{ model: 'default', displayName: 'Default (recommended)' }, { model: 'sonnet', displayName: 'Sonnet 5.5' }, { model: 'opus', displayName: 'Opus 5.5' }] : { hosts: [] } }));
+  let launched = false;
+  const command = vi.fn(async (name: string) => ({ type: 'ack' as const, cmd_id: 'cmd', ok: true, result: name === 'settings.models' ? { defaults: { model: 'claude-sonnet-5-5', displayName: 'Sonnet 5.5', effort: 'medium', modelSource: { kind: 'file', path: '/repo/.claude/settings.local.json', key: 'model' }, effortSource: { kind: 'provider', key: 'model default effort' } } } : name === 'settings.read' ? { policy: { roles: { orchestrate: { standard: [{ executor: 'claude', model: 'claude-opus-5-5' }] } } } } : name === 'list_models' ? [{ model: 'default', displayName: 'Default (recommended)' }, { model: 'sonnet', displayName: 'Sonnet 5.5' }, { model: 'opus', displayName: 'Opus 5.5' }] : name === 'session.launch' ? (launched = true, { terminalId: 't' }) : name === 'session.hosts' ? { hosts: launched ? [{ terminalId: 't', conversationId: '["claude","native"]' }] : [] } : {} }));
   render(<MemoryRouter><ConversationPage target={target} client={{ command }} newSession={{ cwd: '/repo', projectId: 'p' }} language={language}/></MemoryRouter>);
   await act(async () => {});
   const label = language === 'ja' ? 'モデル · Sonnet 5.5' : 'Model · Sonnet 5.5';
@@ -56,7 +57,7 @@ it.each(['en', 'ja'] as const)('preserves the provider default until the policy 
   fireEvent.change(screen.getByRole('textbox', { name: language === 'ja' ? '入力' : 'Message' }), { target: { value: 'Begin' } });
   fireEvent.click(screen.getByRole('button', { name: language === 'ja' ? '送信' : 'Send' }));
   await waitFor(() => expect(command).toHaveBeenCalledWith('session.launch', { projectId: 'p', provider: 'claude', model: 'opus' }));
-  await act(async () => {});
+  await waitFor(() => expect(command).toHaveBeenCalledWith('session.send', { conversationId: '["claude","native"]', text: 'Begin' }));
 });
 it('adds sixteen pixels to row geometry in narrow panels without changing counts or grouping', () => {
   const tree = { roots: ['root'], edges: [], unresolved: [], nodes: [{ id: 'root', kind: 'conversation' as const, label: 'Root', role: 'orchestrate', state: 'idle', provider: 'claude', model: 'opus', children: ['child'], attempts: [] }, { id: 'child', kind: 'conversation' as const, label: 'Child', role: 'implement', state: 'running', provider: 'codex', model: 'gpt-6.1-sol', children: [], attempts: [] }] };
@@ -117,35 +118,67 @@ it('discards a default model response from the previous working directory', asyn
   expect(screen.queryByRole('button', { name: 'Model · Opus 5.5' })).toBeNull();
 });
 
-it.each(['poll', 'launch', 'hosts'] as const)('cancels session discovery on unmount while waiting for %s', async pending => {
+it.each(['poll', 'launch', 'hosts'] as const)('sends exactly once after unmount while waiting for %s and leaves no timers', async pending => {
   vi.useFakeTimers();
   const target = createStore();
   target.setSnapshot({ seq: 1, generation: 0, projection: { projects: [{ id: 'p', root_path: '/repo' }] } });
   target.setConnection('connected');
   const ack = (result: unknown) => ({ type: 'ack' as const, cmd_id: 'cmd', ok: true, result });
   let launched = false;
+  let discovered = false;
+  const onConversation = vi.fn();
   let complete: (() => void) | undefined;
-  const command = vi.fn(async (name: string) => {
+  const command = vi.fn(async (name: string, _payload: unknown) => {
     if (name === 'session.launch') {
       launched = true;
       if (pending === 'launch') return new Promise<ReturnType<typeof ack>>(resolve => { complete = () => resolve(ack({ terminalId: 't' })); });
       return ack({ terminalId: 't' });
     }
-    if (name === 'session.hosts' && launched && pending === 'hosts') return new Promise<ReturnType<typeof ack>>(resolve => { complete = () => resolve(ack({ hosts: [] })); });
-    return ack({ hosts: [] });
+    if (name === 'session.hosts') {
+      const hosts = [{ terminalId: 't', conversationId: '["claude","native"]' }];
+      if (launched && pending === 'hosts' && !discovered) return new Promise<ReturnType<typeof ack>>(resolve => { complete = () => resolve(ack({ hosts })); });
+      return ack({ hosts: discovered ? hosts : [] });
+    }
+    return ack({});
   });
-  const view = render(<MemoryRouter><ConversationPage target={target} client={{ command }} newSession={{ cwd: '/repo', projectId: 'p' }}/></MemoryRouter>);
+  const view = render(<MemoryRouter><ConversationPage target={target} client={{ command }} newSession={{ cwd: '/repo', projectId: 'p' }} onConversation={onConversation}/></MemoryRouter>);
   await act(async () => {});
   fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Begin' } });
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
   expect(command).toHaveBeenCalledWith('session.launch', expect.anything());
   if (pending !== 'poll') expect(complete).toBeTypeOf('function');
   view.unmount();
-  const calls = command.mock.calls.length;
-  await act(async () => { complete?.(); });
-  // 待機の Promise も解決し、後片付け後の再ポーリングを残さない。
+  discovered = true;
+  await act(async () => { complete?.(); await vi.advanceTimersByTimeAsync(250); });
+  expect(command.mock.calls.filter(([name]) => name === 'session.launch')).toHaveLength(1);
+  expect(command.mock.calls.filter(([name]) => name === 'session.send')).toEqual([['session.send', { conversationId: '["claude","native"]', text: 'Begin' }]]);
   expect(vi.getTimerCount()).toBe(0);
+  expect(onConversation).not.toHaveBeenCalled();
+  expect(sessionStorage.getItem('agent-graph-conversation-draft:new:p:/repo')).toBeNull();
+  const calls = command.mock.calls.length;
   await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
   expect(command).toHaveBeenCalledTimes(calls);
-  expect(command.mock.calls.some(([name]) => name === 'session.send')).toBe(false);
+});
+
+it('leaves no discovery timers after the deadline on unmount and retains the unsent draft', async () => {
+  vi.useFakeTimers();
+  const target = createStore();
+  target.setSnapshot({ seq: 1, generation: 0, projection: { projects: [{ id: 'p', root_path: '/repo' }] } });
+  target.setConnection('connected');
+  const command = vi.fn(async (name: string) => ({ type: 'ack' as const, cmd_id: 'cmd', ok: true,
+    result: name === 'session.launch' ? { terminalId: 't' } : { hosts: [] } }));
+  const view = render(<MemoryRouter><ConversationPage target={target} client={{ command }} newSession={{ cwd: '/repo', projectId: 'p' }}/></MemoryRouter>);
+  await act(async () => {});
+  fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Begin' } });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
+  view.unmount();
+  await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+  expect(command.mock.calls.filter(([name]) => name === 'session.launch')).toHaveLength(1);
+  expect(command.mock.calls.filter(([name]) => name === 'session.send')).toHaveLength(0);
+  expect(vi.getTimerCount()).toBe(0);
+  expect(sessionStorage.getItem('agent-graph-conversation-draft:new:p:/repo')).toBe('Begin');
+  const calls = command.mock.calls.length;
+  await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+  expect(command).toHaveBeenCalledTimes(calls);
+  sessionStorage.clear();
 });

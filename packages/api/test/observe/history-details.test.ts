@@ -49,6 +49,45 @@ test("実物形式の手動タイトル・状態を変えないモデル変更�
   assert.equal(project(readFacts(ledger)).conversations[0].user_name, "Renamed review");
 });
 
+for (const scenario of [
+  { name: "UI で改名した後に同じ custom-title と user 行を取り込んでも会話名と根の名前を保つ",
+    title: "Review the importer", expectedName: "Renamed in dashboard", expectedTitles: ["Review the importer"] },
+  { name: "UI で改名した後でも新しい custom-title を会話名と根の名前に反映する",
+    title: "Renamed in Claude Code", expectedName: "Renamed in Claude Code", expectedTitles: ["Review the importer", "Renamed in Claude Code"] },
+]) test(scenario.name, t => {
+  const directory = mkdtempSync(join(tmpdir(), "history-details-rename-"));
+  const path = join(directory, "session.jsonl");
+  const ledger = openLedger(":memory:");
+  t.after(() => { ledger.close(); rmSync(directory, { recursive: true, force: true }); });
+  writeFileSync(path, claude);
+  const initial = observeClaudeFile(ledger, path, { observedTs: TS });
+  assert.deepEqual(initial.conflicts, []);
+  const id = createNativeId("claude", "session");
+  assert.equal(project(readFacts(ledger)).conversations[0].user_name, "Review the importer");
+  assert.equal(ledger.append({ source: "ui", source_event_id: "dashboard-rename", kind: "conversation.renamed",
+    subject: `conversation:${id}`, source_ts: "2026-09-25T01:19:00.000Z", confidence: "confirmed",
+    payload: { user_name: "Renamed in dashboard" } }).status, "appended");
+  const renamed = project(readFacts(ledger));
+  assert.equal(renamed.conversations[0].user_name, "Renamed in dashboard");
+  assert.equal(renamed.roots[0].name, "Renamed in dashboard");
+  appendFileSync(path, [
+    { type: "custom-title", customTitle: scenario.title, sessionId: "session" },
+    { type: "user", uuid: "request-after-rename", timestamp: "2026-09-25T01:20:00.000Z", sessionId: "session",
+      message: { role: "user", content: "Continue the review." } },
+  ].map(row => JSON.stringify(row)).join("\n") + "\n");
+  const result = observeClaudeFile(ledger, path, { cursor: initial.cursor, observedTs: "2026-09-25T01:20:00.000Z" });
+  assert.deepEqual(result.conflicts, []);
+  const facts = readFacts(ledger);
+  const projection = project(facts);
+  assert.equal(projection.conversations[0].user_name, scenario.expectedName);
+  assert.equal(projection.roots[0].name, scenario.expectedName);
+  assert.ok(projection.messages.some(message => message.native_id === "request-after-rename"));
+  assert.deepEqual(facts.flatMap(fact => fact.kind === "conversation.updated" && fact.source === "transcript-claude"
+    && fact.source_event_id.startsWith("custom-title:") ? [fact.payload?.user_name] : []), scenario.expectedTitles);
+  observeClaudeFile(ledger, path, { cursor: result.cursor, observedTs: "2026-09-25T01:21:00.000Z" });
+  assert.deepEqual(readFacts(ledger), facts);
+});
+
 test("Codex の起動・完了・親への連絡を分け、増分と再起動でも子の辺を一つだけ残す", t => {
   const directory = mkdtempSync(join(tmpdir(), "history-details-codex-"));
   const sessions = join(directory, "sessions");

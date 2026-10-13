@@ -209,7 +209,9 @@ export function observeClaudeFile(ledger: Ledger, path: string, options: ClaudeO
       const title = String(customTitle.row!.customTitle).trim();
       const position = customTitle.line.cursor;
       const eventId = `custom-title:${id}:${position.identity}:${String(position.offset).padStart(16, "0")}:${position.hash}`;
-      if (previous?.user_name !== title && !existing.some(fact => fact.source === "transcript-claude" && fact.source_event_id === eventId)) {
+      const previousTitle = existing.findLast(fact => fact.source === "transcript-claude"
+        && fact.subject === `conversation:${id}` && fact.source_event_id.startsWith("custom-title:"));
+      if ((previousTitle?.payload as ConversationPayload | null)?.user_name !== title && !existing.some(fact => fact.source === "transcript-claude" && fact.source_event_id === eventId)) {
         append({ source: "transcript-claude", source_event_id: eventId, source_ts: observedTs, observed_ts: observedTs,
           confidence: "confirmed", kind: "conversation.updated", subject: `conversation:${id}`, payload: { user_name: title }, cursor: null });
       }

@@ -1,3 +1,4 @@
+import { promptFrame, HELP_PANEL, COST_PANEL, MODEL_PANEL, PERMISSION_PANEL, SELECTION_PANEL } from './terminal-screen-fixture.ts';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -8,6 +9,9 @@ import type { spawn } from 'node-pty';
 import { createSessionHosts, MAX_SCROLLBACK_BYTES, type HostOptions } from '../src/terminal/hosts.ts';
 import { escapeAttachmentPath } from '../src/terminal/attachments.ts';
 import type { TerminalNotification } from '../src/terminal/index.ts';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+import type { spawn as spawnProcess } from 'node:child_process';
 
 const HOST_DISCOVERY_TIMEOUT_MS = 5000;
 const HOST_DISCOVERY_POLL_MS = 10;
@@ -15,17 +19,17 @@ const SESSION = '12345678-1234-1234-1234-123456789abc';
 const conversationId = JSON.stringify(['claude', SESSION]);
 async function createFixture(t: TestContext, waits?: number[], options: HostOptions = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'ag session-hosts-'));
-  const children: { pid: number; killed: boolean; writes: string[]; output: (data: string) => void; exit: (event: { exitCode: number }) => void }[] = [];
+  const children: { pid: number; killed: boolean; writes: string[]; onWrite: (data: string) => void; output: (data: string) => void; exit: (event: { exitCode: number }) => void }[] = [];
   const launches: { file: string; args: string[] | string; options: Parameters<typeof spawn>[2] }[] = [];
   const openTerminal: typeof spawn = (file, args, options) => {
     launches.push({ file, args, options });
-    const child = { pid: 1000 + children.length, killed: false, writes: [] as string[], output: (_data: string) => {}, exit: (_event: { exitCode: number }) => {} };
+    const child = { pid: 1000 + children.length, killed: false, writes: [] as string[], onWrite: (_data: string) => {}, output: (_data: string) => {}, exit: (_event: { exitCode: number }) => {} };
     children.push(child);
     return {
       pid: child.pid,
-      write(data: string) { child.writes.push(data); }, resize() {},
+      write(data: string) { child.writes.push(data); child.onWrite(data); }, resize() {},
       kill() { child.killed = true; child.exit({ exitCode: 0 }); },
-      onData(callback: typeof child.output) { child.output = callback; return { dispose() {} }; },
+      onData(callback: typeof child.output) { child.output = callback; queueMicrotask(() => callback(promptFrame(file))); return { dispose() {} }; },
       onExit(callback: typeof child.exit) { child.exit = callback; return { dispose() {} }; },
     } as unknown as ReturnType<typeof spawn>;
   };
@@ -33,7 +37,8 @@ async function createFixture(t: TestContext, waits?: number[], options: HostOpti
   const messages: TerminalNotification[] = [];
   const notify = (message: TerminalNotification) => messages.push(message);
   const hosts = createSessionHosts(async () => '/repo', { openTerminal, quietMs: 0, warmupMs: 0, sessionsDirectory: directory, attachments: { directory: join(directory, 'attachments') }, submitDelayMs: waits ? 500 : 0, wait: async ms => { waits?.push(ms); waitWrites.push([...children[0].writes]); },
-    listProcesses: async () => [{ pid: 2000, ppid: 1000 }, { pid: 3000, ppid: 2000 }, { pid: 9999, ppid: 1 }], ...options });
+    listProcesses: async () => [{ pid: 2000, ppid: 1000 }, { pid: 3000, ppid: 2000 }, { pid: 9999, ppid: 1 }], ...options,
+    targetOptions: { cache: join(directory, 'cache'), settingsPath: join(directory, 'ssh.toml'), ...options.targetOptions } });
   t.after(async () => { hosts.close(); await rm(directory, { recursive: true, force: true }); });
   const handle = (command: string, payload: unknown = {}) => hosts.handle(command, payload, notify);
   const launch = (resume?: string) => handle('session.launch', { projectId: 'p', provider: 'claude', ...(resume ? { resume } : {}) }) as Promise<{ terminalId: string; pid: number }>;
@@ -182,13 +187,13 @@ test('launch accepts supported providers, UUID resume and a plain model name', a
   }
 });
 
-test('session files bind descendants, queue input in order and send paste followed by CR', async t => {
+test('session files bind descendants and undiscovered resume sends are awaited in order', async t => {
   const f = await createFixture(t);
   const launched = await f.launch(SESSION);
   await f.handle('session.hosts');
   await f.handle('session.send', { conversationId, text: 'first\nline' });
   await f.handle('session.send', { conversationId, text: 'second' });
-  assert.deepEqual(f.children[0].writes, []);
+  assert.deepEqual(f.children[0].writes, ['\x15', '\x1b[200~first\nline\x1b[201~', '\r', '\x15', '\x1b[200~second\x1b[201~', '\r']);
   await writeFile(join(f.directory, '9999.json'), JSON.stringify({ pid: 9999, sessionId: SESSION }));
   await writeFile(join(f.directory, '1000.json'), '{');
   assert.deepEqual(await f.handle('session.hosts'), { hosts: [] });
@@ -282,3 +287,216 @@ test('image sends paste each escaped path, wait 300ms, paste body, wait 500ms an
   await f.handle('session.send', { conversationId, text: 'recovery' });
   assert.equal(f.children[0].writes.at(-1), '\r');
 });
+
+test('known panels, menus and permission choices reject sends without writing any input', async t => {
+  const f = await createFixture(t);
+  await f.launch(SESSION);
+  await writeFile(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: SESSION }));
+  await f.handle('session.hosts');
+  for (const frame of [HELP_PANEL, COST_PANEL, MODEL_PANEL, PERMISSION_PANEL, SELECTION_PANEL]) {
+    f.children[0].output(frame);
+    await assert.rejects(f.handle('session.send', { conversationId, text: 'must not disappear' }), /Terminal is not ready/);
+    assert.deepEqual(f.children[0].writes, []);
+  }
+  f.children[0].output(promptFrame());
+  await f.handle('session.send', { conversationId, text: 'recovered' });
+  assert.equal(f.children[0].writes.at(-1), '\r');
+});
+
+test('the startup deadline never permits writing into a known panel', async t => {
+  let elapsed = 0;
+  t.mock.method(performance, 'now', () => elapsed);
+  const f = await createFixture(t, undefined, {
+    quietMs: undefined, warmupMs: undefined,
+    wait: async ms => { elapsed += ms; f.children[0].output(MODEL_PANEL); },
+  });
+  await f.launch(SESSION);
+  elapsed = 14_500;
+  f.children[0].output(MODEL_PANEL);
+  await assert.rejects(f.handle('session.send', { conversationId, text: 'first' }), /Terminal is not ready/);
+  assert.equal(elapsed, 15_000);
+  assert.deepEqual(f.children[0].writes, []);
+});
+
+for (const provider of ['claude', 'codex'] as const) {
+  for (const [name, frame] of [
+    ['unknown', '\x1b[2J\x1b[HUnrecognized screen'],
+    ['working', '\x1b[2J\x1b[H⠋ Working…\r\n  esc to interrupt'],
+    ['composer without footer', '\x1b[2J\x1b[HOpenAI Codex\r\n\r\n› \x1b[3;3H'],
+  ]) test(`${provider}: ${name} keeps the ordinary paste and submit path`, async t => {
+    const f = await createFixture(t, [], { targetOptions: { execute: async () => '' } });
+    await f.handle('session.launch', { projectId: 'p', provider, resume: SESSION });
+    f.children[0].output(frame);
+    assert.deepEqual(await f.handle('session.send', { conversationId: JSON.stringify([provider, SESSION]), text: 'follow up' }), {});
+    assert.deepEqual(f.children[0].writes, ['\x15', '\x1b[200~follow up\x1b[201~', '\r']);
+    assert.deepEqual(f.waitWrites, [['\x15', '\x1b[200~follow up\x1b[201~']]);
+  });
+}
+
+test('a read-only command returns the rendered panel and closes it before the next send', async t => {
+  const f = await createFixture(t);
+  await f.launch(SESSION);
+  await writeFile(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: SESSION }));
+  await f.handle('session.hosts');
+  let submitted = false;
+  f.children[0].onWrite = data => {
+    if (data === '\r' && !submitted) { submitted = true; f.children[0].output(HELP_PANEL); }
+    if (data === '\x1b') f.children[0].output(promptFrame());
+  };
+  const result = await f.handle('session.send', { conversationId, text: '/help' }) as { delivery: string; command: { output: string; status: string } };
+  assert.equal(result.delivery, 'terminal');
+  assert.equal(result.command.status, 'completed');
+  assert.match(result.command.output, /Claude understands your codebase/);
+  assert.ok(!result.command.output.includes('\x1b'));
+  assert.ok(f.children[0].writes.includes('\x1b[200~/help \x1b[201~'), 'a space prevents fuzzy completion from executing another command');
+  assert.equal(f.children[0].writes.at(-1), '\x1b');
+  await f.handle('session.send', { conversationId, text: 'after help' });
+  assert.equal(f.children[0].writes.at(-1), '\r');
+});
+
+test('a selection stays open and a concurrent following message fails before paste', async t => {
+  const f = await createFixture(t);
+  const launch = await f.launch(SESSION);
+  await writeFile(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: SESSION }));
+  await f.handle('session.hosts');
+  f.children[0].onWrite = data => { if (data === '\r') f.children[0].output(MODEL_PANEL); };
+  const command = f.handle('session.send', { conversationId, text: '/model' });
+  const next = assert.rejects(f.handle('session.send', { conversationId, text: 'do not swallow' }), /Terminal is not ready/);
+  const result = await command as { terminalId: string; command: { output: string; status: string } };
+  await next;
+  assert.equal(result.terminalId, launch.terminalId);
+  assert.equal(result.command.status, 'interactive');
+  assert.match(result.command.output, /Select model/);
+  assert.deepEqual(f.children[0].writes, ['\x15', '\x1b[200~/model \x1b[201~', '\r']);
+});
+
+test('an unrecognized panel is never dismissed just because the command is /help', async t => {
+  const f = await createFixture(t);
+  await f.launch(SESSION);
+  await writeFile(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: SESSION }));
+  await f.handle('session.hosts');
+  f.children[0].onWrite = data => { if (data === '\r') f.children[0].output(MODEL_PANEL); };
+  const result = await f.handle('session.send', { conversationId, text: '/help' }) as { command: { status: string } };
+  assert.equal(result.command.status, 'interactive');
+  assert.ok(!f.children[0].writes.includes('\x1b'));
+});
+
+test('a modal appearing during the paste delay prevents Enter', async t => {
+  const f = await createFixture(t, [], { wait: async () => { f.children[0].output(MODEL_PANEL); } });
+  await f.launch(SESSION);
+  await writeFile(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: SESSION }));
+  await f.handle('session.hosts');
+  await assert.rejects(f.handle('session.send', { conversationId, text: 'not a menu selection' }), /Terminal is not ready/);
+  assert.ok(!f.children[0].writes.includes('\r'));
+});
+
+test('/clear rebinds the terminal and rejects sends still addressed to the previous conversation', async t => {
+  const f = await createFixture(t);
+  await writeFile(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: SESSION }));
+  await f.launch(SESSION);
+  await writeFile(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: SESSION }));
+  await f.handle('session.hosts');
+  await f.handle('session.hosts');
+  const next = 'abcdefab-1234-1234-1234-123456789abc';
+  const nextId = JSON.stringify(['claude', next]);
+  let changed: Promise<void> | undefined;
+  f.children[0].onWrite = data => { if (data === '\r') {
+    f.children[0].output(promptFrame());
+    changed = writeFile(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: next }));
+  } };
+  const result = await f.handle('session.send', { conversationId, text: '/clear' }) as { conversationId: string };
+  await changed;
+  assert.equal(result.conversationId, nextId);
+  await assert.rejects(f.handle('session.send', { conversationId, text: 'stale send' }), /no_host/);
+  await f.handle('session.send', { conversationId: nextId, text: 'new context' });
+  assert.ok(f.children[0].writes.includes('\x1b[200~new context\x1b[201~'));
+});
+
+test('local Claude rechecks its discovered child PID without rediscovering processes', async t => {
+  const listProcesses = t.mock.fn(async () => [{ pid: 3000, ppid: 1000 }]);
+  const f = await createFixture(t, undefined, { listProcesses });
+  await writeFile(join(f.directory, '3000.json'), JSON.stringify({ pid: 3000, sessionId: SESSION }));
+  await f.launch(SESSION);
+  await f.handle('session.hosts');
+  const scans = listProcesses.mock.callCount();
+  for (let index = 0; index < 3; index++) {
+    await f.handle('session.send', { conversationId, text: 'ordinary message' });
+    await f.handle('session.hosts');
+  }
+  const nextId = JSON.stringify(['claude', 'abcdefab-1234-1234-1234-123456789abc']);
+  await writeFile(join(f.directory, '3000.json'), JSON.stringify({ pid: 3000, sessionId: JSON.parse(nextId)[1] }));
+  const writes = [...f.children[0].writes];
+  await assert.rejects(f.handle('session.send', { conversationId, text: 'stale send' }), /no_host/);
+  assert.deepEqual(f.children[0].writes, writes);
+  assert.equal(((await f.handle('session.hosts')) as { hosts: { conversationId: string }[] }).hosts[0].conversationId, nextId);
+  await writeFile(join(f.directory, '3000.json'), JSON.stringify({ pid: 3000, sessionId: SESSION }));
+  assert.equal(((await f.handle('session.hosts')) as { hosts: { conversationId: string }[] }).hosts[0].conversationId, conversationId);
+  assert.equal(listProcesses.mock.callCount(), scans);
+});
+
+for (const [provider, remote] of [['codex', false], ['claude', true], ['codex', true]] as const) {
+  test(`${remote ? 'SSH' : 'local'} ${provider} rediscovers only the host running /clear, /new or /resume`, async t => {
+    const calls: string[] = [];
+    const sessions = [SESSION, 'abcdefab-1234-1234-1234-123456789abc'];
+    const paths: string[] = [];
+    const streams: { killed: boolean }[] = [];
+    const f = await createFixture(t, undefined, { targetOptions: {
+      execute: async (file, args) => {
+        const command = file === 'ssh' ? args.at(-1)! : [file, ...args].join(' ');
+        calls.push(command);
+        if (command.startsWith('ps')) return '1000 1\n1001 1';
+        if (command.startsWith('lsof')) return `n${paths[command.includes('1001') ? 1 : 0]}`;
+        if (command.startsWith('head')) return JSON.stringify({ type: 'session_meta', payload: { id: sessions[command.includes(sessions[1]) ? 1 : 0], cwd: '/repo' } });
+        if (command.startsWith('cd')) return '/repo';
+        if (command.startsWith('find')) return `/remote/${command.includes(sessions[1]) ? sessions[1] : sessions[0]}.jsonl`;
+        return sessions.map((sessionId, index) => `\x1e${Date.now() / 1000}\n${JSON.stringify({ pid: 1000 + index, sessionId, cwd: '/repo' })}`).join('');
+      },
+      spawnStream: (() => {
+        const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), killed: false, kill() { this.killed = true; } });
+        streams.push(child);
+        return child;
+      }) as unknown as typeof spawnProcess,
+    } });
+    async function saveRollout(index: number) {
+      paths[index] = join(f.directory, `rollout-test-${sessions[index]}.jsonl`);
+      await writeFile(paths[index], JSON.stringify({ type: 'session_meta', payload: { id: sessions[index], cwd: '/repo' } }));
+    }
+    await saveRollout(0); await saveRollout(1);
+    if (remote) await f.handle('ssh.write', { connections: [{ id: 'server', name: 'Server', destination: 'dev@host', projects: [{ projectId: 'p', path: '/repo' }] }] });
+    for (const resume of sessions) {
+      await f.handle('session.launch', { projectId: 'p', provider, resume, ...(remote ? { target: { kind: 'ssh', id: 'server' } } : {}) });
+      const child = f.children.at(-1)!;
+      child.output(`\x1b]777;agent-graph-pid=${child.pid}\x07` + promptFrame(provider));
+      await f.handle('session.hosts');
+    }
+    const discovered = await f.handle('session.hosts') as { hosts: { conversationId: string }[] };
+    assert.deepEqual(discovered.hosts.map(host => host.conversationId), sessions.map(session => JSON.stringify([provider, session])));
+    calls.length = 0;
+    f.children[0].onWrite = data => { if (data === '\r') f.children[0].output(promptFrame(provider)); };
+    for (const text of ['message', '/help', '/vim', '/plan']) {
+      await f.handle('session.hosts');
+      await f.handle('session.send', { conversationId: JSON.stringify([provider, sessions[0]]), text });
+    }
+    assert.equal(calls.length, 0);
+    for (const [index, command] of ['clear', 'new', 'resume'].entries()) {
+      const oldId = JSON.stringify([provider, sessions[0]]);
+      sessions[0] = `12345678-1234-1234-1234-123456789ab${index}`;
+      await saveRollout(0);
+      const result = await f.handle('session.send', { conversationId: oldId, text: `/${command}` }) as { conversationId: string };
+      assert.equal(result.conversationId, JSON.stringify([provider, sessions[0]]));
+      assert.equal(calls.filter(call => call.startsWith('ps')).length, 1, 'only the changed host is rediscovered');
+      if (provider === 'codex') assert.equal(calls.filter(call => call.startsWith('lsof')).length, 1);
+      calls.length = 0;
+      const listed = await f.handle('session.hosts') as { hosts: { conversationId: string; disconnected?: boolean }[] };
+      assert.deepEqual(listed.hosts.map(host => host.conversationId), sessions.map(session => JSON.stringify([provider, session])));
+      assert.ok(listed.hosts.every(host => !host.disconnected));
+      await assert.rejects(f.handle('session.send', { conversationId: oldId, text: 'stale' }), /no_host/);
+      await f.handle('session.send', { conversationId: result.conversationId, text: 'continued' });
+      assert.equal(calls.length, 0);
+    }
+    if (remote) {
+      assert.equal(streams.length, 5);
+      assert.equal(streams.filter(stream => stream.killed).length, 3);
+    }
+  });
+}

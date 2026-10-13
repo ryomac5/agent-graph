@@ -289,6 +289,7 @@ api と MCP 中継と CLI が、同じソケットへ接続する。
 | `dashboard` | `codemirror` と `@codemirror/lang-*` | 真ん中の作業場でのコードの表示と編集。段 8 で足す |
 | `dashboard` | `@xterm/xterm`、`@xterm/addon-fit` | 真ん中の作業場のターミナルの描画。段 8 で足す |
 | `api` | `node-pty` | ターミナルの擬似端末。段 8 で足す |
+| `api` | `@xterm/headless` | ホスト端末の現在画面を保持し、送信前の入力可否とスラッシュコマンドの画面を読む。MIT。端末入力の修正で足す |
 | `dashboard` | `@tiptap/react`、`@tiptap/starter-kit`、`@tiptap/markdown`、`@tiptap/pm`、`@tiptap/extension-table`、`@tiptap/extension-list` | 真ん中の作業場での Markdown のプレビューの中の編集。段 8 で足す |
 
 ライセンスが MIT 以外の依存を追加するときは、段の受け入れでライセンスを確認する。
@@ -1079,6 +1080,9 @@ Codex は、子の環境に `CODEX_THREAD_ID` を渡す。
 - 操作: Codex の effort の変更は、次のターンから効くと明示する。実行中に変える操作は出さない
 - 不明のとき: 見出しに、状態が不明であることと理由を出す。発言の欠落があれば、欠落の範囲を区切り線で示す
 - 上回る点: 発言に、出所と確度を残す。継続と分岐と圧縮の境界を、会話の中で見える形にする。外の会話は、読み取り専用と明示して引き継ぎの導線を出す
+
+api が保持する PTY の入力とスラッシュコマンドは、[端末送信の契約](terminal-slash-commands.md) に従う。
+端末の現在画面を確かめてから送り、jsonl に出ない結果は一時表示にし、選択画面は同じ端末へ引き継ぐ。
 
 ### 承認の受け箱
 

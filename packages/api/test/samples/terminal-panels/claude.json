@@ -1,0 +1,68 @@
+[
+  {
+    "command": "/help",
+    "lines": [
+      "Help  General   Commands   Custom commands",
+      "",
+      "  Claude understands your codebase, makes edits with your permission, and",
+      "  executes commands — right from your terminal.",
+      "  Shortcuts",
+      "  ! for shell mode      double tap esc to clear input  ctrl + shift + _ to",
+      "  / for commands        shift + tab to auto-accept     undo",
+      "  @ for file paths      edits                          ctrl + z to suspend",
+      "  /btw for side         ctrl + o for verbose output    ctrl + v to paste",
+      "  question              ctrl + t to toggle tasks       images",
+      "                        backslash (\\) + return (⏎)     opt + p to switch model",
+      "                        for newline                    ctrl + s to stash",
+      "                                                       prompt",
+      "                                                       ctrl + g to edit in",
+      "                                                       $EDITOR",
+      "                                                       /keybindings to",
+      "                                                       customize",
+      "",
+      "  For more help: https://code.claude.com/docs/en/overview",
+      "",
+      "  Esc to cancel"
+    ]
+  },
+  {
+    "command": "/cost",
+    "lines": [
+      "Settings  Status   Config   Usage   Stats ",
+      "",
+      "  Session",
+      "",
+      "  Total cost:            $0.0000",
+      "  Total duration (API):  0s",
+      "  Total duration (wall): 6s",
+      "  Total code changes:    0 lines added, 0 lines removed",
+      "  Usage:                 0 input, 0 output, 0 cache read, 0 cache write",
+      "",
+      "  Esc to cancel"
+    ]
+  },
+  {
+    "command": "/model",
+    "lines": [
+      "Select model",
+      "  Switch between Claude models. Your pick becomes the default for new",
+      "  sessions. For other/previous model names, specify with --model.",
+      "",
+      "    1. Default (recommended)  Use the default model (currently Opus 5.5) ·",
+      "                              $4/$20 per Mtok",
+      "    2. Opus                   Opus 5.5 · Best for everyday, complex tasks ·",
+      "                              $4/$20 per Mtok",
+      "    3. Fable                  Fable 5.1 · Most capable for your hardest and",
+      "                              longest-running tasks · $10/$50 per Mtok",
+      "    4. Sonnet                 Sonnet 5.5 · Efficient for routine tasks ·",
+      "                              $2/$10 per Mtok",
+      "  ❯ 5. Haiku ✔                Haiku 5.5 · Fastest for quick answers ·",
+      "                              $0.10/$0.50 per Mtok ($0.50/$2.50 for prompts",
+      "                              over 100k)",
+      "",
+      "  ◐ Medium effort (default) ←/→ to adjust",
+      "",
+      "  Enter to set as default · s to use this session only · Esc to cancel"
+    ]
+  }
+]

@@ -6,6 +6,7 @@ import { SessionName } from '../../components/SessionName.tsx';
 import { memo, useCallback, useContext, useEffect, useMemo, useLayoutEffect, useRef, useState } from 'react';
 import { OpenWorkspaceConversation, OpenWorkspaceTerminal, WorkspaceConversationHeader, type ConversationTabMetadata } from '../../lib/workspace-context.ts';
 import { useAutosizeTextarea } from './useAutosizeTextarea.ts';
+import { useSlashCommands } from './useSlashCommands.tsx';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import { getRegisteredProjects, OTHER_PROJECT } from '../../lib/projects.ts';
 import { loadConversationEdits, loadConversationWindow, prefetchConversationWindow, takePrefetchedConversationWindow, MESSAGE_PAGE_SIZE } from '../../lib/projection-client.ts';
@@ -224,6 +225,7 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
   const receiptRunId = receipt ? resolveRunId(receipt.runId, state.identities) : undefined;
   const [continued, setContinued] = useState(false);
   const [sentMessages, setSentMessages] = useState<{ id: string; conversationId: string; text: string; known: Set<unknown>; acknowledged: boolean }[]>([]);
+  const [commandResults, setCommandResults] = useState<{ id: string; conversationId: string; text: string; output: string }[]>([]);
   const starting = Boolean(newSession && !conversationId);
   const nativeProvider = /^\["(claude|codex)",/.exec(conversationId)?.[1];
   const creatingHost = hosts.find(host => host.conversationId === conversationId);
@@ -347,6 +349,8 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
   const projectId = resolveProjectId(state, readText(conversation?.project ?? task?.project ?? newSession?.projectId)
     || readText(state.projection.projects?.find(row => row.root_path === cwd.trim())?.id));
   const project = state.projection.projects?.find(row => row.id === projectId);
+  const slashCommands = useSlashCommands({ client, conversationId, projectId, provider, enabled: terminalConversation && connected && !pending,
+    input, onChange: setInput });
   async function refreshHosts(): Promise<SessionHost[]> {
     const ack = await client.command('session.hosts', {});
     if (!ack.ok) throw new Error(ack.error ?? t('failed'));
@@ -628,13 +632,22 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
         }
         const ids = await attachments.upload();
         const ack = await client.command('session.send', { conversationId: destination, text: sent, ...(ids.length ? { attachments: ids } : {}) });
+        const result = readObject(ack.result);
+        const terminalId = readText(result.terminalId);
         if (!ack.ok) throw new Error(['Invalid attachment', 'Invalid attachments', 'Attachment too large', 'Attachment transfer failed'].includes(ack.error ?? '') ? attachments.text.failed : ack.error ?? t('failed'));
+        const command = readObject(result.command);
+        const nextConversation = readText(result.conversationId);
+        if (nextConversation) destination = nextConversation;
         clearSentDraft(draftKey, sent);
-        if (mounted.current) setSentMessages(previous => previous.map(message => message.id === messageId ? { ...message, conversationId: destination, acknowledged: true } : message));
+        if (mounted.current) setSentMessages(previous => result.delivery === 'terminal' ? previous.filter(message => message.id !== messageId)
+          : previous.map(message => message.id === messageId ? { ...message, conversationId: destination, acknowledged: true } : message));
+        if (mounted.current && typeof command.output === 'string' && command.output) setCommandResults(previous => [...previous,
+          { id: messageId, conversationId: destination, text: sent, output: command.output as string }]);
         if (!isVisible(sourceConversation)) return;
         attachments.clear();
-        if (starting) {
-          setHostedConversation({ id: destination, provider: 'claude', origin: 'observed', project: projectId, cwd: cwd.trim() });
+        if (command.status === 'interactive' && terminalId) openTerminal?.(terminalId);
+        if (starting || destination !== sourceConversation) {
+          setHostedConversation({ id: destination, provider, origin: 'observed', project: projectId, cwd: cwd.trim() });
           if (onConversation) onConversation(destination); else navigate(`/c/${encodeURIComponent(destination)}`);
         }
       } catch (reason) {
@@ -805,6 +818,9 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
         && !pendingInputs.some(row => !message.known.has(row.id) && sameSent(readMessageBody(row), message.text))).map(message => <Message key={message.id} language={language} sender={senderOf({ role: 'user' }, participants)} row={{ id: message.id, role: 'user', body: message.text, body_state: 'stored', delivery_state: message.acknowledged ? undefined : 'sending' }}/>) }
       {deltas.map(([key, delta]) => <Message key={key} language={language} streaming sender={agentSender} showName={nameShown(agentSender)}
         row={{ id: delta.messageId ?? key, role: 'assistant', body: delta.text, body_state: 'stored' } satisfies Row}/>)}
+      {commandResults.filter(result => result.conversationId === conversationId).map(result => <div key={result.id} className="command-result" role="status" aria-label="Command result">
+        <div className="mono">{result.text}</div><pre>{result.output}</pre>
+      </div>)}
     </div></div>
     {/* 外の会話には、runner が応答できる続きを用意する。 */}
     <footer className="composer" onFocusCapture={() => setEngaged(true)} onPointerDownCapture={() => setEngaged(true)}>
@@ -851,8 +867,10 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
             <button className="btn btn-ghost" aria-label={`${attachments.text.remove}: ${item.file.name}`} disabled={pending} onClick={() => attachments.remove(item.key)}>×</button>
           </div>)}
         </div>}
-        <textarea data-conversation-draft={draftKey} ref={inputRef} aria-label={t('input')} rows={1} placeholder={t('placeholder')} value={input}
+        {slashCommands.menu}
+        <textarea data-conversation-draft={draftKey} ref={inputRef} aria-label={t('input')} rows={1} placeholder={t('placeholder')} value={input} {...slashCommands.inputProps}
           disabled={pending || !connected || !external && !canSend} onChange={event => setInput(event.target.value)} onKeyDown={event => {
+            if (slashCommands.onKeyDown(event)) return;
             if (event.key === 'Enter' && event.metaKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); }
           }}/>
         <div className="composer-toolbar">

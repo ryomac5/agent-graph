@@ -1,3 +1,4 @@
+import { promptFrame } from './terminal-screen-fixture.ts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mkdtemp, readFile, rm, mkdir, writeFile } from 'node:fs/promises';
@@ -111,6 +112,7 @@ test('SSH hosted terminals safely launch, attach, send, interrupt and report dis
   const list = await hosts.handle('session.hosts', {}, notify) as { hosts: { conversationId: string; terminalId: string; disconnected: boolean }[] };
   assert.equal(list.hosts[0].conversationId, JSON.stringify(['claude', SESSION]));
   await hosts.handle('terminal.attach', { terminalId: launch.terminalId }, notify);
+  output(promptFrame());
   await hosts.handle('session.send', { conversationId: list.hosts[0].conversationId, text: 'message; $(id)' }, notify);
   await hosts.handle('session.interrupt', { conversationId: list.hosts[0].conversationId }, notify);
   assert.deepEqual(writes, ['\x15', '\x1b[200~message; $(id)\x1b[201~', '\r', '\x1b']);

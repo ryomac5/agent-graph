@@ -49,7 +49,7 @@ it('updates the root dot, reads an opened root and remembers the read time after
   const target = fixture();
   const view = render(<MemoryRouter><TurnSignals target={target} bindings={DEFAULT_KEYS}/><RootList roots={selectRoots(idle(target.getSnapshot()))}/><Location/></MemoryRouter>);
   act(() => target.setSnapshot(idle(target.getSnapshot())));
-  expect(screen.getByRole('img', { name: 'Your turn' })).toBeTruthy();
+  expect(screen.getByRole('img', { name: 'Waiting' })).toBeTruthy();
   fireEvent.click(screen.getByText('Read root'));
   expect(JSON.parse(localStorage.getItem(READ_KEY)!)).toEqual({ root: LAST });
   view.unmount();

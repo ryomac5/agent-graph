@@ -125,6 +125,12 @@
 .settings-page .command-dialog { background: var(--bg-0); padding: var(--space-3); border: var(--border); border-radius: var(--radius-2); box-shadow: var(--shadow); }
 .settings-page .command-dialog .btn { height: 28px; }
 .settings-page .command-dialog td, .settings-page .command-dialog th { padding-block: var(--space-2); }
+.policy-preview-summary { list-style: none; padding: 0; margin-block: var(--space-3); }
+.policy-preview-summary li { margin-block: var(--space-2); overflow-wrap: anywhere; }
+.policy-preview caption { text-align: left; color: var(--fg-3); font: var(--type-meta); padding-block: var(--space-2); }
+.settings-page .policy-preview td, .settings-page .policy-preview th { padding-block: var(--space-2); vertical-align: top; }
+.policy-preview td:first-child { overflow-wrap: anywhere; }
+.policy-preview time { color: var(--fg-3); }
 .assignment-candidates > li > .btn { max-width: 100%; justify-content: flex-start; white-space: nowrap; }
 .assignment-candidates .assignment-depths { grid-column: 1 / -1; min-width: 0; flex-wrap: nowrap; justify-content: flex-start; }
 .assignment-depths button { flex: none; }

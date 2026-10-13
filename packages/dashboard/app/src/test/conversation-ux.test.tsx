@@ -14,7 +14,7 @@ import { resolveParticipants } from '../components/conversation/participants.ts'
 import { effortLabel, toolsLabel } from '../components/conversation/text.ts';
 import { Message } from '../components/conversation/Message.tsx';
 
-beforeEach(() => { localStorage.clear(); vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ generation: 0, projection: { messages: [], message_memberships: [] }, next: null }) }))); });
+beforeEach(() => { localStorage.clear(); sessionStorage.clear(); vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ generation: 0, projection: { messages: [], message_memberships: [] }, next: null }) }))); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 const client = { command: vi.fn(async (name: string) => ({ type: 'ack' as const, cmd_id: 'cmd', ok: true, result: name === 'settings.read' ? { config: { agents: { claude: { model: 'opus' }, codex: { model: 'opus' } } } } : [{ model: 'default', displayName: 'Default (recommended)' }, { model: 'opus', displayName: 'Opus 5.5' }] })) };
 function setup(messages: Row[] = [], extra: Record<string, Row[]> = {}) {
@@ -48,13 +48,15 @@ it.each(['running', 'idle'])('shows observed queued inputs in their bubbles whil
   expect(screen.getAllByText('Next step')).toHaveLength(1);
 });
 
-it('marks an optimistic input as sending until enqueue is observed', async () => {
+it('ends Sending at ack before enqueue or the recorded message arrives', async () => {
   const target = setup();
   render(<MemoryRouter><ConversationPage conversationId="c" target={target} client={client} language="en"/></MemoryRouter>);
   await act(async () => {});
   fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Next step' } });
   fireEvent.keyDown(screen.getByRole('textbox', { name: 'Message' }), { key: 'Enter', metaKey: true });
-  await screen.findByText('Sending…');
+  await act(async () => {});
+  expect(screen.queryByText('Sending…')).toBeNull();
+  expect(screen.getAllByText('Next step')).toHaveLength(1);
   await act(async () => { target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: {
     runs: { upsert: [{ id: 'r', conversation_id: 'c', state: 'running', generation: 1 }], remove: [] },
     conversations: { upsert: [{ id: 'c', provider: 'claude', origin: 'managed', pending_inputs: [
@@ -77,7 +79,7 @@ it('reconciles two midturn inputs with enqueue and keeps the recorded input afte
     fireEvent.keyDown(screen.getByRole('textbox', { name: 'Message' }), { key: 'Enter', metaKey: true });
     await act(async () => {});
   }
-  expect(screen.getAllByText('Sending…')).toHaveLength(2);
+  expect(screen.queryByText('Sending…')).toBeNull();
   const conversation = { id: 'c', provider: 'claude', origin: 'managed', pending_inputs: [
     { id: 'q1', body: first, state: 'queued' }, { id: 'q2', body: second, state: 'queued' },
   ] };
@@ -382,4 +384,80 @@ it.each(['en', 'ja'] as const)('shows each sender above the bubble once per cons
     expect(header.querySelector('time')).toBeTruthy();
   }
   await act(async () => {});
+});
+
+it.each(['managed', 'terminal'])('shows Sending only until the %s send acknowledgement', async origin => {
+  const id = origin === 'terminal' ? '["claude","native"]' : 'c';
+  const target = setup([], { conversations: [{ id, provider: 'claude', origin: origin === 'terminal' ? 'observed' : 'managed' }],
+    runs: [{ id: 'r', conversation_id: id, state: 'running', generation: 1, launch: { cwd: '/repo' } }] });
+  let acknowledge!: (ack: { type: 'ack'; cmd_id: string; ok: boolean }) => void;
+  const controlled = { command: vi.fn((name: string) => name === 'send' || name === 'session.send'
+    ? new Promise<{ type: 'ack'; cmd_id: string; ok: boolean }>(resolve => { acknowledge = resolve; })
+    : name === 'session.hosts' ? Promise.resolve({ type: 'ack' as const, cmd_id: 'hosts', ok: true, result: { hosts: [{ conversationId: id, terminalId: 't' }] } }) : client.command(name)) };
+  render(<MemoryRouter><ConversationPage conversationId={id} target={target} client={controlled}/></MemoryRouter>);
+  await act(async () => {});
+  fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Midturn request' } });
+  fireEvent.keyDown(screen.getByRole('textbox', { name: 'Message' }), { key: 'Enter', metaKey: true });
+  await screen.findAllByText('Sending…');
+  await vi.waitFor(() => expect(acknowledge).toBeTypeOf('function'));
+  await act(async () => { acknowledge({ type: 'ack', cmd_id: 'sent', ok: true }); });
+  expect(screen.queryByText('Sending…')).toBeNull();
+  expect(screen.getAllByText('Midturn request')).toHaveLength(1);
+  expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).value).toBe('');
+  expect(sessionStorage.getItem(`agent-graph-conversation-draft:${id}`)).toBeNull();
+});
+
+it('restores per-conversation drafts after switching conversations and reloading, then clears a successful send', async () => {
+  const target = setup();
+  const page = (id: string) => <MemoryRouter><ConversationPage conversationId={id} target={target} client={client}/></MemoryRouter>;
+  let view = render(page('c'));
+  await act(async () => {});
+  const value = () => (screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).value;
+  fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'First draft\ncontinued' } });
+  view.rerender(page('child')); await act(async () => {});
+  expect(value()).toBe('');
+  fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Child draft' } });
+  view.rerender(page('c')); await act(async () => {});
+  expect(value()).toBe('First draft\ncontinued');
+  view.unmount(); view = render(page('c')); await act(async () => {});
+  expect(value()).toBe('First draft\ncontinued');
+  fireEvent.keyDown(screen.getByRole('textbox', { name: 'Message' }), { key: 'Enter', metaKey: true });
+  await act(async () => {});
+  expect(value()).toBe('');
+  view.unmount(); view = render(page('c')); await act(async () => {});
+  expect(value()).toBe('');
+  view.rerender(page('child')); await act(async () => {});
+  expect(value()).toBe('Child draft');
+});
+
+it('retains a draft after a failed send', async () => {
+  const target = setup();
+  const failing = { command: (name: string) => name === 'send' ? Promise.resolve({ type: 'ack' as const, cmd_id: 'send', ok: false, error: 'Unavailable' }) : client.command(name) };
+  const page = <MemoryRouter><ConversationPage conversationId="c" target={target} client={failing}/></MemoryRouter>;
+  const view = render(page); await act(async () => {});
+  fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Keep this' } });
+  fireEvent.keyDown(screen.getByRole('textbox', { name: 'Message' }), { key: 'Enter', metaKey: true });
+  await screen.findByText('Unavailable');
+  view.unmount(); render(page); await act(async () => {});
+  expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).value).toBe('Keep this');
+});
+
+it('clears the acknowledged source draft after navigating away without clearing the other conversation', async () => {
+  const target = setup();
+  let acknowledge!: (ack: { type: 'ack'; cmd_id: string; ok: boolean }) => void;
+  const controlled = { command: (name: string) => name === 'send'
+    ? new Promise<{ type: 'ack'; cmd_id: string; ok: boolean }>(resolve => { acknowledge = resolve; }) : client.command(name) };
+  const page = (id: string) => <MemoryRouter><ConversationPage conversationId={id} target={target} client={controlled}/></MemoryRouter>;
+  const view = render(page('c')); await act(async () => {});
+  fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Sent from main' } });
+  fireEvent.keyDown(screen.getByRole('textbox', { name: 'Message' }), { key: 'Enter', metaKey: true });
+  await screen.findAllByText('Sending…');
+  view.rerender(page('child')); await act(async () => {});
+  fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Keep child draft' } });
+  await act(async () => { acknowledge({ type: 'ack', cmd_id: 'send', ok: true }); });
+  expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).value).toBe('Keep child draft');
+  expect(sessionStorage.getItem('agent-graph-conversation-draft:c')).toBeNull();
+  view.rerender(page('c')); await act(async () => {});
+  expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).value).toBe('');
+  expect(screen.queryByText('Sending…')).toBeNull();
 });

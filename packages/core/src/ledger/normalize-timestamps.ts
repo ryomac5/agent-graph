@@ -1,19 +1,33 @@
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
-import { normalizeTimestamp, TIMESTAMP_FIELDS } from './timestamps.ts';
+import { normalizeStoredTimestamp, TIMESTAMP_FIELDS } from './timestamps.ts';
 import { createNativeId } from './projections/relations.ts';
 import { compareEventOrder } from './event-order.ts';
 import { getMessageText } from './projections/messages.ts';
 
 export interface TimestampRepair { changes: Record<string, number>; generation: number; }
+export const TIMESTAMP_REPAIR_ID = 'utc-milliseconds-v1';
+
+export function hasNormalizedLedgerTimestamps(db: DatabaseSync): boolean {
+  return !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ledger_repairs'").get()
+    && !!db.prepare('SELECT 1 FROM ledger_repairs WHERE id = ?').get(TIMESTAMP_REPAIR_ID);
+}
 
 /** 版を変えずに既存の時刻列を補完する。payload と識別子は変更しない。 */
-export function normalizeLedgerTimestamps(db: DatabaseSync): TimestampRepair {
+export function normalizeLedgerTimestamps(db: DatabaseSync, options: { once?: boolean } = {}): TimestampRepair {
   const changes: Record<string, number> = {};
+  const readGeneration = () => Number(db.prepare('SELECT generation FROM projection_state WHERE id = 1').get()!.generation);
+  if (options.once && hasNormalizedLedgerTimestamps(db)) return { changes, generation: readGeneration() };
   const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map(row => String(row.name)));
   if (!tables.has('facts') || !tables.has('projection_state')) throw new Error('Ledger required');
   const add = (key: string, count: number | bigint) => { if (count) changes[key] = (changes[key] ?? 0) + Number(count); };
   db.exec('BEGIN IMMEDIATE');
   try {
+    // 競合した起動も、書き込みロックを得た後に完了印を再確認する。
+    if (options.once && hasNormalizedLedgerTimestamps(db)) {
+      const generation = readGeneration();
+      db.exec('COMMIT');
+      return { changes, generation };
+    }
     for (const table of ['facts', 'conversations', 'runs', 'connections', 'messages', 'approvals', 'search_documents',
       'api_conversation_summaries', 'api_send_watches']) {
       if (!tables.has(table)) continue;
@@ -24,7 +38,7 @@ export function normalizeLedgerTimestamps(db: DatabaseSync): TimestampRepair {
       const update = db.prepare(`UPDATE ${table} SET ${times.map(column => `${column} = ?`).join(', ')}
         WHERE ${keys.map(column => `${column} = ?`).join(' AND ')}`);
       for (const row of db.prepare(`SELECT ${[...keys, ...times].join(', ')} FROM ${table}`).iterate()) {
-        const values = times.map(column => row[column] === null ? null : normalizeTimestamp(String(row[column])));
+        const values = times.map(column => row[column] === null ? null : normalizeStoredTimestamp(String(row[column])));
         if (times.some((column, index) => row[column] !== values[index])) {
           add(table, update.run(...values, ...keys.map(key => row[key] as SQLInputValue)).changes);
         }
@@ -38,7 +52,7 @@ export function normalizeLedgerTimestamps(db: DatabaseSync): TimestampRepair {
       const collect = (sql: string) => {
         for (const row of db.prepare(sql).iterate()) {
           if (typeof row.timestamp !== 'string') continue;
-          const value = normalizeTimestamp(row.timestamp);
+          const value = normalizeStoredTimestamp(row.timestamp);
           if (value !== row.timestamp) updates.push({ keys: keys.map(key => row[key] as SQLInputValue), path: String(row.path), value });
         }
       };
@@ -86,7 +100,10 @@ export function normalizeLedgerTimestamps(db: DatabaseSync): TimestampRepair {
       }
     }
     if (Object.keys(changes).length) db.exec('UPDATE projection_state SET generation = generation + 1 WHERE id = 1');
-    const generation = Number(db.prepare('SELECT generation FROM projection_state WHERE id = 1').get()!.generation);
+    // 完了印と補完を一緒に確定する。失敗時は次の起動で再試行できる。
+    db.exec('CREATE TABLE IF NOT EXISTS ledger_repairs (id TEXT PRIMARY KEY)');
+    db.prepare('INSERT OR IGNORE INTO ledger_repairs (id) VALUES (?)').run(TIMESTAMP_REPAIR_ID);
+    const generation = readGeneration();
     db.exec('COMMIT');
     return { changes, generation };
   } catch (error) { db.exec('ROLLBACK'); throw error; }

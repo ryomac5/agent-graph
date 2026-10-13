@@ -1,16 +1,70 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
 import { openLedger, readLedgerDatabase, applyIncremental, rebuild, project, type Fact, type FactInput } from '../../src/ledger/index.ts';
 import { normalizeTimestamp } from '../../src/ledger/timestamps.ts';
-import { normalizeLedgerTimestamps } from '../../src/ledger/normalize-timestamps.ts';
+import { hasNormalizedLedgerTimestamps, normalizeLedgerTimestamps } from '../../src/ledger/normalize-timestamps.ts';
 import { searchLedger } from '../../src/ledger/search.ts';
 import { projectEntityRecords } from '../../src/ledger/projections/delegations.ts';
+import { projectEntities } from '../../src/ledger/projections/relations.ts';
 
 const UTC = '2026-10-13T00:00:00.000Z';
 const OFFSET = '2026-10-13T09:00:00+0900';
+
+test('時差のない日時は機械の TZ によらず UTC として解釈する', () => {
+  const module = new URL('../../src/ledger/timestamps.ts', import.meta.url).href;
+  const values = ['2026-10-13T00:00:00', '2026-10-13 00:00:00.123456', '2026-10-13', '2024-02-29T09:00:00+0900'];
+  for (const TZ of ['UTC', 'Asia/Tokyo']) {
+    const output = execFileSync(process.execPath, ['--input-type=module', '-e',
+      `import { normalizeTimestamp } from ${JSON.stringify(module)}; console.log(JSON.stringify(${JSON.stringify(values)}.map(normalizeTimestamp)));`],
+    { env: { ...process.env, TZ }, encoding: 'utf8' });
+    assert.deepEqual(JSON.parse(output), [UTC, '2026-10-13T00:00:00.123Z', UTC, '2024-02-29T00:00:00.000Z'], TZ);
+  }
+});
+
+test('append は存在しない日付を含む不正な source_ts と observed_ts を追記前に拒否する', t => {
+  const { ledger } = createFixture(t);
+  for (const value of ['garbage', '2026-02-30T00:00:00Z', '2026-02-29T09:00:00+0900',
+    '2026-04-31T00:00:00', '2026-13-01T00:00:00Z', '2026-10-13T24:00:00Z']) {
+    for (const field of ['source_ts', 'observed_ts']) {
+      assert.throws(() => ledger.append({ source: 'ui', source_event_id: `${field}:${value}`,
+        kind: 'run.created', subject: 'run:r', confidence: 'confirmed', source_ts: UTC, observed_ts: UTC,
+        payload: { conversation_id: 'c', generation: 1, state: 'idle' }, [field]: value }), TypeError, `${field}: ${value}`);
+    }
+  }
+  assert.deepEqual(ledger.readSince(0, 100), []);
+});
+
+test('不正な payload の時刻があっても純粋投影・増分投影・再構築と後続の事実は止まらない', t => {
+  const { ledger, db, append } = createFixture(t);
+  const invalid = 'garbage';
+  ledger.append({ source: 'ui', source_event_id: 'bad-run', kind: 'run.created', subject: 'run:r',
+    source_ts: UTC, confidence: 'confirmed', payload: { conversation_id: 'c', generation: 1, state: 'running',
+      started_ts: invalid, last_evidence_ts: invalid } });
+  append('connection.created', 'connection:x', { run_id: 'r', type: 'ws', fingerprint: 'x', state: 'connected', last_evidence_ts: invalid });
+  append('run.created', 'run:calendar', { conversation_id: 'c2', generation: 1, state: 'idle', started_ts: '2026-02-30T00:00:00Z' });
+  const facts = ledger.readSince(0, 100);
+  const original = JSON.stringify(facts);
+  assert.equal(projectEntities(facts, 'run').find(row => row.id === 'r')!.started_ts, invalid);
+  assert.equal(projectEntityRecords<{ started_ts: string }>(facts, 'run').find(row => row.id === 'r')!.started_ts, invalid);
+  const projection = project(facts);
+  assert.equal(projection.runs.find(row => row.conversation_id === 'c')!.started_ts, invalid);
+  assert.equal(projection.runs.find(row => row.conversation_id === 'c2')!.started_ts, '2026-02-30T00:00:00Z');
+  assert.equal(projection.connections[0].last_evidence_ts, invalid);
+  assert.equal(JSON.stringify(facts), original);
+  const state = applyIncremental(db, 0);
+  assert.equal(state.last_seq, facts.at(-1)!.seq);
+  append('run.updated', 'run:r', { generation: 1, model: 'later' });
+  assert.equal(applyIncremental(db, state.last_seq).last_seq, facts.at(-1)!.seq + 1);
+  const before = db.prepare('SELECT * FROM runs ORDER BY id').all();
+  assert.equal(before.find(row => row.conversation_id === 'c')!.model, 'later');
+  rebuild(db);
+  assert.deepEqual(db.prepare('SELECT * FROM runs ORDER BY id').all(), before);
+  assert.equal(db.prepare('SELECT last_evidence_ts FROM connections').get()!.last_evidence_ts, invalid);
+});
 function createFixture(t: TestContext) {
   const directory = mkdtempSync(join(tmpdir(), 'timestamp-'));
   const ledger = openLedger(join(directory, 'ledger.db'));
@@ -127,14 +181,40 @@ test('既存行は payload と版を変えず一度の補完で直り、再実�
   assert.equal(db.prepare('SELECT started_ts FROM runs').get()!.started_ts, UTC);
 });
 
-test('不正な既存時刻がある補完は全体を rollback する', t => {
+test('補完中の書き込み失敗は時刻列・世代・完了印をすべて rollback し、再試行できる', t => {
   const { db, append } = createFixture(t);
   append('run.created', 'run:r', { conversation_id: 'c', generation: 1, state: 'idle', started_ts: OFFSET });
   applyIncremental(db, 0);
   db.prepare('UPDATE facts SET source_ts = ?').run(OFFSET);
-  db.exec("UPDATE runs SET started_ts = 'invalid'");
-  assert.throws(() => normalizeLedgerTimestamps(db), TypeError);
+  db.prepare('UPDATE runs SET started_ts = ?').run(OFFSET);
+  const before = db.prepare('SELECT * FROM projection_state').all();
+  db.exec("CREATE TRIGGER reject_timestamp_repair BEFORE UPDATE ON runs BEGIN SELECT RAISE(ABORT, 'injected failure'); END");
+  assert.throws(() => normalizeLedgerTimestamps(db, { once: true }), /injected failure/);
   assert.equal(db.prepare('SELECT source_ts FROM facts').get()!.source_ts, OFFSET);
+  assert.deepEqual(db.prepare('SELECT * FROM projection_state').all(), before);
+  assert.equal(hasNormalizedLedgerTimestamps(db), false);
+  db.exec('DROP TRIGGER reject_timestamp_repair');
+  assert.ok(normalizeLedgerTimestamps(db, { once: true }).changes.facts);
+  assert.equal(hasNormalizedLedgerTimestamps(db), true);
+  const generation = Number(db.prepare('SELECT generation FROM projection_state').get()!.generation);
+  // 完了後の起動は表を走査しない。旧表記を再注入しても補完が再実行されない。
+  db.prepare('UPDATE facts SET source_ts = ?').run(OFFSET);
+  assert.deepEqual(normalizeLedgerTimestamps(db, { once: true }), { changes: {}, generation });
+  assert.equal(db.prepare('SELECT source_ts FROM facts').get()!.source_ts, OFFSET);
+});
+
+test('補完は既存の不正な時刻を保持し、他の行の補完と完了印を確定する', t => {
+  const { db, append } = createFixture(t);
+  append('run.created', 'run:r', { conversation_id: 'c', generation: 1, state: 'idle', started_ts: 'garbage' });
+  applyIncremental(db, 0);
+  db.prepare('UPDATE facts SET source_ts = ?').run(OFFSET);
+  const payload = db.prepare('SELECT payload, payload_hash FROM facts').get();
+  const result = normalizeLedgerTimestamps(db, { once: true });
+  assert.equal(result.changes.facts, 1);
+  assert.equal(db.prepare('SELECT started_ts FROM runs').get()!.started_ts, 'garbage');
+  assert.equal(db.prepare("SELECT json_extract(data, '$.started_ts') AS ts FROM entity_records WHERE entity = 'run'").get()!.ts, 'garbage');
+  assert.deepEqual(db.prepare('SELECT payload, payload_hash FROM facts').get(), payload);
+  assert.equal(hasNormalizedLedgerTimestamps(db), true);
 });
 
 test('保持期間の境界は observed_ts と cutoff の時差・小数秒を吸収し、同時刻を残す', t => {

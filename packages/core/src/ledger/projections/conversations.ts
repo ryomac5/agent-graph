@@ -1,3 +1,4 @@
+import { normalizeStoredTimestamp } from "../timestamps.ts";
 import type { Fact } from "../facts.ts";
 import { projectInputQueues, type PendingInput } from "./input-queue.ts";
 import { compareEventOrder } from "../event-order.ts";
@@ -163,7 +164,7 @@ export function projectConversations(
     if (fact.kind !== "conversation.created") continue;
     const payload = fact.payload as { provider?: string; native_id?: string } | null;
     const id = payload?.provider && payload.native_id ? createNativeId(payload.provider, payload.native_id) : fact.subject.slice(13);
-    const timestamp = normalizeTimestamp(fact.source_ts);
+    const timestamp = normalizeStoredTimestamp(fact.source_ts);
     if (!created.has(id) || timestamp < created.get(id)!) created.set(id, timestamp);
   }
   const tasksById = new Map(tasks.map((task) => [task.id, task]));
@@ -199,4 +200,3 @@ export function projectConversations(
     operation_targets: conversations.map((conversation) => conversation.id),
   };
 }
-import { normalizeTimestamp } from "../timestamps.ts";

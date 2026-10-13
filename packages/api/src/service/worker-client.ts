@@ -53,6 +53,8 @@ export async function startObservationWorker(service: ReturnType<typeof openObse
     }
     if (message.type === "projected") service.notifyProjection();
     if (message.type === "appended") service.notifyAppend(message.seq);
+    if (message.type === "timestamps-repaired") console.error(JSON.stringify(message));
+    if (message.type === "timestamp-repair-failed") console.warn(JSON.stringify(message));
     if (message.type === "fatal") fail(new Error(message.message));
   });
   let hook;

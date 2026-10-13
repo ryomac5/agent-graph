@@ -1,3 +1,4 @@
+import { normalizeTimestamp } from '../../../core/src/ledger/timestamps.ts';
 import { setTimeout as delay } from 'node:timers/promises';
 import { DatabaseSync, type SQLOutputValue } from 'node:sqlite';
 import { getMessageText } from '../../../core/src/ledger/projections/messages.ts';
@@ -214,4 +215,3 @@ export class SendWatch {
   }
   close() { this.stopped = true; this.queued.clear(); this.db.close(); }
 }
-import { normalizeTimestamp } from '../../../core/src/ledger/timestamps.ts';

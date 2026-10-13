@@ -10,6 +10,7 @@ import type { RunnerClient } from "../src/runner-client.ts";
 import { defaultPolicy, getCandidates } from "../../core/src/assign/policy.ts";
 import { POLICY_HISTORY_LIMIT } from "../src/settings/policy-preview.ts";
 import type { FactPayloads } from "../../core/src/ledger/facts.ts";
+import { readLedgerDatabase } from "../../core/src/ledger/repository.ts";
 
 test("serve preview reads kit descriptions/tasks and ledger titles with source dates, hiding kit fallback names", async () => {
   const root = await mkdtemp(join(tmpdir(), "policy-preview-history-"));
@@ -81,12 +82,18 @@ test("serve preview selects the newest 100 requests across mixed offsets and out
           payload: { ...request, request_id: String(index), attempt: 1, state: "received" } });
       }
     }
+    // append の正規化を迂回し、補完前の本番に残る生の時差表記を再現する。
+    const db = readLedgerDatabase(observation.ledger);
+    db.exec(`UPDATE facts SET source_ts = strftime('%Y-%m-%dT%H:%M:%S', source_ts, '+9 hours') || '+0900' WHERE source = 'kit';
+      UPDATE facts SET source_ts = strftime('%Y-%m-%dT%H:%M:%S', source_ts, '-5 hours') || '-0500' WHERE source = 'legacy'`);
+    assert.equal(db.prepare("SELECT count(*) AS count FROM facts WHERE source = 'kit' AND kind = 'delegation.created' AND julianday(source_ts) IS NULL").get()!.count, kitIndexes.length);
     const policy = defaultPolicy();
     const preview = configured.settings.previewPolicy({ roles: { implement: [...getCandidates(policy, "implement")].reverse() } });
     assert.equal(preview.total, POLICY_HISTORY_LIMIT);
     assert.equal(preview.changed, POLICY_HISTORY_LIMIT);
     assert.deepEqual(preview.rows.map(row => row.description), [119, 118, 117, 116, 115].map(index => `Request ${index}`));
-    assert.deepEqual(preview.rows.map(row => row.timestamp), [119, 118, 117, 116, 115].map(index => readTimestamp(index, "Z").replace("Z", ".000Z")));
+    assert.deepEqual(preview.rows.map(row => row.timestamp), [119, 118, 117, 116, 115].map(index => index % 2
+      ? readTimestamp(index, "+0900") : readTimestamp(index, "Z").replace("Z", ".000Z")));
     // 境界の依頼だけを変更対象から外し、101 件目が代わりに入らないことも確かめる。
     observation.ledger.append({ source: "intake", source_event_id: "boundary-update", source_ts: readTimestamp(olderCount, "+09:00"),
       kind: "delegation.created", subject: "delegation:boundary", confidence: "confirmed",

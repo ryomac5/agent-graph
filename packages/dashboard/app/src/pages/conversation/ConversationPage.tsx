@@ -37,7 +37,7 @@ import { ChangedFiles } from './ChangedFiles.tsx';
 import { groupToolRuns, instructionKind } from '../../components/conversation/timeline.ts';
 import { isDelegationTool, resolveDelegationNode } from '../../components/conversation/DelegationCard.tsx';
 import { currentRootConversation, selectRoots, useRootIndex } from '../../lib/roots.ts';
-import { resolveReplyStatus } from '../../lib/reply-status.ts';
+import { useConversationDraft } from '../../lib/conversation-draft.ts';
 import { describeTool, waitsOnBackground } from '../../components/conversation/tool-activity.ts';
 import { resolveActivity } from '../../lib/activity.ts';
 import { isWorkingTurn, useTurnConversations, useWorkingTurn, workingElapsed } from '../../lib/turns.ts';
@@ -146,7 +146,7 @@ function ConversationTabHeader({ metadata, breadcrumb, actions }: { metadata: Co
     const actions = document.getElementById(`workspace-actions-${header.tabId}`);
     if (back && actions) setSlots({ back, actions });
   }, [header?.tabId]);
-  useLayoutEffect(() => { if (header) header.report(header.tabId, metadata); }, [header?.tabId, header?.report, metadata.name, metadata.state, metadata.yourTurn, metadata.title, metadata.autoName, metadata.startedAt]);
+  useLayoutEffect(() => { if (header) header.report(header.tabId, metadata); }, [header?.tabId, header?.report, metadata.name, metadata.state, metadata.title, metadata.autoName, metadata.startedAt]);
   return slots ? <>{breadcrumb && createPortal(<div className="conv-breadcrumb">{breadcrumb}</div>, slots.back)}{createPortal(actions, slots.actions)}</> : null;
 }
 export function ConversationPage({ client, conversationId: explicitId, target = store, language = 'en', embedded = false, seriesIds, seriesState, displayName, breadcrumb, onConversation, newSession }: ConversationPageProps) {
@@ -204,7 +204,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const receiptConversationId = receipt ? resolveConversation(receipt.conversationId) : undefined;
   const receiptRunId = receipt ? state.identities?.runs[receipt.runId] ?? receipt.runId : undefined;
   const [continued, setContinued] = useState(false);
-  const [sentMessages, setSentMessages] = useState<{ id: string; conversationId: string; text: string; known: Set<unknown> }[]>([]);
+  const [sentMessages, setSentMessages] = useState<{ id: string; conversationId: string; text: string; known: Set<unknown>; acknowledged: boolean }[]>([]);
   const starting = Boolean(newSession && !conversationId);
   const nativeProvider = /^\["(claude|codex)",/.exec(conversationId)?.[1];
   const creatingHost = hosts.find(host => host.conversationId === conversationId);
@@ -237,7 +237,8 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const defaultCwd = cwd.trim() || savedCwd;
   const defaults = providerDefaults?.provider === provider && providerDefaults.cwd === defaultCwd ? providerDefaults.value : undefined;
   const recommendedModel = defaults?.model ?? '';
-  const [input, setInput] = useState('');
+  const draftKey = conversationId || `new:${newSession?.projectId ?? ''}:${newSession?.cwd ?? ''}`;
+  const [input, setInput, clearSentDraft] = useConversationDraft(draftKey);
   const attachments = useAttachments(conversationId, language, client);
   const [dragging, setDragging] = useState(false);
   const dragDepth = useRef(0);
@@ -431,8 +432,6 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
   const displayEntries = useMemo(() => groupToolRuns(entries), [entries]);
   const toolResults = useMemo(() => collectToolResults(entries.filter(entry => entry.kind === 'message').map(entry => entry.row)), [entries]);
   const deltas = Object.entries(state.deltas).filter(([, delta]) => historyIds.includes(delta.conversationId ?? '') || !delta.conversationId && delta.runId === run?.id);
-  const replyStatus = !pending && !sentMessages.some(message => resolveConversation(message.conversationId) === conversationId) && !deltas.length
-    ? resolveReplyStatus(historyState, activityIds, readText(activityRun?.state) || seriesState) : undefined;
   const streamLength = deltas.reduce((total, [, delta]) => total + delta.text.length, 0);
 
   useEffect(() => {
@@ -440,7 +439,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     setEdited(false);
   }, [conversationId, currentModel, currentEffort, savedCwd]);
   useEffect(() => {
-    setInput(''); setError(''); setDragging(false); dragDepth.current = 0;
+    setError(''); setDragging(false); dragDepth.current = 0;
     setPending(false); setAnswered(new Set()); setAppliedModel(undefined);
     setDetailsOpen(false); setFilesOpen(false); setEngaged(false); setHandoffBlocked(false);
   }, [conversationId]);
@@ -528,13 +527,13 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     return () => { disposed = true; };
   }, [client, provider, connected, conversationId]);
 
-  async function execute(command: string, payload: unknown): Promise<Ack | undefined> {
+  async function execute(command: string, payload: unknown, retainAck = false): Promise<Ack | undefined> {
     if (pending || !connected) return;
     const sourceConversation = conversationId;
     setPending(true); setError('');
     try {
       const ack = await client.command(command, payload);
-      if (!isVisible(sourceConversation)) return;
+      if (!isVisible(sourceConversation)) return retainAck && ack.ok ? ack : undefined;
       if (!ack.ok) { setError(ack.error ?? t('failed')); return; }
       return ack;
     } catch (reason) { if (isVisible(sourceConversation)) setError(reason instanceof Error ? reason.message : String(reason)); }
@@ -547,7 +546,7 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     const sent = input;
     const messageId = crypto.randomUUID();
     following.current = true;
-    setSentMessages(previous => [...previous, { id: messageId, conversationId, text: sent, known: new Set([...messageEntries.map(entry => entry.row.id), ...pendingInputs.map(row => row.id)]) }]);
+    setSentMessages(previous => [...previous, { id: messageId, conversationId, text: sent, acknowledged: false, known: new Set([...messageEntries.map(entry => entry.row.id), ...pendingInputs.map(row => row.id)]) }]);
     if (terminalConversation) {
       const sourceConversation = conversationId;
       setPending(true); setError('');
@@ -585,9 +584,10 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
         if (!isVisible(sourceConversation)) return;
         const ack = await client.command('session.send', { conversationId: destination, text: sent, ...(ids.length ? { attachments: ids } : {}) });
         if (!ack.ok) throw new Error(['Invalid attachment', 'Invalid attachments', 'Attachment too large', 'Attachment transfer failed'].includes(ack.error ?? '') ? attachments.text.failed : ack.error ?? t('failed'));
+        clearSentDraft(draftKey, sent);
+        setSentMessages(previous => previous.map(message => message.id === messageId ? { ...message, conversationId: destination, acknowledged: true } : message));
         if (!isVisible(sourceConversation)) return;
-        setInput(value => value === sent ? '' : value); attachments.clear();
-        setSentMessages(previous => previous.map(message => message.id === messageId ? { ...message, conversationId: destination } : message));
+        attachments.clear();
         if (starting) {
           setHostedConversation({ id: destination, provider: 'claude', origin: 'observed', project: projectId, cwd: cwd.trim() });
           if (onConversation) onConversation(destination); else navigate(`/c/${encodeURIComponent(destination)}`);
@@ -606,9 +606,11 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
     const payload = starting ? { provider, ...launchPayload } : external
       ? { conversationId, ...launchPayload, ...(stopped ? { confirmStopped: true } : {}) }
       : { runId: run!.id, input: { text: sent } };
-    const ack = await execute(command, payload);
+    const ack = await execute(command, payload, true);
     if (!ack) { setSentMessages(previous => previous.filter(message => message.id !== messageId)); return; }
-    setInput(value => value === sent ? '' : value);
+    clearSentDraft(draftKey, sent);
+    setSentMessages(previous => previous.map(message => message.id === messageId ? { ...message, acknowledged: true } : message));
+    if (!isVisible(conversationId)) return;
     if (external) {
       const result = readObject(ack.result);
       const id = readText(result.conversationId);
@@ -682,14 +684,14 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
       </div>
     </div>;
   return <section className={`conversation-page${embedded ? ' embedded' : ''}`} aria-label={t('conversation')}>
-    {workspaceHeader ? <ConversationTabHeader metadata={{ autoName: nameRoot?.auto_name, startedAt: conversationStart(state, conversationId), name: nameRoot?.user_name || nameRoot?.name || title, state: status, yourTurn: Boolean(replyStatus), title: [nameRoot?.name || title, replyStatus ? t('yourTurn') : dictionaries[language][status], elapsed ? `${t(status.startsWith('waiting') ? 'waiting' : 'elapsed')} ${elapsed}` : '', shownModel].filter(Boolean).join(' · ') }} breadcrumb={back} actions={headerActions}/> : <header className="conv-header">
+    {workspaceHeader ? <ConversationTabHeader metadata={{ autoName: nameRoot?.auto_name, startedAt: conversationStart(state, conversationId), name: nameRoot?.user_name || nameRoot?.name || title, state: status, title: [nameRoot?.name || title, dictionaries[language][status], elapsed ? `${t(status.startsWith('waiting') ? 'waiting' : 'elapsed')} ${elapsed}` : '', shownModel].filter(Boolean).join(' · ') }} breadcrumb={back} actions={headerActions}/> : <header className="conv-header">
       <div className="conv-title-row" onClick={event => {
         if (!(event.target instanceof Element) || !event.target.closest('.state-badge')) return;
         event.preventDefault(); setDetailsOpen(true);
       }}>
         {breadcrumb && <div className="conv-breadcrumb">{breadcrumb}</div>}
         <Heading className="conv-title truncate" aria-label={nameRoot?.name ?? title} title={nameRoot?.user_name ? nameRoot.auto_name : title}>{nameRoot ? <SessionName key={nameRoot.id} root={nameRoot} client={client} language={language}/> : title}</Heading>
-        <StateBadge state={status} yourTurn={Boolean(replyStatus)} language={language} evidenceUrl="#conversation-details"
+        <StateBadge state={status} language={language} evidenceUrl="#conversation-details"
           evidence={evidenceLabel(evidence) || undefined}
           reason={readText(run?.cause ?? run?.reason) || undefined} elapsed={elapsed ? `${t(status.startsWith('waiting') ? 'waiting' : 'elapsed')} ${elapsed}` : undefined}/>
         {provider && <span className="conv-agent truncate" title={[providerName(provider), shownModel].filter(Boolean).join(' · ')}>{agentName(provider, shownModel)}</span>}
@@ -739,13 +741,12 @@ export function ConversationPage({ client, conversationId: explicitId, target = 
         </div>;
       })}
       {sentMessages.filter(message => resolveConversation(message.conversationId) === conversationId
-        && !pendingInputs.some(row => !message.known.has(row.id) && sameSent(readBody(row.body), message.text))).map(message => <Message key={message.id} language={language} sender={senderOf({ role: 'user' }, participants)} row={{ id: message.id, role: 'user', body: message.text, body_state: 'stored', delivery_state: 'sending' }}/>) }
+        && !pendingInputs.some(row => !message.known.has(row.id) && sameSent(readBody(row.body), message.text))).map(message => <Message key={message.id} language={language} sender={senderOf({ role: 'user' }, participants)} row={{ id: message.id, role: 'user', body: message.text, body_state: 'stored', delivery_state: message.acknowledged ? undefined : 'sending' }}/>) }
       {deltas.map(([key, delta]) => <Message key={key} language={language} streaming sender={agentSender} showName={nameShown(agentSender)}
         row={{ id: delta.messageId ?? key, role: 'assistant', body: delta.text, body_state: 'stored' } satisfies Row}/>)}
     </div></div>
     {/* 外の会話には、runner が応答できる続きを用意する。 */}
     <footer className="composer" onFocusCapture={() => setEngaged(true)} onPointerDownCapture={() => setEngaged(true)}>
-      {replyStatus && <p className={`reply-line${replyStatus === 'answer' ? ' reply-required' : ''}`} role="status"><Icon name={replyStatus === 'answer' ? 'alert' : 'message'} size={16}/>{t(replyStatus === 'answer' ? 'needsAnswer' : 'waitingReply')}</p>}
       {isWorkingTurn(workingTurn) && <div className="working-line" role="status" aria-label={t('working')}>
         <div className="working-summary"><span className="working-spinner" aria-hidden="true"/>{t('working')}
           {turnElapsed && <span role="timer" aria-live="off"> · {turnElapsed}</span>}</div>

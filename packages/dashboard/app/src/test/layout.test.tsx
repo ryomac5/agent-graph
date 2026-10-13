@@ -47,7 +47,7 @@ it('1: groups sessions by turns and the current 24-hour boundary, collapses proj
   mount();
   const sidebar = document.querySelector('.sidebar') as HTMLElement;
   const sessions = within(sidebar).getByRole('region', { name: 'Project sessions' });
-  const turn = await within(sessions).findByRole('region', { name: 'Your turn' });
+  const turn = await within(sessions).findByRole('region', { name: 'Waiting' });
   expect(within(turn).getByRole('link', { name: 'Session approval' })).toBeTruthy();
   expect(within(turn).getByRole('link', { name: 'Session input' })).toBeTruthy();
   expect(within(turn).getByRole('link', { name: 'Session unread' })).toBeTruthy();
@@ -147,7 +147,7 @@ it('uses Japanese for session groups, panel tabs and mobile navigation', () => {
   expect(screen.getByRole('tab', { name: 'グラフ' })).toBeTruthy();
   expect(screen.getByRole('tab', { name: '変更' })).toBeTruthy();
   expect(screen.getByRole('tab', { name: 'ファイル' })).toBeTruthy();
-  expect(screen.getByRole('region', { name: 'あなたの番' })).toBeTruthy();
+  expect(screen.getByRole('region', { name: '待機中' })).toBeTruthy();
   expect(within(screen.getByRole('navigation', { name: '画面' })).getByRole('button', { name: 'セッション' })).toBeTruthy();
   expect(document.querySelector('.sidebar')?.textContent).not.toContain('委譲');
 });

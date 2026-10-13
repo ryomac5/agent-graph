@@ -199,8 +199,8 @@ it.each(['idle', 'running', 'waiting_approval'])('gives your turn the same prior
   await act(async () => {});
   const expected = state === 'waiting_approval' ? 'waiting_approval' : 'waiting_input';
   const row = screen.getByRole('link', { name: 'Main agent' });
-  expect(row.closest('section')?.getAttribute('aria-label')).toBe('Your turn');
-  expect(document.querySelectorAll('.session-group')[0]?.getAttribute('aria-label')).toBe('Your turn');
+  expect(row.closest('section')?.getAttribute('aria-label')).toBe('Waiting');
+  expect(document.querySelectorAll('.session-group')[0]?.getAttribute('aria-label')).toBe('Waiting');
   expect(row.querySelector('.activity-mark')?.getAttribute('data-state')).toBe(expected);
   expect(row.querySelector('.root-elapsed')).toBeNull();
   expect(screen.getByRole('tab', { name: 'Main agent' }).querySelector('.activity-mark')?.getAttribute('data-state')).toBe(expected);
@@ -282,7 +282,7 @@ function appendMessage(target: ReturnType<typeof createStore>, row: Row) {
     message_memberships: [...state.projection.message_memberships, { id: row.id, message_id: row.id, conversation_id: 'c', active: 1 }],
   } });
 }
-it('reuses reply and activity caches on every second tick and refreshes after a new message', async () => {
+it('reuses activity and timeline caches on every second tick and refreshes after a new message', async () => {
   const target = setup();
   appendMessage(target, { id: 'a', role: 'assistant', body: 'Ready.', source_ts: '2026-10-11T00:01:00Z' });
   const readGeneration = vi.fn(() => 2);
@@ -295,65 +295,33 @@ it('reuses reply and activity caches on every second tick and refreshes after a 
   const resolveActivity = vi.spyOn(activityModel, 'resolveActivity');
   render(<MemoryRouter><ConversationPage conversationId="c" target={target} client={client}/></MemoryRouter>);
   await act(async () => {});
-  expect(screen.getByText('Waiting for your reply')).toBeTruthy();
   expect(selectTimeline).toHaveBeenCalled();
   expect(readGeneration).toHaveBeenCalled();
-  const historyState = resolveActivity.mock.calls.filter(([state]) => state !== target.getSnapshot()).at(-1)?.[0];
-  expect(historyState).toBeTruthy();
   for (let tick = 0; tick < 3; tick++) {
     selectTimeline.mockClear(); resolveActivity.mockClear(); readGeneration.mockClear();
     act(() => vi.advanceTimersByTime(1000));
-    expect(resolveActivity.mock.calls.some(([state]) => state === historyState)).toBe(true);
-    expect(resolveActivity.mock.calls.every(([state]) => state === historyState || state === target.getSnapshot())).toBe(true);
+    expect(resolveActivity.mock.calls.every(([state]) => state === target.getSnapshot())).toBe(true);
     expect(selectTimeline).not.toHaveBeenCalled();
     expect(readGeneration).not.toHaveBeenCalled();
-    expect(screen.getByText('Waiting for your reply')).toBeTruthy();
   }
   act(() => appendMessage(target, { id: 'question', role: 'assistant', body: 'Continue?', source_ts: '2026-10-11T00:02:00Z' }));
   expect(selectTimeline).toHaveBeenCalled();
-  expect(screen.getByText('Needs your answer')).toBeTruthy();
 });
-it.each(['en', 'ja'] as const)('shows an idle root awaiting a reply in the composer, sidebar and tab in %s', async language => {
+it.each(['en', 'ja'] as const)('omits reply prompts from the composer, sidebar and tabs in %s', async language => {
   const target = setup();
-  appendMessage(target, { id: 'a', role: 'assistant', body: 'The changes are ready.', source_ts: '2026-10-11T00:01:00Z' });
+  appendMessage(target, { id: 'a', role: 'assistant', body: 'Continue?', source_ts: '2026-10-11T00:01:00Z' });
   const state = target.getSnapshot();
   render(<MemoryRouter><RootList roots={selectRoots(state)} state={state} language={language}/>
     <Workbench project="p" session="root" conversationId="c" client={client} language={language}
       renderConversation={id => <ConversationPage conversationId={id} target={target} client={client} embedded language={language}/>}/></MemoryRouter>);
   await act(async () => {});
-  const reply = screen.getByText(language === 'ja' ? 'あなたの返事を待っています' : 'Waiting for your reply');
-  expect(reply.closest('.composer')).toBeTruthy();
-  expect(document.querySelector('.root-row-meta .status-label')?.textContent).toBe(language === 'ja' ? 'あなたの番' : 'Your turn');
-  expect(screen.getByRole('tab', { name: 'Main agent' }).querySelector('.status-label')?.getAttribute('data-label')).toBe(language === 'ja' ? 'あなたの番' : 'Your turn');
-});
-it.each([
-  ['idle', 'Shall I continue?', 'en', 'Needs your answer'],
-  ['waiting_input', '進めますか？', 'ja', '回答が必要です'],
-  ['idle', '進めますか。', 'ja', '回答が必要です'],
-  ['idle', 'こちらですか。', 'ja', '回答が必要です'],
-  ['idle', 'こちらでしょうか', 'ja', '回答が必要です'],
-  ['idle', '進めませんか。', 'ja', '回答が必要です'],
-  ['idle', 'Run this:\n```sh\necho hi?\n```', 'en', 'Waiting for your reply'],
-  ['idle', 'Run `echo hi?`', 'en', 'Waiting for your reply'],
-  ['idle', 'Run this:\n```sh\necho hi?\n```\nShall I continue?', 'en', 'Needs your answer'],
-  ['idle', 'Use `echo hi`?', 'en', 'Needs your answer'],
-  ['idle', 'そうか。', 'ja', 'あなたの返事を待っています'],
-] as const)('uses a stronger reply cue for a question in %s', async (state, body, language, label) => {
-  const target = setup(state);
-  appendMessage(target, { id: 'a', role: 'assistant', body, source_ts: '2026-10-11T00:01:00Z' });
-  render(<MemoryRouter><ConversationPage conversationId="c" target={target} client={client} language={language}/></MemoryRouter>);
-  await act(async () => {});
-  expect(screen.getByText(label).classList.contains('reply-required')).toBe(['Needs your answer', '回答が必要です'].includes(label));
-});
-it('requires an answer for an unanswered question tool and clears it after its result', async () => {
-  const target = setup('waiting_input');
-  appendMessage(target, { id: 'a', role: 'assistant', source_ts: '2026-10-11T00:01:00Z', body: [{ type: 'tool_use', id: 'question', name: 'AskUserQuestion', input: { questions: [] } }] });
-  render(<MemoryRouter><ConversationPage conversationId="c" target={target} client={client}/></MemoryRouter>);
-  await act(async () => {});
-  expect(screen.getByText('Needs your answer')).toBeTruthy();
-  act(() => appendMessage(target, { id: 'result', role: 'user', source_ts: '2026-10-11T00:02:00Z', body: [{ type: 'tool_result', tool_use_id: 'question', content: 'Yes' }] }));
-  expect(screen.queryByText('Needs your answer')).toBeNull();
-  expect(screen.getByText('Waiting for your reply')).toBeTruthy();
+  for (const label of ['Waiting for your reply', 'Needs your answer', 'Your turn', 'あなたの返事を待っています', '回答が必要です', 'あなたの番']) {
+    expect(document.body.textContent).not.toContain(label);
+    expect(document.body.innerHTML).not.toContain(label);
+  }
+  expect(document.querySelector('.reply-line')).toBeNull();
+  expect(document.querySelector('.root-row-meta .status-label')?.textContent).toBe(language === 'ja' ? '待機中' : 'Idle');
+  expect(screen.getByRole('tab', { name: 'Main agent' }).querySelector('.status-label')?.getAttribute('data-label')).toBe(language === 'ja' ? '待機中' : 'Idle');
 });
 it.each(['running', 'ended', 'failed', 'unknown', 'child', 'user-last'])('does not show a reply cue for %s', async kind => {
   const target = setup(['child', 'user-last'].includes(kind) ? 'idle' : kind);

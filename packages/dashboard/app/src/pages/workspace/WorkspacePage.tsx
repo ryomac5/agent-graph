@@ -41,7 +41,13 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
   const project = resolveProjectId(state, route);
   const roots = useMemo(() => selectRoots(state, project), [state.projection.roots, state.projection.conversations, project]);
   const index = useRootIndex(state);
-  const selected = roots.find(root => suppliedConversation && (root.conversation_ids.includes(suppliedConversation) || buildRootTree(root, index).nodes.some(node => node.conversationId === suppliedConversation))) ?? roots.find(root => root.id === search.get('root')) ?? roots[0];
+  // URL の会話が未配信でも、別の根の作業場に切り替えない。
+  const selected = suppliedConversation
+    ? roots.find(root => root.conversation_ids.includes(suppliedConversation) || buildRootTree(root, index).nodes.some(node => node.conversationId === suppliedConversation))
+    : roots.find(root => root.id === search.get('root')) ?? roots[0];
+  const projectionComplete = state.projection.conversations !== undefined && !state.projectionError
+    && !Object.values(state.pages ?? {}).some(page => page.next);
+  const conversationNotFound = suppliedConversation && !selected && !index.conversations.has(suppliedConversation) && projectionComplete;
   const newSession = search.get('session') ?? undefined;
   const draftWorkspace = useRef<{ token: string; session: string }>(undefined);
   if (newSession && draftWorkspace.current?.token !== newSession) draftWorkspace.current = { token: newSession, session: selected?.id ?? newSession };
@@ -63,7 +69,10 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
   const childNode = selectedNode;
   const childTitle = childNode ? tree.edges.find(edge => edge.target === childNode.id)?.title || undefined : undefined;
   const breadcrumb = <>{childId && <button className="btn btn-ghost btn-sm root-back" aria-label={`${language === 'ja' ? '戻る:' : 'Back to'} ${selected?.name ?? ""}`} onClick={() => { const next = new URLSearchParams(search); next.delete('child'); if (selected) next.set('root', selected.id); if (suppliedConversation) navigate(`/p/${encodeURIComponent(project)}?${next}`); else setSearch(next); }}><Icon name="chevronLeft"/><span className="truncate">{selected?.name}</span></button>}</>;
-  const workspaceSession = newSession ? draftWorkspace.current!.session : childId ?? selected?.id ?? conversationId ?? '';
+  const workspaceSession = newSession ? draftWorkspace.current!.session : suppliedConversation ? selected?.id ?? suppliedConversation : childId ?? selected?.id ?? conversationId ?? '';
+  const unresolvedConversationId = suppliedConversation && !newSession && !selected ? suppliedConversation : undefined;
+  // 投影の取得失敗時は URL の会話として保存し、根の解決後に合流する。
+  const pendingWorkspace = unresolvedConversationId && !projectionComplete && !state.projectionError;
   return <OpenWorkspaceFile.Provider value={(path, worktree) => openFile.current(path, worktree)}><div className={`workspace root-workspace three-workspace${showRootList ? ' with-roots' : ''}`}>
     <div className="workspace-columns">
       {/* アプリの画面では、会話の一覧は左のサイドバーのプロジェクトの下に置き、作業場は会話とサブエージェントに広さを渡す。 */}
@@ -71,7 +80,8 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
         <div className="column-scroll"><RootList state={state} client={client} roots={roots} selected={selected?.id} language={language} onSelect={root => {
           const next = new URLSearchParams(search); next.set('root', root.id); next.delete('path'); next.delete('child'); next.delete('session'); setSearch(next);
         }}/></div></section>}
-      {(conversationId || newSession) ? <Workbench key={`${project}:${workspaceSession}`} project={project} session={workspaceSession} conversationId={conversationId ?? ''} openConversationId={search.get('conversation') ?? undefined} newSession={newSession} client={client} language={language} bindings={bindings} registerOpenFile={openFile}
+      {conversationNotFound ? <section className="workspace-conversation" aria-label={t.conversation}><p role="status" className="status-line">{language === 'ja' ? '会話が見つかりません' : 'Conversation not found'}</p></section>
+        : (conversationId || newSession) ? <Workbench key={project} project={project} session={pendingWorkspace ? undefined : workspaceSession} unresolvedConversationId={unresolvedConversationId} conversationId={conversationId ?? ''} openConversationId={search.get('conversation') ?? suppliedConversation ?? undefined} newSession={newSession} client={client} language={language} bindings={bindings} registerOpenFile={openFile}
         renderConversation={(tabConversation, onConversation) => <>
           {tabConversation === conversationId && childNode?.delegation?.state === 'failed' && <div className="request-detail-actions"><strong>{childTitle || childNode.label}</strong><button className="btn btn-secondary btn-sm" disabled={state.connection !== 'connected'} onClick={() => void retry(childNode)}>{t.retry}</button></div>}
           {retryError && <p role="alert" className="status-line danger">{retryError}</p>}

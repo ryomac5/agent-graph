@@ -15,17 +15,58 @@ import type { ConversationClient } from '../conversation/ConversationPage.tsx';
 import { LoadingFeature } from '../../components/LoadingFeature.tsx';
 import { TerminalTab, createTerminalSession, type TerminalSession } from './TerminalTab.tsx';
 import { FilePicker } from './FilePicker.tsx';
+import { createPortal } from 'react-dom';
 import './workbench.css';
 const CodeTab = lazy(() => import('./CodeTab.tsx').then(module => ({ default: module.CodeTab })));
 const WHEEL_LINE_HEIGHT = 16;
 const id = () => crypto.randomUUID();
 function fileKey(tab: Extract<WorkspaceTab, { kind: 'code' }>) { return JSON.stringify([tab.worktree ?? '', tab.path]); }
+function matchesTab(a: WorkspaceTab, b: WorkspaceTab): boolean {
+  if (a.kind === 'conversation' && b.kind === 'conversation') return a.conversationId ? a.conversationId === b.conversationId : a.id === b.id;
+  if (a.kind === 'code' && b.kind === 'code') return fileKey(a) === fileKey(b);
+  return a.kind === 'terminal' && b.kind === 'terminal' && (a.id === b.id || !!a.terminalId && a.terminalId === b.terminalId);
+}
+function mergeTab(tree: PaneTree | null, tab: WorkspaceTab, focused?: string, keepIncoming = false): { tree: PaneTree; pane: string } {
+  if (!tree) { const pane = id(); return { tree: { kind: 'pane', id: pane, tabs: [tab], active: tab.id }, pane }; }
+  const panes = listPanes(tree);
+  const existing = panes.flatMap(pane => pane.tabs.map(tab => ({ pane, tab }))).find(item => matchesTab(item.tab, tab));
+  const pane = existing?.pane ?? panes.find(pane => pane.id === focused) ?? panes[0];
+  return { pane: pane.id, tree: updatePane(tree, pane.id, pane => ({ ...pane,
+    tabs: existing ? pane.tabs.map(item => item.id === existing.tab.id && keepIncoming ? { ...item, ...tab } : item) : [...pane.tabs, tab],
+    active: existing && !keepIncoming ? existing.tab.id : tab.id,
+  })) };
+}
+// 別の作業場で使われた initial-tab 等を、現在の入力や端末と取り違えない。
+function renewWorkspaceIds(tree: PaneTree | null, newSession?: string): PaneTree | null {
+  if (!tree) return null;
+  if (tree.kind === 'split') return { ...tree, id: id(), first: renewWorkspaceIds(tree.first, newSession)!, second: renewWorkspaceIds(tree.second, newSession)! };
+  const ids = new Map(tree.tabs.map(tab => [tab.id, tab.id === newSession ? tab.id : id()]));
+  return { ...tree, id: id(), tabs: tree.tabs.map(tab => ({ ...tab, id: ids.get(tab.id)! })), active: tree.active ? ids.get(tree.active) : undefined };
+}
+function mergeWorkspace(saved: PaneTree | null, pending: PaneTree | null, focused: string): { tree: PaneTree | null; focused: string } {
+  if (!saved || !pending) return { tree: pending ?? saved, focused };
+  let tree = saved;
+  let destination = listPanes(saved)[0].id;
+  // 待機中のタブの ID を優先し、入力を持つ描画先を保つ。
+  for (const pane of listPanes(pending)) {
+    for (const tab of pane.tabs) {
+      const merged = mergeTab(tree, tab, destination, true);
+      tree = merged.tree;
+      if (pane.id === focused && tab.id === pane.active) destination = merged.pane;
+    }
+  }
+  const active = listPanes(pending).find(pane => pane.id === focused)?.active;
+  const pane = listPanes(tree).find(pane => pane.tabs.some(tab => tab.id === active));
+  if (pane) tree = updatePane(tree, pane.id, pane => ({ ...pane, active }));
+  return { tree, focused: pane?.id ?? destination };
+}
 function CodeLabel({ document, name, language }: { document: CodeDocument; name: string; language: Language }) {
   const state = useSyncExternalStore(document.subscribe, document.getSnapshot);
   return <>{name}{state.dirty && <span aria-label={language === 'ja' ? '未保存' : 'Unsaved'}> ●</span>}{state.external && <span aria-label={language === 'ja' ? '外で変更' : 'Changed on disk'}> !</span>}</>;
 }
-export function Workbench({ project, session, conversationId, client, language, bindings = DEFAULT_KEYS, renderConversation, registerOpenFile, newSession, openConversationId }: {
-  project: string; session: string; conversationId: string; client: ConversationClient; language: Language; bindings?: KeyBindings;
+export function Workbench({ project, session, unresolvedConversationId, conversationId, client, language, bindings = DEFAULT_KEYS, renderConversation, registerOpenFile, newSession, openConversationId }: {
+  project: string; session?: string; conversationId: string; client: ConversationClient; language: Language; bindings?: KeyBindings;
+  unresolvedConversationId?: string;
   openConversationId?: string; newSession?: string; renderConversation: (conversationId: string, onConversation: (id: string) => void) => ReactNode; registerOpenFile?: RefObject<(path: string, worktree?: string) => void>;
 }) {
   const [conversationTabs, setConversationTabs] = useState<Record<string, ConversationTabMetadata>>({});
@@ -35,21 +76,35 @@ export function Workbench({ project, session, conversationId, client, language, 
       return current?.name === metadata.name && current.state === metadata.state && current.title === metadata.title && current.autoName === metadata.autoName && current.startedAt === metadata.startedAt && current.elapsedStarted === metadata.elapsedStarted && current.elapsedLabel === metadata.elapsedLabel && current.model === metadata.model ? previous : { ...previous, [tabId]: metadata };
     });
   }, []);
-  const key = workspaceKey(project, session);
-  const [tree, setTree] = useState<PaneTree | null>(() => {
-    const saved = localStorage.getItem(key);
+  const key = session === undefined ? undefined : workspaceKey(project, session);
+  function readWorkspace(saved: string | null): PaneTree | null {
     if (!saved && newSession && !conversationId) return { kind: 'pane', id: 'initial-pane', tabs: [{ kind: 'conversation', id: newSession, conversationId: '' }], active: newSession };
     return restoreWorkspace(saved, conversationId);
-  });
+  }
+  const [tree, setTree] = useState<PaneTree | null>(() => readWorkspace(key === undefined ? null : localStorage.getItem(key)));
   const [focused, setFocused] = useState(() => tree ? listPanes(tree)[0].id : '');
+  const [workspace, setWorkspace] = useState({ key, unresolvedConversationId, generation: 0, migratedKey: undefined as string | undefined });
+  if (workspace.key !== key || workspace.unresolvedConversationId !== unresolvedConversationId) {
+    const carry = !!workspace.unresolvedConversationId && workspace.unresolvedConversationId === (openConversationId ?? conversationId);
+    const saved = key === undefined ? null : localStorage.getItem(key);
+    const restored = renewWorkspaceIds(readWorkspace(saved), newSession);
+    const next = carry ? mergeWorkspace(saved ? restored : null, tree, focused) : { tree: restored, focused: restored ? listPanes(restored)[0].id : '' };
+    // 木と保存先を同じ描画で切り替え、古い木を新しい鍵に書かせない。
+    setTree(next.tree);
+    setFocused(next.focused);
+    setWorkspace({ key, unresolvedConversationId, generation: workspace.generation + (carry ? 0 : 1), migratedKey: carry ? workspace.migratedKey ?? (workspace.key !== key ? workspace.key : undefined) : undefined });
+  }
   const [menu, setMenu] = useState<string>(), [picker, setPicker] = useState<{ pane: string; worktree?: string }>();
   const [renaming, setRenaming] = useState<{ pane: string; tab: string; value: string }>();
   const [tabMenu, setTabMenu] = useState<{ pane: string; tab: WorkspaceTab; x: number; y: number }>();
   const openedSession = useRef<string | undefined>(undefined);
+  const openedConversation = useRef(openConversationId);
   const [restart, setRestart] = useState(0);
   const root = useRef<HTMLDivElement>(null);
   const documents = useRef(new Map<string, CodeDocument>());
   const terminals = useRef(new Map<string, TerminalSession>());
+  const bodies = useRef(new Map<string, HTMLDivElement>());
+  const headers = useRef(new Map<string, { back: HTMLDivElement; actions: HTMLDivElement }>());
   const tabMenuRoot = useRef<HTMLDivElement>(null);
   const ja = language === 'ja';
   const text = dictionaries[language];
@@ -94,17 +149,15 @@ export function Workbench({ project, session, conversationId, client, language, 
     });
   }, [newSession]);
   useEffect(() => {
-    if (!openConversationId) return;
+    const requested = openConversationId ?? (openedConversation.current ? conversationId : undefined);
+    openedConversation.current = openConversationId;
+    if (!requested) return;
     setTree(current => {
-      if (!current) return createWorkspace(openConversationId);
-      const existing = listPanes(current).flatMap(pane => pane.tabs.map(tab => ({ pane, tab }))).find(({ tab }) => tab.kind === 'conversation' && tab.conversationId === openConversationId);
-      if (existing) { setFocused(existing.pane.id); return updatePane(current, existing.pane.id, pane => ({ ...pane, active: existing.tab.id })); }
-      const pane = listPanes(current).find(pane => pane.id === focused) ?? listPanes(current)[0];
-      const tab: WorkspaceTab = { kind: 'conversation', id: id(), conversationId: openConversationId };
-      setFocused(pane.id);
-      return updatePane(current, pane.id, pane => ({ ...pane, tabs: [...pane.tabs, tab], active: tab.id }));
+      const merged = mergeTab(current, { kind: 'conversation', id: id(), conversationId: requested }, focused);
+      setFocused(merged.pane);
+      return merged.tree;
     });
-  }, [openConversationId]);
+  }, [openConversationId, workspace.generation]);
   function label(tab: WorkspaceTab) { return tab.name || (tab.kind === 'code' ? tab.path.split('/').at(-1)! : tab.kind === 'terminal' ? ja ? 'ターミナル' : 'Terminal' : tab.conversationId ? conversationTabs[tab.id]?.name || (ja ? '会話' : 'Conversation') : ja ? '新しいセッション' : 'New session'); }
   function displayLabel(tab: WorkspaceTab) {
     const name = label(tab);
@@ -158,10 +211,16 @@ export function Workbench({ project, session, conversationId, client, language, 
     if (!terminals.current.has(tab.id)) terminals.current.set(tab.id, createTerminalSession(client, project, tab.worktree, tab.terminalId));
     return terminals.current.get(tab.id)!;
   }
-  useEffect(() => { localStorage.setItem(key, JSON.stringify(tree)); }, [key, tree]);
+  useEffect(() => {
+    if (key === undefined || workspace.key !== key) return;
+    localStorage.setItem(key, JSON.stringify(tree));
+    if (workspace.migratedKey && workspace.migratedKey !== key) localStorage.removeItem(workspace.migratedKey);
+  }, [key, tree, workspace]);
   useEffect(() => {
     const live = new Set(panes.flatMap(pane => pane.tabs).map(tab => tab.id));
     for (const [tabId, terminal] of terminals.current) if (!live.has(tabId)) { terminal.dispose(); terminals.current.delete(tabId); }
+    for (const tabId of bodies.current.keys()) if (!live.has(tabId)) bodies.current.delete(tabId);
+    for (const tabId of headers.current.keys()) if (!live.has(tabId)) headers.current.delete(tabId);
     const liveFiles = new Set(panes.flatMap(pane => pane.tabs).filter(tab => tab.kind === 'code').map(fileKey));
     for (const key of documents.current.keys()) if (!liveFiles.has(key)) documents.current.delete(key);
   }, [tree]);
@@ -234,6 +293,27 @@ export function Workbench({ project, session, conversationId, client, language, 
     if (focusedPane?.tabs.length === 0 && target instanceof Element && target.closest('.delegation-card')) return;
     setFocused(paneId);
   }
+  // 保存済みの分割へ合流しても、会話とエディタの入力を持つ要素は移動だけにする。
+  function getBody(tabId: string) {
+    if (!bodies.current.has(tabId)) {
+      const element = document.createElement('div');
+      element.style.display = 'contents';
+      bodies.current.set(tabId, element);
+    }
+    return bodies.current.get(tabId)!;
+  }
+  function attachHeader(element: HTMLElement | null, tabId: string, slot: 'back' | 'actions', hidden: boolean) {
+    if (!element) return;
+    if (!headers.current.has(tabId)) {
+      const back = document.createElement('div'), actions = document.createElement('div');
+      back.id = `workspace-back-${tabId}`; back.className = 'workbench-back';
+      actions.id = `workspace-actions-${tabId}`; actions.className = 'workbench-actions';
+      headers.current.set(tabId, { back, actions });
+    }
+    const host = headers.current.get(tabId)![slot];
+    host.hidden = hidden;
+    if (host.parentElement !== element) element.append(host);
+  }
   function renderTree(node: PaneTree): ReactNode {
     if (node.kind === 'split') return <div className={`workbench-split ${node.direction}`} key={node.id}>
       <div className="split-child" style={{ flexGrow: node.ratio }}>{renderTree(node.first)}</div>
@@ -244,7 +324,7 @@ export function Workbench({ project, session, conversationId, client, language, 
         /><div className="split-child" style={{ flexGrow: 1 - node.ratio }}>{renderTree(node.second)}</div></div>;
     return <section className="workbench-pane" key={node.id} tabIndex={-1} data-pane-id={node.id} data-focused={focusedPane?.id === node.id} onFocusCapture={event => focusPane(node.id, event.target)} onPointerDownCapture={event => focusPane(node.id, event.target)}>
       <header className="workbench-tabs">
-        {node.tabs.filter(tab => tab.kind === 'conversation').map(tab => <div key={tab.id} id={`workspace-back-${tab.id}`} className="workbench-back" hidden={tab.id !== node.active}/>)}
+        {node.tabs.filter(tab => tab.kind === 'conversation').map(tab => <span key={tab.id} className="workbench-back" style={{ display: 'contents' }} ref={element => attachHeader(element, tab.id, 'back', tab.id !== node.active)}/>)}
         <div className="workbench-tablist" role="tablist" aria-label={ja ? 'ワークスペースのタブ' : 'Workspace tabs'}>{node.tabs.map(tab => <div className="workbench-tab" key={tab.id} data-tab-id={tab.id} data-dragging={tabDrag.dragging === tab.id} data-drop-before={tabDrag.preview?.pane === node.id && tabDrag.preview?.tablist && tabDrag.preview.before === tab.id} onPointerDown={event => { setTabMenu(undefined); if (event.button === 1) event.preventDefault(); tabDrag.begin(event, tab.id); }} onClickCapture={event => { if (tabDrag.suppressClick.current) { tabDrag.suppressClick.current = false; event.preventDefault(); event.stopPropagation(); } }}
           onContextMenu={event => { event.preventDefault(); if (tabDrag.active.current) return; const bounds = event.currentTarget.getBoundingClientRect(); setTabMenu({ pane: node.id, tab, x: event.clientX || bounds.left, y: event.clientY || bounds.bottom }); }}
           onAuxClick={event => { if (event.button === 1) { event.preventDefault(); close(tab); } }}>
@@ -255,7 +335,7 @@ export function Workbench({ project, session, conversationId, client, language, 
         {tabDrag.preview?.pane === node.id && tabDrag.preview.tablist && <span className="workbench-drop-end" style={{ left: tabDrag.preview.line }}/>}
         <div className="workbench-add"><button className="icon-button" aria-label={ja ? 'タブを開く' : 'Open tab'} aria-expanded={menu === node.id} onClick={() => setMenu(menu === node.id ? undefined : node.id)}>+</button>
           {menu === node.id && <div className="workbench-menu" role="menu" onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setMenu(undefined); event.currentTarget.parentElement?.querySelector<HTMLButtonElement>('button')?.focus(); } }}>{(['conversation', 'terminal', 'file'] as const).map(kind => <button className="btn btn-ghost" role="menuitem" key={kind} onClick={() => { if (kind === 'file') { setPicker({ pane: node.id, worktree: activeTab && 'worktree' in activeTab ? activeTab.worktree : undefined }); setMenu(undefined); } else addTab(kind, node.id); }}>{kind === 'conversation' ? ja ? '会話' : 'Conversation' : kind === 'terminal' ? ja ? 'ターミナル' : 'Terminal' : ja ? 'ファイルを開く' : 'Open file'}</button>)}</div>}</div>
-        {node.tabs.filter(tab => tab.kind === 'conversation').map(tab => <div key={tab.id} id={`workspace-actions-${tab.id}`} className="workbench-actions" hidden={tab.id !== node.active}/>)}
+        {node.tabs.filter(tab => tab.kind === 'conversation').map(tab => <span key={tab.id} style={{ display: 'contents' }} ref={element => attachHeader(element, tab.id, 'actions', tab.id !== node.active)}/>)}
         {!node.tabs.length && <button className="icon-button" aria-label={ja ? '区画を閉じる' : 'Close pane'} onClick={() => { setTree(tree => tree && closePane(tree, node.id)); requestAnimationFrame(() => root.current?.focus()); }}>×</button>}
         {tabMenu?.pane === node.id && <div className="workbench-menu workbench-tab-menu" role="menu" ref={tabMenuRoot} style={{ left: tabMenu.x, top: tabMenu.y }} onKeyDown={event => {
           if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
@@ -281,13 +361,13 @@ export function Workbench({ project, session, conversationId, client, language, 
           <button className="btn btn-ghost" onClick={() => setPicker({ pane: node.id })}>{ja ? 'ファイルを開く' : 'Open file'}</button>
         </div>
       </div></div>}
-      {node.tabs.map(tab => <div key={tab.id} role="tabpanel" id={`workspace-body-${tab.id}`} aria-labelledby={`workspace-tab-${tab.id}`} hidden={tab.id !== node.active} className="workbench-body">
-        {tab.kind === 'conversation' ? <WorkspaceConversationHeader.Provider value={{ tabId: tab.id, report: reportConversation }}><OpenWorkspaceTerminal.Provider value={terminalId => openTerminal(terminalId, node.id)}>{renderConversation(tab.conversationId, conversationId => replaceConversation(node.id, tab.id, conversationId))}</OpenWorkspaceTerminal.Provider></WorkspaceConversationHeader.Provider> : tab.kind === 'code' ? <FeatureErrorBoundary><Suspense fallback={<LoadingFeature language={language}/>}><CodeTab path={tab.path} document={getDocument(tab)} language={language}/></Suspense></FeatureErrorBoundary> : <TerminalTab key={`${tab.id}:${restart}`} session={getTerminal(tab)} language={language} reopen={() => { terminals.current.get(tab.id)?.dispose(); terminals.current.delete(tab.id); setRestart(value => value + 1); }}/>}</div>)}
+      {node.tabs.map(tab => <div key={tab.id} role="tabpanel" id={`workspace-body-${tab.id}`} aria-labelledby={`workspace-tab-${tab.id}`} hidden={tab.id !== node.active} className="workbench-body" ref={element => { const body = getBody(tab.id); if (element && body.parentElement !== element) element.append(body); }}/>)}
       {tabDrag.preview?.pane === node.id && !tabDrag.preview.tablist && <div className={`workbench-drop-preview ${tabDrag.preview.edge ?? 'center'}`} aria-hidden="true"/>}
     </section>;
   }
   return <OpenWorkspaceConversation.Provider value={openConversation}><OpenWorkspaceFile.Provider value={openFile}><div className="workbench workspace-conversation" tabIndex={-1} ref={root} aria-label={ja ? 'ワークスペース' : 'Workbench'} onKeyDownCapture={event => { if (handler(event.nativeEvent)) { event.preventDefault(); event.stopPropagation(); } }}>
     {tree ? renderTree(tree) : <div className="empty-state"><button className="btn btn-secondary" onClick={() => { setTree(createWorkspace(conversationId)); setFocused('initial-pane'); }}>{ja ? '会話を開く' : 'Open conversation'}</button><button className="btn btn-ghost" onClick={() => setPicker({ pane: id() })}>{ja ? 'ファイルを開く' : 'Open file'}</button></div>}
+    {panes.flatMap(node => node.tabs.map(tab => createPortal(<div className="workbench-content" style={{ display: 'contents' }} onFocusCapture={event => focusPane(node.id, event.target)} onPointerDownCapture={event => focusPane(node.id, event.target)}>{tab.kind === 'conversation' ? <WorkspaceConversationHeader.Provider value={{ tabId: tab.id, report: reportConversation }}><OpenWorkspaceTerminal.Provider value={terminalId => openTerminal(terminalId, node.id)}>{renderConversation(tab.conversationId, conversationId => replaceConversation(node.id, tab.id, conversationId))}</OpenWorkspaceTerminal.Provider></WorkspaceConversationHeader.Provider> : tab.kind === 'code' ? <FeatureErrorBoundary><Suspense fallback={<LoadingFeature language={language}/>}><CodeTab path={tab.path} document={getDocument(tab)} language={language}/></Suspense></FeatureErrorBoundary> : <TerminalTab key={`${tab.id}:${restart}`} session={getTerminal(tab)} language={language} reopen={() => { terminals.current.get(tab.id)?.dispose(); terminals.current.delete(tab.id); setRestart(value => value + 1); }}/>}</div>, getBody(tab.id), tab.id)))}
     {tabDrag.dragging && tabDrag.point && <div className="workbench-drag-ghost" data-valid={!!tabDrag.preview} aria-hidden="true" style={{ left: tabDrag.point.x + 12, top: tabDrag.point.y + 12 }}>{displayLabel(panes.flatMap(pane => pane.tabs).find(tab => tab.id === tabDrag.dragging)!)}</div>}
     {picker && <FilePicker projectId={project} worktree={picker.worktree} client={client} language={language} close={() => { setPicker(undefined); root.current?.focus(); }} open={path => openFile(path, picker.worktree, picker.pane)}/>}
   </div></OpenWorkspaceFile.Provider></OpenWorkspaceConversation.Provider>;

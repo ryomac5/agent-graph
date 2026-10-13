@@ -1,3 +1,4 @@
+import { USAGE_PROBE_PATH } from '../src/usage/probe-path.ts';
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
@@ -952,29 +953,31 @@ test("本文が変わらない周期でも Codex の題名を取り込み、投�
   assert.equal(feed.snapshot().projection.conversations[0].ai_title, "Changed");
 });
 
-test('usage-probe histories are ignored and existing facts stay outside feed lists', t => {
+test('only unattended conversations at the exact probe path stay outside feed lists', t => {
   const f = createFixture(t);
   const directory = join(f.env.CLAUDE_CONFIG_DIR, 'projects', 'probe');
   mkdirSync(directory, { recursive: true });
-  writeFileSync(join(directory, 'probe.jsonl'), JSON.stringify({ ...JSON.parse(createClaudeMessage('probe')), cwd: '/home/test/.cache/agent-graph/usage-probe' }) + '\n');
+  writeFileSync(join(directory, 'probe.jsonl'), JSON.stringify({ ...JSON.parse(createClaudeMessage('probe')), cwd: '/home/test/repo' }) + '\n');
   const service = openObservationService({ env: f.env });
   t.after(() => service.close());
   service.ingestOnce();
-  assert.equal(service.ledger.readSince(0, Number.MAX_SAFE_INTEGER).filter(fact => fact.source === 'transcript-claude').length, 0);
-  for (const [id, cwd] of [['probe-interactive', '/home/test/.cache/agent-graph/usage-probe/'], ['probe-unattended', '/home/test/.cache/agent-graph/usage-probe'], ['visible', '/home/test/repo']]) {
+  assert.equal(service.ledger.readSince(0, Number.MAX_SAFE_INTEGER).filter(fact => fact.kind === 'message.created' && fact.source === 'transcript-claude').length, 1);
+  for (const [id, cwd] of [['probe-interactive', USAGE_PROBE_PATH], ['probe-unattended', USAGE_PROBE_PATH], ['other-unattended', '/home/test/project/usage-probe'], ['null-cwd', undefined], ['visible', '/home/test/repo']] as const) {
     service.ledger.append({ source: 'legacy', source_event_id: id, kind: 'conversation.created', subject: `conversation:${id}`,
       source_ts: TS, confidence: 'confirmed', payload: { provider: 'claude', native_id: id, origin: 'observed',
-        type: id === 'probe-unattended' ? 'unattended' : 'interactive', history_format: 'jsonl', cwd } });
+        type: id.endsWith('unattended') ? 'unattended' : 'interactive', history_format: 'jsonl', ...(cwd ? { cwd } : {}) } });
   }
   const feed = new ProjectionFeed(f.dbPath, service.catchUp);
   t.after(() => feed.close());
   const before = service.ledger.readSince(0, Number.MAX_SAFE_INTEGER);
   const snapshot = feed.snapshot();
-  assert.deepEqual(snapshot.projection.conversations.map(row => row.id), [createNativeId('claude', 'visible')]);
-  assert.equal(snapshot.pages.conversations.total, 1);
+  const visibleIds = ['probe', 'probe-interactive', 'other-unattended', 'null-cwd', 'visible'].map(id => createNativeId('claude', id)).sort();
+  assert.deepEqual(snapshot.projection.conversations.map(row => row.id).sort(), visibleIds);
+  assert.equal(snapshot.pages.conversations.total, visibleIds.length);
   assert.deepEqual(feed.list('conversations').rows, snapshot.projection.conversations);
-  assert.equal(snapshot.projection.roots.length, 1);
-  assert.deepEqual(snapshot.projection.roots[0].conversation_ids, [createNativeId('claude', 'visible')]);
+  const rootIds = ['probe', 'probe-interactive', 'null-cwd', 'visible'].map(id => createNativeId('claude', id)).sort();
+  assert.equal(snapshot.projection.roots.length, rootIds.length);
+  assert.deepEqual(snapshot.projection.roots.flatMap(row => row.conversation_ids).sort(), rootIds);
   assert.deepEqual(feed.list('roots').rows, snapshot.projection.roots);
   assert.deepEqual(service.ledger.readSince(0, Number.MAX_SAFE_INTEGER), before);
 });

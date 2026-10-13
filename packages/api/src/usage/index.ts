@@ -4,6 +4,7 @@ import { createInterface } from 'node:readline';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { asRecord, parseClaude, parseClaudeLimits, parseClaudeStatusline, parseCodex, parseAntigravity, supportsAgy, type ProviderId, type ProviderUsage, type UsageWindow } from './parsers.ts';
+import { USAGE_PROBE_PATH } from './probe-path.ts';
 import { probeClaude, probeCodex, runUsageCommand, type SpawnUsage } from './process.ts';
 
 export const POLL_MS = 15 * 60_000;
@@ -60,7 +61,7 @@ export function createUsageService(options: UsageOptions = {}) {
   async function fetchProvider(id: ProviderId): Promise<{ windows: UsageWindow[]; timestamp: number; reason?: string }> {
     if (id === 'claude') {
       try {
-        const limits = await probeClaude(options.claudeCommand ?? 'claude', options.claudeProbePath ?? join(homedir(), '.cache/agent-graph/usage-probe'), options.spawn);
+        const limits = await probeClaude(options.claudeCommand ?? 'claude', options.claudeProbePath ?? USAGE_PROBE_PATH, options.spawn);
         return { windows: parseClaudeLimits(limits), timestamp: now() };
       } catch {
         try { return { ...await readClaudeFallback(options.readRepositoryPaths?.() ?? [process.cwd()]), reason: 'record_fallback' }; }

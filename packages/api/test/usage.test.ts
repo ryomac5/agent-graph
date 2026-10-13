@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, mkdir, rm, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { EventEmitter, once } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { spawn } from 'node:child_process';
 import { createUsageService, readCodexFallback, POLL_MS, RETRY_MS, MANUAL_MS, STALE_MS } from '../src/usage/index.ts';
 import { parseClaude, parseClaudeLimits, parseClaudeStatusline, parseCodex, parseAntigravity, supportsAgy } from '../src/usage/parsers.ts';
@@ -254,22 +256,104 @@ test('unavailable sources retain exponential backoff capped at 15 minutes', asyn
 });
 
 for (const stalled of [false, true]) {
-  test(stalled ? 'Claude timeout escalates SIGTERM to SIGKILL and waits for close' : 'Claude successful probe waits for natural close without killing', { timeout: 40_000 }, async t => {
+  test(stalled ? 'Claude timeout escalates SIGTERM to SIGKILL and waits for exit' : 'Claude successful probe waits for natural exit without killing', { timeout: 40_000 }, async t => {
     const f = await fixture(t);
     const signals: (NodeJS.Signals | number | undefined)[] = [];
-    let closed = false;
+    let exited = false;
     const launch: typeof spawn = ((command: string, args: string[], options: Parameters<typeof spawn>[2]) => {
       const script = "import { createInterface } from 'node:readline';\nconst lines = createInterface({ input: process.stdin });\nlines.on('line', () => process.stdout.write(JSON.stringify({type:'control_response',response:{request_id:'usage',response:{rate_limits:{seven_day:{utilization:31}}}}})+'\\n'));\nlines.on('close', () => setTimeout(() => process.exit(0), 100));";
       const child = spawn(process.execPath, ['-e', stalled ? "process.on('SIGTERM', () => {}); process.stdin.resume(); setInterval(() => {}, 1000);" : script], options);
       const kill = child.kill.bind(child);
       child.kill = signal => { signals.push(signal); return kill(signal); };
-      child.once('close', () => { closed = true; });
-      t.after(() => { if (!closed) kill('SIGKILL'); });
+      child.once('exit', () => { exited = true; });
+      t.after(() => { if (!exited) kill('SIGKILL'); });
       return child;
     }) as typeof spawn;
     if (stalled) await assert.rejects(probeClaude('fake', join(f.root, 'probe'), launch), /timeout/);
     else assert.deepEqual(await probeClaude('fake', join(f.root, 'probe'), launch), { seven_day: { utilization: 31 } });
-    assert.equal(closed, true);
+    assert.equal(exited, true);
     assert.deepEqual(signals, stalled ? ['SIGTERM', 'SIGKILL'] : []);
+  });
+}
+
+for (const successful of [false, true]) {
+  test(successful ? 'Claude resolves on natural exit while a descendant keeps stdout open'
+    : 'Claude rejects within the deadline while a descendant keeps stdout open', { timeout: 40_000 }, async t => {
+    const f = await fixture(t);
+    let descendantPid: number | undefined;
+    let closeAtExit: boolean | undefined;
+    const signals: (NodeJS.Signals | number | undefined)[] = [];
+    const launch: typeof spawn = ((command: string, args: string[], options: Parameters<typeof spawn>[2]) => {
+      const script = `import { spawn } from 'node:child_process';
+import { createInterface } from 'node:readline';
+const lines = createInterface({ input: process.stdin });
+const descendant = spawn(process.execPath, ['-e', "setInterval(() => {}, 1000); process.send('ready');"], { stdio: ['ignore', 'inherit', 'inherit', 'ipc'] });
+descendant.once('message', () => {
+  process.stdout.write('descendant:' + descendant.pid + '\\n');
+  descendant.disconnect(); descendant.unref();
+  if (${successful}) {
+    process.stdout.write(JSON.stringify({type:'control_response',response:{request_id:'usage',response:{rate_limits:{seven_day:{utilization:31}}}}}) + '\\n', () => process.exit(0));
+  } else {
+    process.on('SIGTERM', () => {});
+    setInterval(() => {}, 1000);
+  }
+});`;
+      const child = spawn(process.execPath, ['-e', script], options);
+      const kill = child.kill.bind(child);
+      child.kill = signal => { signals.push(signal); return kill(signal); };
+      let closed = false;
+      child.once('close', () => { closed = true; });
+      child.once('exit', () => { closeAtExit = closed; });
+      child.stdout!.on('data', chunk => {
+        const match = /descendant:(\d+)/.exec(chunk.toString());
+        if (match) descendantPid = Number(match[1]);
+      });
+      t.after(() => {
+        if (child.exitCode === null && child.signalCode === null) kill('SIGKILL');
+        if (descendantPid) process.kill(descendantPid, 'SIGKILL');
+      });
+      return child;
+    }) as typeof spawn;
+    const started = performance.now();
+    const pending = probeClaude('fake', join(f.root, 'probe'), launch);
+    if (successful) assert.deepEqual(await pending, { seven_day: { utilization: 31 } });
+    else await assert.rejects(pending, /timeout/);
+    assert.equal(typeof descendantPid, 'number');
+    assert.equal(closeAtExit, false);
+    assert.deepEqual(signals, successful ? [] : ['SIGTERM', 'SIGKILL']);
+    assert.ok(performance.now() - started < (successful ? 5_000 : 35_000));
+  });
+}
+
+for (const responseReceived of [false, true]) {
+  test('Claude finishes after SIGKILL even without exit or close: response=' + responseReceived, async t => {
+    const f = await fixture(t);
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const child = Object.assign(new EventEmitter(), {
+      stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
+      kill: (signal?: NodeJS.Signals | number) => { signals.push(signal); return true; },
+    });
+    const signals: (NodeJS.Signals | number | undefined)[] = [];
+    const launched = once(child, 'launched');
+    const launch = (() => { child.emit('launched'); return child; }) as unknown as typeof spawn;
+    const pending = probeClaude('fake', join(f.root, 'probe'), launch);
+    let settled = false;
+    const rejection = assert.rejects(pending, /timeout/).then(() => { settled = true; });
+    await launched;
+    if (responseReceived) child.stdout.write(JSON.stringify({ type: 'control_response', response: {
+      request_id: 'usage', response: { rate_limits: { seven_day: { utilization: 31 } } },
+    } }) + '\n');
+    t.mock.timers.tick(responseReceived ? 5_000 : 25_000);
+    assert.deepEqual(signals, ['SIGTERM']);
+    t.mock.timers.tick(5_000);
+    assert.deepEqual(signals, ['SIGTERM', 'SIGKILL']);
+    t.mock.timers.tick(999);
+    await Promise.resolve();
+    assert.equal(settled, false);
+    t.mock.timers.tick(1);
+    await rejection;
+    assert.equal(child.stdin.destroyed && child.stdout.destroyed && child.stderr.destroyed, true);
+    t.mock.timers.tick(60_000);
+    assert.deepEqual(signals, ['SIGTERM', 'SIGKILL']);
   });
 }

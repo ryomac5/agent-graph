@@ -1,7 +1,6 @@
-import { basename, normalize } from 'node:path';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
-export function isUsageProbeCwd(cwd: unknown): boolean {
-  return typeof cwd === 'string' && basename(normalize(cwd)) === 'usage-probe';
-}
+export const USAGE_PROBE_PATH = join(homedir(), '.cache/agent-graph/usage-probe');
 
-export const VISIBLE_CONVERSATION_SQL = "coalesce(rtrim(t.cwd, '/'), '') NOT GLOB '*/usage-probe' AND coalesce(t.cwd, '') != 'usage-probe'";
+export const VISIBLE_CONVERSATION_SQL = `NOT (coalesce(t.cwd, '') = '${USAGE_PROBE_PATH.replaceAll("'", "''")}' AND coalesce(t.type, '') = 'unattended')`;

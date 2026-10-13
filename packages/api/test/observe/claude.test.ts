@@ -1,3 +1,5 @@
+import { USAGE_PROBE_PATH } from '../../src/usage/probe-path.ts';
+import { observeClaudeContext } from '../../src/observe/claude/context.ts';
 import type { Fact } from "../../../core/src/ledger/index.ts";
 import assert from "node:assert/strict";
 import { appendFileSync, cpSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -462,17 +464,37 @@ test("jsonl の包みと自動挿入を投影で正規化し、最初の依頼�
   assert.deepEqual(readFacts(ledger), facts);
 });
 
-test('usage-probe history remains ignored across incremental cursor reads', t => {
+test('real conversations remain ingested after changing cwd to the exact probe path', t => {
   const { ledger, directory } = createFixture(t);
-  const path = join(directory, 'probe.jsonl');
-  writeFileSync(path, JSON.stringify({ ...JSON.parse(createMessage('first')), cwd: '/home/test/.cache/agent-graph/usage-probe' }) + '\n');
+  const path = join(directory, 'real.jsonl');
+  const message = (uuid: string, cwd: string) => JSON.stringify({ ...JSON.parse(createMessage(uuid)), cwd });
+  writeFileSync(path, message('first', '/home/test/repo') + '\n');
   const first = observeClaudeFile(ledger, path);
-  assert.equal(first.ignored, true);
-  appendFileSync(path, createMessage('next') + '\n');
+  observeClaudeContext(ledger, path, { lines: first.lines, fromStart: true });
+  appendFileSync(path, message('next', USAGE_PROBE_PATH) + '\n');
   const next = observeClaudeFile(ledger, path, { cursor: first.cursor });
-  assert.equal(next.ignored, true);
-  assert.deepEqual(readFacts(ledger), []);
-  writeFileSync(path, JSON.stringify({ ...JSON.parse(createMessage('replacement')), cwd: '/home/test/repo' }) + '\n');
-  assert.equal(observeClaudeFile(ledger, path, { cursor: next.cursor }).ignored, undefined);
-  assert.equal(readFacts(ledger).filter(fact => fact.kind === 'conversation.created').length, 1);
+  observeClaudeContext(ledger, path, { lines: next.lines });
+  appendFileSync(path, message('last', '/home/test/repo') + '\n');
+  const last = observeClaudeFile(ledger, path, { cursor: next.cursor });
+  const facts = readFacts(ledger);
+  assert.equal(last.appended > 0, true);
+  assert.deepEqual(project(facts).messages.map(row => row.native_id).sort(), ['first', 'last', 'next']);
+  assert.equal(project(facts).conversations[0].cwd, '/home/test/repo');
+  assert.equal(facts.some(fact => fact.kind === 'run.created'), true);
+  const fresh = openLedger(':memory:');
+  t.after(() => fresh.close());
+  observeClaudeFile(fresh, path);
+  observeClaudeContext(fresh, path);
+  assert.deepEqual(project(readFacts(fresh)), project(facts));
+});
+
+test('transcripts starting at the probe path are ingested without permanent cursor exclusion', t => {
+  const { ledger, directory } = createFixture(t);
+  const path = join(directory, 'real-at-probe.jsonl');
+  writeFileSync(path, JSON.stringify({ ...JSON.parse(createMessage('first')), cwd: USAGE_PROBE_PATH }) + '\n');
+  const first = observeClaudeFile(ledger, path);
+  const legacyCursor = { ...first.cursor, usageProbe: true };
+  appendFileSync(path, createMessage('next') + '\n');
+  observeClaudeFile(ledger, path, { cursor: legacyCursor });
+  assert.deepEqual(project(readFacts(ledger)).messages.map(row => row.native_id).sort(), ['first', 'next']);
 });

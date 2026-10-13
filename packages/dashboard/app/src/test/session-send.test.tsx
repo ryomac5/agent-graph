@@ -118,11 +118,17 @@ it.each(['claude', 'codex'])('creates a %s session from the project plus, opens 
   expect(screen.queryByRole('dialog')).toBeNull();
   await vi.waitFor(() => expect(f.command).toHaveBeenCalledWith('session.launch', { projectId: 'p', provider, target: { kind: 'local' } }));
   await vi.waitFor(() => {
-    const saved = restoreWorkspace(localStorage.getItem(workspaceKey('p', 'root')), 'c')!;
-    expect(listPanes(saved)[0].tabs).toHaveLength(2);
+    const raw = localStorage.getItem(workspaceKey('p', conversationId));
+    expect(raw).not.toBeNull();
+    const saved = restoreWorkspace(raw, conversationId)!;
+    expect(listPanes(saved)[0].tabs).toHaveLength(1);
     expect(listPanes(saved)[0].tabs.at(-1)).toMatchObject({ kind: 'conversation', conversationId });
     expect(listPanes(saved)[0].active).toBe(listPanes(saved)[0].tabs.at(-1)!.id);
   });
+  const previous = restoreWorkspace(localStorage.getItem(workspaceKey('p', 'root')), 'c')!;
+  expect(listPanes(previous)[0].tabs).toHaveLength(1);
+  expect(listPanes(previous)[0].tabs[0]).toMatchObject({ kind: 'conversation', conversationId: 'c' });
+  expect(screen.queryByText('Earlier response')).toBeNull();
   await waitFor(() => expect(screen.getByRole('button', { name: /^(Model|モデル) · / }).textContent).toContain('Model A'));
   fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'First message' } });
   fireEvent.click(screen.getByRole('button', { name: 'Send' }));
@@ -198,14 +204,14 @@ it('keeps the first input and shows the reason when starting fails', async () =>
   expect(screen.getByRole('tab', { name: 'New session' })).toBeTruthy();
 });
 
-it('keeps the conversation and run reachable when API identities change after launch', async () => {
+it.each(['explicit', 'derived'])('keeps the conversation and run reachable with %s API identities after launch', async identity => {
   const f = fixture('observed', 'running', undefined, 'antigravity'); render(<f.Wrapper/>);
   await waitFor(() => expect(screen.getByRole('button', { name: /^(Model|モデル) · / }).textContent).toContain('Model A'));
   fireEvent.change(screen.getByRole('textbox', { name: '入力' }), { target: { value: 'Continue with context' } });
   fireEvent.click(screen.getByRole('button', { name: '送信' }));
-  await act(async () => f.finish(ack({ conversationId: 'runner-id', runId: 'runner-run' })));
+  await act(async () => f.finish(ack({ conversationId: 'runner-id', runId: identity === 'explicit' ? 'runner-run' : 'runner-id:1' })));
   act(() => f.target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0,
-    identities: { conversations: { 'runner-id': 'claude:native' }, runs: { 'runner-run': 'claude:native:1' } }, changes: {
+    identities: { conversations: { 'runner-id': 'claude:native' }, runs: identity === 'explicit' ? { 'runner-run': 'claude:native:1' } : {} }, changes: {
       conversations: { upsert: [{ id: 'claude:native', provider: 'claude', origin: 'managed', history_format: 'jsonl' }], remove: [] },
       runs: { upsert: [{ id: 'claude:native:1', conversation_id: 'claude:native', state: 'idle', generation: 1, launch: { cwd: '/repo', model: { model: 'model-a' } } }], remove: [] },
     } }));

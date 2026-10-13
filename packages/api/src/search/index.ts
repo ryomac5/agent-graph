@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { DatabaseSync } from 'node:sqlite';
 import { searchLedger, SearchValidationError, type SearchQuery, type SearchMode } from '../../../core/src/ledger/search.ts';
 import { authorize, readRequestUrl } from '../ws/security.ts';
+import { sendJson } from '../ws/compression.ts';
 
 export function parseSearchQuery(params: URLSearchParams): SearchQuery {
   const query: SearchQuery = { query: params.get('q') ?? '' };
@@ -29,14 +30,14 @@ export function createSearchHandler(db: DatabaseSync, options: { port: number; t
     response.setHeader('Cache-Control', 'no-store');
     response.setHeader('Content-Type', 'application/json; charset=utf-8');
     response.setHeader('X-Content-Type-Options', 'nosniff');
-    if (!authorize(request, options.port, options.token)) { response.writeHead(403).end(JSON.stringify({ error: 'Forbidden' })); return true; }
+    if (!authorize(request, options.port, options.token)) { sendJson(request, response, { error: 'Forbidden' }, 403); return true; }
     if (request.method !== 'GET') { response.setHeader('Allow', 'GET'); response.writeHead(405).end(); return true; }
     try {
       const result = searchLedger(db, parseSearchQuery(url.searchParams), options.mode);
-      response.writeHead(200).end(JSON.stringify(result));
+      sendJson(request, response, result);
     } catch (error) {
       const invalid = error instanceof SearchValidationError;
-      response.writeHead(invalid ? 400 : 500).end(JSON.stringify({ error: invalid ? error.message : 'Search unavailable' }));
+      sendJson(request, response, { error: invalid ? error.message : 'Search unavailable' }, invalid ? 400 : 500);
     }
     return true;
   };

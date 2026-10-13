@@ -24,7 +24,7 @@ function createReceiver(ledger: Ledger) {
       socket: { remoteAddress: "127.0.0.1", localPort: 12345 } });
     let status = 0;
     let body = "";
-    const response = { writeHead: (code: number) => { status = code; }, end: (value: string) => { body = value; } };
+    const response = { setHeader() {}, writeHead: (code: number) => { status = code; }, end: (value: string | Buffer) => { body = value.toString(); } };
     await handler(request as unknown as IncomingMessage, response as unknown as ServerResponse);
     return new Response(body, { status });
   };

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { createPagedIdentityFeed, PAGE_SIZE } from './fixtures/paged-identities.ts';
+import { deriveRunId } from '../src/service/screen-identities.ts';
 
 const TURN_START = '2026-10-11T00:00:00.000Z';
 
@@ -20,7 +21,8 @@ test('snapshot 全対応表と後続ページと既存 run の patch が旧形�
     assert.ok(!snapshot.projection.runs.some(row => row.conversation_id === legacy));
     for (const identities of [snapshot.identities, page.identities, patch.identities]) {
       assert.equal(identities?.conversations[legacy], canonical);
-      assert.equal(identities?.runs[`${legacy}:1`], `${canonical}:1`);
+      assert.equal(identities?.runs[`${legacy}:1`], undefined);
+      assert.equal(deriveRunId(`${legacy}:1`, identities!.conversations), `${canonical}:1`);
     }
     assert.equal(page.rows.find(row => row.conversation_id === legacy)?.turn_started_ts, TURN_START);
     assert.equal(patch.changes.runs.upsert.find(row => row.conversation_id === legacy)?.turn_started_ts, TURN_START);

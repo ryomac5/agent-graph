@@ -33,9 +33,11 @@ test("S14: API snapshot and patch expose corrected relation while preserving ori
   const patch = feed.refresh();
   assert.ok(patch && patch !== "resync");
   assert.equal(patch.changes.relations?.remove.length, 1);
-  assert.equal(patch.changes.relations?.upsert[0].to_id, '["codex","correct"]');
+  assert.equal(patch.changes.relations?.upsert[0].to_id, undefined);
+  assert.equal(JSON.parse(String(patch.changes.relations?.upsert[0].id))[2], '["codex","correct"]');
   const after = feed.snapshot();
   assert.notDeepEqual(before.projection.relations, after.projection.relations);
-  assert.equal(after.projection.relations[0].to_id, '["codex","correct"]');
+  assert.equal(after.projection.relations[0].to_id, undefined);
+  assert.equal(JSON.parse(String(after.projection.relations[0].id))[2], '["codex","correct"]');
   assert.equal(service.ledger.readSince(0, 1000).find((fact) => fact.kind === "relation.created")!.payload!.to_id, "wrong");
 });

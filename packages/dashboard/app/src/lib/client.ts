@@ -147,6 +147,8 @@ export function createClient(options: ClientOptions) {
     };
   }
   return {
+    // 通常の端末は接続に属するため、終了するまでは自動読み直しを待つ。
+    canReload: () => pending.size === 0 && terminalIds.size === 0,
     subscribeConnected(listener: () => void) { connectedListeners.add(listener); return () => { connectedListeners.delete(listener); }; },
     subscribeTerminal(listener: (notice: TerminalNotice) => void) { terminalListeners.add(listener); return () => { terminalListeners.delete(listener); }; },
     start() { if (stopped) { stopped = false; target.setConnection('connecting'); connect(); } },

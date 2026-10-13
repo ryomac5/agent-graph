@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test \"test/**/*.test.ts\"",
+    "test": "node --test \"test/**/*.test.ts\" \"app/src/test/**/*.node-test.ts\"",
     "build:app": "vite build --configLoader native",
     "dev:app": "vite --configLoader native",
     "test:app": "vitest run --configLoader native"

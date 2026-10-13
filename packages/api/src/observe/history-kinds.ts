@@ -46,6 +46,7 @@ export function extractHistoryKinds(provider: HistoryProvider, value: unknown): 
       }
     }
     const content = readObject(row.message).content;
+    if (type === "assistant" && typeof readObject(row.message).model === "string") add("message.model", "<present>");
     if (Array.isArray(content)) for (const block of content) add("message.content.type", readObject(block).type);
   } else {
     const payload = readObject(row.payload);
@@ -65,6 +66,8 @@ export function extractHistoryKinds(provider: HistoryProvider, value: unknown): 
 
 // 分類の正本。取り込みは現在の読み手の範囲に限る。
 export const HISTORY_CLASSIFICATIONS: HistoryClassification[] = [
+  { provider: "claude", type: "assistant", field: "message.model", subtype: "<present>", action: "ingest", handler: "message",
+    reason: "発言を保存し、synthetic 以外のモデルを状態変更とは独立に実行へ保存する。" },
   ...(["user", "assistant"] as const).flatMap(type => [
     ...CLAUDE_INTERNAL_MESSAGE_FLAGS.map(flag => ({ flag, ignore: flag !== "isMeta",
       reason: flag === "isMeta" ? "旗を保存し、正規化した報告と通知を残す。" : "圧縮要約・履歴表示専用の行は発言として取り込まない。" })),
@@ -103,7 +106,7 @@ export const HISTORY_CLASSIFICATIONS: HistoryClassification[] = [
   {"provider":"codex","type":"event_msg","field":"payload.item_started.item.type","subtype":"McpToolCall","action":"ignore","handler":"ignore","reason":"道具または内部処理の記録。現在の読み手では取り込まない。"},
   {"provider":"codex","type":"event_msg","field":"payload.item_started.item.type","subtype":"WebSearch","action":"ignore","handler":"ignore","reason":"道具または内部処理の記録。現在の読み手では取り込まない。"},
   {"provider":"codex","type":"event_msg","field":"payload.item_started.item.type","subtype":"ContextCompaction","action":"ignore","handler":"ignore","reason":"道具または内部処理の記録。現在の読み手では取り込まない。"},
-  {"provider":"codex","type":"event_msg","field":"payload.item_started.item.type","subtype":"SubAgentActivity","action":"ignore","handler":"ignore","reason":"対応する response_item がない活動記録。現在は取り込まず、取り込み追加の検討対象とする。"},
+  {"provider":"codex","type":"event_msg","field":"payload.item_started.item.type","subtype":"SubAgentActivity","action":"ignore","handler":"ignore","reason":"開始通知は item_completed の活動と重複するため、完了通知で保存する。"},
   {"provider":"codex","type":"event_msg","field":"payload.item_started.item.type","subtype":"CollabAgentToolCall","action":"ignore","handler":"ignore","reason":"対応する response_item がない活動記録。現在は取り込まず、取り込み追加の検討対象とする。"},
   {"provider":"codex","type":"event_msg","field":"payload.item_completed.item.type","subtype":"AgentMessage","action":"ignore","handler":"ignore","reason":"response_item の発言と重複するため捨てる。"},
   {"provider":"codex","type":"event_msg","field":"payload.item_completed.item.type","subtype":"UserMessage","action":"ignore","handler":"ignore","reason":"response_item の発言と重複するため捨てる。"},
@@ -115,9 +118,9 @@ export const HISTORY_CLASSIFICATIONS: HistoryClassification[] = [
   {"provider":"codex","type":"event_msg","field":"payload.item_completed.item.type","subtype":"McpToolCall","action":"ignore","handler":"ignore","reason":"道具または内部処理の記録。現在の読み手では取り込まない。"},
   {"provider":"codex","type":"event_msg","field":"payload.item_completed.item.type","subtype":"WebSearch","action":"ignore","handler":"ignore","reason":"道具または内部処理の記録。現在の読み手では取り込まない。"},
   {"provider":"codex","type":"event_msg","field":"payload.item_completed.item.type","subtype":"ContextCompaction","action":"ignore","handler":"ignore","reason":"道具または内部処理の記録。現在の読み手では取り込まない。"},
-  {"provider":"codex","type":"event_msg","field":"payload.item_completed.item.type","subtype":"SubAgentActivity","action":"ignore","handler":"ignore","reason":"対応する response_item がない活動記録。現在は取り込まず、取り込み追加の検討対象とする。"},
+  {"provider":"codex","type":"event_msg","field":"payload.item_completed.item.type","subtype":"SubAgentActivity","action":"ingest","handler":"subagent-activity","reason":"子の起動は親子関係にし、完了と連絡は活動の根拠として保存する。"},
   {"provider":"codex","type":"event_msg","field":"payload.item_completed.item.type","subtype":"CollabAgentToolCall","action":"ignore","handler":"ignore","reason":"対応する response_item がない活動記録。現在は取り込まず、取り込み追加の検討対象とする。"},
-  {"provider":"codex","type":"response_item","field":"payload.function_call.name","subtype":"spawn_agent","action":"ignore","handler":"ignore","reason":"委譲の操作の証拠。現在は取り込まず、取り込み追加の検討対象とする。"},
+  {"provider":"codex","type":"response_item","field":"payload.function_call.name","subtype":"spawn_agent","action":"ingest","handler":"spawn","reason":"子への依頼を既存の道具呼び出しとして保存する。親子の確定には native ID の活動記録を使う。"},
   {"provider":"codex","type":"response_item","field":"payload.function_call.name","subtype":"send_message","action":"ignore","handler":"ignore","reason":"委譲の操作の証拠。現在は取り込まず、取り込み追加の検討対象とする。"},
   {"provider":"codex","type":"response_item","field":"payload.function_call.name","subtype":"wait_agent","action":"ignore","handler":"ignore","reason":"委譲の操作の証拠。現在は取り込まず、取り込み追加の検討対象とする。"},
   { provider: "codex", type: "response_item", field: "payload.agent_message.content.type", subtype: "input_text", action: "ingest", handler: "message", reason: "agent_message の入力テキストも本文ブロックの一部として保存する。" },
@@ -171,7 +174,7 @@ export const HISTORY_CLASSIFICATIONS: HistoryClassification[] = [
   {"provider":"claude","type":"attachment","field":"attachment.type","subtype":"session_context","action":"ignore","handler":"ignore","reason":"補助情報であり、この読み手では会話・発言・関係を作らない。"},
   {"provider":"claude","type":"attachment","field":"attachment.type","subtype":"silent_turn_reminder","action":"ignore","handler":"ignore","reason":"補助情報であり、この読み手では会話・発言・関係を作らない。"},
   {"provider":"claude","type":"attachment","field":"attachment.type","subtype":"skill_listing","action":"ignore","handler":"ignore","reason":"補助情報であり、この読み手では会話・発言・関係を作らない。"},
-  {"provider":"claude","type":"attachment","field":"attachment.type","subtype":"structured_output","action":"ignore","handler":"ignore","reason":"補助情報であり、この読み手では会話・発言・関係を作らない。"},
+  {"provider":"claude","type":"attachment","field":"attachment.type","subtype":"structured_output","action":"ingest","handler":"structured-output","reason":"構造化した最終出力を assistant の発言として保存する。"},
   {"provider":"claude","type":"attachment","field":"attachment.type","subtype":"task_reminder","action":"ignore","handler":"ignore","reason":"補助情報であり、この読み手では会話・発言・関係を作らない。"},
   {"provider":"claude","type":"attachment","field":"attachment.type","subtype":"task_status","action":"ignore","handler":"ignore","reason":"補助情報であり、この読み手では会話・発言・関係を作らない。"},
   {"provider":"claude","type":"attachment","field":"attachment.type","subtype":"thinking_drop","action":"ignore","handler":"ignore","reason":"補助情報であり、この読み手では会話・発言・関係を作らない。"},
@@ -180,7 +183,7 @@ export const HISTORY_CLASSIFICATIONS: HistoryClassification[] = [
   {"provider":"claude","type":"bridge-session","field":"","subtype":"","action":"ignore","handler":"ignore","reason":"補助情報であり、この読み手では事実を作らない。"},
   {"provider":"claude","type":"continued-in","field":"","subtype":"","action":"ingest","handler":"relation","reason":"継続または圧縮の関係を保存する。"},
   {"provider":"claude","type":"cost-state","field":"","subtype":"","action":"ignore","handler":"ignore","reason":"補助情報であり、この読み手では事実を作らない。"},
-  {"provider":"claude","type":"custom-title","field":"","subtype":"","action":"ignore","handler":"ignore","reason":"補助情報であり、この読み手では事実を作らない。"},
+  {"provider":"claude","type":"custom-title","field":"","subtype":"","action":"ingest","handler":"custom-title","reason":"利用者が付けた題名を会話の user_name に保存する。"},
   {"provider":"claude","type":"file-history-delta","field":"","subtype":"","action":"ignore","handler":"ignore","reason":"補助情報であり、この読み手では事実を作らない。"},
   {"provider":"claude","type":"file-history-snapshot","field":"","subtype":"","action":"ignore","handler":"ignore","reason":"補助情報であり、この読み手では事実を作らない。"},
   {"provider":"claude","type":"isolation-latch","field":"","subtype":"","action":"ignore","handler":"ignore","reason":"隔離の補助情報であり、会話や状態の根拠としては使わない。"},

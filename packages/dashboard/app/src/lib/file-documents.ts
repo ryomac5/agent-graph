@@ -3,6 +3,13 @@ import type { FilesClient, FilesRequest } from '../pages/files/model.ts';
 
 // 接続ごとに分離し、タブを閉じても未保存の本文は保持する。
 const clients = new WeakMap<FilesClient, Map<string, CodeDocument>>();
+export function hasUnsavedDocuments(client: FilesClient): boolean {
+  for (const document of clients.get(client)?.values() ?? []) {
+    const state = document.getSnapshot();
+    if (state.dirty || state.saving) return true;
+  }
+  return false;
+}
 export function getFileDocument(client: FilesClient, request: FilesRequest): CodeDocument {
   let documents = clients.get(client);
   if (!documents) { documents = new Map(); clients.set(client, documents); }

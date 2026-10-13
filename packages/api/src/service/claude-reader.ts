@@ -89,6 +89,7 @@ export function observeClaudeHistories(ledger: Ledger, directory: string, facts:
           fromStart: !start || observation.reset || start.offset === 0 });
         // 発言の取り込みで読んだ行から、場所とターンの根拠を同じ取引で足す。
         const context = observeClaudeContext(fileLedger, file, { lines: observation.lines,
+          modelBackfillLines: observation.modelBackfillLines,
           fromStart: !start || observation.reset || start.offset === 0, ...(readLocation ? { locate: readLocation } : {}) });
         return { ...observation, conflicts: [...observation.conflicts, ...titles.filter(result => result.status === "conflict"), ...context.conflicts] };
       });

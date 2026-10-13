@@ -1,4 +1,6 @@
+import { LoadingFeature } from '../../components/LoadingFeature.tsx';
 import { readSessionProvider, SESSION_PROVIDER_KEY } from '../../lib/session-start.ts';
+import { resolveRunId } from '../../lib/identities.ts';
 import { createPortal } from 'react-dom';
 import { SessionName } from '../../components/SessionName.tsx';
 import { memo, useCallback, useContext, useEffect, useMemo, useLayoutEffect, useRef, useState } from 'react';
@@ -25,6 +27,7 @@ import { isBlank, isToolOnly, Message, ToolRun } from '../../components/conversa
 import { harnessKind, readMessageBody } from '../../lib/message-body.ts';
 import { useToolResults } from '../../components/conversation/ToolCall.tsx';
 import { resolveParticipants, senderOf, type Sender } from '../../components/conversation/participants.ts';
+import { holdDashboardReload } from '../../lib/reload-safety.ts';
 import { ACTIVE_STATES, compareEntries, messageSignature, PENDING_APPROVALS, readObject, readText, selectTimeline, showValue, type TimelineEntry } from '../../components/conversation/model.ts';
 import { ChoiceMenu } from '../../components/ChoiceMenu.tsx';
 import { describeDefaultSource, displayModel, findOlderModels, isRecommended, readVisibleModels, type ComposerModel } from '../../components/conversation/models.ts';
@@ -74,7 +77,8 @@ const STICK_TO_BOTTOM_PX = 120;
 const LOAD_OLDER_THRESHOLD_PX = 80;
 const HOST_POLL_MS = 5000;
 const HOST_START_TIMEOUT_MS = 30000;
-interface SessionHost { conversationId: string; terminalId: string; provider?: string; cwd?: string; disconnected?: boolean; projectId?: string; target?: { kind: string; id?: string } }
+const HOST_DISCOVERY_POLL_MS = 250;
+export interface SessionHost { conversationId: string; terminalId: string; provider?: string; cwd?: string; disconnected?: boolean; projectId?: string; target?: { kind: string; id?: string } }
 function readHosts(result: unknown): SessionHost[] {
   const rows = readObject(result).hosts;
   return (Array.isArray(rows) ? rows : []).flatMap(row => {
@@ -162,9 +166,11 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
   const conversationId = resolveConversation(requestedId);
   const visibleConversation = useRef(conversationId);
   visibleConversation.current = conversationId;
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   function isVisible(id: string) {
     const identities = target.getSnapshot().identities;
-    return (identities?.conversations[visibleConversation.current] ?? visibleConversation.current) === (identities?.conversations[id] ?? id);
+    return mounted.current && (identities?.conversations[visibleConversation.current] ?? visibleConversation.current) === (identities?.conversations[id] ?? id);
   }
   useEffect(() => { if (requestedId !== conversationId) onConversation?.(conversationId); }, [requestedId, conversationId]);
   const workspaceHeader = useContext(WorkspaceConversationHeader);
@@ -208,12 +214,14 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
   const t = (key: ConversationText) => translate(language, key);
   const [sessionProvider, setSessionProvider] = useState(readSessionProvider);
   const openTerminal = useContext(OpenWorkspaceTerminal);
-  const [hosts, setHosts] = useState<SessionHost[]>([]);
+  // 起動時に確認済みの host を、投影と次の一覧応答が届くまで引き継ぐ。
+  const [hosts, setHosts] = useState<SessionHost[]>(() => readHosts({ hosts: [location.state?.sessionHost] }));
+  const [hostsLoadedFor, setHostsLoadedFor] = useState<string>();
   const [pendingHost, setPendingHost] = useState<SessionHost>();
   const [hostedConversation, setHostedConversation] = useState<Row>();
   const [receipt, setReceipt] = useState<{ conversationId: string; runId: string; provider: string; cwd: string; model: string; effort: string }>();
   const receiptConversationId = receipt ? resolveConversation(receipt.conversationId) : undefined;
-  const receiptRunId = receipt ? state.identities?.runs[receipt.runId] ?? receipt.runId : undefined;
+  const receiptRunId = receipt ? resolveRunId(receipt.runId, state.identities) : undefined;
   const [continued, setContinued] = useState(false);
   const [sentMessages, setSentMessages] = useState<{ id: string; conversationId: string; text: string; known: Set<unknown>; acknowledged: boolean }[]>([]);
   const starting = Boolean(newSession && !conversationId);
@@ -232,6 +240,7 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
   }, [receipt, receiptRunId, projectedRun?.id, projectedConversation?.origin]);
   // 会話の行がまだ届いていなくても、会話の id の先頭から提供元を読む。読めないと古い経路に落ちて送れなくなるからである。
   const provider = readText(conversation?.provider) || providerFromId(conversationId);
+  const shouldDiscoverHosts = Boolean(nativeProvider || provider === 'claude' || !conversation && conversationId);
   const launch = readObject(run?.launch);
   const saved = readModel(run);
   const currentModel = readText(run?.model) || saved.model;
@@ -342,12 +351,14 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
     const ack = await client.command('session.hosts', {});
     if (!ack.ok) throw new Error(ack.error ?? t('failed'));
     const next = readHosts(ack.result);
-    setHosts(next);
-    setPendingHost(previous => next.some(host => host.terminalId === previous?.terminalId) ? undefined : previous);
+    if (isVisible(conversationId)) {
+      setHosts(next);
+      setPendingHost(previous => next.some(host => host.terminalId === previous?.terminalId) ? undefined : previous);
+    }
     return next;
   }
   useEffect(() => {
-    if (!visible || (!nativeProvider && provider !== 'claude') || !['connected', 'runner_unavailable'].includes(state.connection)) return;
+    if (!visible || !shouldDiscoverHosts || !['connected', 'runner_unavailable'].includes(state.connection)) return;
     let disposed = false;
     const poll = async () => {
       try {
@@ -358,11 +369,14 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
           setPendingHost(previous => next.some(host => host.terminalId === previous?.terminalId) ? undefined : previous);
         }
       } catch { /* 接続の復帰後に一覧を取り直す。 */ }
+      finally {
+        if (!disposed) setHostsLoadedFor(conversationId);
+      }
     };
     void poll();
     const timer = setInterval(() => { void poll(); }, HOST_POLL_MS);
     return () => { disposed = true; clearInterval(timer); };
-  }, [client, nativeProvider, provider, conversationId, state.connection, visible]);
+  }, [client, shouldDiscoverHosts, conversationId, state.connection, visible]);
   // 画面に出す発言は新しい窓だけだが、変えたファイルは読み込みで残した古い発言も含めて数える。
   const changedFiles = useMemo(() => {
     const editRows = [...new Map([...(editHistory?.id === conversationId ? editHistory.rows : []), ...messageEntries.map(entry => entry.row)]
@@ -569,6 +583,10 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
     finally { if (isVisible(sourceConversation)) setPending(false); }
   }
   async function send() {
+    const release = holdDashboardReload();
+    try { await sendInput(); } finally { release(); }
+  }
+  async function sendInput() {
     if (!(external ? canLaunch : canSend) || (!input.trim() && !attachments.items.length)) return;
     if (attachments.items.length && !terminalConversation) return;
     if (external && !terminalConversation && !starting && !supported) { setHandoffBlocked(true); return; }
@@ -595,26 +613,24 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
             const ack = await client.command('session.launch', { projectId, provider: provider || 'claude', ...(resume ? { resume } : {}), ...(model && model !== 'default' ? { model } : {}) });
             if (!ack.ok) throw new Error(ack.error ?? t('failed'));
             terminalId = readText(readObject(ack.result).terminalId);
-            setPendingHost({ conversationId, terminalId });
+            if (isVisible(sourceConversation)) setPendingHost({ conversationId, terminalId });
           }
           const deadline = Date.now() + HOST_START_TIMEOUT_MS;
           let next = await refreshHosts();
           if (starting) {
             while (!next.some(host => host.terminalId === terminalId)) {
-              if (!isVisible(sourceConversation)) return;
               if (Date.now() >= deadline) throw new Error(language === 'ja' ? '会話の開始を確認できません。' : 'Unable to confirm the session start.');
-              await new Promise(resolve => setTimeout(resolve, 250));
+              await new Promise(resolve => setTimeout(resolve, HOST_DISCOVERY_POLL_MS));
               next = await refreshHosts();
             }
             destination = next.find(host => host.terminalId === terminalId)!.conversationId;
           }
         }
         const ids = await attachments.upload();
-        if (!isVisible(sourceConversation)) return;
         const ack = await client.command('session.send', { conversationId: destination, text: sent, ...(ids.length ? { attachments: ids } : {}) });
         if (!ack.ok) throw new Error(['Invalid attachment', 'Invalid attachments', 'Attachment too large', 'Attachment transfer failed'].includes(ack.error ?? '') ? attachments.text.failed : ack.error ?? t('failed'));
         clearSentDraft(draftKey, sent);
-        setSentMessages(previous => previous.map(message => message.id === messageId ? { ...message, conversationId: destination, acknowledged: true } : message));
+        if (mounted.current) setSentMessages(previous => previous.map(message => message.id === messageId ? { ...message, conversationId: destination, acknowledged: true } : message));
         if (!isVisible(sourceConversation)) return;
         attachments.clear();
         if (starting) {
@@ -622,9 +638,10 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
           if (onConversation) onConversation(destination); else navigate(`/c/${encodeURIComponent(destination)}`);
         }
       } catch (reason) {
+        if (mounted.current) setSentMessages(previous => previous.filter(message => message.id !== messageId));
+        if (!isVisible(sourceConversation)) return;
         if (reason instanceof Error && reason.message === 'no_host') setPendingHost(undefined);
-        if (isVisible(sourceConversation)) setError(reason instanceof Error ? reason.message : String(reason));
-        setSentMessages(previous => previous.filter(message => message.id !== messageId));
+        setError(reason instanceof Error ? reason.message : String(reason));
       } finally { if (isVisible(sourceConversation)) setPending(false); }
       return;
     }
@@ -636,9 +653,9 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
       ? { conversationId, ...launchPayload, ...(stopped ? { confirmStopped: true } : {}) }
       : { runId: run!.id, input: { text: sent } };
     const ack = await execute(command, payload, true);
-    if (!ack) { setSentMessages(previous => previous.filter(message => message.id !== messageId)); return; }
+    if (!ack) { if (mounted.current) setSentMessages(previous => previous.filter(message => message.id !== messageId)); return; }
     clearSentDraft(draftKey, sent);
-    setSentMessages(previous => previous.map(message => message.id === messageId ? { ...message, acknowledged: true } : message));
+    if (mounted.current) setSentMessages(previous => previous.map(message => message.id === messageId ? { ...message, acknowledged: true } : message));
     if (!isVisible(conversationId)) return;
     if (external) {
       const result = readObject(ack.result);
@@ -666,8 +683,16 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
     if (await execute('answer', { approvalId, decision })) setAnswered(previous => new Set([...previous, approvalId]));
   }
 
+  // 記録のモデル名「claude-opus-5-5」は、一覧の「Opus 5.5」と同じものとして選ぶ。内部名をそのまま出さない。
+  const matchModel = (value: string) => models.find(item => item.model === value)?.model
+    ?? models.find(item => modelName(value) !== '' && [item.displayName, `Claude ${item.displayName}`].includes(modelName(value)))?.model ?? value;
+  const selectedModel = matchModel(model);
+  const dirty = edited && Boolean(model) && (selectedModel !== matchModel(appliedModel?.model || currentModel || (terminalConversation ? 'default' : '')) || effort !== (appliedModel?.effort ?? currentEffort));
+  useEffect(() => { if (dirty) return holdDashboardReload(); }, [dirty]);
+
   if (!conversation) return <section className={`conversation-page missing${embedded ? ' embedded' : ''}`}><div className="empty-state">
-    <Icon name="message" size={22}/><h1>{t('conversation')}</h1><p>{t('noConversation')}</p></div></section>;
+    <Icon name="message" size={22}/><h1>{t('conversation')}</h1>{conversationId && hostsLoadedFor !== conversationId
+      ? <LoadingFeature language={language}/> : <p>{t('noConversation')}</p>}</div></section>;
   const Heading = embedded ? 'h2' : 'h1';
   const evidence = status === 'ended' ? run?.end_evidence : run?.last_evidence;
   const elapsedTurn = !seriesIds && isWorkingTurn(workingTurn) ? workingTurn : undefined;
@@ -676,11 +701,6 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
   const shownEffort = appliedModel?.effort ?? currentEffort;
   const nameRoot = root?.conversation_ids.includes(conversationId) ? root : undefined;
   const title = displayName || conversationName(state, conversationId) || t('conversation');
-  // 記録のモデル名「claude-opus-5-5」は、一覧の「Opus 5.5」と同じものとして選ぶ。内部名をそのまま出さない。
-  const matchModel = (value: string) => models.find(item => item.model === value)?.model
-    ?? models.find(item => modelName(value) !== '' && [item.displayName, `Claude ${item.displayName}`].includes(modelName(value)))?.model ?? value;
-  const selectedModel = matchModel(model);
-  const dirty = edited && Boolean(model) && (selectedModel !== matchModel(appliedModel?.model || currentModel || (terminalConversation ? 'default' : '')) || effort !== (appliedModel?.effort ?? currentEffort));
   const usesDefault = !model || model === 'default' || models.some(item => item.model === model && isRecommended(item));
   const resolvedModel = appliedModel?.model || currentModel || (usesDefault ? recommendedModel : model);
   const defaultLabel = defaults?.displayName ? displayModel(defaults.model ?? '', [{ model: defaults.model ?? '', displayName: defaults.displayName }]) : recommendedModel ? displayModel(recommendedModel, models) : t('noModels');
@@ -831,7 +851,7 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
             <button className="btn btn-ghost" aria-label={`${attachments.text.remove}: ${item.file.name}`} disabled={pending} onClick={() => attachments.remove(item.key)}>×</button>
           </div>)}
         </div>}
-        <textarea ref={inputRef} aria-label={t('input')} rows={1} placeholder={t('placeholder')} value={input}
+        <textarea data-conversation-draft={draftKey} ref={inputRef} aria-label={t('input')} rows={1} placeholder={t('placeholder')} value={input}
           disabled={pending || !connected || !external && !canSend} onChange={event => setInput(event.target.value)} onKeyDown={event => {
             if (event.key === 'Enter' && event.metaKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); }
           }}/>

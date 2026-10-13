@@ -2,6 +2,7 @@ import { decodeStoredValue, readObject, readText } from '../../components/activi
 import type { ExecutionState } from '../../components/StateBadge.tsx';
 import { conversationName, readModel, runLabel } from '../../lib/format.ts';
 import { createProjectMatcher } from '../../lib/projects.ts';
+import { resolveRunId } from '../../lib/identities.ts';
 import type { Row, ScreenState } from '../../lib/store.ts';
 
 export interface TreeNode {
@@ -41,7 +42,7 @@ export function buildDelegationTree(state: ScreenState, project?: string): Deleg
   const edges: TreeEdge[] = [];
   const parents = new Map<string, string>();
   const unresolved = new Set<string>();
-  const runId = (id: string) => state.identities?.runs[id] ?? id;
+  const runId = (id: string) => resolveRunId(id, state.identities);
   const conversationId = (id: string) => state.identities?.conversations[id] ?? id;
   const conversationsById = new Map(conversations.map(row => [readText(row.id), row]));
   const latestRuns = new Map<string, Row>();

@@ -9,6 +9,7 @@ import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocket, WebSocketServer } from 'ws';
 import { MAX_FRAME_BYTES } from '../ws/contract.ts';
+import { WEBSOCKET_COMPRESSION } from '../ws/compression.ts';
 import { authorize, readRequestUrl } from '../ws/security.ts';
 import type { createPreviewApi } from '../files/preview.ts';
 
@@ -125,7 +126,7 @@ export async function startStaticServer(options: StaticOptions) {
   let port = options.port ?? DEFAULT_DASHBOARD_PORT;
   const origin = () => `http://127.0.0.1:${port}`;
   const sockets = new Set<WebSocket>();
-  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES, perMessageDeflate: WEBSOCKET_COMPRESSION });
   const server = createServer(async (request, response) => {
     response.setHeader('Cache-Control', 'no-store');
     response.setHeader('X-Content-Type-Options', 'nosniff');
@@ -170,9 +171,12 @@ export async function startStaticServer(options: StaticOptions) {
     if (['/snapshot', '/conversation', '/projection', '/api/search', '/api/send-watches'].includes(url.pathname)) {
       if (!authorize(request, port, upstream.token)) { response.writeHead(403).end(); return; }
       const proxy = requestHttp(new URL(url.pathname + url.search, upstream.url), {
-        headers: { 'x-agent-graph-token': upstream.token },
+        headers: { 'x-agent-graph-token': upstream.token,
+          ...(request.headers['accept-encoding'] !== undefined ? { 'accept-encoding': request.headers['accept-encoding'] } : {}) },
       }, result => {
-        response.writeHead(result.statusCode ?? 502, { 'Content-Type': 'application/json' });
+        response.writeHead(result.statusCode ?? 502, Object.fromEntries(
+          ['content-type', 'content-encoding', 'content-length', 'vary'].flatMap(name =>
+            result.headers[name] === undefined ? [] : [[name, result.headers[name]!]])));
         result.pipe(response);
       });
       proxy.on('error', () => { if (!response.headersSent) response.writeHead(502); response.end(); });
@@ -224,7 +228,8 @@ export async function startStaticServer(options: StaticOptions) {
     wss.handleUpgrade(request, socket, head, browser => {
       const url = new URL(upstream.wsUrl);
       url.searchParams.set('token', upstream.token);
-      const remote = new WebSocket(url);
+      // 同一プロセスへの中継で二重に圧縮せず、ブラウザへの送信時にだけ圧縮する。
+      const remote = new WebSocket(url, { perMessageDeflate: false });
       sockets.add(browser); sockets.add(remote);
       // 中継の接続前に hello を受けても捨てない。
       const queue: { data: Buffer; binary: boolean }[] = [];

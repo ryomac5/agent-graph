@@ -6,7 +6,7 @@ import { projectProjects } from "../../../core/src/ledger/projections/projects.t
 import { getMessageText } from "../../../core/src/ledger/projections/messages.ts";
 import { compareEventOrder, encodeEventOrder } from "../../../core/src/ledger/event-order.ts";
 import { resolveProjectLocation } from "../../../core/src/ledger/repository.ts";
-import { createScreenIdentities, type ScreenIdentities } from './screen-identities.ts';
+import { compactScreenIdentities, createScreenIdentities, type ScreenIdentities } from './screen-identities.ts';
 import type { ObservationProgress } from "./index.ts";
 
 import { initializeSummaryIndex, LATEST_MESSAGE_SQL, FALLBACK_MESSAGE_SQL } from "./summary-index.ts";
@@ -55,6 +55,21 @@ const LIST_COLUMNS: Record<string, string> = {
 };
 function decodeFacts(rows: Record<string, unknown>[]): Fact[] {
   return rows.map(row => ({ ...row, payload: row.payload === null ? null : JSON.parse(String(row.payload)) } as Fact));
+}
+function readRelationParts(id: unknown): string[] | undefined {
+  let parts: unknown;
+  try { parts = JSON.parse(String(id)); } catch { return; }
+  if (Array.isArray(parts) && parts.length === 4 && parts.every(value => typeof value === 'string')) return parts;
+}
+function compactRelation(row: Record<string, unknown>): Record<string, unknown> {
+  const parts = readRelationParts(row.id);
+  if (!parts) return row;
+  // 関係 ID に既に含まれる値だけ省く。独自 ID と訂正で異なる値はそのまま残す。
+  const result = { ...row };
+  for (const [index, key] of ['type', 'from_id', 'to_id', 'evidence'].entries()) {
+    if (row[key] === parts[index]) delete result[key];
+  }
+  return result;
 }
 
 export class ProjectionFeed {
@@ -289,7 +304,8 @@ export class ProjectionFeed {
     if (table === "tasks") return this.prepare(`SELECT t.id, substr(t.name, 1, ${NAME_LENGTH}) AS name, coalesce(r.project_id, t.project) AS project,
       coalesce(r.state, 'unregistered') AS project_state, t.state FROM tasks t
       LEFT JOIN api_project_resolution r ON r.id = t.project ${where} ORDER BY t.id ${limit}`).all(parameter);
-    return this.prepare(`SELECT ${LIST_COLUMNS[table] ?? "*"} FROM ${table} t ${where} ORDER BY t.id ${limit}`).all(parameter);
+    const rows = this.prepare(`SELECT ${LIST_COLUMNS[table] ?? "*"} FROM ${table} t ${where} ORDER BY t.id ${limit}`).all(parameter);
+    return table === 'relations' ? rows.map(compactRelation) : rows;
   }
   refresh(): ProjectionPatch | "resync" | undefined {
     const state = this.catchUp();
@@ -474,6 +490,7 @@ export class ProjectionFeed {
     if (patch.changes.delegations) patch.changes.delegations.upsert = this.rootDelegations(patch.changes.delegations.upsert);
     const referenced = this.readReferencedIdentities(Object.values(patch.changes).flatMap(change => change.upsert));
     if (identities || Object.keys(referenced.conversations).length || Object.keys(referenced.runs).length) {
+      // 対応そのものの変更は省かず、配信済みの独自別名や自己対応への訂正を上書きする。
       patch.identities = { conversations: { ...referenced.conversations, ...identities?.conversations },
         runs: { ...referenced.runs, ...identities?.runs } };
     }
@@ -521,15 +538,23 @@ export class ProjectionFeed {
     const add = (id: unknown) => {
       if (typeof id !== "string") return;
       if (id in this.identities.conversations) identities.conversations[id] = this.identities.conversations[id];
-      if (id in this.identities.runs) identities.runs[id] = this.identities.runs[id];
+      if (id in this.identities.runs) {
+        identities.runs[id] = this.identities.runs[id];
+        const conversation = /^(.*):\d+$/.exec(id)?.[1];
+        if (conversation && conversation in this.identities.conversations) identities.conversations[conversation] = this.identities.conversations[conversation];
+      }
     };
     for (const row of rows) {
       for (const key of ["id", "conversation_id", "run_id", "parent_run_id", "from_id", "to_id", "current_conversation_id"]) add(row[key]);
+      if (typeof row.id === 'string' && row.id.startsWith('[')) {
+        const parts = readRelationParts(row.id);
+        if (parts) { add(row.from_id ?? parts[1]); add(row.to_id ?? parts[2]); }
+      }
       for (const id of Array.isArray(row.conversation_ids) ? row.conversation_ids : []) add(id);
       const attempts = typeof row.attempts === "string" ? JSON.parse(row.attempts) : row.attempts;
       for (const attempt of Array.isArray(attempts) ? attempts : []) add(attempt.run_id);
     }
-    return identities;
+    return compactScreenIdentities(identities);
   }
   snapshot() {
     const projection = Object.fromEntries(LIST_TABLES.map(table => [table, this.readList(table)]));
@@ -541,10 +566,7 @@ export class ProjectionFeed {
       next: projection[table].length === LIST_PAGE_SIZE ? projection[table].at(-1)!.id : null,
     }]));
     pages.roots = { total: this.roots.length, next: this.roots.length >= LIST_PAGE_SIZE ? this.roots[LIST_PAGE_SIZE - 1].id : null };
-    const identities = {
-      conversations: { ...this.identities.conversations },
-      runs: { ...this.identities.runs },
-    };
+    const identities = compactScreenIdentities(this.identities);
     return { seq: this.state.last_seq, generation: this.state.generation, projection, pages, identities,
       ...(this.observation ? { observation: this.observation } : {}) };
   }

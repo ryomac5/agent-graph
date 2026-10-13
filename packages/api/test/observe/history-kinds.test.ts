@@ -33,6 +33,9 @@ function createSample(entry: HistoryClassification): Record<string, unknown> {
         ...(origin === "<missing>" ? { humanTurn: true } : { origin: { kind: origin } }) };
     }
     if (type === "ai-title") row.aiTitle = "Synthetic title";
+    if (type === "custom-title") row.customTitle = "Custom title";
+    if (field === "attachment.type" && subtype === "structured_output") row.attachment = { type: subtype, data: { verdict: "approve" } };
+    if (field === "message.model") row.message = { role: "assistant", model: "claude-sonnet-5", content: "Synthetic text" };
     if (type === "continued-in") row.continuedInSessionId = "continued";
   } else {
     const contentKind = field.startsWith("payload.") && field.endsWith(".content.type");
@@ -58,12 +61,15 @@ function createSample(entry: HistoryClassification): Record<string, unknown> {
     if (field.startsWith("payload.")) row.payload = type === "event_msg" ? { type: subtype, turn_id: "turn" } : item;
     if (field === "payload.item_started.item.type" || field === "payload.item_completed.item.type") {
       row.payload = { type: field.split(".")[1], item: { type: subtype, id: "sample" } };
+      if (subtype === "SubAgentActivity") row.payload = { type: field.split(".")[1], thread_id: "session",
+        item: { type: subtype, id: "call", kind: "started", agent_thread_id: "child", agent_path: "/root/review" } };
     }
     if (field === "payload.function_call.name") row.payload = { type: "function_call", name: subtype, arguments: "{}", call_id: "call" };
   }
   return row;
 }
 const expectedKinds: Record<string, string> = {
+  "custom-title": "conversation.updated", "structured-output": "message.created", spawn: "message.created", "subagent-activity": "relation.created",
   message: "message.created", title: "conversation.updated", relation: "relation.created", queue: "conversation.input_queue_changed",
   "queued-command-user": "message.created", "queued-command-report": "message.created", "queued-command-legacy-user": "message.created", meta: "conversation.created", model: "run.updated", turn: "run.state_changed", delegation: "relation.created",
 };

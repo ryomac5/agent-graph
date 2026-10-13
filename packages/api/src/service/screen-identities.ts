@@ -2,6 +2,14 @@ import type { Fact } from '../../../core/src/ledger/facts.ts';
 import { projectConversationIds } from '../../../core/src/ledger/projections/relations.ts';
 
 export interface ScreenIdentities { conversations: Record<string, string>; runs: Record<string, string> }
+export function deriveRunId(id: string, conversations: Record<string, string>): string {
+  const match = /^(.*):(\d+)$/.exec(id);
+  return match && conversations[match[1]] ? `${conversations[match[1]]}:${match[2]}` : id;
+}
+export function compactScreenIdentities(identities: ScreenIdentities): ScreenIdentities {
+  return { conversations: { ...identities.conversations }, runs: Object.fromEntries(Object.entries(identities.runs)
+    .filter(([id, canonical]) => deriveRunId(id, identities.conversations) !== canonical)) };
+}
 export function createScreenIdentities(facts: readonly Fact[]): ScreenIdentities {
   const conversations = Object.fromEntries(projectConversationIds(facts));
   const runs: Record<string, string> = {};

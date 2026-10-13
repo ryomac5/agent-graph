@@ -1,3 +1,4 @@
+import { classifyHistoryRow, findUnclassifiedKinds, identifyHistoryKind } from "../history-kinds.ts";
 import { observeCodexTitles } from "./titles.ts";
 import { homedir } from "node:os";
 import { basename, join, normalize, sep } from "node:path";
@@ -39,23 +40,6 @@ function identifyConversation(id: string): string { return createNativeId("codex
 
 // 入力に時刻がない場合も、観測した壁時計を状態の根拠へ混ぜない。
 const UNKNOWN_SOURCE_TS = "1970-01-01T00:00:00.000Z";
-
-const IGNORED_ITEMS = new Set([
-  "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output", "reasoning",
-  "commandExecution", "fileChange", "web_search_call", "tool_search_call", "tool_search_output", "compaction",
-]);
-const IGNORED_EVENTS = new Set([
-  "token_count", "user_message", "agent_message", "agent_reasoning", "exec_command_begin", "exec_command_end",
-  "exec_command_output_delta", "item_started", "item_completed", "context_compacted", "warning", "error",
-  "thread_settings_applied",
-]);
-const IGNORED_RECORDS = new Set([
-  "turn_context", "compacted", "token_usage_record", "world_state", "inter_agent_communication_metadata",
-]);
-const IGNORED_METHODS = new Set([
-  "item/started", "item/agentMessage/delta", "thread/tokenUsage/updated", "serverRequest/resolved",
-  "thread/started", "thread/settings/updated",
-]);
 
 interface RunBoundary {
   generation: number;
@@ -310,9 +294,12 @@ function observeFile(ledger: Ledger, path: string, options: CodexObservationOpti
       else if (!readText(meta.timestamp) || !Number.isFinite(Date.parse(String(meta.timestamp)))) reportUnsupported(line, "Invalid session metadata");
       continue;
     }
+    const classification = classifyHistoryRow("codex", row);
+    const unclassified = findUnclassifiedKinds("codex", row);
+    if (unclassified.length) reportUnsupported(line, `Unclassified history kinds: ${unclassified.map(identifyHistoryKind).join(", ")}`);
     const method = readText(row.method);
-    const eventType = readText(payload.type);
-    if (row.type === "turn_context" && id) {
+    if (classification?.handler === "model") {
+      if (!id) continue;
       // ターンの設定に書かれたモデルを、変わったときだけ実行に記録する。
       const observed = readCodexTurnModel(row);
       if (observed.model) {
@@ -329,22 +316,20 @@ function observeFile(ledger: Ledger, path: string, options: CodexObservationOpti
       continue;
     }
     const item = method === "item/completed" ? readObject(params.item) : row.type === "response_item" ? payload : row;
-    if (IGNORED_RECORDS.has(String(row.type)) || (!method && IGNORED_ITEMS.has(String(row.type)))
-      || (row.type === "event_msg" && IGNORED_EVENTS.has(eventType ?? "")) || IGNORED_METHODS.has(method ?? "")
-      || ((row.type === "response_item" || method === "item/completed") && IGNORED_ITEMS.has(String(item.type)))
-      || row.record_type === "state") continue;
+    if (classification?.handler === "ignore" || row.record_type === "state") continue;
     if (!id) { reportUnsupported(line, "Missing thread identifier"); continue; }
     // ターンの開始と終わりの読み替えは core の状態の規則に従う。
-    const turn = classifyCodexRecord(row as { [key: string]: JsonValue });
+    const turn = classification?.handler === "turn" || !classification
+      ? classifyCodexRecord(row as { [key: string]: JsonValue }) : undefined;
     if (turn) {
       const evidence: ObjectValue = turn.kind === "thread_status" ? { kind: turn.kind, status: readObject(params.status) }
         : turn.kind === "request_approval" ? { kind: turn.kind, request_id: turn.turn_id ?? null }
           : { kind: turn.kind, turn_id: turn.turn_id ?? null };
       changeState(id, turn.state, timestamp, line, evidence);
     } else if (row.type === "response_item" || method === "item/completed" || row.type === "message") {
-      if (item.type === "message" || item.type === "agentMessage" || item.type === "userMessage" || item.type === "agent_message") {
+      if (classification?.handler === "message") {
         createMessage(id, { ...item, role: item.role ?? (item.type === "userMessage" ? "user" : "assistant") }, timestamp, line);
-      } else if (item.type === "collabAgentToolCall") {
+      } else if (classification?.handler === "delegation") {
         const sender = readText(item.senderThreadId);
         if (item.tool === "spawnAgent" && item.status === "completed" && sender && Array.isArray(item.receiverThreadIds)) {
           ensureConversation(sender, timestamp);

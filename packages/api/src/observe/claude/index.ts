@@ -1,20 +1,15 @@
+import { classifyHistoryRow, findUnclassifiedKinds, identifyHistoryKind } from "../history-kinds.ts";
 import { readdirSync, readFileSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import { createNativeId, projectConversations, serializeValue } from "../../../../core/src/ledger/index.ts";
 import type { AppendResult, ConversationPayload, FactInput, JsonValue, Ledger, UnsupportedObservationPayload } from "../../../../core/src/ledger/index.ts";
 import { readAppendOnlyFile } from "../files.ts";
-import type { FileCursor, FileLine, FileRead } from "../files.ts";
+import type { FileCursor, FileRead } from "../files.ts";
 
-export const CLAUDE_QUEUED_COMMANDS_VERSION = 1;
+export const CLAUDE_QUEUED_COMMANDS_VERSION = 2;
 
 const HEADLESS_ENTRYPOINTS = new Set(["sdk-cli", "sdk-ts", "sdk-py"]);
-const IGNORED_TYPES = new Set(["file-history-snapshot", "progress", "summary",
-  "custom-title", "agent-name", "last-prompt", "pr-link", "attachment", "ai-title",
-  "permission-mode", "mode", "atis-latch", "cost-state", "file-history-delta", "bridge-session",
-  "agent-setting", "relocated", "worktree-state"]);
-const IGNORED_SYSTEM_SUBTYPES = new Set(["api_error", "away_summary", "bridge_status", "informational",
-  "local_command", "model_refusal_fallback", "scheduled_task_fire", "stop_hook_summary", "turn_duration"]);
 type Row = { [key: string]: JsonValue };
 export interface ClaudeUnsupportedPayload extends UnsupportedObservationPayload {
   record_type: string;
@@ -47,8 +42,19 @@ export function parseRow(text: string): Row | undefined {
 }
 export function findUnsupportedReason(row: Row | undefined): string | undefined {
   if (!row) return "Invalid JSON object";
+  const classification = classifyHistoryRow("claude", row);
+  if (classification?.handler.startsWith("queued-command-")) {
+    const attachment = readObject(row.attachment)!;
+    if (!readString(row.uuid) || !(typeof attachment.prompt === "string" || Array.isArray(attachment.prompt))) {
+      return "Unsupported queued command structure";
+    }
+    if (classification.handler === "queued-command-legacy-user" && (attachment.origin !== undefined || attachment.humanTurn !== true)) {
+      return "Missing queued command human origin";
+    }
+    if (!readQueuedTimestamp(row)) return "Missing or invalid queued command timestamp";
+  }
   if (row.subtype !== undefined && !(row.type === "system"
-    && (row.subtype === "compact_boundary" || IGNORED_SYSTEM_SUBTYPES.has(String(row.subtype))))) {
+    && (row.subtype === "compact_boundary" || classifyHistoryRow("claude", row)?.action === "ignore"))) {
     return "Unsupported record subtype";
   }
   if (row.type === "user" || row.type === "assistant") {
@@ -62,10 +68,21 @@ export function findUnsupportedReason(row: Row | undefined): string | undefined 
     if (!readString(row.continuedInSessionId)) return "Missing continuation native ID";
   } else if (row.type === "system" && row.subtype === "compact_boundary") {
     if (!readString(row.uuid)) return "Missing compact boundary UUID";
-  } else if (row.type === "system" || IGNORED_TYPES.has(String(row.type))) {
+  } else if (row.type === "system" || classifyHistoryRow("claude", row)?.handler === "ignore"
+    || classifyHistoryRow("claude", row)?.handler === "title" || row.type === "attachment") {
     return undefined;
   } else return "Unsupported record type";
   return undefined;
+}
+function findUnclassifiedReason(row: Row | undefined): string | undefined {
+  if (!row) return undefined;
+  const kinds = findUnclassifiedKinds("claude", row);
+  return kinds.length ? `Unclassified history kinds: ${kinds.map(identifyHistoryKind).join(", ")}` : undefined;
+}
+function readQueuedTimestamp(row: Row): string | undefined {
+  const attachment = readObject(row.attachment);
+  const timestamp = attachment?.timestamp ?? row.timestamp;
+  return typeof timestamp === "string" && Number.isFinite(Date.parse(timestamp)) ? timestamp : undefined;
 }
 function createUnsupportedEventId(path: string, row: Row | undefined, reason: string): string {
   return JSON.stringify(["unsupported", path, readString(row?.type) ?? "unknown", readString(row?.subtype) ?? null, reason]);
@@ -111,30 +128,21 @@ export function observeClaudeFile(ledger: Ledger, path: string, options: ClaudeO
     else if (appended.status === "duplicate") result.duplicates += 1;
     else result.conflicts.push(appended);
   }
-  function appendQueuedCommand(line: FileLine, checkpoint: string | null): void {
-    const row = parseRow(line.text);
-    const attachment = readObject(row?.attachment);
-    const origin = readObject(attachment?.origin);
-    if (row?.type !== "attachment" || attachment?.type !== "queued_command"
-      || attachment.commandMode !== "prompt" || !readString(row.uuid)
-      || !(typeof attachment.prompt === "string" || Array.isArray(attachment.prompt))
-      || !Number.isFinite(Date.parse(String(attachment.timestamp)))) return;
-    const human = origin?.kind === "human" || attachment.origin === undefined && attachment.humanTurn === true;
-    if (!human && origin?.kind !== "peer") return;
+  function appendQueuedCommand(row: Row, handler: string, checkpoint: string | null): void {
+    const attachment = readObject(row.attachment)!;
     const messageId = createNativeId("claude", String(row.uuid));
     const common = { source: "transcript-claude" as const, confidence: "confirmed" as const,
-      source_ts: String(attachment.timestamp), observed_ts: observedTs, cursor: null };
+      source_ts: readQueuedTimestamp(row)!, observed_ts: observedTs, cursor: null };
     // 通常の user 行と識別を共有し、出所の識別は分けて既存の payload と衝突させない。
     append({ ...common, kind: "message.created", subject: `message:${messageId}`,
       source_event_id: `queued-command:${messageId}`, payload: { provider: "claude", native_id: String(row.uuid),
-        version: 1, role: human ? "user" : "agent_report", body: attachment.prompt,
+        version: 1, role: handler === "queued-command-report" ? "agent_report" : "user", body: attachment.prompt,
         body_state: "stored" } });
     const membershipId = JSON.stringify([messageId, id]);
     append({ ...common, kind: "message_membership.created", subject: `message_membership:${membershipId}`,
       source_event_id: `queued-command-membership:${membershipId}`,
       payload: { message_id: messageId, conversation_id: id, active: true }, cursor: checkpoint });
   }
-  for (const line of queuedBackfill) appendQueuedCommand(line, null);
   // 親は行の sessionId ではなく、子の記録を置いたディレクトリから確定する。
   if (subagent && basename(dirname(absolutePath)) === "subagents") {
     const parent = createNativeId("claude", basename(dirname(dirname(absolutePath))));
@@ -150,26 +158,29 @@ export function observeClaudeFile(ledger: Ledger, path: string, options: ClaudeO
     }
   }
   // 時刻のない題名は観測時刻と行の位置で順序を保つ。再読時は同じ行を追記しない。
-  const latestTitle = rows.findLast(({ row }) => row?.type === "ai-title" && readString(row.aiTitle)?.trim());
+  const latestTitle = rows.findLast(({ row }) => row && classifyHistoryRow("claude", row)?.handler === "title" && readString(row.aiTitle)?.trim());
   const unsupported = new Map<string, UnsupportedInput>();
   const knownUnsupported = new Set(existing.filter((fact) => fact.source === "transcript-claude"
     && fact.kind === "observation.unsupported").map((fact) => fact.source_event_id));
-  const hasUnsupported = rows.some(({ row }) => {
-    const reason = findUnsupportedReason(row);
-    return reason !== undefined && !knownUnsupported.has(createUnsupportedEventId(absolutePath, row, reason));
+  const backfillRows = queuedBackfill.map(line => ({ line, row: parseRow(line.text), backfill: true }))
+    .filter(({ row }) => classifyHistoryRow("claude", row)?.handler.startsWith("queued-command-"));
+  const pendingRows = [...backfillRows, ...rows.map(entry => ({ ...entry, backfill: false }))];
+  const hasUnsupported = pendingRows.some(({ row }) => {
+    return [findUnsupportedReason(row), findUnclassifiedReason(row)].some(reason =>
+      reason !== undefined && !knownUnsupported.has(createUnsupportedEventId(absolutePath, row, reason)));
   });
-  for (const { line, row } of rows) {
+  for (const { line, row, backfill } of pendingRows) {
     const sourceTs = row && Number.isFinite(Date.parse(String(row.timestamp))) ? String(row.timestamp) : observedTs;
     const common = { source: "transcript-claude" as const, confidence: "confirmed" as const,
-      source_ts: sourceTs, observed_ts: observedTs, cursor: hasUnsupported ? null : JSON.stringify(line.cursor) };
-    if (!previous && line === rows[0].line) {
+      source_ts: sourceTs, observed_ts: observedTs, cursor: hasUnsupported || backfill ? null : JSON.stringify(line.cursor) };
+    if (!backfill && !previous && line === rows[0].line) {
       append({ ...common, kind: "conversation.created", subject: `conversation:${id}`,
         source_event_id: `conversation:${id}`, payload, cursor: null });
-    } else if (previous && (previous.origin !== payload.origin || previous.type !== payload.type) && line === rows[0].line) {
+    } else if (!backfill && previous && (previous.origin !== payload.origin || previous.type !== payload.type) && line === rows[0].line) {
       append({ ...common, kind: "conversation.updated", subject: `conversation:${id}`,
         source_event_id: `conversation:${id}:metadata:${payload.origin}:${payload.type}`, payload, cursor: null });
     }
-    if (line === rows[0].line && latestTitle) {
+    if (!backfill && line === rows[0].line && latestTitle) {
       const title = String(latestTitle.row!.aiTitle).trim();
       const eventId = `ai-title:${id}:${latestTitle.line.cursor.identity}:${String(latestTitle.line.cursor.offset).padStart(16, "0")}:${latestTitle.line.cursor.hash}`;
       if (previous?.ai_title !== title && !existing.some(fact => fact.source === "transcript-claude" && fact.source_event_id === eventId)) {
@@ -177,8 +188,9 @@ export function observeClaudeFile(ledger: Ledger, path: string, options: ClaudeO
           confidence: "confirmed", kind: "conversation.updated", subject: `conversation:${id}`, payload: { ai_title: title }, cursor: null });
       }
     }
-    const reason = findUnsupportedReason(row);
-    if (reason) {
+    const structuralReason = findUnsupportedReason(row);
+    for (const reason of [structuralReason, findUnclassifiedReason(row)]) {
+      if (!reason) continue;
       const recordType = readString(row?.type) ?? "unknown";
       const recordSubtype = readString(row?.subtype) ?? null;
       const eventId = createUnsupportedEventId(absolutePath, row, reason);
@@ -192,12 +204,13 @@ export function observeClaudeFile(ledger: Ledger, path: string, options: ClaudeO
             format_name: "claude-jsonl", format_version: "structural", reason,
             record_type: recordType, record_subtype: recordSubtype, count: 1 } });
       }
-      continue;
     }
-    if (!row) continue;
-    if (row.type === "attachment") appendQueuedCommand(line, common.cursor);
+    if (structuralReason || !row) continue;
+    const classification = classifyHistoryRow("claude", row);
+    if (classification?.handler === "ignore") continue;
+    if (classification?.handler.startsWith("queued-command-")) appendQueuedCommand(row, classification.handler, common.cursor);
     const queueEventId = `input-queue:${id}:${String(line.cursor.offset).padStart(16, "0")}:${line.cursor.hash}`;
-    if (row.type === "queue-operation") {
+    if (classification?.handler === "queue" || row.type === "queue-operation") {
       const eventId = queueEventId;
       if (!queueEventIds.has(eventId)) {
         append({ ...common, kind: "conversation.input_queue_changed", subject: `conversation:${id}`,
@@ -209,7 +222,7 @@ export function observeClaudeFile(ledger: Ledger, path: string, options: ClaudeO
         queueEventIds.add(eventId);
       }
     }
-    if (row.type === "user" || row.type === "assistant") {
+    if (classification?.handler === "message") {
       const message = readObject(row.message)!;
       const messageId = createNativeId("claude", String(row.uuid));
       const messagePayload = { provider: "claude" as const, native_id: String(row.uuid), version: 1,
@@ -220,7 +233,7 @@ export function observeClaudeFile(ledger: Ledger, path: string, options: ClaudeO
       const membershipId = JSON.stringify([messageId, id]);
       append({ ...common, kind: "message_membership.created", subject: `message_membership:${membershipId}`,
         source_event_id: `membership:${membershipId}`, payload: { message_id: messageId, conversation_id: id, active: true } });
-    } else if (row.type === "continued-in" || (row.type === "system" && row.subtype === "compact_boundary")) {
+    } else if (classification?.handler === "relation") {
       const type = row.type === "continued-in" ? "continued" : "compacted";
       const target = type === "continued" ? createNativeId("claude", String(row.continuedInSessionId)) : id;
       const evidence: JsonValue = type === "continued"

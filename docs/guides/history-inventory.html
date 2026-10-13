@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>履歴の種類の棚卸し</title>
+<style>body{font:16px/1.7 system-ui,sans-serif;max-width:1100px;margin:40px auto;padding:0 20px;color:#1a1a1a}pre{background:#f2f4f7;padding:16px;overflow:auto}table{border-collapse:collapse;width:100%;margin-bottom:24px}th,td{border:1px solid #ddd;padding:8px;text-align:left;overflow-wrap:anywhere}code{font-size:14px}</style>
+<h1>履歴の種類の棚卸し</h1>
+<p>2026-10-13 の読み取り専用の棚卸しで、1,381 ファイル・132 種類を確認した。未分類 0 件、終了コード 0。履歴は走査中にも追記されるため、件数は再実行ごとに変わり得る。以下の件数はこの走査の結果である。</p>
+<h2>実行</h2>
+<pre>node scripts/inventory/history-kinds.mjs
+builtin cd packages/api &amp;&amp; node --run test
+builtin cd ../../packages/core &amp;&amp; node --run test
+builtin cd ../.. &amp;&amp; node --run typecheck</pre>
+<p>台本は <code>~/.claude/projects</code> と <code>~/.codex/sessions</code> 以下の JSONL を読む。本番の api・runner・台帳には接続しない。archived_sessions は走査対象外。分類の正本は <code>packages/api/src/observe/history-kinds.ts</code> であり、読み手と台本は共通の抽出・分類を使う。</p>
+<h2>分類の鍵と診断</h2>
+<p>鍵は provider・行の type・副種別の欄・副種別の値の組。Claude は attachment.type、system.subtype、queue-operation.operation、message.content.type を抽出する。queued_command は <code>attachment.queued_command.commandMode+origin.kind</code> と、commandMode・origin.kind の JSON 配列を鍵にする。欠落値は <code>&lt;missing&gt;</code> とする。</p>
+<p>Codex は payload.type、payload の種類ごとの content.type、通知の params.item.type を抽出する。event_msg の item_started / item_completed は、それぞれ <code>payload.item_started.item.type</code> / <code>payload.item_completed.item.type</code> を鍵にする。response_item の function_call は、spawn_agent・send_message・wait_agent の場合に <code>payload.function_call.name</code> を使い、他の道具は従来の function_call として分類する。旧形式メタは legacy_meta に分ける。</p>
+<p>件数は鍵を含む行数。同じ種類のブロックが同じ行に複数あっても一件。最初のファイルは走査内の番号と行番号で示し、実パスは出さない。未分類があれば、種別の形だけを残した見本を出して終了コード 1 にする。本文・パス・識別子は伏せる。読めないディレクトリや途中の走査失敗も終了コード 1 にする。</p>
+<p>不正 JSON・JSON オブジェクト以外・type がなく他の分類鍵もない行は、種類の棚卸しに含めない。読み手は従来の診断だけを残し、Unclassified history kinds を重ねない。未知の種類には未分類診断を残し、従来の診断の source_event_id と payload は変えない。</p>
+<h2>queued_command の振り分け</h2>
+<table><thead><tr><th>commandMode</th><th>origin.kind</th><th>件数</th><th>扱い</th></tr></thead><tbody><tr><td>&lt;missing&gt;</td><td>coordinator</td><td>38</td><td>子の会話に user として保存</td></tr>
+<tr><td>&lt;missing&gt;</td><td>peer</td><td>13</td><td>agent_report として保存</td></tr>
+<tr><td>prompt</td><td>human</td><td>149</td><td>user として保存</td></tr>
+<tr><td>prompt</td><td>peer</td><td>52</td><td>agent_report として保存</td></tr>
+<tr><td>task-notification</td><td>&lt;missing&gt;</td><td>604</td><td>捨てる</td></tr>
+<tr><td>task-notification</td><td>task-notification</td><td>339</td><td>捨てる</td></tr></tbody></table>
+<p>task-notification は origin.kind の有無を別々に分類し、どちらも捨てる。旧形式の prompt・origin 欠落は、humanTurn が真であることを確かめて利用者の発言として扱う。未知の組は未分類の診断を残す。</p>
+<p>時刻は attachment.timestamp を優先し、欠落時だけ同じ行の timestamp を使う。両方ない場合や時刻が不正な場合は取り込まず、診断を残す。前後の行や観測時刻から発言時刻を推測しない。子の会話はファイルの agent ID で識別し、親の sessionId に誤って所属させない。peer は既存の agent_report の正規化を使う。</p>
+<p>e732af1 の一度だけ拾い直す仕組みを使い、claudeQueuedCommandsVersion を 1 から 2 に更新した。旧 cursor より前の取り込み対象の queued_command だけを再処理する。既存の発言・所属の source_event_id と payload は維持する。新規の発言も UUID と会話 ID から決定的に識別する。時刻のない過去行にも診断を残し、サービスの checkpoint で再走査を終える。投影の版は変更していない。</p>
+<h2>Codex の item.type 別の現状</h2>
+<table><thead><tr><th>payload.item.type</th><th>item_started</th><th>item_completed</th><th>現在の扱い</th></tr></thead><tbody><tr><td>AgentMessage</td><td>0</td><td>30380</td><td>response_item の発言と重複するため捨てる</td></tr>
+<tr><td>UserMessage</td><td>0</td><td>2475</td><td>response_item の発言と重複するため捨てる</td></tr>
+<tr><td>CommandExecution</td><td>0</td><td>17086</td><td>道具・内部処理として現在は捨てる</td></tr>
+<tr><td>Reasoning</td><td>0</td><td>21431</td><td>道具・内部処理として現在は捨てる</td></tr>
+<tr><td>FileChange</td><td>0</td><td>3544</td><td>道具・内部処理として現在は捨てる</td></tr>
+<tr><td>Extension</td><td>0</td><td>920</td><td>対応する response_item はない。現在は捨てるが、取り込み追加の検討対象</td></tr>
+<tr><td>ImageView</td><td>0</td><td>81</td><td>道具・内部処理として現在は捨てる</td></tr>
+<tr><td>McpToolCall</td><td>0</td><td>37</td><td>道具・内部処理として現在は捨てる</td></tr>
+<tr><td>WebSearch</td><td>0</td><td>37</td><td>道具・内部処理として現在は捨てる</td></tr>
+<tr><td>ContextCompaction</td><td>0</td><td>98</td><td>道具・内部処理として現在は捨てる</td></tr>
+<tr><td>SubAgentActivity</td><td>0</td><td>10</td><td>対応する response_item はない。現在は捨てるが、取り込み追加の検討対象</td></tr>
+<tr><td>CollabAgentToolCall</td><td>0</td><td>7</td><td>対応する response_item はない。現在は捨てるが、取り込み追加の検討対象</td></tr></tbody></table>
+<p>UserMessage と AgentMessage はレビューで response_item と件数が一致したため、重複として扱う。他の種類全体を重複とは断定しない。表が ingest とする response_item の collabAgentToolCall は、この走査でも 0 件。実際の委譲の証拠は function_call の spawn_agent と event_msg の SubAgentActivity にある。この作業では Codex の取り込みを増やしていない。</p>
+<h2>取り込みを増やすべき鍵</h2>
+<p>以下は現在 ignore の鍵で、今後の取り込み追加の対象である。この作業では queued_command 以外の取り込みは追加していない。実装時には、意味と帰属の根拠、重複排除、既存の事実への訂正方法を決める。</p>
+<table><thead><tr><th>鍵</th><th>件数</th><th>取り込み追加の内容・根拠</th></tr></thead><tbody><tr><td>Claude: custom-title</td><td>1188</td><td>利用者が付けた題名を保存する。ai-title と所有・優先順を決める。</td></tr>
+<tr><td>Claude: agent-name</td><td>2064</td><td>エージェント名を保存する。会話 ID や確定名との混同を避ける。</td></tr>
+<tr><td>Claude: attachment.type = model</td><td>743</td><td>実行モデルの根拠として扱う。</td></tr>
+<tr><td>Claude: attachment.type = structured_output</td><td>29</td><td>構造化された成果を保存する。発言や成果物への対応を決める。</td></tr>
+<tr><td>Claude: system.subtype = model_refusal_fallback の retractedMessageUuids</td><td>1</td><td>撤回された発言を訂正の追記で表す。既存の発言を削除・上書きしない。件数はこの system 行の数。</td></tr>
+<tr><td>Codex: event_msg の item_started / item_completed、payload.item.type = SubAgentActivity</td><td>10</td><td>子の活動は実際の委譲の証拠。対応する response_item がなく、捨てると証拠が欠ける。</td></tr>
+<tr><td>Codex: response_item、payload.type = function_call、payload.name = spawn_agent</td><td>3</td><td>委譲の開始・追加指示・待機の証拠を取り込む。呼び出しと結果を照合し、根拠なしに成功を断定しない。</td></tr>
+<tr><td>Codex: response_item、payload.type = function_call、payload.name = send_message</td><td>4</td><td>委譲の開始・追加指示・待機の証拠を取り込む。呼び出しと結果を照合し、根拠なしに成功を断定しない。</td></tr>
+<tr><td>Codex: response_item、payload.type = function_call、payload.name = wait_agent</td><td>7</td><td>委譲の開始・追加指示・待機の証拠を取り込む。呼び出しと結果を照合し、根拠なしに成功を断定しない。</td></tr>
+<tr><td>Codex: event_msg の payload.item.type = CollabAgentToolCall / Extension</td><td>7 / 920</td><td>対応する response_item がない活動記録。委譲や拡張機能の意味を調べてから取り込みを追加する。</td></tr></tbody></table>
+<p>isolation-latch は通常の ignore とし、未対応診断は作らない。prompt_snapshot は既存の発言との重複の可能性があり、独立した入力の証拠としては扱わない。</p>
+<h2>試験の範囲</h2>
+<p>分類表の全鍵から合成行を作り、読み手が ingest の事実を作り、ignore では事実も診断も作らないことを確認する。queued_command の各組、発言の role、子への所属、hand-back の正規化、時刻の優先順と欠落・不正時の診断を検証する。未知の mode・origin・item.type は未分類になる。不正 JSON と type のない行は診断一件だけになる。既存事実の不変性、再読・再起動・再構築と旧版 checkpoint からの補完も検証する。</p>
+<h2>最終の確認結果</h2>
+<ul>
+<li>棚卸し: 1,381 ファイル・132 種類、未分類 0 件、終了コード 0。</li>
+<li>api: 689 件中 668 件成功、失敗 0 件、ソケット制約により 21 件スキップ。終了コード 0。</li>
+<li>api の perf.test.ts: 初回で成功。移行と投影 17,968.2 ms、5 万行の取り込みと投影 15,753.0 ms。単独の再実行は不要だった。</li>
+<li>core: 401 件成功、失敗・スキップ 0 件。終了コード 0。</li>
+<li>追加・更新した分類関連の試験: 254 件成功、失敗・スキップ 0 件。</li>
+<li>分類表とのずれの検出: 隔離した読み手のコピーだけに旧い commandMode !== &quot;prompt&quot; の条件を戻すと、coordinator と peer の分類照合試験 2 件が失敗し、終了コード 1 になった。作業ツリーの読み手と分類表は変更せず確認した。</li>
+<li>根の型検査: packages/daemon/src/http/views.ts:83 の既存の TS2322（ModelFamily の google と Family の不一致）のみ。終了コード 1。</li>
+<li>git diff --check: 成功。</li>
+</ul>
+<p>本番の api と runner は再起動していない。履歴と本番の状態は読み取りだけで、コミットはしていない。</p>
+</html>

@@ -11,6 +11,8 @@ import { OpenWorkspaceFile, WorkspaceConversationHeader, type ConversationTabMet
 import { createStore } from '../lib/store.ts';
 import { workspaceKey } from '../lib/panes.ts';
 import { DEFAULT_KEYS } from '../lib/keys.ts';
+import { trackReloadInputs } from '../lib/reload-inputs.ts';
+import { isDashboardAutoReloadBlocked } from '../lib/reload-guard.ts';
 import type { Ack, TerminalNotice } from '../lib/client.ts';
 const terminalInput = vi.hoisted(() => ({ send: undefined as ((data: string) => void) | undefined }));
 import type { ConversationClient } from '../pages/conversation/ConversationPage.tsx';
@@ -186,6 +188,26 @@ it('reloads on focus and polls disk hashes while preserving unsaved edits', asyn
   const poll = intervals.mock.calls.find(([, delay]) => delay === 5000)![0] as () => void;
   await act(async () => poll());
   expect(screen.getByText('This file changed on disk.')).toBeTruthy(); expect(screen.getByRole('textbox', { name: 'Code' }).textContent).toBe('mine');
+});
+it('allows dashboard reload after focused EditorView updates clean content or saves edits', async () => {
+  const inputs = trackReloadInputs(document);
+  try {
+    const f = fixture(); await openCode();
+    const editor = EditorView.findFromDOM(screen.getByRole('textbox', { name: 'Code' }))!;
+    act(() => editor.focus());
+    expect(document.activeElement).toBe(editor.contentDOM);
+    const client = Object.assign(f.client, { canReload: () => true });
+    expect(isDashboardAutoReloadBlocked(client, inputs.isBlocked)).toBe(false);
+    f.changeDisk('external clean content');
+    await act(async () => fireEvent.focus(window));
+    expect(editor.state.doc.toString()).toBe('external clean content');
+    expect(isDashboardAutoReloadBlocked(client, inputs.isBlocked)).toBe(false);
+    edit('unsaved content');
+    expect(isDashboardAutoReloadBlocked(client, inputs.isBlocked)).toBe(true);
+    await act(async () => fireEvent.keyDown(editor.contentDOM, { key: 's', metaKey: true }));
+    expect(editor.state.doc.toString()).toBe('unsaved content');
+    expect(isDashboardAutoReloadBlocked(client, inputs.isBlocked)).toBe(false);
+  } finally { inputs.dispose(); }
 });
 it('keeps terminal output and its process while moving the tab across panes', async () => {
   const f = fixture(); fireEvent.keyDown(screen.getByRole('textbox', { name: 'Message' }), { key: 'd', metaKey: true });

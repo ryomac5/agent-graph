@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Language } from '../../lib/i18n.ts';
 import type { ConversationClient } from './ConversationPage.tsx';
+import { holdDashboardReload } from '../../lib/reload-safety.ts';
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 export const MAX_ATTACHMENTS = 8;
@@ -22,6 +23,7 @@ function readDataUrl(file: File): Promise<string> {
 async function readBase64(file: File): Promise<string> { return (await readDataUrl(file)).split(',')[1]; }
 export function useAttachments(conversationId: string, language: Language, client: ConversationClient) {
   const [items, setItems] = useState<Attachment[]>([]);
+  useEffect(() => { if (items.length) return holdDashboardReload(); }, [items.length]);
   const current = useRef<Attachment[]>([]);
   const [error, setError] = useState('');
   const text = attachmentText[language];

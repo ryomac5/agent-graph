@@ -118,11 +118,17 @@ it.each(['claude', 'codex'])('creates a %s session from the project plus, opens 
   expect(screen.queryByRole('dialog')).toBeNull();
   await vi.waitFor(() => expect(f.command).toHaveBeenCalledWith('session.launch', { projectId: 'p', provider, target: { kind: 'local' } }));
   await vi.waitFor(() => {
-    const saved = restoreWorkspace(localStorage.getItem(workspaceKey('p', 'root')), 'c')!;
-    expect(listPanes(saved)[0].tabs).toHaveLength(2);
+    const raw = localStorage.getItem(workspaceKey('p', conversationId));
+    expect(raw).not.toBeNull();
+    const saved = restoreWorkspace(raw, conversationId)!;
+    expect(listPanes(saved)[0].tabs).toHaveLength(1);
     expect(listPanes(saved)[0].tabs.at(-1)).toMatchObject({ kind: 'conversation', conversationId });
     expect(listPanes(saved)[0].active).toBe(listPanes(saved)[0].tabs.at(-1)!.id);
   });
+  const previous = restoreWorkspace(localStorage.getItem(workspaceKey('p', 'root')), 'c')!;
+  expect(listPanes(previous)[0].tabs).toHaveLength(1);
+  expect(listPanes(previous)[0].tabs[0]).toMatchObject({ kind: 'conversation', conversationId: 'c' });
+  expect(screen.queryByText('Earlier response')).toBeNull();
   await waitFor(() => expect(screen.getByRole('button', { name: /^(Model|モデル) · / }).textContent).toContain('Model A'));
   fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'First message' } });
   fireEvent.click(screen.getByRole('button', { name: 'Send' }));

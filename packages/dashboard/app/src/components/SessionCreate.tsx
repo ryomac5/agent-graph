@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ConversationClient } from '../pages/conversation/ConversationPage.tsx';
+import type { ConversationClient, SessionHost } from '../pages/conversation/ConversationPage.tsx';
 import type { Row } from '../lib/store.ts';
 import { ProviderMark } from './RootViews.tsx';
 import { CommandDialog } from './command/Commands.tsx';
@@ -8,7 +8,7 @@ import { request, startSession, readSessionProvider, SESSION_PROVIDER_KEY } from
 export { request } from '../lib/session-start.ts';
 export interface SshConnection { id: string; name: string; destination: string; projects: { projectId: string; path: string }[] }
 export function SessionCreate({ client, projects, initialProject, language = 'en', onClose, onCreated }: {
-  client: ConversationClient; projects: Row[]; initialProject?: string; language?: 'ja' | 'en'; onClose(): void; onCreated(project: string, conversation: string): void;
+  client: ConversationClient; projects: Row[]; initialProject?: string; language?: 'ja' | 'en'; onClose(): void; onCreated(project: string, conversation: string, host: SessionHost): void;
 }) {
   const text = (en: string, ja: string) => language === 'ja' ? ja : en;
   const [projectId, setProject] = useState(initialProject ?? String(projects[0]?.id ?? ''));
@@ -43,10 +43,10 @@ export function SessionCreate({ client, projects, initialProject, language = 'en
         worktree = createdTree.current?.key === key ? createdTree.current : await request<{ path: string }>(client, 'worktree.create', { projectId, target, base, name });
         createdTree.current = { key, path: worktree.path };
       }
-      const conversation = await startSession(client, { projectId, target, provider, ...(worktree ? { worktree: worktree.path } : {}) }, {
+      const host = await startSession(client, { projectId, target, provider, ...(worktree ? { worktree: worktree.path } : {}) }, {
         terminalId: pendingTerminal, onLaunched: setPendingTerminal, active: () => mounted.current,
       });
-      if (conversation) onCreated(projectId, conversation);
+      if (host) onCreated(projectId, host.conversationId, host);
     } catch { if (mounted.current) setError(text('Unable to start conversation', '会話を始められません')); }
     finally { inFlight.current = false; if (mounted.current) setBusy(false); }
   }

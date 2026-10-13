@@ -1,15 +1,18 @@
+import { act, renderHook, cleanup } from '@testing-library/react';
+import { useConversationDraft } from '../lib/conversation-draft.ts';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { installPreloadRecovery, RELOAD_IDLE_MS, VERSION_CHECK_MS } from '../lib/preload-recovery.ts';
 import { holdDashboardReload, isDashboardReloadBlocked } from '../lib/reload-safety.ts';
 
 let dispose = () => {};
 beforeEach(() => {
+  vi.spyOn(document, 'hasFocus').mockReturnValue(false);
   sessionStorage.clear(); vi.useFakeTimers(); vi.setSystemTime(100_000);
   vi.spyOn(document, 'hidden', 'get').mockReturnValue(false);
   document.head.innerHTML = '<script type="module" src="/assets/old.js"></script>';
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, text: async () => '<script type="module" src="/assets/new.js"></script>' })));
 });
-afterEach(() => { dispose(); document.head.innerHTML = ''; vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); dispose(); document.head.innerHTML = ''; vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 const advance = (ms: number) => vi.advanceTimersByTimeAsync(ms);
 const event = (name: string) => window.dispatchEvent(new Event(name, { bubbles: true }));
 function install(options: Parameters<typeof installPreloadRecovery>[1] = {}) {
@@ -86,8 +89,12 @@ it('cancels a pending reload when the server returns to the loaded version', asy
   await advance(RELOAD_IDLE_MS); expect(reload).not.toHaveBeenCalled();
 });
 it('does not reload or lose the draft when storage is unavailable', async () => {
+  const draft = renderHook(() => useConversationDraft('storage-unavailable'));
   vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('Storage blocked'); });
-  const reload = install(); await advance(RELOAD_IDLE_MS); expect(reload).not.toHaveBeenCalled();
+  act(() => draft.result.current[1]('Keep this unsaved message'));
+  const reload = install(); await advance(VERSION_CHECK_MS * 2); expect(reload).not.toHaveBeenCalled();
+  expect(draft.result.current[0]).toBe('Keep this unsaved message');
+  expect(sessionStorage.getItem('agent-graph-conversation-draft:storage-unavailable')).toBeNull();
 });
 it('does not overlap checks and aborts a stalled request before retrying', async () => {
   vi.mocked(fetch).mockImplementationOnce((_url, options) => new Promise((_resolve, reject) => {
@@ -101,4 +108,13 @@ it('cancels polling and pending reloads on disposal', async () => {
   const reload = install(); await advance(0); dispose();
   event('vite:preloadError'); event('online'); await advance(VERSION_CHECK_MS * 2);
   expect(fetch).toHaveBeenCalledTimes(1); expect(reload).not.toHaveBeenCalled();
+});
+
+it.each(['blur', 'hidden'])('keeps a focused reader until %s', async transition => {
+  vi.mocked(document.hasFocus).mockReturnValue(true);
+  const reload = install();
+  await advance(VERSION_CHECK_MS * 2); expect(reload).not.toHaveBeenCalled();
+  if (transition === 'blur') vi.mocked(document.hasFocus).mockReturnValue(false);
+  else vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+  await advance(1000); expect(reload).toHaveBeenCalledTimes(1);
 });

@@ -1,3 +1,4 @@
+import { trackReloadInputs } from '../lib/reload-inputs.ts';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
@@ -432,7 +433,8 @@ it('restores per-conversation drafts after switching conversations and reloading
   expect(value()).toBe('Child draft');
 });
 
-it('restores a multiline draft after an automatic version reload', async () => {
+it('restores a multiline draft after an automatic version reload when focus is lost', async () => {
+  const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
   const target = setup();
   const page = <MemoryRouter><ConversationPage conversationId="c" target={target} client={client}/></MemoryRouter>;
   let view = render(page); await act(async () => {});
@@ -440,13 +442,17 @@ it('restores a multiline draft after an automatic version reload', async () => {
   document.head.innerHTML = '<script type="module" src="/assets/old.js"></script>';
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, text: async () => '<script type="module" src="/assets/new.js"></script>' })));
   const reload = vi.fn(() => { view.unmount(); view = render(page); });
-  const dispose = installPreloadRecovery(reload, { isBlocked: isDashboardReloadBlocked });
+  const inputs = trackReloadInputs(document);
+  const dispose = installPreloadRecovery(reload, { isBlocked: () => isDashboardReloadBlocked() || inputs.isBlocked() });
   try {
     fireEvent.input(screen.getByRole('textbox', { name: 'Message' }), { target: { value: '書きかけ\nKeep this draft' } });
     await act(async () => { await vi.advanceTimersByTimeAsync(RELOAD_IDLE_MS); });
+    expect(reload).not.toHaveBeenCalled();
+    focus.mockReturnValue(false);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
     expect(reload).toHaveBeenCalledTimes(1);
     expect(screen.getByRole('textbox', { name: 'Message' })).toHaveProperty('value', '書きかけ\nKeep this draft');
-  } finally { dispose(); document.head.innerHTML = ''; vi.useRealTimers(); }
+  } finally { inputs.dispose(); dispose(); document.head.innerHTML = ''; vi.useRealTimers(); }
 });
 
 it('retains a draft after a failed send', async () => {
@@ -481,4 +487,28 @@ it('clears the acknowledged source draft after navigating away without clearing 
   view.rerender(page('c')); await act(async () => {});
   expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).value).toBe('');
   expect(screen.queryByText('Sending…')).toBeNull();
+});
+
+it.each(['model', 'effort'])('holds reload for an unapplied %s and releases on revert and unmount', async field => {
+  const target = setup([], { conversations: [{ id: 'c', provider: 'codex', origin: 'managed' }],
+    runs: [{ id: 'r', conversation_id: 'c', state: 'idle', generation: 1, launch: { cwd: '/repo', model: { model: 'opus', effort: 'high' } } }] });
+  const modelsClient = { command: (name: string) => name === 'list_models' ? Promise.resolve({ type: 'ack' as const, cmd_id: 'models', ok: true, result: [{ model: 'opus', displayName: 'Opus 5.5', effort: 'high' }, { model: 'other', displayName: 'Other', effort: 'high' }] }) : client.command(name) };
+  const view = render(<MemoryRouter><ConversationPage conversationId="c" target={target} client={modelsClient} language="en"/></MemoryRouter>);
+  await act(async () => {});
+  await act(async () => {});
+  expect(isDashboardReloadBlocked()).toBe(false);
+  const open = () => { const button = screen.getByRole('button', { name: field === 'model' ? /^Model · / : /^Effort · / }); if (button.getAttribute('aria-expanded') !== 'true') fireEvent.click(button); };
+  open();
+  fireEvent.click(screen.getByRole('menuitemradio', { name: field === 'model' ? 'Other' : 'low' }));
+  await act(async () => {});
+  expect(isDashboardReloadBlocked()).toBe(true);
+  open();
+  fireEvent.click(screen.getByRole('menuitemradio', { name: field === 'model' ? /Opus 5.5/ : 'high' }));
+  await act(async () => {});
+  expect(isDashboardReloadBlocked()).toBe(false);
+  open();
+  fireEvent.click(screen.getByRole('menuitemradio', { name: field === 'model' ? 'Other' : 'low' }));
+  await act(async () => {});
+  expect(isDashboardReloadBlocked()).toBe(true);
+  view.unmount(); expect(isDashboardReloadBlocked()).toBe(false);
 });

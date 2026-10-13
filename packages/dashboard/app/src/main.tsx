@@ -4,8 +4,8 @@ import { createSearchClient } from './pages/search/model.ts';
 import { createClient } from './lib/client.ts';
 import { installStyleNonce } from './lib/style-nonce.ts';
 import { installPreloadRecovery } from './lib/preload-recovery.ts';
-import { isDashboardReloadBlocked } from './lib/reload-safety.ts';
-import { hasUnsavedDocuments } from './lib/file-documents.ts';
+import { isDashboardAutoReloadBlocked } from './lib/reload-guard.ts';
+import { trackReloadInputs } from './lib/reload-inputs.ts';
 
 installStyleNonce();
 
@@ -24,9 +24,10 @@ const client = createClient({ url: `${location.protocol === 'https:' ? 'wss:' : 
     if (meta) meta.content = next;
     return next;
   } });
+const reloadInputs = trackReloadInputs(document);
 installPreloadRecovery(undefined, {
   subscribeConnected: client.subscribeConnected,
-  isBlocked: () => !client.canReload() || isDashboardReloadBlocked() || hasUnsavedDocuments(client),
+  isBlocked: () => isDashboardAutoReloadBlocked(client, reloadInputs.isBlocked),
 });
 client.start();
 createRoot(document.getElementById('root')!).render(<Dashboard client={client} searchClient={{ search: (query, signal) => createSearchClient({ token }).search(query, signal) }}/>);

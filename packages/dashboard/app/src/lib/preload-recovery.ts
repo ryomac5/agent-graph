@@ -23,7 +23,7 @@ export function installPreloadRecovery(reload = () => window.location.reload(), 
   function tryReload() {
     if (disposed || reloading || !nextEntry) return;
     if (composing || pointerDown || options.isBlocked?.()
-      || !document.hidden && Date.now() - lastActivity < RELOAD_IDLE_MS) {
+      || !document.hidden && (document.hasFocus() || Date.now() - lastActivity < RELOAD_IDLE_MS)) {
       retry = setTimeout(tryReload, RELOAD_RETRY_MS);
       return;
     }

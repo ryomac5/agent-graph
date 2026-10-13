@@ -5,10 +5,12 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { isDeepStrictEqual } from 'node:util';
-import { gzipSync, brotliCompressSync, deflateRawSync } from 'node:zlib';
+import { gzipSync, brotliCompressSync, deflateRawSync, constants } from 'node:zlib';
 import { ProjectionFeed } from '../../packages/api/src/service/projection-feed.ts';
 import { deriveRunId } from '../../packages/api/src/service/screen-identities.ts';
 import { measure } from './baseline.mjs';
+import { BROTLI_OPTIONS, GZIP_OPTIONS } from '../../packages/api/src/ws/compression.ts';
+import { measureTransport } from './transport.mjs';
 
 const ROOT = resolve(import.meta.dirname, '../..');
 const OUTPUT = join(ROOT, '.perf/snapshot');
@@ -28,8 +30,8 @@ export function describeSnapshot(snapshot) {
     return [table, { rows: rows.length, bytes: bytes(rows), fields }];
   }));
   return { seq: snapshot.seq, generation: snapshot.generation, bytes: Buffer.byteLength(json),
-    gzipBytes: gzipSync(json).length, brotliBytes: brotliCompressSync(json).length,
-    deflateBytes: deflateRawSync(json).length,
+    gzipBytes: gzipSync(json, GZIP_OPTIONS).length, brotliBytes: brotliCompressSync(json, BROTLI_OPTIONS).length,
+    deflateBytes: deflateRawSync(json, { ...GZIP_OPTIONS, finishFlush: constants.Z_SYNC_FLUSH }).length - 4,
     sections: Object.fromEntries(Object.entries(snapshot).map(([key, value]) => [key, bytes(value)])),
     identities: Object.fromEntries(Object.entries(snapshot.identities ?? {}).map(([key, value]) =>
       [key, { entries: Object.keys(value).length, bytes: bytes(value) }])), tables,
@@ -98,8 +100,10 @@ async function main() {
   db.exec('BEGIN');
   const result = { timestamp: new Date().toISOString(), node: process.version, mode: 'DatabaseSync readOnly',
     baselineCommit: ref ? execFileSync('git', ['rev-parse', ref], { cwd: ROOT, encoding: 'utf8' }).trim() : undefined,
-    note: 'Existing API projections; no catchUp, rebuild, service restart, observation metadata or in-memory send watches. Compression sizes are estimates, not network measurements.' };
+    note: 'Existing API projections; no catchUp, rebuild, service restart, observation metadata or in-memory send watches. Transport uses in-memory HTTP/ws streams, not production networking.' };
   let previous;
+  let conversationId = process.env.AGENT_GRAPH_PERF_CONVERSATION;
+  const payloads = {};
   try {
     for (const [name, Feed] of [...(Baseline ? [['before', Baseline]] : []), ['after', ProjectionFeed]]) {
       const feed = createReadOnlyFeed(Feed, db);
@@ -107,10 +111,34 @@ async function main() {
       const { value: json, ...serializeMs } = measure(() => JSON.stringify(snapshot));
       const { value: ignored, ...parseMs } = measure(() => JSON.parse(json));
       result[name] = { ...describeSnapshot(snapshot), snapshotMs, serializeMs, parseMs };
+      payloads[`${name}Snapshot`] = snapshot;
+      if (!conversationId) {
+        let largest = 0;
+        for (const root of snapshot.projection.roots) {
+          const size = bytes(feed.conversation(root.current_conversation_id, '', { latest: true }));
+          if (size > largest) { largest = size; conversationId = root.current_conversation_id; }
+        }
+      }
+      if (!conversationId) throw new Error('No conversation; set AGENT_GRAPH_PERF_CONVERSATION');
+      const conversation = feed.conversation(conversationId, '', { latest: true });
+      result[name].conversation = { ...describeSnapshot(conversation), selection: 'Largest latest window among initial roots (or AGENT_GRAPH_PERF_CONVERSATION)', id: conversationId };
+      payloads[`${name}Conversation`] = conversation;
+      payloads[`${name}Page`] = feed.list('relations');
       if (name === 'before') previous = JSON.parse(json);
-      else if (previous) result.equivalence = verifySnapshot(previous, JSON.parse(json));
+      else if (previous) {
+        result.equivalence = verifySnapshot(previous, JSON.parse(json));
+        if (!isDeepStrictEqual(payloads.beforeConversation, conversation)) throw new Error('Conversation mismatch');
+      }
     }
+    result.databaseChanges = db.prepare('SELECT total_changes() AS count').get().count;
   } finally { db.exec('ROLLBACK'); db.close(); }
+  for (const name of ['before', 'after']) if (payloads[`${name}Snapshot`]) {
+    const snapshot = payloads[`${name}Snapshot`];
+    payloads[`${name}Patch`] = { type: 'patch', from_seq: snapshot.seq - 1, seq: snapshot.seq, generation: snapshot.generation,
+      changes: { relations: { upsert: snapshot.projection.relations, remove: [] } } };
+  }
+  payloads.smallPatch = { type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: { runs: { upsert: [{ id: 'example:1', state: 'running' }], remove: [] } } };
+  result.transport = await measureTransport(payloads);
   writeFileSync(join(OUTPUT, 'report.json'), JSON.stringify(result, null, 2) + '\n');
   console.log(JSON.stringify(result, null, 2));
 }

@@ -37,3 +37,17 @@ test('snapshot・頁・patch は関係の重複欄だけ省き、独自 run 別�
   assert.deepEqual(f.feed.scopePatch(patch, new Set([ROOT])).changes.relations, patch.changes.relations);
   assert.equal(before.projection.relations.some(row => row.evidence), false);
 });
+
+test('関係の独自 ID と ID に一致しない訂正値は省略せずに配る', t => {
+  const directory = mkdtempSync(join(tmpdir(), 'compact-relation-'));
+  const f = createCompactSnapshotFeed(join(directory, 'ledger.db'));
+  t.after(() => { f.close(); rmSync(directory, { recursive: true }); });
+  const rows = f.db.prepare('SELECT * FROM relations ORDER BY id').all();
+  f.db.prepare('UPDATE relations SET evidence = ? WHERE id = ?').run('corrected evidence', rows[0].id);
+  f.db.prepare('UPDATE relations SET id = ? WHERE id = ?').run('custom-relation', rows[1].id);
+  const page = f.feed.list('relations');
+  const corrected = page.rows.find(row => row.id === rows[0].id)!;
+  assert.equal(corrected.evidence, 'corrected evidence');
+  assert.equal(corrected.type, undefined);
+  assert.deepEqual({ ...page.rows.find(row => row.id === 'custom-relation') }, { ...rows[1], id: 'custom-relation' });
+});

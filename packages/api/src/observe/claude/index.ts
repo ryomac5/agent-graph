@@ -10,6 +10,7 @@ import type { FileCursor, FileRead } from "../files.ts";
 
 export const CLAUDE_QUEUED_COMMANDS_VERSION = 2;
 export const CLAUDE_MESSAGE_FLAGS_VERSION = 1;
+export const CLAUDE_HISTORY_DETAILS_VERSION = 1;
 
 const HEADLESS_ENTRYPOINTS = new Set(["sdk-cli", "sdk-ts", "sdk-py"]);
 type Row = { [key: string]: JsonValue };
@@ -25,6 +26,7 @@ export interface ClaudeObserveOptions {
   managed?: boolean;
 }
 export interface ClaudeObservation extends FileRead {
+  modelBackfillLines?: FileRead["lines"];
   appended: number;
   duplicates: number;
   conflicts: AppendResult[];
@@ -55,6 +57,8 @@ export function findUnsupportedReason(row: Row | undefined): string | undefined 
     }
     if (!readQueuedTimestamp(row)) return "Missing or invalid queued command timestamp";
   }
+  if (classification?.handler === "structured-output"
+    && (!readString(row.uuid) || readObject(row.attachment)?.data === undefined)) return "Unsupported structured output";
   if (row.subtype !== undefined && !(row.type === "system"
     && (row.subtype === "compact_boundary" || classifyHistoryRow("claude", row)?.action === "ignore"))) {
     return "Unsupported record subtype";
@@ -71,7 +75,7 @@ export function findUnsupportedReason(row: Row | undefined): string | undefined 
   } else if (row.type === "system" && row.subtype === "compact_boundary") {
     if (!readString(row.uuid)) return "Missing compact boundary UUID";
   } else if (row.type === "system" || classifyHistoryRow("claude", row)?.handler === "ignore"
-    || classifyHistoryRow("claude", row)?.handler === "title" || row.type === "attachment") {
+    || classifyHistoryRow("claude", row)?.handler === "title" || row.type === "custom-title" || row.type === "attachment") {
     return undefined;
   } else return "Unsupported record type";
   return undefined;
@@ -107,9 +111,12 @@ export function observeClaudeFile(ledger: Ledger, path: string, options: ClaudeO
   // 読み済みの範囲だけを一度補完する。既存の発言の識別子と payload は書き換えない。
   const backfillQueued = cursor && !result.reset && cursor.claudeQueuedCommandsVersion !== CLAUDE_QUEUED_COMMANDS_VERSION;
   const backfillFlags = cursor && cursor.claudeMessageFlagsVersion !== CLAUDE_MESSAGE_FLAGS_VERSION;
-  const backfillLines = backfillQueued || backfillFlags
+  const backfillDetails = cursor && !result.reset && cursor.claudeHistoryDetailsVersion !== CLAUDE_HISTORY_DETAILS_VERSION;
+  const backfillLines = backfillQueued || backfillFlags || backfillDetails
     ? result.reset ? result.lines : readAppendOnlyFile(absolutePath).lines.filter(line => line.cursor.offset <= cursor!.offset) : [];
-  const versions = { claudeQueuedCommandsVersion: CLAUDE_QUEUED_COMMANDS_VERSION, claudeMessageFlagsVersion: CLAUDE_MESSAGE_FLAGS_VERSION };
+  if (backfillDetails) result.modelBackfillLines = backfillLines.filter(line => parseRow(line.text)?.type === "assistant");
+  const versions = { claudeQueuedCommandsVersion: CLAUDE_QUEUED_COMMANDS_VERSION, claudeMessageFlagsVersion: CLAUDE_MESSAGE_FLAGS_VERSION,
+    claudeHistoryDetailsVersion: CLAUDE_HISTORY_DETAILS_VERSION };
   result.cursor = { ...result.cursor, ...versions };
   for (const line of result.lines) line.cursor = { ...line.cursor, ...versions };
   const observedTs = options.observedTs ?? new Date().toISOString();
@@ -179,8 +186,10 @@ export function observeClaudeFile(ledger: Ledger, path: string, options: ClaudeO
     && fact.kind === "observation.unsupported").map((fact) => fact.source_event_id));
   const backfillRows = backfillLines.map(line => ({ line, row: parseRow(line.text), backfill: true }))
     .filter(({ row }) => backfillQueued && classifyHistoryRow("claude", row)?.handler.startsWith("queued-command-")
-      || backfillFlags && (row?.type === "user" || row?.type === "assistant") && isClaudeInternalMessage(row));
+      || backfillFlags && (row?.type === "user" || row?.type === "assistant") && isClaudeInternalMessage(row)
+      || backfillDetails && ["custom-title", "structured-output"].includes(classifyHistoryRow("claude", row)?.handler ?? ""));
   const pendingRows = [...backfillRows, ...rows.map(entry => ({ ...entry, backfill: false }))];
+  const customTitle = pendingRows.findLast(({ row }) => row?.type === "custom-title" && readString(row.customTitle)?.trim());
   const hasUnsupported = pendingRows.some(({ row }) => {
     return [findUnsupportedReason(row), findUnclassifiedReason(row)].some(reason =>
       reason !== undefined && !knownUnsupported.has(createUnsupportedEventId(absolutePath, row, reason)));
@@ -195,6 +204,15 @@ export function observeClaudeFile(ledger: Ledger, path: string, options: ClaudeO
     } else if (!backfill && previous && (previous.origin !== payload.origin || previous.type !== payload.type) && line === rows[0].line) {
       append({ ...common, kind: "conversation.updated", subject: `conversation:${id}`,
         source_event_id: `conversation:${id}:metadata:${payload.origin}:${payload.type}`, payload, cursor: null });
+    }
+    if (customTitle && line === pendingRows[0].line) {
+      const title = String(customTitle.row!.customTitle).trim();
+      const position = customTitle.line.cursor;
+      const eventId = `custom-title:${id}:${position.identity}:${String(position.offset).padStart(16, "0")}:${position.hash}`;
+      if (previous?.user_name !== title && !existing.some(fact => fact.source === "transcript-claude" && fact.source_event_id === eventId)) {
+        append({ source: "transcript-claude", source_event_id: eventId, source_ts: observedTs, observed_ts: observedTs,
+          confidence: "confirmed", kind: "conversation.updated", subject: `conversation:${id}`, payload: { user_name: title }, cursor: null });
+      }
     }
     if (!backfill && line === rows[0].line && latestTitle) {
       const title = String(latestTitle.row!.aiTitle).trim();
@@ -229,6 +247,15 @@ export function observeClaudeFile(ledger: Ledger, path: string, options: ClaudeO
     const classification = classifyHistoryRow("claude", row);
     if (classification?.handler === "ignore") continue;
     if (classification?.handler.startsWith("queued-command-")) appendQueuedCommand(row, classification.handler, common.cursor);
+    if (classification?.handler === "structured-output") {
+      const messageId = createNativeId("claude", String(row.uuid));
+      append({ ...common, kind: "message.created", subject: `message:${messageId}`, source_event_id: `structured-output:${messageId}`,
+        payload: { provider: "claude", native_id: String(row.uuid), version: 1, role: "assistant", phase: "final_answer",
+          body: JSON.stringify(readObject(row.attachment)!.data), body_state: "stored" }, cursor: null });
+      const membershipId = JSON.stringify([messageId, id]);
+      append({ ...common, kind: "message_membership.created", subject: `message_membership:${membershipId}`,
+        source_event_id: `structured-output-membership:${membershipId}`, payload: { message_id: messageId, conversation_id: id, active: true } });
+    }
     const queueEventId = `input-queue:${id}:${String(line.cursor.offset).padStart(16, "0")}:${line.cursor.hash}`;
     if (classification?.handler === "queue" || row.type === "queue-operation") {
       const eventId = queueEventId;

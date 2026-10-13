@@ -10,6 +10,11 @@ import { defaultLocationResolver, type LocationResolver } from "../location.ts";
 import type { RolloutLine, RolloutReader } from "./files.ts";
 import type { FileCursor } from "../files.ts";
 
+export const CODEX_HISTORY_DETAILS_VERSION = 1;
+export function isCodexHistoryDetail(row: unknown): boolean {
+  return ["spawn", "subagent-activity", "model"].includes(classifyHistoryRow("codex", row)?.handler ?? "");
+}
+
 export interface CodexObservationOptions {
   codexHome?: string;
   reader?: RolloutReader;
@@ -31,6 +36,13 @@ function readObject(value: unknown): ObjectValue {
 }
 function readText(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+function readArguments(value: JsonValue | undefined): ObjectValue | undefined {
+  if (typeof value === "string") {
+    try { value = JSON.parse(value) as JsonValue; }
+    catch (error) { if (error instanceof SyntaxError) return undefined; throw error; }
+  }
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value : undefined;
 }
 function readTime(value: unknown, fallback: string): string {
   const text = readText(value);
@@ -235,12 +247,12 @@ function observeFile(ledger: Ledger, path: string, options: CodexObservationOpti
     }
     boundaries.set(id, index.runs.get(conversation)!);
   }
-  function changeState(id: string, state: RunState, timestamp: string, line: RolloutLine, evidence: ObjectValue): void {
+  function changeState(id: string, state: RunState, timestamp: string, line: RolloutLine, evidence: ObjectValue, eventId?: string): void {
     ensureConversation(id, timestamp);
     ensureRun(id, timestamp);
     const starts = boundaries.get(id)!;
     // 別のファイルの byte offset は比較せず、現在の世代へ結ぶ。
-    const legacyKey = `${fileId}:${line.offset}:${line.hash}:${id}:state`;
+    const legacyKey = eventId ?? `${fileId}:${line.offset}:${line.hash}:${id}:state`;
     // 規則の変更は別の事実として追記し、古い根拠と世代を保持する。
     const key = `${legacyKey}:v${TURN_RULE_VERSION}`;
     // 再読した過去の通知は、最初に結んだ世代を保持する。
@@ -312,12 +324,58 @@ function observeFile(ledger: Ledger, path: string, options: CodexObservationOpti
           append({ ...createBase(`${fileId}:${line.offset}:${line.hash}:${id}:model`, timestamp, line), kind: "run.updated", subject,
             payload: { conversation_id: identifyConversation(id), generation, ...observed } });
         }
+        index.models.set(subject, signature);
       }
       continue;
     }
     const item = method === "item/completed" ? readObject(params.item) : row.type === "response_item" ? payload : row;
     if (classification?.handler === "ignore" || row.record_type === "state") continue;
     if (!id) { reportUnsupported(line, "Missing thread identifier"); continue; }
+    if (classification?.handler === "spawn") {
+      const args = readArguments(item.arguments);
+      const callId = readText(item.call_id);
+      if (!args || !callId) { reportUnsupported(line, "Unsupported spawn arguments"); continue; }
+      createMessage(id, { id: item.id ?? `${id}:spawn:${callId}`, role: "assistant", content: [
+        { type: "tool_use", id: callId, name: "spawn_agent", input: args },
+      ] }, timestamp, line);
+      continue;
+    }
+    if (classification?.handler === "subagent-activity") {
+      const activity = readObject(payload.item);
+      const child = readText(activity.agent_thread_id);
+      const kind = readText(activity.kind);
+      if (!child || !["started", "completed", "interacted"].includes(kind ?? "")) {
+        reportUnsupported(line, "Unsupported subagent activity"); continue;
+      }
+      const evidence = { kind: "subagent_activity", activity_kind: kind!, item_id: activity.id ?? null,
+        agent_thread_id: child, agent_path: activity.agent_path ?? null };
+      if (kind === "interacted") {
+        // 連絡先は親や兄弟にもなるため、子の関係や相手の状態を作らない。
+        ensureConversation(id, timestamp);
+        ensureRun(id, timestamp);
+        const generation = boundaries.get(id)!.findLast(start => start.fileId !== fileId || start.offset <= line.offset)!.generation;
+        append({ ...createBase(`${fileId}:${line.offset}:${line.hash}:activity`, timestamp, line), kind: "run.updated",
+          subject: `run:${identifyConversation(id)}:${generation}`, payload: { conversation_id: identifyConversation(id), generation,
+            last_evidence: evidence, last_evidence_ts: timestamp } });
+      } else {
+        if (child === id) { reportUnsupported(line, "Self-referencing subagent activity"); continue; }
+        changeState(child, kind === "started" ? "running" : "idle", timestamp, line,
+          { ...evidence, kind: kind === "started" ? "turn_started" : "turn_completed" },
+          // 同時刻の run.created より後に並べ、最初の活動を unknown で上書きさせない。
+          `run:${child}:activity:${fileId}:${line.offset}:${line.hash}`);
+        if (kind === "started") {
+          ensureConversation(id, timestamp);
+          append({ ...createBase(`${fileId}:${line.offset}:${line.hash}:subagent`, timestamp, line), kind: "conversation.updated",
+            subject: `conversation:${identifyConversation(child)}`, payload: { type: "subagent" } });
+          const relationId = JSON.stringify([identifyConversation(id), identifyConversation(child), "delegated"]);
+          append({ ...createBase(`${fileId}:${line.offset}:${line.hash}:delegated:${child}`, timestamp, line), kind: "relation.created",
+            subject: `relation:${relationId}`, payload: { type: "delegated", from_id: identifyConversation(id), to_id: identifyConversation(child),
+              confidence: "confirmed", active: true, evidence: { ...evidence, toolUseId: activity.id ?? null,
+                description: readText(activity.agent_path)?.split("/").at(-1) ?? null } } });
+        }
+      }
+      continue;
+    }
     // ターンの開始と終わりの読み替えは core の状態の規則に従う。
     const turn = classification?.handler === "turn" || !classification
       ? classifyCodexRecord(row as { [key: string]: JsonValue }) : undefined;

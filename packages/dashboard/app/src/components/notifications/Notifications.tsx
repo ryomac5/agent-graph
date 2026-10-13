@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { selectScreenTables } from '../../lib/projection-cache.ts';
 import { AppLink } from '../AppLink.tsx';
 import { Icon, type IconName } from '../Icon.tsx';
 import { approvalOutcome, formatClock } from '../../lib/format.ts';
@@ -12,8 +13,9 @@ import { collectNotifications, loadPreferences, NOTIFICATION_KINDS, notification
 
 const NOTICE_LIMIT = 100;
 export interface NotificationsProps { client: CommandClient; target?: ScreenStore; initiallyOpen?: boolean; compact?: boolean; language?: Language }
-export function Notifications({ client, target = store, initiallyOpen = true, compact = false, language = 'en' }: NotificationsProps) {
-  const state = useScreenStore(target);
+export const Notifications = memo(function Notifications({ client, target = store, initiallyOpen = true, compact = false, language = 'en' }: NotificationsProps) {
+  const selectState = useMemo(() => selectScreenTables(['runs', 'approvals', 'conversations', 'roots', 'projects', 'aliases', 'relations', 'messages', 'message_memberships', 'artifacts', 'tasks']), []);
+  const state = useScreenStore(target, selectState);
   const text = (en: string, ja: string) => language === 'ja' ? ja : en;
   const previous = useRef<ScreenState | undefined>(undefined);
   const occurrence = useRef(0);
@@ -43,7 +45,7 @@ export function Notifications({ client, target = store, initiallyOpen = true, co
       }
     }
     if (visible.length) setNotices(items => [...visible.reverse(), ...items].slice(0, NOTICE_LIMIT));
-  }, [state, preferences, language]);
+  }, [state.projection.runs, state.projection.approvals, state.generation, preferences, language]);
   useEffect(() => { if (open && focused) panel.current?.focus(); }, [open, focused]);
   useEffect(() => () => { for (const notification of browserNotices.current) notification.close(); }, []);
   async function changePreference(kind: typeof NOTIFICATION_KINDS[number], mode: NotificationMode) {
@@ -91,5 +93,5 @@ export function Notifications({ client, target = store, initiallyOpen = true, co
       })}</ol>
     </section>}
   </div>;
-}
+});
 export default Notifications;

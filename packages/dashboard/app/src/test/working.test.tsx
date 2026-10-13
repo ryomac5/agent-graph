@@ -183,7 +183,7 @@ it('does not infer a clock from a tool timestamp when projected start evidence i
   expect(workingElapsed(resolveWorkingTurn({ ...tool, turn_started_ts: START }), NOW)).toBe('3m 12s');
 });
 
-it.each(['idle', 'running', 'waiting_approval'])('gives your turn the same priority and color on the list, tab and conversation for %s', async state => {
+it.each(['idle', 'running', 'waiting_approval'])('gives waiting activity the same priority and color on the list, tab and conversation for %s', async state => {
   const target = setup(state);
   const snapshot = target.getSnapshot();
   target.setSnapshot({ ...snapshot, projection: { ...snapshot.projection,
@@ -210,7 +210,7 @@ it.each(['idle', 'running', 'waiting_approval'])('gives your turn the same prior
   expect(document.querySelector('.conversation-page .state-badge')?.classList.contains(`status-${expected}`)).toBe(true);
 });
 
-it('places your turn and approval waits before running in an ungrouped list', () => {
+it('places input and approval waits before running in an ungrouped list', () => {
   const snapshot = setup('idle').getSnapshot();
   const roots = [
     { id: 'busy', name: 'Busy', state: 'running', conversation_ids: ['busy'] },
@@ -282,7 +282,7 @@ function appendMessage(target: ReturnType<typeof createStore>, row: Row) {
     message_memberships: [...state.projection.message_memberships, { id: row.id, message_id: row.id, conversation_id: 'c', active: 1 }],
   } });
 }
-it('reuses activity and timeline caches on every second tick and refreshes after a new message', async () => {
+it('does not recompute conversation activity on ticks and refreshes after a new message', async () => {
   const target = setup();
   appendMessage(target, { id: 'a', role: 'assistant', body: 'Ready.', source_ts: '2026-10-11T00:01:00Z' });
   const readGeneration = vi.fn(() => 2);
@@ -300,7 +300,7 @@ it('reuses activity and timeline caches on every second tick and refreshes after
   for (let tick = 0; tick < 3; tick++) {
     selectTimeline.mockClear(); resolveActivity.mockClear(); readGeneration.mockClear();
     act(() => vi.advanceTimersByTime(1000));
-    expect(resolveActivity.mock.calls.every(([state]) => state === target.getSnapshot())).toBe(true);
+    expect(resolveActivity).not.toHaveBeenCalled();
     expect(selectTimeline).not.toHaveBeenCalled();
     expect(readGeneration).not.toHaveBeenCalled();
   }

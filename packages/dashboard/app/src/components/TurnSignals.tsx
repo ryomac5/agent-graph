@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { selectScreenTables } from '../lib/projection-cache.ts';
 import { useLocation, useNavigate } from 'react-router';
 import { createKeyHandler, type KeyBindings } from '../lib/keys.ts';
 import { store, useScreenStore, type ScreenStore } from '../lib/store.ts';
@@ -7,7 +8,8 @@ import { OTHER_PROJECT, getRegisteredProjects, resolveProjectId } from '../lib/p
 import { publishTurns, readHistory, recordTransitions, rememberConversation, selectTurns, useTurns, READ_KEY, READY_KEY, RECENT_KEY } from '../lib/turns.ts';
 
 export function TurnSignals({ target = store, bindings }: { target?: ScreenStore; bindings: KeyBindings }) {
-  const state = useScreenStore(target);
+  const selectState = useMemo(() => selectScreenTables(['conversations', 'runs', 'relations', 'delegations', 'messages', 'message_memberships', 'approvals', 'projects', 'roots', 'aliases']), []);
+  const state = useScreenStore(target, selectState);
   const location = useLocation(); const navigate = useNavigate();
   const previous = useRef<Root[]>([]);
   const opened = useRef('');

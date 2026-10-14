@@ -2,6 +2,7 @@ import type { Language } from '../../lib/i18n.ts';
 
 const text = {
   en: {
+    terminalCodexModel: 'Change the model in the Codex terminal. /model requires interactive selection.',
     loadOlder: 'Load older', agentReport: 'Agent report', command: 'Command', oldHistory: 'Older history is unavailable', projectInstructions: 'Project instructions', settingsInstructions: 'Configuration instructions', defaultModel: 'Recommended', recommended: 'Recommended', inUse: 'In use', toolsUsed: 'Used',
     conversation: 'Conversation', unknown: 'Unknown', source: 'Source', confidence: 'Confidence', streaming: 'Streaming', toolOutput: 'Tool output',
     show: 'Show full message', hide: 'Show less', approval: 'Approval request', unavailable: 'Message unavailable',
@@ -25,6 +26,7 @@ const text = {
     filesChanged: 'Files changed', difference: 'Diff', details: 'Details', historyFormat: 'History format', access: 'Access', parentAgent: 'Requesting agent', handoffUnsupported: 'Take over not supported',
   },
   ja: {
+    terminalCodexModel: 'Change the model in the Codex terminal. /model requires interactive selection.',
     deliveryFailed: '送った発言が会話に届きませんでした', notDelivered: '未配達', resend: '再送',
     backgroundWait: '裏の作業を待っています', working: '作業中',
     loadOlder: '古い発言を読み込む', agentReport: 'エージェントの報告', command: 'コマンド', oldHistory: '古い記録は読めません', projectInstructions: 'プロジェクトの指示', settingsInstructions: '設定の指示', defaultModel: 'おすすめ', recommended: 'おすすめ', inUse: '使用中', toolsUsed: 'ツールを使用',

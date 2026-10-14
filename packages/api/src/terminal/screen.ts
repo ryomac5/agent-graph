@@ -45,9 +45,8 @@ export function isInputBlocked(screen: ScreenSnapshot, provider: 'claude' | 'cod
   const dismiss = /^\s*Esc to cancel\s*$/mu.test(panel);
   if (dismiss && (/^\s*Help\s+General\s+Commands\b/mu.test(panel)
     || /^\s*Settings\s+Status\s+Config\s+Usage\s+Stats\s*$/mu.test(panel) && /^\s*Total cost:/mu.test(panel))) return true;
-  // 許可の確認も同じ番号付き選択欄を持つ。履歴中の見出しだけでは止めない。
-  return /^\s*❯\s+\d+\.\s+/mu.test(panel)
-    && /\b(?:Enter to (?:select|confirm|set as default)|Esc to cancel)\b|Do you want to proceed\?|\(esc\)/u.test(panel);
+  // 入力欄のない番号付き選択欄は、案内の文言に依らず止める。
+  return /^\s*❯\s+\d+\.\s+/mu.test(panel);
 }
 
 export function readCommandOutput(before: ScreenSnapshot, after: ScreenSnapshot, command: string, provider: 'claude' | 'codex'): string {

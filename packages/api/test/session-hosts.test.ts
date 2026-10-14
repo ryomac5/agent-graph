@@ -1,4 +1,4 @@
-import { promptFrame, HELP_PANEL, COST_PANEL, MODEL_PANEL, PERMISSION_PANEL, SELECTION_PANEL } from './terminal-screen-fixture.ts';
+import { promptFrame, HELP_PANEL, COST_PANEL, MODEL_PANEL, MODEL_SWITCH_PANEL, PERMISSION_PANEL, SELECTION_PANEL } from './terminal-screen-fixture.ts';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -368,6 +368,20 @@ test('a selection stays open and a concurrent following message fails before pas
   assert.equal(result.command.status, 'interactive');
   assert.match(result.command.output, /Select model/);
   assert.deepEqual(f.children[0].writes, ['\x15', '\x1b[200~/model \x1b[201~', '\r']);
+});
+
+test('a model switch confirmation rejects a second model command before paste or Enter', async t => {
+  const f = await createFixture(t);
+  const launch = await f.launch(SESSION);
+  await writeFile(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: SESSION }));
+  await f.handle('session.hosts');
+  f.children[0].onWrite = data => { if (data === '\r') f.children[0].output(MODEL_SWITCH_PANEL); };
+  const result = await f.handle('session.send', { conversationId, text: '/model sonnet' }) as { terminalId: string; command: { output: string; status: string } };
+  assert.equal(result.terminalId, launch.terminalId);
+  assert.equal(result.command.status, 'interactive');
+  assert.match(result.command.output, /❯ 1\. Yes, switch to Sonnet 5\.5/);
+  await assert.rejects(f.handle('session.send', { conversationId, text: '/model opus' }), /Terminal is not ready/);
+  assert.deepEqual(f.children[0].writes, ['\x15', '\x1b[200~/model sonnet \x1b[201~', '\r']);
 });
 
 test('an unrecognized panel is never dismissed just because the command is /help', async t => {

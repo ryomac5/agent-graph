@@ -72,8 +72,8 @@ it('keeps an interactive model switch in the existing terminal flow without clai
   expect(screen.getByRole('status', { name: 'Command result' }).textContent).toContain('Switch model?');
 });
 
-it('prevents another Apply while the recorded model has not changed after an interactive switch', async () => {
-  const { command, conversationId, target, openTerminal } = setup({ response: { result: {
+it.each(['No, go back', 'Escape'])('allows Apply after cancelling the terminal confirmation with %s', async cancellation => {
+  const { command, conversationId, openTerminal } = setup({ response: { result: {
     terminalId: 'terminal', command: { status: 'interactive', output: 'Switch model?\n❯ 1. Yes, switch to Sonnet 5.5\n  2. No, go back' },
   } } });
   fireEvent.click(screen.getByRole('button', { name: /^Model · / }));
@@ -81,27 +81,36 @@ it('prevents another Apply while the recorded model has not changed after an int
   fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
   await waitFor(() => expect(openTerminal).toHaveBeenCalledExactlyOnceWith('terminal'));
   expect(command).toHaveBeenCalledWith('session.send', { conversationId, text: '/model sonnet' });
-  fireEvent.click(screen.getByRole('button', { name: /^Model · / }));
-  fireEvent.click(screen.getByRole('menuitemradio', { name: /Opus 5.5/ }));
-  expect((screen.getByRole('button', { name: 'Apply' }) as HTMLButtonElement).disabled).toBe(true);
-  fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
-  await selectHaiku();
-  expect((screen.getByRole('button', { name: 'Apply' }) as HTMLButtonElement).disabled).toBe(true);
-  fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
-  // モデル以外の記録の更新では確認待ちを解除しない。
-  act(() => target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: {
-    runs: { upsert: [{ id: 'r', conversation_id: conversationId, generation: 1, state: 'running', model: 'opus', effort: 'high' }], remove: [] },
-  } }));
-  await selectHaiku();
-  expect((screen.getByRole('button', { name: 'Apply' }) as HTMLButtonElement).disabled).toBe(true);
-  fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
-  expect(command.mock.calls.filter(([name]) => name === 'session.send')).toHaveLength(1);
-  act(() => target.applyPatch({ type: 'patch', from_seq: 2, seq: 3, generation: 0, changes: {
-    runs: { upsert: [{ id: 'r', conversation_id: conversationId, generation: 1, state: 'idle', model: 'claude-sonnet-5-5' }], remove: [] },
-  } }));
-  expect(screen.getByRole('button', { name: /^Model · Sonnet 5.5/ })).toBeTruthy();
   await selectHaiku();
   expect((screen.getByRole('button', { name: 'Apply' }) as HTMLButtonElement).disabled).toBe(false);
+  const error = 'Terminal is not ready for a message. Continue in the terminal tab.';
+  command.mockResolvedValueOnce({ type: 'ack', cmd_id: 'blocked', ok: false, error });
+  fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+  expect(await screen.findByRole('alert')).toHaveProperty('textContent', error);
+  expect(screen.getByTitle('Claude · opus')).toBeTruthy();
+  // 端末側のキャンセルを模擬する。記録のモデルは変わらず、API が再び送信を受け付ける。
+  const cancelConfirmation = vi.fn(() => command.mockResolvedValueOnce({ type: 'ack', cmd_id: 'retry', ok: true,
+    result: { command: { status: 'completed', output: '⎿  Set model to Haiku 5.5' } },
+  }));
+  render(<button onClick={cancelConfirmation} onKeyDown={event => { if (event.key === 'Escape') cancelConfirmation(); }}>No, go back</button>);
+  if (cancellation === 'Escape') fireEvent.keyDown(screen.getByRole('button', { name: 'No, go back' }), { key: 'Escape' });
+  else fireEvent.click(screen.getByRole('button', { name: 'No, go back' }));
+  await selectHaiku();
+  expect((screen.getByRole('button', { name: 'Apply' }) as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+  await waitFor(() => expect(screen.getByTitle('Claude · haiku')).toBeTruthy());
+  expect(command.mock.calls.filter(([name]) => name === 'session.send')).toHaveLength(3);
+  expect(screen.queryByRole('alert')).toBeNull();
+});
+
+it('accepts the wrapped terminal model confirmation', async () => {
+  setup({ response: { result: { command: { status: 'completed', output: '⎿  Set model to Sonnet 5.5 and saved as your\n   default for new sessions' } } } });
+  fireEvent.click(screen.getByRole('button', { name: /^Model · / }));
+  fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Sonnet 5.5' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+  await waitFor(() => expect(screen.getByTitle('Claude · sonnet')).toBeTruthy());
+  expect(screen.getByRole('button', { name: /^Model · Sonnet 5.5/ })).toBeTruthy();
+  expect(screen.queryByRole('alert')).toBeNull();
 });
 
 it.each(['Haiku 5.5', 'haiku', 'claude-haiku-5-5'])('accepts only the applied model display name or alias: %s', async confirmed => {

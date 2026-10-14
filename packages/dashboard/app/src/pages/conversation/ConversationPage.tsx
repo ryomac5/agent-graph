@@ -270,7 +270,6 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
   const [error, setError] = useState('');
   const [answered, setAnswered] = useState<Set<unknown>>(new Set());
   const [appliedModel, setAppliedModel] = useState<{ model: string; effort: string }>();
-  const [modelConfirmationPending, setModelConfirmationPending] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
@@ -483,7 +482,6 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
     setAppliedModel(undefined);
     setEdited(false);
   }, [conversationId, currentModel, currentEffort, savedCwd]);
-  useEffect(() => { setModelConfirmationPending(false); }, [conversationId, currentModel]);
   useEffect(() => {
     setError(''); setDragging(false); dragDepth.current = 0;
     setPending(false); setAnswered(new Set()); setAppliedModel(undefined);
@@ -696,7 +694,7 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
     const applied = model === 'default' ? recommendedModel : model;
     if (!applied) return;
     if (external) {
-      if (!terminalConversation || provider !== 'claude' || !host || host.disconnected || modelConfirmationPending) return;
+      if (!terminalConversation || provider !== 'claude' || !host || host.disconnected) return;
       const text = `/model ${applied}`;
       const ack = await execute('session.send', { conversationId, text });
       if (!ack) return;
@@ -705,13 +703,15 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
       const output = readText(command.output);
       if (output) setCommandResults(previous => [...previous, { id: ack.cmd_id, conversationId, text, output }]);
       if (command.status === 'interactive') {
-        setModelConfirmationPending(true);
         const terminalId = readText(result.terminalId);
         if (terminalId) openTerminal?.(terminalId);
         return;
       }
       // 受理だけでは成功とせず、端末の切り替え完了を確認してから表示を変える。
-      const confirmed = /^\s*(?:⎿\s*)?Set model to[ \t]+(.+?)(?: and saved as your default for new sessions)?[ \t]*$/mu.exec(output)?.[1];
+      const confirmation = /^[ \t]*(?:⎿[ \t]*)?Set model to[ \t]+[^\r\n]+(?:\r?\n[ \t]+[^\r\n]+)*/mu.exec(output)?.[0]
+        .replace(/\r?\n[ \t]+/gu, ' ').trim();
+      const confirmed = confirmation?.replace(/ and saved as your default for new sessions$/u, '')
+        .replace(/^(?:⎿[ \t]*)?Set model to[ \t]+/u, '').trim();
       if (command.status === 'completed' && confirmed && matchModel(confirmed) === matchModel(applied)) setAppliedModel({ model: applied, effort: currentEffort });
       else setError(t('failed'));
       return;
@@ -904,7 +904,7 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
             {starting && <div className="composer-provider" role="group" aria-label={language === 'ja' ? '提供元' : 'Provider'}>{['claude', 'codex'].map(value => <button type="button" key={value} aria-pressed={sessionProvider === value} disabled={pending} onClick={() => { setSessionProvider(value); localStorage.setItem(SESSION_PROVIDER_KEY, value); setModel(''); setEffort(''); setEdited(false); }}>{value === 'claude' ? 'Claude' : 'Codex'}</button>)}</div>}
             <ChoiceMenu name={t('model') + ' · ' + modelLabel} label={<><span className={"composer-provider-mark provider-" + provider} aria-hidden="true"><Icon name={provider === "claude" ? "sparkle" : "terminal"} size={16}/></span><span className="truncate" title={!shownModel && usesDefault ? modelSource : undefined}>{modelLabel}</span>{usesDefault && !shownModel && <span className="muted-text" style={{ font: "var(--type-meta)" }}>{t('recommended')}</span>}</>} width={320} value={selectedModel} choices={modelChoices} disabled={!connected || pending} olderLabel={language === 'ja' ? '古いバージョン ' + olderModels.size + ' 件' : olderModels.size + ' older versions'}
               note={terminalCodex ? t('terminalCodexModel') : codexActive ? t('activeCodex') : models.length ? undefined : t('noModels')} onChange={value => { setEdited(true); setModel(value); if (provider === 'codex') setEffort(models.find(item => item.model === value)?.effort ?? ''); }}
-              footer={<button className="btn btn-primary btn-sm" disabled={terminalCodex || codexActive || !dirty || model === 'default' && !recommendedModel || (external ? !connected || pending || !host || host.disconnected || modelConfirmationPending : !writable)} onClick={() => void applyModel()}>{t('applyShort')}</button>}/>
+              footer={<button className="btn btn-primary btn-sm" disabled={terminalCodex || codexActive || !dirty || model === 'default' && !recommendedModel || (external ? !connected || pending || !host || host.disconnected : !writable)} onClick={() => void applyModel()}>{t('applyShort')}</button>}/>
             {provider === 'codex' && <ChoiceMenu name={t('effort') + ' · ' + effortValue} label={<>{t('effort')} <span className="mono">{effortValue}</span></>} value={effort} disabled={!connected || pending || codexActive}
               choices={[{ value: '', label: t('defaultEffort'), title: effortSource }, ...[...new Set([...CODEX_EFFORTS, ...(effort ? [effort] : [])])].map(value => ({ value, label: <span className="mono">{value}</span> }))]} onChange={value => { setEdited(true); setEffort(value); }}
               footer={!external ? <button className="btn btn-primary btn-sm" disabled={!writable || !dirty} onClick={() => void applyModel()}>{t('applyShort')}</button> : undefined}/>}

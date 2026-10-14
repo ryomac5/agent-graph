@@ -5,6 +5,8 @@ export function promptFrame(provider = 'claude', text = ''): string {
 }
 export const HELP_PANEL = '\x1b[2J\x1b[H❯ /help\r\n────────────────────────────────────────\r\n  Help  General   Commands   Custom commands\r\n\r\n  Claude understands your codebase.\r\n  Esc to cancel\x1b[3;8H';
 export const MODEL_PANEL = '\x1b[2J\x1b[H❯ /model\r\n────────────────────────────────────────\r\n  Select model\r\n  ❯ 1. Haiku\r\n  Enter to set as default · s to use this session only · Esc to cancel\x1b[4;3H';
+// Claude Code 2.1.299 の履歴のある会話で確認した行。
+export const MODEL_SWITCH_PANEL = '\x1b[2J\x1b[H────────────────────────────────────────\r\n  Switch model?\r\n  ❯ 1. Yes, switch to Sonnet 5.5\r\n    2. No, go back\x1b[3;3H';
 export const COST_PANEL = '\x1b[2J\x1b[H❯ /cost\r\n────────────────────────────────────────\r\n  Settings  Status   Config   Usage   Stats\r\n\r\n  Session\r\n  Total cost: $0.0000\r\n  Esc to cancel\x1b[3;3H';
 export const PERMISSION_PANEL = '\x1b[2J\x1b[H────────────────────────────────────────\r\n  Do you want to proceed?\r\n  ❯ 1. Yes\r\n    2. No\r\n  Esc to cancel\x1b[3;3H';
 export const BASH_PERMISSION_PANEL = "\x1b[2J\x1b[H────────────────────────────────────────\r\n  Bash command\r\n  echo hello\r\n────────────────────────────────────────\r\n  Do you want to proceed?\r\n  ❯ 1. Yes\r\n    2. Yes, and don't ask again for echo commands\r\n    3. No, and tell Claude what to do differently (esc)\x1b[6;3H";

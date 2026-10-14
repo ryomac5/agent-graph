@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { TerminalScreen, isInputBlocked, readPrompt, readPanel } from '../src/terminal/screen.ts';
-import { promptFrame, HELP_PANEL, MODEL_PANEL, BASH_PERMISSION_PANEL } from './terminal-screen-fixture.ts';
+import { promptFrame, HELP_PANEL, MODEL_PANEL, MODEL_SWITCH_PANEL, BASH_PERMISSION_PANEL } from './terminal-screen-fixture.ts';
 
 for (const provider of ['claude', 'codex'] as const) test(`${provider}: only the current composer is an input-ready screen`, async t => {
   const screen = new TerminalScreen(); t.after(() => screen.close());
@@ -55,12 +55,25 @@ test('Codex has no verified blocking panels and does not require a footer to all
   }
 });
 
+test('Claude model switch choices block input without confirmation or cancellation hints', async t => {
+  const screen = new TerminalScreen(); t.after(() => screen.close());
+  for (const frame of [MODEL_SWITCH_PANEL, MODEL_SWITCH_PANEL.replace('Switch model?', 'Choose an option')]) {
+    screen.write(frame);
+    const snapshot = await screen.read();
+    assert.equal(readPrompt(snapshot, 'claude'), undefined);
+    assert.equal(isInputBlocked(snapshot, 'claude'), true);
+    const lines = [...snapshot.lines.filter(Boolean), '────────────────────────────────────────', '❯ ', '────────────────────────────────────────'];
+    assert.equal(isInputBlocked({ ...snapshot, lines, cursorY: lines.length - 2 }, 'claude'), false);
+  }
+});
+
 test('Claude Bash permission choices block input without a selection footer', async t => {
   const screen = new TerminalScreen(); t.after(() => screen.close());
   screen.resize(100, 24);
   for (const frame of [BASH_PERMISSION_PANEL,
     BASH_PERMISSION_PANEL.replace('Do you want to proceed?', ''),
-    BASH_PERMISSION_PANEL.replace('(esc)', '')]) {
+    BASH_PERMISSION_PANEL.replace('(esc)', ''),
+    BASH_PERMISSION_PANEL.replace('Do you want to proceed?', '').replace('(esc)', '')]) {
     screen.write(frame);
     const snapshot = await screen.read();
     assert.equal(readPrompt(snapshot, 'claude'), undefined);
@@ -69,7 +82,6 @@ test('Claude Bash permission choices block input without a selection footer', as
     assert.equal(isInputBlocked({ ...snapshot, lines, cursorY: lines.length - 2 }, 'claude'), false);
   }
   for (const frame of [BASH_PERMISSION_PANEL.replace('❯ 1. Yes', '  1. Yes'),
-    BASH_PERMISSION_PANEL.replace('Do you want to proceed?', '').replace('(esc)', ''),
     '\x1b[2J\x1b[HWorking…']) {
     screen.write(frame);
     assert.equal(isInputBlocked(await screen.read(), 'claude'), false);

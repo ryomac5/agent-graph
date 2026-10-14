@@ -21,7 +21,7 @@ function setup({ provider = 'claude', hosted = true, disconnected = false, respo
   target.setConnection('connected');
   const command = vi.fn(async (name: string): Promise<Ack> => ({ type: 'ack', cmd_id: 'cmd', ok: true,
     result: name === 'session.hosts' ? { hosts: hosted ? [{ conversationId, terminalId: 'terminal', launchModel: 'opus', disconnected }] : [] }
-      : name === 'list_models' ? [{ model: 'opus', displayName: 'Opus 5.5' }, { model: 'haiku', displayName: 'Haiku 5.5' }]
+      : name === 'list_models' ? [{ model: 'opus', displayName: 'Opus 5.5' }, { model: 'haiku', displayName: 'Haiku 5.5' }, { model: 'sonnet', displayName: 'Sonnet 5.5' }]
       : name === 'settings.models' ? { defaults: { model: 'haiku' } }
       : {}, ...(name === 'session.send' ? response : {}),
   }));
@@ -33,7 +33,8 @@ function setup({ provider = 'claude', hosted = true, disconnected = false, respo
 }
 
 async function selectHaiku() {
-  fireEvent.click(screen.getByRole('button', { name: /^Model · / }));
+  const button = screen.getByRole('button', { name: /^Model · / });
+  if (button.getAttribute('aria-expanded') !== 'true') fireEvent.click(button);
   fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Haiku 5.5' }));
 }
 
@@ -69,6 +70,63 @@ it('keeps an interactive model switch in the existing terminal flow without clai
   await waitFor(() => expect(openTerminal).toHaveBeenCalledExactlyOnceWith('terminal'));
   expect(screen.getByTitle('Claude · opus')).toBeTruthy();
   expect(screen.getByRole('status', { name: 'Command result' }).textContent).toContain('Switch model?');
+});
+
+it('prevents another Apply while the recorded model has not changed after an interactive switch', async () => {
+  const { command, conversationId, target, openTerminal } = setup({ response: { result: {
+    terminalId: 'terminal', command: { status: 'interactive', output: 'Switch model?\n❯ 1. Yes, switch to Sonnet 5.5\n  2. No, go back' },
+  } } });
+  fireEvent.click(screen.getByRole('button', { name: /^Model · / }));
+  fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Sonnet 5.5' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+  await waitFor(() => expect(openTerminal).toHaveBeenCalledExactlyOnceWith('terminal'));
+  expect(command).toHaveBeenCalledWith('session.send', { conversationId, text: '/model sonnet' });
+  fireEvent.click(screen.getByRole('button', { name: /^Model · / }));
+  fireEvent.click(screen.getByRole('menuitemradio', { name: /Opus 5.5/ }));
+  expect((screen.getByRole('button', { name: 'Apply' }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+  await selectHaiku();
+  expect((screen.getByRole('button', { name: 'Apply' }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+  // モデル以外の記録の更新では確認待ちを解除しない。
+  act(() => target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: {
+    runs: { upsert: [{ id: 'r', conversation_id: conversationId, generation: 1, state: 'running', model: 'opus', effort: 'high' }], remove: [] },
+  } }));
+  await selectHaiku();
+  expect((screen.getByRole('button', { name: 'Apply' }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+  expect(command.mock.calls.filter(([name]) => name === 'session.send')).toHaveLength(1);
+  act(() => target.applyPatch({ type: 'patch', from_seq: 2, seq: 3, generation: 0, changes: {
+    runs: { upsert: [{ id: 'r', conversation_id: conversationId, generation: 1, state: 'idle', model: 'claude-sonnet-5-5' }], remove: [] },
+  } }));
+  expect(screen.getByRole('button', { name: /^Model · Sonnet 5.5/ })).toBeTruthy();
+  await selectHaiku();
+  expect((screen.getByRole('button', { name: 'Apply' }) as HTMLButtonElement).disabled).toBe(false);
+});
+
+it.each(['Haiku 5.5', 'haiku', 'claude-haiku-5-5'])('accepts only the applied model display name or alias: %s', async confirmed => {
+  setup({ response: { result: { command: { status: 'completed', output: `Set model to ${confirmed} and saved as your default for new sessions` } } } });
+  await selectHaiku();
+  fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+  await waitFor(() => expect(screen.getByTitle('Claude · haiku')).toBeTruthy());
+  expect(screen.queryByRole('alert')).toBeNull();
+});
+
+it.each(['Sonnet 5.5', 'Haiku 5.5 extra'])('keeps the displayed model when confirmation names a different model: %s', async confirmed => {
+  setup({ response: { result: { command: { status: 'completed', output: `Set model to ${confirmed} and saved as your default for new sessions` } } } });
+  await selectHaiku();
+  fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+  expect(await screen.findByRole('alert')).toBeTruthy();
+  expect(screen.getByTitle('Claude · opus')).toBeTruthy();
+  expect(screen.getByRole('button', { name: /^Model · Opus 5.5/ })).toBeTruthy();
+});
+
+it('reports an empty successful response as a failure', async () => {
+  setup({ response: { result: {} } });
+  await selectHaiku();
+  fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+  expect(await screen.findByRole('alert')).toBeTruthy();
+  expect(screen.getByTitle('Claude · opus')).toBeTruthy();
 });
 
 it.each([

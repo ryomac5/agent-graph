@@ -1,8 +1,9 @@
 import { resolveProjectLocation, type GitRunner } from "../../../core/src/ledger/repository.ts";
+import { verificationVisibility } from '../verification.ts';
 
 const LOCATION_CACHE_LIMIT = 4096;
 
-export interface ObservedLocation { cwd: string; repository_id?: string }
+export interface ObservedLocation { cwd: string; repository_id?: string; hidden?: true; hidden_reason?: string }
 /** 観測した場所を、作業ツリーなら本体のリポジトリに結ぶ。git で決まらない場所は場所だけを返す。 */
 export type LocationResolver = (cwd: string) => ObservedLocation;
 
@@ -15,6 +16,7 @@ export function createLocationResolver(git?: GitRunner): LocationResolver {
       const resolved = resolveProjectLocation(cwd, git ? { git } : {});
       // 消えたリポジトリの代わりの識別は、登録したプロジェクトと結べないので記録しない。
       location = resolved.reason === "missing" ? { cwd } : { cwd, repository_id: resolved.repository_id };
+      Object.assign(location, verificationVisibility(cwd));
       if (cache.size >= LOCATION_CACHE_LIMIT) cache.delete(cache.keys().next().value!);
       cache.set(cwd, location);
     }

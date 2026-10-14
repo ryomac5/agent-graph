@@ -183,7 +183,8 @@ export function App({ target = store, client = unavailableClient, searchClient =
   const rootQuery = search.get('root'); const childQuery = search.get('child');
   useEffect(() => { setMobileView('conversation'); }, [location.pathname, rootQuery, childQuery]);
   const explorer = useFileExplorer({ client, target, project: pathProject ? decodeURIComponent(pathProject) : project ?? '', enabled: location.pathname.endsWith('/files') });
-  const requestedConversation = search.get('conversation') ?? (pathConversation ? decodeURIComponent(pathConversation) : undefined);
+  const requestedConversation = search.get('conversation') ?? (pathConversation ? decodeURIComponent(pathConversation) : undefined)
+    ?? (rootQuery && !roots.some(root => root.id === rootQuery) ? rootQuery : undefined);
   const selectedRoot = requestedConversation
     ? resolveConversationRoot(roots.filter(root => rootProject(root, registeredIds) === project), rootIndex, requestedConversation)
     : roots.find(root => root.id === search.get('root')) ?? directRoot ?? roots.find(root => rootProject(root, registeredIds) === project);

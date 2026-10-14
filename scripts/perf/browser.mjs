@@ -1,3 +1,4 @@
+import { readSmokeSession } from '../smoke/session.mjs';
 import { execFileSync } from 'node:child_process';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -39,8 +40,11 @@ await attempt('dashboard', async () => {
   if (!response.ok) throw new Error(`Snapshot HTTP ${response.status}`);
   const snapshot = await response.json();
   const selected = JSON.parse(await readFile(join(PERF, 'ledger.json'), 'utf8')).selected;
-  const saved = await readFile(join(homedir(), '.cache/agent-graph/smoke/session.json'), 'utf8').then(JSON.parse, () => undefined);
-  const smoke = saved && snapshot.projection.roots.some(r => r.id === saved.conversationId) ? saved : undefined;
+  const smoke = await readSmokeSession(join(homedir(), '.cache/agent-graph/smoke/session-v2.json'), async id => {
+    const response = await fetch(BASE + '/conversation?id=' + encodeURIComponent(id), { headers: { 'x-agent-graph-token': token } });
+    if (!response.ok) throw new Error(`Conversation HTTP ${response.status}`);
+    return response.json();
+  });
   const terminals = new Set();
   const launches = new Set();
   const blocked = [];
@@ -163,7 +167,7 @@ await attempt('dashboard', async () => {
   try {
     if (!smoke || process.env.AGENT_GRAPH_PERF_SEND === '0') dashboard.send = { unavailable: 'Saved smoke conversation unavailable or send disabled' };
     else {
-      await page.goto(`${BASE}/p/${encodeURIComponent(smoke.project)}?root=${encodeURIComponent(smoke.conversationId)}`); await lastVisible();
+      await page.goto(`${BASE}/p/${encodeURIComponent(smoke.project)}?conversation=${encodeURIComponent(smoke.conversationId)}`); await lastVisible();
       const native = JSON.parse(smoke.conversationId)[1];
       let transcript;
       for (const directory of await readdir(join(homedir(), '.claude/projects'))) {

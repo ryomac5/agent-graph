@@ -512,3 +512,31 @@ test('hosts retain the requested launch model before any assistant response', as
   }
   assert.deepEqual(f.launches[0].args, ['--model', 'haiku']);
 });
+
+test('smoke 起動は利用者の cwd を使わず、採番抑止の印を渡し、利用者の会話を再開しない', async t => {
+  const { SMOKE_DIRECTORY, SMOKE_PROJECT_ID } = await import('../src/verification.ts');
+  const f = await createFixture(t);
+  const request = { projectId: SMOKE_PROJECT_ID, provider: 'claude' };
+  await f.handle('session.launch', request);
+  assert.equal(f.launches[0].options.cwd, SMOKE_DIRECTORY);
+  assert.equal(f.launches[0].options.env?.AGENT_GRAPH_HEADLESS, '1');
+  const before = f.launches.length;
+  await assert.rejects(f.handle('session.launch', { ...request, provider: 'codex' }));
+  await assert.rejects(f.handle('session.launch', { ...request, worktree: 'user-branch' }));
+  await assert.rejects(f.handle('session.launch', { ...request, resume: SESSION }));
+  assert.equal(f.launches.length, before);
+  const { mkdir } = await import('node:fs/promises');
+  const folder = join(process.env.CLAUDE_CONFIG_DIR!, 'projects', SMOKE_DIRECTORY.replace(/[^a-zA-Z0-9]/g, '-'));
+  await mkdir(folder, { recursive: true });
+  const path = join(folder, `${SESSION}.jsonl`);
+  await writeFile(path, JSON.stringify({ cwd: '/real/user/repo' }) + '\n');
+  await assert.rejects(f.handle('session.launch', { ...request, resume: SESSION }), /Invalid smoke resume/);
+  assert.equal(f.launches.length, before);
+  await writeFile(path, JSON.stringify({ cwd: SMOKE_DIRECTORY }) + '\n');
+  await f.handle('session.launch', { ...request, resume: SESSION });
+  assert.equal(f.launches.at(-1)?.options.cwd, SMOKE_DIRECTORY);
+  assert.equal(f.launches.at(-1)?.options.env?.AGENT_GRAPH_HEADLESS, '1');
+  await f.launch();
+  assert.equal(f.launches.at(-1)?.options.cwd, '/repo');
+  assert.equal(f.launches.at(-1)?.options.env?.AGENT_GRAPH_HEADLESS, undefined);
+});

@@ -3,7 +3,7 @@ import { createTargetService, buildLaunchCommand, validateTarget, type TargetOpt
 import { discoverRemoteSession, startRemoteMirror } from '../remote/mirror.ts';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -12,6 +12,7 @@ import type { FilesRequest } from '../files/index.ts';
 import { MAX_TERMINALS, spawnTerminal, type TerminalNotification } from './index.ts';
 import { TerminalScreen, isInputBlocked, readPrompt, readPanel, readCommandOutput } from './screen.ts';
 import { listSlashCommands } from './slash-commands.ts';
+import { SMOKE_DIRECTORY, SMOKE_PROJECT_ID } from '../verification.ts';
 
 import { createAttachmentStore, escapeAttachmentPath, uploadRemoteAttachment, type AttachmentOptions } from './attachments.ts';
 
@@ -242,7 +243,21 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
         if ([...hosts.values()].filter(host => !host.disconnected).length + opening >= MAX_TERMINALS) throw new Error('Terminal limit reached');
         opening++;
         try {
-          const location = await targets.launchLocation(request.projectId as string, target, request.worktree);
+          const smokeLaunch = request.projectId === SMOKE_PROJECT_ID;
+          if (smokeLaunch) {
+            if (provider !== 'claude' || request.target !== undefined || request.worktree !== undefined) throw new Error('Invalid session launch');
+            await mkdir(SMOKE_DIRECTORY, { recursive: true });
+            if (await realpath(SMOKE_DIRECTORY) !== join(await realpath(homedir()), '.cache/agent-graph/smoke')) throw new Error('Invalid smoke directory');
+            if (resumeId) {
+              const transcript = join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'projects',
+                SMOKE_DIRECTORY.replace(/[^a-zA-Z0-9]/g, '-'), `${resumeId}.jsonl`);
+              const rows = (await readFile(transcript, 'utf8')).split('\n').filter(Boolean).map(line => JSON.parse(line));
+              const cwds = rows.flatMap(row => typeof row.cwd === 'string' ? [row.cwd] : []);
+              if (!cwds.length || cwds.some(cwd => cwd !== SMOKE_DIRECTORY)) throw new Error('Invalid smoke resume');
+            }
+          }
+          const location = smokeLaunch ? { path: SMOKE_DIRECTORY, local: SMOKE_DIRECTORY, connection: undefined }
+            : await targets.launchLocation(request.projectId as string, target, request.worktree);
           const cwd = location.path;
           if (closed) throw new Error('Terminal service closed');
           if (resumeId && [...hosts.values()].some(host => host.provider === provider && (host.resumeId === resumeId || host.conversationId === JSON.stringify([provider, resumeId])))) throw new Error('Session already hosted');
@@ -252,6 +267,8 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
           const env = Object.fromEntries(Object.entries(process.env).filter(([key, value]) => value !== undefined
             && !key.startsWith('AGENT_GRAPH') && !key.startsWith('CLAUDE_CODE') && key !== 'CLAUDECODE')) as Record<string, string>;
           env.TERM = 'xterm-256color';
+          // 旧キットの turn hook もこの印で採番を抑止する。利用者の cwd は引き継がない。
+          if (smokeLaunch) env.AGENT_GRAPH_HEADLESS = '1';
           const terminal = (options.openTerminal ?? spawnTerminal)(location.connection ? 'ssh' : provider, location.connection ? ['-tt', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', location.connection.destination, '--', buildLaunchCommand(cwd, provider, resumeId, request.model as string | undefined)] : args, { cwd: location.connection ? location.local : cwd, env, name: env.TERM, cols: 80, rows: 24 });
           const terminalId = randomUUID();
           const host: Host = { described: request.target !== undefined, terminalId, terminal, resumeId, provider, projectId: request.projectId as string, cwd, target, connection: location.connection, startedAt: new Date().toISOString(), startedTick: performance.now(), scrollback: Buffer.alloc(0), screen: new TerminalScreen(), inputRevision: 0, listeners: new Set() };

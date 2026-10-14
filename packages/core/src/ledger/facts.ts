@@ -38,6 +38,8 @@ export interface TaskPayload {
   state: string;
 }
 export interface ConversationPayload {
+  hidden?: true;
+  hidden_reason?: string;
   input_queue_event?: { operation: string; body?: JsonValue; delivery_id?: string };
   user_name?: string | null;
   ai_title?: string | null;
@@ -206,6 +208,7 @@ export type FactPayloads = {
   "observation.unsupported": UnsupportedObservationPayload;
   "task.state_changed": Pick<TaskPayload, "state">;
   "conversation.renamed": { user_name: string | null };
+  "conversation.hidden": { hidden: true; hidden_reason: string };
   "conversation.task_changed": { task_id: string | null };
   "conversation.input_queue_changed": Pick<ConversationPayload, "input_queue_event">;
   "relation.state_changed": Pick<RelationPayload, "active">;

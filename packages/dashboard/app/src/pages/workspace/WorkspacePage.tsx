@@ -1,7 +1,8 @@
 import { VisibleView } from '../../lib/visibility.tsx';
 import { refreshConversationTab } from '../../lib/conversation-tab.ts';
 import { useTurnConversations } from '../../lib/turns.ts';
-import { useMemo, useState, useRef, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, useRef, type ReactNode } from 'react';
+import { loadConversationWindow } from '../../lib/projection-client.ts';
 import { NavLink, useNavigate, useParams, useSearchParams } from 'react-router';
 import { store, useScreenStore, type ScreenStore } from '../../lib/store.ts';
 import { dictionaries, type Language } from '../../lib/i18n.ts';
@@ -45,14 +46,31 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
   const roots = selectRoots(state, project);
   const index = useRootIndex(state);
   const turns = useTurnConversations();
-  const requestedConversation = search.get('conversation') ?? suppliedConversation;
+  const requestedRoot = search.get('root');
+  const requestedConversation = search.get('conversation') ?? suppliedConversation
+    ?? (requestedRoot && !roots.some(root => root.id === requestedRoot) ? requestedRoot : undefined);
   // URL の会話が未配信でも、別の根の作業場に切り替えない。
   const selected = requestedConversation
     ? resolveConversationRoot(roots, index, requestedConversation)
     : roots.find(root => root.id === search.get('root')) ?? roots[0];
   const projectionComplete = state.projection.conversations !== undefined && !state.projectionError
     && !Object.values(state.pages ?? {}).some(page => page.next);
-  const conversationNotFound = suppliedConversation && !selected && !index.conversations.has(suppliedConversation) && projectionComplete;
+  const [missingConversation, setMissingConversation] = useState<string>();
+  const unlisted = (suppliedConversation || requestedRoot) && requestedConversation
+    && !selected && !index.conversations.has(requestedConversation) && projectionComplete;
+  useEffect(() => {
+    if (!unlisted || !requestedConversation) return;
+    const controller = new AbortController();
+    // 非表示の会話は一覧にはない。直接取得の結果でだけ存在を判定する。
+    void loadConversationWindow(requestedConversation, controller.signal, undefined, undefined,
+      client.fetchConversation ? path => client.fetchConversation!(path, controller.signal) : undefined).then(page => {
+      if (controller.signal.aborted || page.generation !== target.getSnapshot().generation) return;
+      if (page.conversation) target.mergeProjection({ conversations: [page.conversation] }, page.generation);
+      else setMissingConversation(requestedConversation);
+    }).catch(() => { /* 取得失敗は会話欄の既存の履歴エラーで表示する。 */ });
+    return () => controller.abort();
+  }, [unlisted, requestedConversation, client, target]);
+  const conversationNotFound = unlisted && missingConversation === requestedConversation;
   const newSession = search.get('session') ?? undefined;
   const draftWorkspace = useRef<{ token: string; session: string }>(undefined);
   if (newSession && draftWorkspace.current?.token !== newSession) draftWorkspace.current = { token: newSession, session: selected?.id ?? newSession };
@@ -69,7 +87,7 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
   const childId = requestedChild && !selected?.conversation_ids.includes(requestedChild) ? selectedNode?.conversationId : undefined;
   // 表示の並びと操作先は分け、再開した継続元も開けるようにする。
   const series = useMemo(() => selected ? orderSeries(state, selected.conversation_ids) : [], [selected, state.projection.conversations, state.projection.runs]);
-  const conversationId = search.get('conversation') ?? childId ?? suppliedConversation ?? (selected ? currentRootConversation(selected, index) : undefined);
+  const conversationId = search.get('conversation') ?? childId ?? suppliedConversation ?? (selected ? currentRootConversation(selected, index) : requestedConversation);
   // 子の会話は、頼んだ内容を名前として出す。
   const childNode = selectedNode;
   const childTitle = childNode ? tree.edges.find(edge => edge.target === childNode.id)?.title || undefined : undefined;
@@ -77,7 +95,7 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
   const workspaceSession = newSession ? draftWorkspace.current!.session : requestedConversation ? selected?.id ?? requestedConversation : childId ?? selected?.id ?? conversationId ?? '';
   const unresolvedConversationId = requestedConversation && !newSession && !selected ? requestedConversation : undefined;
   // 投影の取得失敗時は URL の会話として保存し、根の解決後に合流する。
-  const pendingWorkspace = unresolvedConversationId && !projectionComplete && !state.projectionError;
+  const pendingWorkspace = unresolvedConversationId && (!projectionComplete || unlisted) && !state.projectionError;
   return <OpenWorkspaceFile.Provider value={(path, worktree) => openFile.current(path, worktree)}><div className={`workspace root-workspace three-workspace${showRootList ? ' with-roots' : ''}`}>
     <div className="workspace-columns">
       {/* アプリの画面では、会話の一覧は左のサイドバーのプロジェクトの下に置き、作業場は会話とサブエージェントに広さを渡す。 */}

@@ -1,5 +1,10 @@
 // 本番のダッシュボードで、核の使い方を本物のブラウザで最初から最後まで通す。
 // 本番に出すたびに `node scripts/smoke/core-journeys.mjs` で走らせる。1 つでも落ちたら終了コードは 1 になる。
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { SMOKE_DIRECTORY, SMOKE_PROJECT_ID } from '../../packages/api/src/verification.ts';
+import { readSmokeSession } from './session.mjs';
+import { verifyRename } from './rename-fixture.mjs';
 import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -9,9 +14,9 @@ import { setTimeout as delay } from 'node:timers/promises';
 const PLAYWRIGHT = '/Users/r/.npm/_npx/d71ea5ed3eabc9b3/node_modules/playwright/index.mjs';
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const BASE = (process.env.AGENT_GRAPH_SMOKE_URL ?? 'http://127.0.0.1:7420').replace(/\/$/, '');
-const STATE_DIR = join(homedir(), '.cache/agent-graph/smoke');
-const SESSION_FILE = join(STATE_DIR, 'session.json');
-const PROJECT_PATH = ROOT.replace(/\/$/, '');
+const STATE_DIR = SMOKE_DIRECTORY;
+const SESSION_FILE = join(STATE_DIR, 'session-v2.json');
+const BROWSE_PROJECT_PATH = ROOT.replace(/\/$/, '');
 const MODEL = 'haiku';
 const REPLY_TIMEOUT_MS = 90_000;
 const CHANGES_TIMEOUT_MS = 5_000;
@@ -41,7 +46,7 @@ let page;
 let current = 'setup';
 const pageErrors = [];
 // 確かめで生じた状態。後始末で使う。
-const smoke = { id: '', native: '', project: '', created: false, renamed: false, phase: 'idle', launches: [], blocked: [], terminals: new Set(), launchCommands: new Set() };
+const smoke = { id: '', native: '', project: SMOKE_PROJECT_ID, created: false, phase: 'idle', launches: [], blocked: [], terminals: new Set(), launchCommands: new Set() };
 
 function log(line) { process.stdout.write(`${line}\n`); }
 async function waitFor(check, label, timeout = UI_TIMEOUT_MS, interval = 250) {
@@ -59,6 +64,11 @@ async function readToken() {
   if (!token) throw new Error('Dashboard token was not found in the page');
   return token;
 }
+async function readConversation(id) {
+  const response = await fetch(`${BASE}/conversation?id=${encodeURIComponent(id)}`, { headers: { 'x-agent-graph-token': await readToken() } });
+  if (!response.ok) throw new Error(`Conversation failed: ${response.status}`);
+  return response.json();
+}
 async function snapshot() {
   const response = await fetch(`${BASE}/snapshot`, { headers: { 'x-agent-graph-token': await readToken() } });
   if (!response.ok) throw new Error(`Snapshot failed: ${response.status}`);
@@ -75,11 +85,11 @@ async function waitForClosedSend(text) {
 }
 function nativeOf(id) { const value = JSON.parse(id); return Array.isArray(value) ? value[1] : ''; }
 async function rememberSession() {
-  await writeFile(SESSION_FILE, `${JSON.stringify({ conversationId: smoke.id, project: smoke.project, model: MODEL, createdAt: new Date().toISOString() }, null, 2)}\n`);
+  await writeFile(SESSION_FILE, `${JSON.stringify({ version: 2, cwd: STATE_DIR, conversationId: smoke.id, project: smoke.project, model: MODEL, createdAt: new Date().toISOString() }, null, 2)}\n`);
 }
 function stamp() { return new Date().toLocaleTimeString('ja-JP', { hour12: false }); }
 
-// 画面の WebSocket を中継し、本番の台帳を書き換える命令は確かめの送信と名前の変更だけに絞る。
+// 画面の WebSocket を中継し、本番の台帳を書き換える命令は隔離した会話への送信だけに絞る。
 // 新しいセッションの作成の窓にはモデルの欄が無いので、確かめ用のセッションの起動にだけ haiku を足す。
 function guard(ws) {
   const server = ws.connectToServer();
@@ -107,7 +117,6 @@ function guard(ws) {
     }
     if (command === 'session.send' && smoke.id && payload.conversationId === smoke.id) allowed = true;
     if (command === 'attachment.put' && smoke.phase === 'image') allowed = true;
-    if (command === 'session.rename' && smoke.id && payload.rootId === smoke.id) allowed = true;
     if (command === 'terminal.close' && helper && smoke.terminals.has(payload.terminalId)) allowed = true;
     if (!allowed) {
       smoke.blocked.push({ step: current, command, payload });
@@ -186,8 +195,7 @@ const active = () => page.locator('.workbench-body:not([hidden])').first();
 const composer = () => active().locator('footer.composer');
 const panel = () => page.getByRole('complementary', { name: 'Panel', exact: true });
 async function openRoot(rootId, composerShown = true) {
-  await page.goto(`${BASE}/p/${encodeURIComponent(smoke.project)}?root=${encodeURIComponent(rootId)}`);
-  await page.locator('a.root-row[aria-current="page"]').waitFor({ timeout: UI_TIMEOUT_MS });
+  await page.goto(`${BASE}/p/${encodeURIComponent(smoke.project)}?conversation=${encodeURIComponent(rootId)}`);
   if (composerShown) await composer().getByRole('textbox', { name: 'Message', exact: true }).waitFor({ timeout: UI_TIMEOUT_MS });
 }
 // 会話の欄で、印の付いた人の発言より後に、OK を含む相手の発言が出るまで待つ。
@@ -215,14 +223,13 @@ async function main() {
   await mkdir(STATE_DIR, { recursive: true });
   for (const file of await readdir(STATE_DIR)) if (/^fail-.*\.png$/.test(file)) await rm(join(STATE_DIR, file));
   const initial = await snapshot();
-  const project = initial.projection.projects.find(row => row.root_path === PROJECT_PATH);
-  if (!project) throw new Error(`Project ${PROJECT_PATH} is not registered in the dashboard`);
-  smoke.project = String(project.id);
-  const saved = await readFile(SESSION_FILE, 'utf8').then(JSON.parse, () => undefined);
-  if (saved?.conversationId && initial.projection.roots.some(root => root.id === saved.conversationId)) {
+  const project = initial.projection.projects.find(row => row.root_path === BROWSE_PROJECT_PATH);
+  if (!project) throw new Error(`Project ${BROWSE_PROJECT_PATH} is not registered in the dashboard`);
+  const saved = await readSmokeSession(SESSION_FILE, readConversation);
+  if (saved) {
     smoke.id = saved.conversationId; smoke.native = nativeOf(smoke.id);
   }
-  const rootsBefore = initial.projection.roots.filter(root => root.project === smoke.project).length;
+  const rootsBefore = initial.projection.roots.filter(root => root.project === project.id).length;
 
   browser = await chromium.launch({ headless: process.env.AGENT_GRAPH_SMOKE_HEADED !== '1' });
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
@@ -245,19 +252,19 @@ async function main() {
     await step('1 send', async () => {
       if (!smoke.id) {
         smoke.phase = 'create';
-        // 前の提供元の設定によらず、従来どおり Claude の会話を確かめる。
-        await page.evaluate(() => localStorage.setItem('agent-graph-session-provider', 'claude'));
-        // 「+」はプロジェクトの行に指を載せたときだけ見える。
-        const projectRow = page.locator('.sidebar-project-row').filter({ has: page.getByRole('link', { name: project.display_name, exact: true }) });
-        await projectRow.hover();
-        await projectRow.getByRole('button', { name: `Start conversation: ${project.display_name}`, exact: true }).click();
-        await page.waitForURL(url => url.searchParams.has('conversation'), { timeout: 45_000 });
-        smoke.id = new URL(page.url()).searchParams.get('conversation');
+        const [ack] = await helperCommands([['session.launch', { projectId: SMOKE_PROJECT_ID, provider: 'claude', model: MODEL }]]);
+        if (!ack.ok) throw new Error(ack.error);
+        const host = await waitFor(async () => (await smokeHosts()).find(row => row.conversationId), 'isolated smoke conversation', 45_000);
+        smoke.id = host.conversationId;
         smoke.native = nativeOf(smoke.id);
         smoke.created = true;
+        await waitFor(async () => {
+          const detail = await readConversation(smoke.id);
+          return detail.projection.conversations.some(row => row.id === smoke.id && row.cwd === STATE_DIR && row.hidden);
+        }, 'hidden smoke metadata', 30_000);
         await rememberSession();
-        await composer().getByRole('textbox', { name: 'Message', exact: true }).waitFor({ timeout: UI_TIMEOUT_MS });
-      } else await openRoot(smoke.id);
+      }
+      await openRoot(smoke.id);
       smoke.phase = 'send';
       const marker = `確かめの ${stamp()}`;
       const text = `${marker}。OK とだけ返してください。`;
@@ -383,7 +390,7 @@ async function main() {
     });
 
     // 子の多い根を開く。グラフと Codex の子の確かめで使う。
-    const parent = initial.projection.roots.filter(root => root.project === smoke.project && root.id !== smoke.id)
+    const parent = initial.projection.roots.filter(root => root.project === project.id && root.id !== smoke.id)
       .toSorted((a, b) => (b.total_children ?? 0) - (a.total_children ?? 0))[0];
     const tree = () => panel().getByRole('tree', { name: 'Request graph' });
     async function waitForGraphRows() {
@@ -398,7 +405,7 @@ async function main() {
     }
     async function openParent() {
       if (!parent || !parent.total_children) throw new Error('no root with children in the project');
-      await page.goto(`${BASE}/p/${encodeURIComponent(smoke.project)}?root=${encodeURIComponent(parent.id)}`);
+      await page.goto(`${BASE}/p/${encodeURIComponent(project.id)}?root=${encodeURIComponent(parent.id)}`);
       await panel().getByRole('tab', { name: 'Graph', exact: true }).click();
       await tree().waitFor({ timeout: UI_TIMEOUT_MS });
       await waitForGraphRows();
@@ -474,7 +481,7 @@ async function main() {
     });
 
     await step('5 changes', async () => {
-      await openRoot(smoke.id, false);
+      await openParent();
       const started = Date.now();
       await panel().getByRole('tab', { name: 'Changes', exact: true }).click();
       await panel().getByRole('region', { name: 'Commits' }).getByRole('listitem').first().waitFor({ timeout: CHANGES_TIMEOUT_MS });
@@ -492,23 +499,20 @@ async function main() {
       return 'README.md opened in a code tab';
     });
 
-    await step('7 rename', async () => {
-      if (!smoke.id) throw new Error('no smoke session');
-      await openRoot(smoke.id, false);
-      const list = page.getByRole('region', { name: `${project.display_name} sessions` });
-      const link = () => list.locator(`a.root-row[aria-current="page"]`);
-      const original = await link().getAttribute('aria-label');
-      const name = `smoke-${Date.now().toString(36)}`;
-      await link().dblclick();
-      const input = list.getByRole('textbox', { name: 'Rename', exact: true });
-      await input.fill(name); await input.press('Enter');
-      smoke.renamed = true;
-      await list.getByRole('link', { name, exact: true }).waitFor({ timeout: 10_000 });
-      await link().dblclick();
-      await input.fill(''); await input.press('Enter');
-      await list.getByRole('link', { name: original, exact: true }).waitFor({ timeout: 10_000 });
-      smoke.renamed = false;
-      return `"${original}" -> "${name}" -> "${original}"`;
+    await step('7 rename in isolated fixtures', async () => {
+      const run = promisify(execFile);
+      await run(process.execPath, ['--import', './packages/api/test/setup.ts', '--test', 'packages/api/test/session-rename.test.ts'], { cwd: ROOT });
+      await run(process.execPath, [join(ROOT, 'packages/dashboard/node_modules/vitest/vitest.mjs'), 'run', '--configLoader', 'native', 'app/src/test/session-rename.test.tsx', 'app/src/test/workspace-new-conversation.test.tsx'], { cwd: join(ROOT, 'packages/dashboard') });
+      return verifyRename(browser, BASE);
+    });
+    await step('7a hidden and directly readable', async () => {
+      const state = await snapshot();
+      if (state.projection.conversations.some(row => row.id === smoke.id) || state.projection.roots.some(row => row.conversation_ids.includes(smoke.id))) throw new Error('Smoke conversation leaked into the list');
+      if (!await readSmokeSession(SESSION_FILE, readConversation)) throw new Error('Smoke conversation is not isolated');
+      await openRoot(smoke.id);
+      await active().locator('article.message').first().waitFor({ timeout: UI_TIMEOUT_MS });
+      if (await page.locator('a.root-row[aria-current="page"]').count()) throw new Error('Hidden conversation appeared in the sidebar');
+      return 'hidden in sidebar, readable by direct URL';
     });
 
     await step('8 settings', async () => {
@@ -524,9 +528,6 @@ async function main() {
   } finally {
     current = 'cleanup';
     const notes = [];
-    try {
-      if (smoke.renamed) { const [ack] = await helperCommands([['session.rename', { rootId: smoke.id, name: '' }]]); notes.push(`name reset ${ack.ok ? 'ok' : ack.error}`); }
-    } catch (error) { notes.push(`name reset failed: ${error.message}`); }
     try { notes.push(`closed ${await closeSmokeTerminals()} terminal(s)`); } catch (error) { notes.push(`terminal close failed: ${error.message}`); }
     try {
       await page.evaluate(entries => { localStorage.clear(); for (const [key, value] of JSON.parse(entries)) localStorage.setItem(key, value); }, storage);
@@ -537,7 +538,7 @@ async function main() {
       return 'no pageerror and no CSP violation';
     });
     const after = await snapshot().catch(() => undefined);
-    const rootsAfter = after?.projection.roots.filter(root => root.project === smoke.project).length;
+    const rootsAfter = after?.projection.roots.filter(root => root.project === project.id).length;
     const unexpected = smoke.blocked.filter(row => row.step !== '3 codex send path').map(row => `${row.step}:${row.command}`);
     log(`----  cleanup: ${notes.join(', ')}`);
     log(`----  session ${smoke.id} (${smoke.created ? 'created this run' : 'reused'}), project roots ${rootsBefore} -> ${rootsAfter ?? '?'}`);

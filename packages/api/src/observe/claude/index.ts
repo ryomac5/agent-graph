@@ -7,6 +7,7 @@ import { isClaudeInternalMessage, readClaudeMessageFlags } from "../../../../cor
 import type { AppendResult, ConversationPayload, FactInput, JsonValue, Ledger, UnsupportedObservationPayload } from "../../../../core/src/ledger/index.ts";
 import { readAppendOnlyFile } from "../files.ts";
 import type { FileCursor, FileRead } from "../files.ts";
+import { verificationVisibility } from '../../verification.ts';
 
 export const CLAUDE_QUEUED_COMMANDS_VERSION = 2;
 export const CLAUDE_MESSAGE_FLAGS_VERSION = 1;
@@ -131,6 +132,7 @@ export function observeClaudeFile(ledger: Ledger, path: string, options: ClaudeO
   const previous = projectConversations(existing, new Map()).conversations.find((conversation) => conversation.id === id);
   const validRows = rows.filter(({ row }) => !findUnsupportedReason(row)).map(({ row }) => row!);
   const payload: ConversationPayload = {
+    ...verificationVisibility(String(validRows.find(row => typeof row.cwd === 'string')?.cwd ?? '')),
     provider: "claude", native_id: nativeId, history_format: "jsonl",
     origin: options.managed || previous?.origin === "managed" ? "managed" : "observed",
     type: subagent ? "subagent" : validRows.some((row) => HEADLESS_ENTRYPOINTS.has(String(row.entrypoint)))

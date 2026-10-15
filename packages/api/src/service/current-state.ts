@@ -1,7 +1,7 @@
 import { basename } from 'node:path';
 import { createHash } from 'node:crypto';
 import type { DatabaseSync, SQLInputValue, StatementSync } from 'node:sqlite';
-import { evaluateState, readNativeEvidence, readNativeTurnId } from '../../../core/src/state/index.ts';
+import { DEFAULT_STATE_POLICY, DEFAULT_DELIVERY_POLICY, evaluateState, readNativeEvidence, readNativeTurnId } from '../../../core/src/state/index.ts';
 import type { StateDecision, StateInput, StateEvidence, Signal, Scan, NativeRecord, ProcessIdentity } from '../../../core/src/state/index.ts';
 import { orderActiveFacts } from '../../../core/src/ledger/projections/connections.ts';
 import type { Fact } from '../../../core/src/ledger/facts.ts';
@@ -14,6 +14,9 @@ const flag = (value: unknown): boolean | undefined => value === true || value ==
 export const DISPLAY_STATES = { Unresolved: 'unresolved', Stopped: 'stopped', 'Needs approval': 'waiting_approval', Waiting: 'waiting_input',
   Working: 'running', Closed: 'closed', 'Not hosted': 'not_hosted', Idle: 'idle', Unknown: 'unknown' } as const;
 const PRIORITY = Object.values(DISPLAY_STATES);
+// core の進行・待ち 300 秒、配達 60 秒、走査の生存 30 秒の最大値。
+export const STATE_SCAN_RETENTION_MS = Math.max(DEFAULT_STATE_POLICY.progressMs, DEFAULT_STATE_POLICY.waitingMs,
+  DEFAULT_DELIVERY_POLICY.deadlineMs, SESSION_SCAN_VALID_MS);
 
 function identifyDecision(decision: StateDecision, input: StateInput): string {
   // 走査の証拠は保持し、識別には照会時刻でなく対象プロセスと結果を使う。
@@ -193,7 +196,29 @@ export class CurrentState {
     this.removedRuns = [];
     // 走査を記録した後の評価は全実行を通るので、ここで新しい会話の印を消してよい。
     this.recordedSessions.clear();
+    this.pruneScans(now);
     return changed;
+  }
+  private pruneScans(now: number): void {
+    // 期限のない終了証拠など、今回の判定が実際に読んだ走査も残す。
+    // 対象の最新登録と最新 busy は、後から届く実行の所持者・進行の照会にも使う。
+    this.db.prepare(`WITH retained AS (
+      SELECT id, row_number() OVER (
+        PARTITION BY coalesce(json_extract(data, '$.provider'), 'claude'), json_extract(data, '$.status')
+        ORDER BY json_extract(data, '$.at') DESC, id) AS position
+      FROM api_state_scans
+    ), sessions AS (
+      SELECT scans.id, row_number() OVER (
+        PARTITION BY coalesce(json_extract(data, '$.provider'), 'claude'), json_extract(data, '$.status'),
+          json_extract(session.value, '$.sessionId'), json_extract(session.value, '$.status')
+        ORDER BY json_extract(data, '$.at') DESC, scans.id) AS position
+      FROM api_state_scans scans, json_each(data, '$.sessions') session
+    ) DELETE FROM api_state_scans
+      WHERE json_extract(data, '$.at') < ?
+        AND id NOT IN (SELECT value FROM json_each(?))
+        AND id NOT IN (SELECT id FROM retained WHERE position = 1)
+        AND id NOT IN (SELECT id FROM sessions WHERE position = 1)`)
+      .run(now - STATE_SCAN_RETENTION_MS, JSON.stringify([...this.scanCache.keys()]));
   }
   private selectConversation(row: Row): void {
     const conversation = String(row.conversation_id);
@@ -510,7 +535,7 @@ export class CurrentState {
       AND EXISTS (SELECT 1 FROM json_each(data, '$.sessions') session WHERE json_extract(session.value, '$.sessionId') = ?
         AND json_extract(session.value, '$.status') = 'busy' AND json_extract(session.value, '$.statusUpdatedAt') >= ?)`,
       [now, started, String(native.native_id), start.at]) : undefined;
-    // 最新の健康・所持と、物理終了の最初の証拠だけで判定する。走査の全履歴は DB に残す。
+    // 最新の健康・所持と、物理終了の最初の証拠だけで判定する。参照した走査は期限後も DB に残す。
     const scans = new Map([latest, good, absent, busy].filter((scan): scan is SessionScan => !!scan).map(scan => [scan.id, scan]));
     for (const scan of scans.values()) {
       if (scan.at < started) continue;

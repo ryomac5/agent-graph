@@ -1,3 +1,4 @@
+import { DatabaseSync } from 'node:sqlite';
 import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -240,4 +241,44 @@ test('古い履歴の時刻由来の世代番号より、後から起動した h
     last_evidence: { hook_event_name: 'UserPromptSubmit', input: { prompt_id: 'new-turn' } } }, NOW + 1001, 'hook');
   assert.equal(f.decision('parent', NOW + 1002).display.label, 'Working');
   assert.equal(f.feed.current.conversations.get(f.id('parent'))!.generation, 2);
+});
+
+for (const exited of [false, true]) test(`保持期限後も判定・配信値と再起動後の証拠を維持する: exited=${exited}`, t => {
+  const kept = fixture(t), pruned = fixture(t);
+  const baseline = new DatabaseSync(kept.path);
+  const database = new DatabaseSync(pruned.path);
+  t.after(() => { baseline.close(); database.close(); });
+  baseline.exec(`CREATE TRIGGER keep_scans BEFORE DELETE ON api_state_scans BEGIN SELECT RAISE(IGNORE); END`);
+  for (const f of [kept, pruned]) {
+    f.run('parent'); f.native('parent', start()); f.native('parent', tool(), NOW + 1);
+    f.scan(NOW + 2); f.decision('parent', NOW + 2);
+    if (exited) { f.scan(NOW + 3, { sessions: [], processes: [] }); f.decision('parent', NOW + 3); }
+  }
+  for (let index = 1; index <= 100; index++) {
+    const at = NOW + index * 10_000;
+    for (const f of [kept, pruned]) {
+      f.scan(at, index % 3 === 0 ? { status: 'failed', sessions: [], processes: [] } : {});
+      f.decision('parent', at);
+    }
+    assert.deepEqual(pruned.feed.snapshot(), kept.feed.snapshot());
+  }
+  assert.ok(Number(database.prepare('SELECT count(*) AS count FROM api_state_scans').get()!.count)
+    < Number(baseline.prepare('SELECT count(*) AS count FROM api_state_scans').get()!.count));
+  for (const f of [kept, pruned]) { f.reopen(); f.decision('parent', NOW + 1_000_000); }
+  assert.deepEqual(pruned.feed.snapshot(), kept.feed.snapshot());
+  if (exited) assert.deepEqual(pruned.decision('parent', NOW + 1_000_000).process.evidenceIds, [`scan:${NOW + 3}`]);
+  else assert.equal(pruned.decision('parent', NOW + 1_000_000).turn.reason, 'running_tool');
+});
+
+test('10秒周期の走査は日をまたいでも保持期限と対象数に応じた件数に収まる', t => {
+  const f = fixture(t);
+  const database = new DatabaseSync(f.path);
+  t.after(() => database.close());
+  for (let index = 0; index <= 17_280; index++) {
+    const at = NOW + index * 10_000;
+    f.scan(at);
+    f.feed.refresh(at);
+    if (index >= 31) assert.ok(Number(database.prepare('SELECT count(*) AS count FROM api_state_scans').get()!.count) <= 31);
+  }
+  assert.equal(database.prepare('SELECT count(*) AS count FROM api_state_scans').get()!.count, 31);
 });

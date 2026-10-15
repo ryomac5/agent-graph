@@ -132,6 +132,8 @@ export class ProjectionFeed {
       this.state = { ...this.state, last_seq: Number(stored.last_seq), generation: Number(stored.generation) };
       this.requiresGeneration = this.state.generation > 0;
       this.db.exec("CREATE INDEX IF NOT EXISTS api_identity_subject_seq ON facts(subject, seq) WHERE kind GLOB 'conversation.*' OR kind = 'run.created'");
+      this.db.exec(`CREATE INDEX IF NOT EXISTS api_root_name_subject_seq ON facts(subject, seq)
+        WHERE kind GLOB 'conversation.*' AND json_type(payload, '$.user_name') IS NOT NULL`);
       initializeSummaryIndex(this.db);
       this.updateIdentities();
       this.updateProjects();
@@ -526,7 +528,12 @@ export class ProjectionFeed {
       const ts = run?.last_evidence_ts ?? run?.ended_ts ?? run?.started_ts;
       if (typeof ts === "string" && ts > (row.last_activity_ts ?? "")) row.last_activity_ts = ts;
     }
-    const facts = decodeFacts(this.prepare("SELECT * FROM facts WHERE seq <= ? AND kind GLOB 'conversation.*' AND kind != 'conversation.input_queue_changed'").all(this.state.last_seq));
+    // 名前を持つ subject の履歴だけを読む。解除の null と部分訂正の継承も残す。
+    const facts = decodeFacts(this.prepare(`SELECT * FROM facts WHERE subject IN (
+      SELECT subject FROM facts WHERE kind GLOB 'conversation.*'
+        AND json_type(payload, '$.user_name') IS NOT NULL AND seq <= ?)
+      AND seq <= ? AND kind GLOB 'conversation.*' AND kind != 'conversation.input_queue_changed'`)
+      .all(this.state.last_seq, this.state.last_seq));
     return projectRoots(conversations, this.prepare("SELECT from_id, to_id, type, active, confidence FROM relations").all() as { from_id: string; to_id: string; type: string; active: number; confidence: string }[], facts);
   }
   private rootDelegations(rows: Record<string, unknown>[]): Record<string, unknown>[] {

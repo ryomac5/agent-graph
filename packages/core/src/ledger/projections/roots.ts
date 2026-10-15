@@ -110,6 +110,10 @@ export function projectRoots(conversations: readonly RootConversation[], relatio
       total_children: descendants.length });
   }
   if (facts) {
+    // 名前のない会話の全列を再投影しない。対象 subject の訂正と識別の履歴は残す。
+    const subjects = new Set(facts.filter(fact => fact.kind.startsWith('conversation.')
+      && fact.payload && Object.hasOwn(fact.payload, 'user_name')).map(fact => fact.subject));
+    facts = facts.filter(fact => subjects.has(fact.subject));
     // 系列全体を一つの実体として投影し、訂正と列ごとの事実順序を名前にも適用する。
     const ids = projectConversationIds(facts);
     const rootIds = new Map(roots.flatMap(root => root.conversation_ids.map(id => [id, root.id] as const)));

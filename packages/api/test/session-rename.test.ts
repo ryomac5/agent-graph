@@ -172,3 +172,27 @@ test('rename resolves a root beyond the first snapshot page', async t => {
   const patch = feed.refresh(); assert.ok(patch && patch !== 'resync');
   assert.equal(patch.changes.roots.upsert.find(row => row.id === JSON.stringify(['claude', 'root-1000']))?.name, 'Beyond page');
 });
+
+test('indexed series names retain partial corrections across refresh, rebuild and feed reopen', async t => {
+  const { openObservationService } = await import('../src/service/index.ts');
+  const { ProjectionFeed } = await import('../src/service/projection-feed.ts');
+  const directory = mkdtempSync(join(tmpdir(), 'ag-series-correction-'));
+  const service = openObservationService({ dbPath: join(directory, 'ledger.sqlite'), live: false });
+  let feed = new ProjectionFeed(service.dbPath, service.catchUp);
+  t.after(() => { feed.close(); service.close(); rmSync(directory, { recursive: true, force: true }); });
+  service.ledger.append({ source: 'host-claude', source_event_id: 'created', kind: 'conversation.created', subject: 'conversation:original', source_ts: '2026-10-01T00:00:00Z', confidence: 'confirmed', payload: { provider: 'claude', native_id: 'native', origin: 'managed', history_format: 'jsonl', type: 'interactive', kit_name: 'repo-001' } });
+  const renamed = service.ledger.append({ source: 'ui', source_event_id: 'renamed', kind: 'conversation.renamed', subject: 'conversation:original', source_ts: '2026-10-02T00:00:00Z', confidence: 'confirmed', payload: { user_name: 'Inherited title' } });
+  service.ledger.append({ source: 'ui', source_event_id: 'corrected', kind: 'conversation.corrected', subject: 'conversation:original', source_ts: '2026-10-03T00:00:00Z', confidence: 'confirmed', supersedes: renamed.fact_id, payload: { cwd: '/fixture' } });
+  const expectName = (name: string) => {
+    feed.refresh();
+    const expected = project(service.ledger.readSince(0, 100)).roots;
+    assert.equal(expected[0].name, name);
+    assert.deepEqual(feed.snapshot().projection.roots, expected);
+  };
+  expectName('Inherited title');
+  service.rebuild(); expectName('Inherited title');
+  feed.close(); feed = new ProjectionFeed(service.dbPath, service.catchUp);
+  expectName('Inherited title');
+  service.ledger.append({ source: 'ui', source_event_id: 'cleared', kind: 'conversation.renamed', subject: 'conversation:original', source_ts: '2026-10-04T00:00:00Z', confidence: 'confirmed', payload: { user_name: null } });
+  expectName('repo-001');
+});

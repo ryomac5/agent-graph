@@ -190,7 +190,7 @@ export async function main(provider) {
       case 'restore-scan': await rm(join(process.env.CLAUDE_CONFIG_DIR, 'sessions', 'invalid.json'), { force: true }); break;
       case 'advance-clock': await writeJson(join(control, 'clock.json'), { offset: stateNow() - Date.now() + request.ms }); break;
       case 'parent-restart': {
-        const next = spawn(process.execPath, [process.argv[1], '--resume', transcript.id], { env: { ...process.env, E2E_PARENT_PID: String(parent), E2E_KEEP_ALIVE: '1' }, stdio: 'ignore' });
+        const next = spawn(process.execPath, [process.argv[1], '--resume', transcript.id], { env: { ...process.env, E2E_PARENT_PID: String(parent), E2E_KEEP_ALIVE: '1' }, stdio: 'ignore', detached: true });
         next.unref(); dropSessionEnd = true; setTimeout(() => void shutdown(), 100); break;
       }
       case 'hold-next': holdNext = true; break;

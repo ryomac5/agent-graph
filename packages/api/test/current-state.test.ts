@@ -42,6 +42,43 @@ function fixture(t: TestContext) {
 const start = (turn = 'turn') => ({ type: 'user', uuid: `user:${turn}`, promptId: turn, message: { content: 'work' } });
 const tool = (turn = 'turn') => ({ type: 'assistant', uuid: `tool:${turn}`, parentUuid: `user:${turn}`, message: { content: [{ type: 'tool_use', id: 'bash', name: 'Bash' }] } });
 
+test('decision_id は走査時刻に依存せず、生存・pid・procStart と期限切れを区別する', t => {
+  const f = fixture(t); f.run('parent'); f.native('parent', start());
+  const scan = (at: number, process = PARENT) => {
+    f.scan(at, { sessions: [{ ...process, sessionId: 'parent', startedAt: NOW - 1000,
+      status: 'busy', statusUpdatedAt: NOW }], processes: [process] });
+    f.decision('parent', at);
+    return f.feed.snapshot().projection;
+  };
+  const first = scan(NOW + 1);
+  const later = scan(NOW + 2);
+  assert.equal(later.runs[0].decision_id, first.runs[0].decision_id);
+  assert.notDeepEqual(later.state_decisions, first.state_decisions);
+  f.reopen();
+  assert.equal(f.decision('parent', NOW + 2).process.value, 'alive_confirmed');
+  assert.equal(f.feed.snapshot().projection.runs[0].decision_id, first.runs[0].decision_id);
+  f.decision('parent', NOW + 2 + SESSION_SCAN_VALID_MS);
+  assert.notEqual(f.feed.snapshot().projection.runs[0].decision_id, first.runs[0].decision_id);
+  const restarted = scan(NOW + 3, { ...PARENT, procStart: 'parent-B' });
+  assert.notEqual(restarted.runs[0].decision_id, first.runs[0].decision_id);
+  const otherPid = scan(NOW + 4, { ...PARENT, pid: 42 });
+  assert.notEqual(otherPid.runs[0].decision_id, restarted.runs[0].decision_id);
+  f.scan(NOW + 5, { sessions: [], processes: [] }); f.decision('parent', NOW + 5);
+  assert.notEqual(f.feed.snapshot().projection.runs[0].decision_id, first.runs[0].decision_id);
+});
+
+test('判定の表示が同じでも、未確認プロセスの pid と procStart を ID で区別する', t => {
+  const f = fixture(t); f.run('parent');
+  const ids = new Set();
+  for (const process of [PARENT, { ...PARENT, pid: 42 }, { ...PARENT, procStart: 'parent-B' }]) {
+    f.append('run.updated', 'run:parent', { conversation_id: f.id('parent'), generation: 1,
+      pid: process.pid, start_fingerprint: process.procStart }, NOW, 'host-claude');
+    assert.equal(f.decision('parent', NOW).process.value, 'unverified');
+    ids.add(f.feed.snapshot().projection.runs[0].decision_id);
+  }
+  assert.equal(ids.size, 3);
+});
+
 test('古い申告 running/idle を採らず、api が期限と理由を配り seq 不変の再評価でも Unknown へ変える', t => {
   const f = fixture(t); f.run('parent');
   assert.equal(f.decision('parent', NOW).display.label, 'Unknown');

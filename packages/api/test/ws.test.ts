@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import test, { type TestContext } from "node:test";
+import { DatabaseSync } from "node:sqlite";
+import { PROJECTION_TABLES } from "../../core/src/ledger/rebuild.ts";
 import { WebSocket } from "ws";
 import { openLedger, type FactInput } from "../../core/src/ledger/index.ts";
 import { openObservationService } from "../src/service/index.ts";
@@ -15,6 +17,14 @@ import type { RunnerEvent, RunnerRequest } from "../src/runner-client.ts";
 type ApiServer = Awaited<ReturnType<typeof startWebSocketServer>>;
 const TIMEOUT_MS = 5000;
 const facts = JSON.parse(readFileSync(new URL("./samples/S17/input.json", import.meta.url), "utf8")) as FactInput[];
+// 永続投影は配信時の現在状態による上書き前の全テーブルを厳密に比較する。
+function readDurableProjection(path: string) {
+  const db = new DatabaseSync(path, { readOnly: true });
+  try {
+    return Object.fromEntries(PROJECTION_TABLES.map(table => [table,
+      db.prepare(`SELECT * FROM ${table}`).all().sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))]));
+  } finally { db.close(); }
+}
 function createFixture(t: TestContext) {
   const directory = mkdtempSync(join(tmpdir(), "ag-ws-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
@@ -228,7 +238,11 @@ testSocket("S17: api restart keeps delegation running, starts once and rebuilds 
   await waitUntil(() => api.runner.available);
   const resumed = await connect(api, 4);
   await resumed.next("resync");
-  const result = await snapshot(api);
+  const scanAt = Date.now();
+  api.feed.recordScan({ id: 's17-current-scan', at: scanAt, status: 'succeeded', sessions: [], processes: [] });
+  api.feed.refresh(scanAt);
+  const result = api.feed.snapshot();
+  const durableProjection = readDurableProjection(dbPath);
   resumed.send({ type: "hello", seq: result.seq, generation: result.generation });
   resumed.send(command);
   await resumed.next("ack");
@@ -240,13 +254,25 @@ testSocket("S17: api restart keeps delegation running, starts once and rebuilds 
   assert.equal(result.projection.messages, undefined);
   assert.deepEqual(detail.projection.messages, []);
   restarted.rebuild();
-  assert.deepEqual((await snapshot(api)).projection, result.projection);
+  await snapshot(api);
+  assert.deepEqual(readDurableProjection(dbPath), durableProjection);
   const reversePath = join(dirname(dbPath), "reverse.db");
   const reverse = openObservationService({ dbPath: reversePath });
   try {
     for (const fact of [...facts].reverse()) reverse.ledger.append(fact);
     const reverseApi = await startWebSocketServer(reverse, { port: 0, runnerPath });
-    try { assert.deepEqual((await snapshot(reverseApi)).projection, result.projection); }
+    try {
+      const replayed = await snapshot(reverseApi);
+      assert.equal(typeof replayed.evaluated_at, 'number');
+      // 走査の証拠と評価時刻は台帳から再現できない現在状態である。
+      // 再生先には別の照会結果を渡し、時刻の偶然の一致には依存しない。
+      reverseApi.feed.recordScan({ id: 's17-replay-scan', at: scanAt + 1, status: 'failed', sessions: [], processes: [] });
+      reverseApi.feed.refresh(scanAt + 1);
+      const currentReplay = reverseApi.feed.snapshot();
+      assert.notDeepEqual(currentReplay.projection.state_decisions, result.projection.state_decisions);
+      assert.equal(durableProjection.state_decisions, undefined);
+      assert.deepEqual(readDurableProjection(reversePath), durableProjection);
+    }
     finally { await reverseApi.close(); }
   } finally { reverse.close(); }
 });
@@ -292,6 +318,7 @@ test("S17 durable recovery, replay and rebuild are verifiable without sockets", 
   assert.equal(feed.replay(4), undefined);
   feed.refresh(2_000_000_000_000);
   const result = feed.snapshot().projection;
+  const durableProjection = readDurableProjection(dbPath);
   const expected = JSON.parse(readFileSync(new URL("./samples/S17/expected-projection.json", import.meta.url), "utf8"));
   for (const [key, value] of Object.entries(expected.delegation)) assert.deepEqual(result.delegations[0][key], value);
   for (const [key, value] of Object.entries(expected.run)) assert.deepEqual(result.runs[0][key], value);
@@ -302,13 +329,20 @@ test("S17 durable recovery, replay and rebuild are verifiable without sockets", 
   assert.equal(feed.refresh(2_000_000_000_000), "resync");
   assert.equal(feed.replay(7), undefined);
   assert.deepEqual(feed.replay(7, feed.snapshot().generation), []);
-  assert.deepEqual(feed.snapshot().projection, result);
+  assert.deepEqual(readDurableProjection(dbPath), durableProjection);
   const reversed = openObservationService({ dbPath: join(directory, "reversed.db") });
   const reverseFeed = new ProjectionFeed(reversed.dbPath, reversed.catchUp, 1);
   try {
     for (const fact of [...facts].reverse()) reversed.ledger.append(fact);
     reverseFeed.refresh(2_000_000_000_000);
-    assert.deepEqual(reverseFeed.snapshot().projection, result);
+    assert.deepEqual(readDurableProjection(reversed.dbPath), durableProjection);
+    // 同じ台帳でも別時刻の走査で現在状態は変わり、再構築の一致条件にはならない。
+    const at = 2_000_000_000_001;
+    reverseFeed.recordScan({ id: 's17-replay-scan', at, status: 'succeeded', sessions: [], processes: [] });
+    reverseFeed.refresh(at);
+    assert.notDeepEqual(reverseFeed.snapshot().projection.state_decisions, result.state_decisions);
+    assert.equal(reverseFeed.snapshot().evaluated_at, at);
+    assert.deepEqual(readDurableProjection(reversed.dbPath), durableProjection);
     reversed.ledger.append({ ...facts[0], kind: "delegation.created", source_event_id: "s17-extra", subject: "delegation:other",
       payload: { request_id: "other", role: "implementer", title: "[redacted]", attempt: 1, state: "received" } });
     reverseFeed.refresh(2_000_000_000_000);
@@ -331,15 +365,22 @@ test("S17 decision identity survives clock changes, incremental ingestion, resta
     service.ledger.append(fact);
     feed.refresh(now + index);
   }
+  feed.recordScan({ id: 's17-initial-scan', at: now + facts.length, status: 'succeeded', sessions: [], processes: [] });
+  feed.refresh(now + facts.length);
   const expected = feed.snapshot().projection;
+  const durableProjection = readDurableProjection(dbPath);
   const decisionId = expected.runs[0].decision_id;
   assert.ok(expected.state_decisions.some(row => row.id === decisionId));
-  const compare = (target: ProjectionFeed, at: number) => {
+  const compare = (target: ProjectionFeed, at: number, path = dbPath) => {
     t.mock.timers.setTime(at);
+    target.recordScan({ id: `s17-scan:${at}`, at, status: 'succeeded', sessions: [], processes: [] });
     target.refresh(at);
     const snapshot = target.snapshot();
     assert.equal(typeof snapshot.evaluated_at, 'number');
-    assert.deepEqual(snapshot.projection, expected);
+    assert.equal(snapshot.evaluated_at, at);
+    assert.equal(snapshot.projection.runs[0].decision_id, decisionId);
+    assert.notDeepEqual(snapshot.projection.state_decisions, expected.state_decisions);
+    assert.deepEqual(readDurableProjection(path), durableProjection);
   };
   t.mock.timers.setTime(now + 1000);
   service.rebuild();
@@ -358,7 +399,7 @@ test("S17 decision identity survives clock changes, incremental ingestion, resta
         replay.ledger.append(fact);
         replayFeed.refresh(now + 3000 + index);
       }
-      compare(replayFeed, now + 4000 + index);
+      compare(replayFeed, now + 4000 + index, replay.dbPath);
     } finally { replayFeed.close(); replay.close(); }
   }
   assert.equal(expected.state_decisions[0].evaluatedAt, undefined);

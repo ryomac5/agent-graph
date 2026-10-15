@@ -194,7 +194,7 @@ test('壊し方の台本を実 stdin・adapter・走査・API 判定まで通す
   const restartedChild = await command('child-tool'); const restartedId = JSON.stringify(['claude', restartedChild.child.id]);
   await inspect(restartedId); await command('advance-clock', { ms: 301_000 }); await command('parent-restart');
   const successor = await waitFor(async () => (await readActors(isolated.control)).find(row => row.id === actor.id && row.pid !== actor.pid), 'restart');
-  assert.equal((await inspect(restartedId)).process.reason, 'owner_restarted');
+  await waitFor(async () => (await inspect(restartedId))?.process.reason === 'owner_restarted', 'owner_restarted after successor is scanned');
   await scriptActor(isolated.control, successor.pid, 'external-input', { text: 'same' });
   await scriptActor(isolated.control, successor.pid, 'external-input', { text: 'same' });
   const rows = (await readFile(successor.path, 'utf8')).trim().split('\n').map(JSON.parse);

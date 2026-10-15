@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { CurrentState } from './current-state.ts';
 import type { SessionScan } from './session-scan.ts';
 import { VISIBLE_CONVERSATION_SQL } from '../usage/probe-path.ts';
@@ -612,12 +611,12 @@ export class ProjectionFeed {
     const current = this.current.runs.get(this.identities.runs[String(row.id)] ?? String(row.id));
     if (!current) return { ...row, state: 'unknown' };
     const decision = current.decision as Record<string, unknown>;
-    let proof = this.decisionRows.get(decision);
+    let proof = this.decisionRows.get(current);
     if (!proof) {
-      // 評価時刻は配信の evaluated_at に置き、証拠と判定だけを識別・比較する。
+      // 評価・走査の時刻は配信に残し、識別には走査結果の中身を使う。
       const { evaluatedAt, ...content } = decision;
-      proof = { id: createHash('sha256').update(JSON.stringify(content)).digest('hex').slice(0, 32), ...content };
-      this.decisionRows.set(decision, proof);
+      proof = { id: String(current.decision_id), ...content };
+      this.decisionRows.set(current, proof);
     }
     this.decisions.set(proof.id, proof);
     // 識別の別名は元の行に残し、同じ判定の全体は一度だけ配る。

@@ -18,16 +18,22 @@ const EXPIRE_PROGRESS_MS = 301_000;
 export async function runStateJourneys({ check, seed, script, send, reply, idle, snapshot, watches, open, status, bubble, isolation }) {
   async function decision(id, condition = () => true) {
     return waitFor(async () => {
-      const { projection } = await snapshot();
+      const { projection, identities } = await snapshot();
       const conversation = projection.conversations.find(row => row.id === id);
-      const run = projection.runs.find(row => row.id === conversation?.current_run_id);
+      // 配信の run id は hook 由来の別名のまま来るため、画面と同じ identities で正規の id に直して比べる。
+      const canonical = value => {
+        if (identities?.runs?.[value] !== undefined) return identities.runs[value];
+        const match = /^(.*):(\d+)$/.exec(value);
+        return match && identities?.conversations?.[match[1]] ? `${identities.conversations[match[1]]}:${match[2]}` : value;
+      };
+      const run = projection.runs.find(row => canonical(row.id) === conversation?.current_run_id);
       const value = projection.state_decisions.find(row => row.id === run?.decision_id);
       return value && condition(value) ? value : false;
     }, `current state ${id}`, SCAN_TIMEOUT_MS);
   }
   async function expect(id, label, condition) {
     const d = await decision(id, value => value.display.label === label && (!condition || condition(value)));
-    assert.ok(Number.isFinite(d.evaluatedAt)); assert.ok(d.turn.reason);
+    assert.ok(Number.isFinite(d.evaluatedAt ?? (await snapshot()).evaluated_at)); assert.ok(d.turn.reason);
     await open(id); await status(label).waitFor();
     assert.equal(d.display.label, label); return d;
   }

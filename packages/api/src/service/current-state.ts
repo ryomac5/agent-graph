@@ -1,7 +1,8 @@
 import { basename } from 'node:path';
+import { createHash } from 'node:crypto';
 import type { DatabaseSync, SQLInputValue, StatementSync } from 'node:sqlite';
 import { evaluateState, readNativeEvidence, readNativeTurnId } from '../../../core/src/state/index.ts';
-import type { StateInput, StateEvidence, Signal, Scan, NativeRecord, ProcessIdentity } from '../../../core/src/state/index.ts';
+import type { StateDecision, StateInput, StateEvidence, Signal, Scan, NativeRecord, ProcessIdentity } from '../../../core/src/state/index.ts';
 import { orderActiveFacts } from '../../../core/src/ledger/projections/connections.ts';
 import type { Fact } from '../../../core/src/ledger/facts.ts';
 import { SESSION_SCAN_VALID_MS, type SessionScan } from './session-scan.ts';
@@ -13,6 +14,25 @@ const flag = (value: unknown): boolean | undefined => value === true || value ==
 export const DISPLAY_STATES = { Unresolved: 'unresolved', Stopped: 'stopped', 'Needs approval': 'waiting_approval', Waiting: 'waiting_input',
   Working: 'running', Closed: 'closed', 'Not hosted': 'not_hosted', Idle: 'idle', Unknown: 'unknown' } as const;
 const PRIORITY = Object.values(DISPLAY_STATES);
+
+function identifyDecision(decision: StateDecision, input: StateInput): string {
+  // 走査の証拠は保持し、識別には照会時刻でなく対象プロセスと結果を使う。
+  const evidence = new Map(input.evidence.map(proof => {
+    const { id, at, observedAt, ...content } = proof;
+    const identity = proof.kind === 'scan'
+      ? { ...content, processes: proof.processes?.filter(p => p.pid === input.process?.pid)
+        .map(p => [p.pid, p.procStart]).sort(), hosted: proof.hosted?.includes(input.runId!) }
+      : proof.kind === 'signal' && proof.activity === 'session_busy' ? content : id;
+    return [id, JSON.stringify(identity)];
+  }));
+  const parts = Object.fromEntries((['process', 'hosting', 'closure', 'turn', 'result'] as const).map(key => {
+    const { at, validUntil, evidenceIds, ...content } = decision[key];
+    return [key, { ...content, evidenceIds: [...new Set(evidenceIds.map(id => evidence.get(id) ?? id))].sort() }];
+  }));
+  const content = { ...parts, processIdentity: input.process, parentProcessAtLaunch: input.parentProcessAtLaunch,
+    observation: decision.observation.map(({ at, ...row }) => row), conflicts: decision.conflicts, display: decision.display };
+  return createHash('sha256').update(JSON.stringify(content)).digest('hex').slice(0, 32);
+}
 interface RunContext { row: Row; facts: Fact[]; records: NativeRecord[]; input: StateInput; parent?: string; childId?: string;
   evaluation?: { scanVersion: number; at: number; until: number; row: Row } }
 
@@ -88,6 +108,7 @@ export class CurrentState {
       const latest = signals.filter(e => e.at <= now).sort((a, b) => b.at - a.at)[0];
       const row: Row = { id, conversation_id: context.row.conversation_id, generation: context.row.generation,
         started_ts: context.row.started_ts, state: DISPLAY_STATES[decision.display.label], decision,
+        decision_id: identifyDecision(decision, input),
         turn_started_ts: decision.turn.value === 'running' && start ? new Date(start.at).toISOString() : null,
         last_evidence_ts: latest ? new Date(latest.at).toISOString() : context.row.started_ts,
         reason: decision.turn.reason, activity_rank: PRIORITY.indexOf(DISPLAY_STATES[decision.display.label]) };

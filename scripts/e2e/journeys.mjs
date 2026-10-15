@@ -341,7 +341,9 @@ export async function runJourneys({ browser, isolation, url, report, signal }) {
     });
     await runStateJourneys({ check, seed, script, send, reply, idle, snapshot, watches, bubble, isolation,
       open: async id => { await page.goto(origin + '/c/' + encodeURIComponent(id)); await active().waitFor(); },
-      status: label => active().getByRole('status', { name: label, exact: true }),
+      // Working だけは会話本文の role=status。他の語は同じ pane の見出しの状態表示にだけ出る。
+      status: label => label === 'Working' ? active().getByRole('status', { name: label, exact: true })
+        : page.locator('section.workbench-pane').filter({ has: active() }).locator('header.workbench-tabs .status-label').and(page.locator(`[data-label=${JSON.stringify(label)}]`)),
     });
     await check('10', async () => {
       assert.deepEqual(browserErrors, [], 'browser errors');

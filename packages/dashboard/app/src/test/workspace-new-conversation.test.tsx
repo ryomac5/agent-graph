@@ -156,3 +156,50 @@ it.each([[newId, true, 'ok'], [newId, false, 'ok'], ['missing-conversation', fal
     expect(screen.queryByRole('textbox', { name: 'Message' })).toBeNull();
   }
 });
+
+it.each([false, true])('keeps a pre-fork tab as one series with its draft and identity (fork while open: %s)', async liveFork => {
+  const target = createStore();
+  const root = { id: 'old', project: 'p', name: 'Series', user_name: 'Series', state: 'idle', conversation_ids: ['old', newId], current_conversation_id: newId };
+  target.setSnapshot({ seq: 1, generation: 1, projection: { projects, roots: [liveFork ? { ...root, conversation_ids: ['old'], current_conversation_id: 'old' } : root],
+    conversations: ['old', newId].map((id, i) => ({ id, provider: 'claude', origin: 'managed', type: 'interactive', created_ts: `2026-10-1${i + 1}T00:00:00Z` })),
+    messages: [{ id: 'before', role: 'assistant', body: 'Before fork history' }, { id: 'after', role: 'assistant', body: 'Latest fork response' }],
+    message_memberships: [{ id: 'before-link', message_id: 'before', conversation_id: 'old', active: 1 }, { id: 'after-link', message_id: 'after', conversation_id: newId, active: 1 }],
+  } });
+  target.setConnection('connected');
+  sessionStorage.setItem('agent-graph-conversation-draft:old', 'Unsent before fork');
+  const saved: PaneTree = { kind: 'pane', id: 'saved-pane', tabs: [{ kind: 'conversation', id: 'saved-tab', conversationId: 'old' }], active: 'saved-tab' };
+  localStorage.setItem(workspaceKey('p', 'old'), JSON.stringify(saved));
+  const command = vi.fn(async (name: string): Promise<Ack> => ({ type: 'ack', cmd_id: 'cmd', ok: true, result: name === 'session.hosts' ? { hosts: [] } : name === 'terminal.open' ? { terminalId: 'fork-terminal' } : {} }));
+  render(<MemoryRouter initialEntries={['/p/p?root=old']}><WorkspacePage project="p" target={target} client={{ command, subscribeTerminal: () => () => {} }} panelVisible={false}/></MemoryRouter>);
+  const message = screen.getByRole('textbox', { name: 'Message' });
+  if (liveFork) {
+    expect(screen.queryByText('Latest fork response')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Open tab' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Terminal' }));
+    await vi.waitFor(() => expect(command).toHaveBeenCalledWith('terminal.open', expect.anything()));
+    const surface = screen.getByRole('tabpanel', { name: 'Terminal' }).querySelector('.terminal-surface');
+    fireEvent.click(screen.getByRole('tab', { name: 'Series' }));
+    act(() => target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 1, changes: { roots: { upsert: [root], remove: [] } } }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Terminal' }));
+    expect(screen.getByRole('tabpanel', { name: 'Terminal' }).querySelector('.terminal-surface')).toBe(surface);
+    expect(command.mock.calls.filter(([name]) => name === 'terminal.open')).toHaveLength(1);
+    expect(command.mock.calls.filter(([name]) => name === 'terminal.close')).toHaveLength(0);
+    fireEvent.click(screen.getByRole('tab', { name: 'Series' }));
+  }
+  expect(await screen.findByText('Latest fork response')).toBeTruthy();
+  expect(screen.getByRole('textbox', { name: 'Message' })).toBe(message);
+  expect(screen.getByText('Before fork history')).toBeTruthy();
+  expect(screen.getByRole('textbox', { name: 'Message' })).toHaveProperty('value', 'Unsent before fork');
+  expect(screen.getAllByRole('tab')).toHaveLength(liveFork ? 2 : 1);
+  expect(screen.getByRole('tab', { name: 'Series' }).id).toBe('workspace-tab-saved-tab');
+  const tabs = listPanes(JSON.parse(localStorage.getItem(workspaceKey('p', 'old'))!)).flatMap(pane => pane.tabs);
+  expect(tabs.filter(tab => tab.kind === 'conversation')).toEqual([{ kind: 'conversation', id: 'saved-tab', conversationId: newId }]);
+  fireEvent.contextMenu(screen.getByRole('tab', { name: 'Series' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'Tab name' }), { target: { value: 'Renamed series' } });
+  fireEvent.keyDown(screen.getByRole('textbox', { name: 'Tab name' }), { key: 'Enter' });
+  await vi.waitFor(() => expect(command).toHaveBeenCalledWith('session.rename', { rootId: 'old', name: 'Renamed series' }));
+  act(() => target.applyPatch({ type: 'patch', from_seq: target.getSnapshot().seq, seq: target.getSnapshot().seq + 1, generation: 1, changes: { roots: { upsert: [{ ...root, name: 'Renamed series', user_name: 'Renamed series' }], remove: [] } } }));
+  expect(await screen.findByRole('tab', { name: 'Renamed series' })).toBeTruthy();
+  expect(screen.getByRole('link', { name: 'Renamed series' })).toBeTruthy();
+});

@@ -11,7 +11,12 @@ function saveDraft(key: string, text: string) {
     else sessionStorage.removeItem(DRAFT_PREFIX + key);
   } catch { /* 保存できなくても入力と送信は続ける。 */ }
 }
-export function useConversationDraft(key: string) {
+export function useConversationDraft(key: string, seriesIds: readonly string[] = []) {
+  // 分岐前の書きかけを現在の操作先へ移し、送信済みの文を古いキーに残さない。
+  if (!readDraft(key)) {
+    const previous = seriesIds.find(id => id !== key && readDraft(id));
+    if (previous) { saveDraft(key, readDraft(previous)); saveDraft(previous, ''); }
+  }
   const mounted = useRef(true);
   useLayoutEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const [draft, setDraft] = useState(() => ({ key, text: readDraft(key) }));

@@ -105,13 +105,18 @@ export function WorkspacePage({ project: suppliedProject, target = store, client
         }}/></div></section>}
       {conversationNotFound ? <section className="workspace-conversation" aria-label={t.conversation}><p role="status" className="status-line">{language === 'ja' ? '会話が見つかりません' : 'Conversation not found'}</p></section>
         : (conversationId || newSession) ? <VisibleView visible={conversationVisible}><Workbench key={project} project={project} session={pendingWorkspace ? undefined : workspaceSession} unresolvedConversationId={unresolvedConversationId} conversationId={conversationId ?? ''} openConversationId={search.get('conversation') ?? suppliedConversation ?? undefined} newSession={newSession} client={client} language={language} bindings={bindings} registerOpenFile={openFile}
-        refreshTab={(id, previous) => refreshConversationTab(state, roots, id, previous, language, turns)} renderConversation={(tabConversation, onConversation) => <>
+        seriesIds={selected?.conversation_ids} currentConversationId={selected ? currentRootConversation(selected, index) : conversationId}
+        resolveRenameRoot={id => roots.find(root => root.conversation_ids.includes(id))?.id}
+        refreshTab={(id, previous) => refreshConversationTab(state, roots, id, previous, language, turns)} renderConversation={(savedConversation, onConversation) => {
+          const isSeries = !!selected?.conversation_ids.includes(savedConversation);
+          const tabConversation = isSeries ? (currentRootConversation(selected!, index) ?? savedConversation) : savedConversation;
+          return <>
           {tabConversation === conversationId && childNode?.delegation?.state === 'failed' && <div className="request-detail-actions"><strong>{childTitle || childNode.label}</strong><button className="btn btn-secondary btn-sm" disabled={state.connection !== 'connected'} onClick={() => void retry(childNode)}>{t.retry}</button></div>}
           {retryError && <p role="alert" className="status-line danger">{retryError}</p>}
-          {renderConversation && (tabConversation !== conversationId || childId || selected?.conversation_ids.length === 1) ? <>{childId && <header className="conv-header"><div className="conv-title-row conv-breadcrumb">{breadcrumb}</div></header>}{renderConversation(tabConversation)}</>
+          {renderConversation && (!isSeries || selected?.conversation_ids.length === 1) ? <>{childId && <header className="conv-header"><div className="conv-title-row conv-breadcrumb">{breadcrumb}</div></header>}{renderConversation(tabConversation)}</>
             : <ConversationPage onConversation={onConversation} newSession={{ projectId: project, cwd: String(state.projection.projects?.find(row => row.id === project)?.root_path ?? '') }} target={target} client={client} conversationId={tabConversation} embedded language={language}
-                breadcrumb={childId ? breadcrumb : undefined} seriesIds={tabConversation === conversationId && !childId ? series : undefined} seriesState={tabConversation === conversationId ? childId ? childNode?.state : selected?.state : undefined} displayName={tabConversation === conversationId ? childId ? childTitle : selected?.name : undefined}/>}
-        </>}/></VisibleView>
+                breadcrumb={childId ? breadcrumb : undefined} seriesIds={isSeries || !selected && tabConversation === conversationId ? series : undefined} seriesState={isSeries ? selected?.state : tabConversation === conversationId ? childNode?.state : undefined} displayName={isSeries ? selected?.name : tabConversation === conversationId ? childTitle : undefined}/>}
+        </>; }}/></VisibleView>
         : <section className="workspace-conversation" aria-label={t.conversation}/>}
       <VisibleView visible={panelVisible}><WorkspacePanel bindings={bindings} project={project} target={target} client={client} language={language} rootId={requestedConversation && !selected ? null : selected?.id}/></VisibleView>
     </div>

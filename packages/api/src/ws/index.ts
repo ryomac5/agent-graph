@@ -202,7 +202,7 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
         if (message.command === 'session.rename') {
           try {
             refresh();
-            const result = await renameSession({ append: service.appendUi }, feed.snapshot().projection.roots as unknown as import('../../../core/src/ledger/projections/roots.ts').RootProjection[], message);
+            const result = await renameSession({ append: service.appendUi }, id => feed.hasRoot(id), message);
             refresh();
             send(socket, { type: 'ack', cmd_id: message.cmd_id, ok: true, result });
           } catch (error) {

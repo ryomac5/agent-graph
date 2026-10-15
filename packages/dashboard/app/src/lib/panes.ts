@@ -58,7 +58,7 @@ export function resizeSplit(tree: PaneTree, id: string, ratio: number): PaneTree
 }
 export function createWorkspace(conversationId: string): PaneTree { return { kind: 'pane', id: 'initial-pane', tabs: [{ kind: 'conversation', id: 'initial-tab', conversationId }], active: 'initial-tab' }; }
 export function workspaceKey(project: string, session: string): string { return `agent-graph-workspace:${JSON.stringify([project, session])}`; }
-export function restoreWorkspace(value: string | null, conversationId: string): PaneTree | null {
+export function restoreWorkspace(value: string | null, conversationId: string, seriesIds: readonly string[] = []): PaneTree | null {
   if (value === 'null') return null;
   if (!value) return createWorkspace(conversationId);
   try {
@@ -81,6 +81,15 @@ export function restoreWorkspace(value: string | null, conversationId: string): 
       if (node.kind === 'split') return (node.direction === 'horizontal' || node.direction === 'vertical') && typeof node.ratio === 'number' && node.ratio >= MIN_RATIO && node.ratio <= 1 - MIN_RATIO && valid(node.first, depth + 1) && valid(node.second, depth + 1);
       return node.kind === 'pane' && Array.isArray(node.tabs) && (node.tabs.length === 0 ? node.active === undefined : node.tabs.some(tab => tab?.id === node.active)) && node.tabs.every(validTab);
     }
-    return valid(tree) ? tree : createWorkspace(conversationId);
+    return valid(tree) ? migrateWorkspaceSeries(tree, conversationId, seriesIds) : createWorkspace(conversationId);
   } catch { return createWorkspace(conversationId); }
+}
+
+export function migrateWorkspaceSeries(tree: PaneTree, conversationId: string, seriesIds: readonly string[]): PaneTree {
+  if (tree.kind === 'split') {
+    const first = migrateWorkspaceSeries(tree.first, conversationId, seriesIds), second = migrateWorkspaceSeries(tree.second, conversationId, seriesIds);
+    return first === tree.first && second === tree.second ? tree : { ...tree, first, second };
+  }
+  const tabs = tree.tabs.map(tab => tab.kind === 'conversation' && tab.conversationId !== conversationId && seriesIds.includes(tab.conversationId) ? { ...tab, conversationId } : tab);
+  return tabs.every((tab, i) => tab === tree.tabs[i]) ? tree : { ...tree, tabs };
 }

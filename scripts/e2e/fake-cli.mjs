@@ -174,8 +174,19 @@ export async function main(provider) {
       case 'interrupt': await interrupt(); break;
       case 'long-tool': clearTimeout(timer); working = true; statusUpdatedAt = stateNow(); transcript.user('E2E long tool'); transcript.tool(); break;
       case 'approval-wait': clearTimeout(timer); working = false; transcript.user('E2E approval request'); await hook('UserPromptSubmit', { prompt: 'E2E approval request' }); await hook('Notification', { notification_type: 'permission_prompt' }); break;
+      case 'background-child':
       case 'child-tool': {
         child?.close(); child = new Transcript('claude', process.env, { id: 'agent-' + randomUUID(), parentSessionId: transcript.id });
+        if (request.action === 'background-child') {
+          transcript.user('E2E delegate in background');
+          const call = randomUUID();
+          transcript.append({ ...transcript.base('assistant'), promptId: transcript.turn,
+            message: { role: 'assistant', content: [{ type: 'tool_use', id: call, name: 'Agent', input: { run_in_background: true } }] } });
+          transcript.append({ ...transcript.base('user'), promptId: transcript.turn,
+            message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: call }] },
+            toolUseResult: { agentId: child.id.slice(6), status: 'async_launched', isAsync: true } });
+          transcript.complete();
+        }
         child.user('E2E child tool'); child.tool(); break;
       }
       case 'child-stop-tool':

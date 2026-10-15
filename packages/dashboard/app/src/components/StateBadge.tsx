@@ -3,12 +3,13 @@ import type { ReactNode } from 'react';
 import { dictionaries, type Language } from '../lib/i18n.ts';
 import { reasonText } from '../lib/reasons.ts';
 
-export type ExecutionState = 'starting' | 'running' | 'waiting_approval' | 'waiting_input' | 'idle' | 'ended' | 'failed' | 'unknown' | 'stopped' | 'closed' | 'not_hosted' | 'unresolved';
-const KNOWN = new Set<ExecutionState>(['starting', 'running', 'waiting_approval', 'waiting_input', 'idle', 'ended', 'failed', 'unknown', 'stopped', 'closed', 'not_hosted', 'unresolved']);
+export type ExecutionState = 'starting' | 'running' | 'waiting_approval' | 'waiting_input' | 'waiting_agents' | 'idle' | 'ended' | 'failed' | 'unknown' | 'stopped' | 'closed' | 'not_hosted' | 'unresolved';
+const KNOWN = new Set<ExecutionState>(['starting', 'running', 'waiting_approval', 'waiting_input', 'waiting_agents', 'idle', 'ended', 'failed', 'unknown', 'stopped', 'closed', 'not_hosted', 'unresolved']);
 /** 実行中、承認待ち、返答待ち、失敗、完了を別の色で示す。 */
 export function stateTone(state: string): 'running' | 'waiting' | 'input' | 'completed' | 'idle' | 'failed' {
   if (state === 'running' || state === 'starting') return 'running';
   if (state === 'waiting_approval') return 'waiting';
+  if (state === 'waiting_agents') return 'running';
   if (state === 'waiting_input') return 'input';
   if (state === 'ended') return 'completed';
   if (state === 'failed') return 'failed';
@@ -22,7 +23,7 @@ export function toDisplayState(state: string): ExecutionState {
   if (state === 'denied') return 'failed';
   return 'unknown';
 }
-const LABELS: Record<string, string> = { running: 'Working', starting: 'Working', waiting_approval: 'Needs approval', waiting_input: 'Waiting',
+const LABELS: Record<string, string> = { running: 'Working', starting: 'Working', waiting_approval: 'Needs approval', waiting_input: 'Waiting', waiting_agents: 'Waiting for agents',
   idle: 'Idle', unknown: 'Unknown', stopped: 'Stopped', closed: 'Closed', not_hosted: 'Not hosted', unresolved: 'Unresolved', ended: 'Stopped' };
 export function stateLabel(state: string, language: Language = 'en'): string {
   const shown = toDisplayState(state);

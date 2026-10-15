@@ -49,8 +49,9 @@
 - R28: 同じturn・試行の先行する中断要求へ明示的に結び付く終了エラーは interrupted とし、そのエラーを failed と重ねない。
 - R29: succeeded・failed・interruptedが同じ試行で競合したら Unknown／evidence_conflict とし、先着した結果を固定しない。
 - R30: 必要な結果段階を得ずに所有プロセスの終了が確定したら結果は Unknown とし、生存未確認だけなら incomplete を保つ。
-- R31: 履歴競合は正常走査で消さず、未解決の範囲のturnには inferred と unconfirmed を添える。
+- R31: 履歴競合は正常走査で消さず、競合行の UUID／ファイル内 offset で対応した turn にだけ inferred と unconfirmed を添える。位置不明の旧い記録から全 run へ印を広げない。対象ファイルの完全な全件再読で再現しなかった場合は supersedes で撤回する。
 - R32: 代表表示の優先順は Unresolved、Stopped、Needs approval、Waiting、Working、Closed、Not hosted、Idle、Unknown とし、Doneは結果の別の印だけにする。
+- R32a: API の `renderConversationState` は、親の代表が Idle で、現在の子の少なくとも一つが Working または Needs approval、かつその試行が stage=launched または value=incomplete のとき、親を Waiting for agents として配る。親の turn は completed のままとする。Unknown／Stopped の子、古い世代の子、親自身の Stopped／Closed／Not hosted はこの表示にしない。子の期限切れ・停止・完了でも再計算し、画面は API の値だけを読む。
 - R33: 生存未確認でも新鮮なturnは Working／Waiting 等を表示し、liveness unverified を添える。
 - R34: 配達の同じcmdIdで対象かbodyKeyが異なる場合は cmd_id_conflict とし、受領を確定しない。
 - R35: 送出前の拒否だけを Not delivered とし、送出の試みと拒否が競合する記録は Unconfirmed にする。
@@ -214,7 +215,36 @@ schema 版・投影版・依存は変更しない。UUID 補完の印は既存�
 ### socket と本番の写しで見つけた不具合（2026-10-16）
 
 - 同じ cmd_id の再提示は、受付時と再提示時の宛先を同じ解決の後で比べる。受付の後で会話と run の別名が解決しても、R34 の衝突にしない。送信履歴も会話の別名を解決して引く。
-- agent_id を持つ hook は、親の session に届いた子の出来事である。親の turn の境界や進行にしない。本番では内部の子の SubagentStop が親を Unknown/boundary_unavailable に落としていた。
+- agent_id を持つ SubagentStart／SubagentStop hook は、親の session に届いた子の出来事である。親の turn の境界や進行にしない。Notification の permission_prompt など、他の hook は agent_id があっても親自身の証拠として読む。
 - Claude の原記録の時刻は親子の順と一致しない。PostToolUse の attachment は親の tool_result より前の時刻を持つ。turn の対応は uuid の辺を先に集め、祖先の promptId を辿って決める。
 - 本番の旧い api は failed の送信行を 24 時間で消す。prod-replay は E2 の行が写しに無いとき、critique の E2 の表の値で写しにだけ戻す。本文は受信行の `<bash-input>` から復元するので、本文の一致はこの再生では検査していない。
 - E1 の表の Unknown は親の生存中の値である。親の不在を走査が示せば、R32 の優先順で Not hosted が代表になる。prod-replay は所持の値に応じて代表を検査し、turn と結果の段階は表のまま検査する。
+
+### 本番規模での第2回レビュー（HEAD 4ece917 からの修正）
+
+増分読み取りを止める根拠を台帳全体の `observation.unsupported` の有無から、競合ファイルに属する実行へ変えた。通常は更新された実行だけを読み、親の相関が変わった場合に限って子を更新する。親子の索引を一度作り、子ごとの全実行探索をやめる。原記録は子の起動結果・task-notification・Codex の collab／SubAgentActivity だけを保持し、通常の本文・tool・UUID の辺は証拠へ変換後に解放する。
+
+競合の記録には原記録の時刻と UUID／offset を残す。競合したファイルは初回と変更時に全件再読し、再現する競合は範囲を訂正し、再現しない競合は既存の observation.unsupported への supersedes で撤回する。途中までの行を残す読み取りや差分だけの成功を撤回の根拠にはしない。位置のない E5 の断片を直接 core に渡す標本は従来の期待を保持するが、API はその位置を推定して現在の turn に付けない。
+
+| 入力・試験 | 固定する出力 |
+| --- | --- |
+| 競合ファイル＋12 subagent の後に別実行へ一件追記 | 更新実行と競合ファイルだけ再読。再起動の全件評価と投影が一致 |
+| 通常本文100件＋後着の子停止通知 | 通常の records 保持は0件、通知だけ1件。子の停止判定は再起動でも一致 |
+| 同じファイルの旧 turn の行が競合 | 対象 turn だけ競合印。別 run・後続 turn には付かない |
+| Claude／Codex の旧い競合が全件再読で再現しない | supersedes を追記し、再起動でも復活しない |
+| agent_id 付き Notification permission_prompt／PreToolUse／UserPromptSubmit | 承認・進行・開始の親の証拠を保持 |
+| Idle の親＋Working／Needs approval の子＋launched／incomplete | Waiting for agents。親の turn は completed のまま |
+| 子が Unknown／Stopped／Idle／Waiting、または試行が完了 | 親を Waiting for agents にしない |
+| 親自身が Working／Stopped／Unknown／Needs approval | 子の表示で上書きしない |
+| 子の進行が期限切れ、後着の停止通知、再起動 | 親の代表表示と decision_id・配信 patch が追従 |
+| 直近7日の Claude／Codex、古い run・未来の run | 提供元ごとに turn 鍵欠落の分母・件数・割合を算出。古い run・未来は除外 |
+
+prod-replay の上限は一件追記後の同期 refresh が **300 ms**、GC 後の評価プロセスのヒープが **400 MiB**。300 ms は設計書の追記から表示まで1秒から、poll 500 ms と配信・描画の余裕200 msを除いた予算であり、実測で決めた値ではない。最大の履歴を持つ既存実行へコピー内で一件追記して測る。取り込み worker の snapshot は閉じて解放し、評価用サービスを開き直す。`node --expose-gc scripts/e2e/prod-replay.mjs` で実行し、GC が使えない場合はヒープを未確認とする。
+
+turn 鍵欠落率の上限は提供元別 **1%（暫定）**。分母は開始または最終証拠が直近7日以内の実行とし、0件は理由付き skip とする。E1〜E3 の元の ID が消えている場合は失敗でなく unavailable、busy 会話がなければ理由付き skip とする。終了コードは不一致があれば1、失敗がなく未確認があれば2、それ以外は0。単体試験は3300 ms・1 GiB・欠落率2%を拒否する。
+
+偽 CLI の e2e 項目 `state-waiting-agents` は、背景の子の起動→親 Waiting for agents→子停止通知→子 Unknown／親 Idle を、API とブラウザの双方で検査する。本番コピーでの実測、socket の待受、ブラウザ e2e の実行結果は別環境で記録する。schema 版・投影版・依存は変更していない。
+
+回帰の確認: 作業ツリー内の隔離コピーで、`current-state.ts`、取り込みの `index.ts`、core の `execution.ts`、`prod-replay.mjs` をそれぞれ `4ece917` に差し替えた。対応する追加試験は順に6件・3件・1件・4件失敗した。作業ツリーの実装と Git の履歴は戻していない。本番の時間・ヒープの改善値はここでは測定していない。
+
+受け入れの結果: core 562合格、API 994合格・21 skip、runner 213合格・8 skip、dashboard 48合格、dashboard app 937合格。build:app と prod-replay の構文検査も成功した。最後の状態配信の変更は current-state／maintenance の57合格・1 skipと、代表表示の120組で再確認した。APIとdashboard appの型検査、prod-replay単体6件、差分の空白検査も成功。skipは環境のsocket制約による既存の扱いで、試験の上限と期待値は緩めていない。

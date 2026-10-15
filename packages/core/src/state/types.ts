@@ -60,6 +60,7 @@ export interface Signal extends Evidence {
 export interface Conflict extends Evidence {
   kind: "conflict";
   runId: string;
+  turnId?: string;
   count: number;
 }
 export interface Unavailable extends Evidence {

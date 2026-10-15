@@ -6,7 +6,7 @@ import type { ExecutionState } from './StateBadge.tsx';
 import { readBody } from '../lib/message-body.ts';
 export { readBody } from '../lib/message-body.ts';
 
-export const executionStates: ExecutionState[] = ['starting', 'running', 'waiting_approval', 'waiting_input', 'idle', 'ended', 'failed', 'unknown', 'stopped', 'closed', 'not_hosted', 'unresolved'];
+export const executionStates: ExecutionState[] = ['starting', 'running', 'waiting_approval', 'waiting_input', 'waiting_agents', 'idle', 'ended', 'failed', 'unknown', 'stopped', 'closed', 'not_hosted', 'unresolved'];
 export type ActivitySection = 'managed' | 'external' | 'unattended' | 'unsupported';
 export interface Activity {
   id: string; parentConversationId?: string; taskId?: string; conversationId?: string; project: string; name: string;

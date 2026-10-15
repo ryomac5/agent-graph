@@ -10,8 +10,8 @@ import { selectRoots } from '../lib/roots.ts';
 import { ConversationPage } from '../pages/conversation/ConversationPage.tsx';
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); publishTurns({ history: { read: {}, ready: {}, recent: [] }, turns: [] }); });
-const states = ['unresolved', 'stopped', 'waiting_approval', 'waiting_input', 'running', 'closed', 'not_hosted', 'idle', 'unknown'];
-const labels = ['Unresolved', 'Stopped', 'Needs approval', 'Waiting', 'Working', 'Closed', 'Not hosted', 'Idle', 'Unknown'];
+const states = ['unresolved', 'stopped', 'waiting_approval', 'waiting_input', 'running', 'waiting_agents', 'closed', 'not_hosted', 'idle', 'unknown'];
+const labels = ['Unresolved', 'Stopped', 'Needs approval', 'Waiting', 'Working', 'Waiting for agents', 'Closed', 'Not hosted', 'Idle', 'Unknown'];
 function fixture() {
   const target = createStore();
   target.setSnapshot({ seq: 10, generation: 1, evaluated_at: 1000, projection: {

@@ -1,3 +1,4 @@
+import { renderConversationState, type ConversationDecision } from './conversation-display.ts';
 import { basename } from 'node:path';
 import { createHash } from 'node:crypto';
 import type { DatabaseSync, SQLInputValue, StatementSync } from 'node:sqlite';
@@ -13,7 +14,7 @@ const object = (value: unknown): Row => value && typeof value === 'object' && !A
 const string = (value: unknown): string | undefined => typeof value === 'string' && value.length ? value : undefined;
 const flag = (value: unknown): boolean | undefined => value === true || value === 'true' ? true : value === false || value === 'false' ? false : undefined;
 export const DISPLAY_STATES = { Unresolved: 'unresolved', Stopped: 'stopped', 'Needs approval': 'waiting_approval', Waiting: 'waiting_input',
-  Working: 'running', Closed: 'closed', 'Not hosted': 'not_hosted', Idle: 'idle', Unknown: 'unknown' } as const;
+  Working: 'running', 'Waiting for agents': 'waiting_agents', Closed: 'closed', 'Not hosted': 'not_hosted', Idle: 'idle', Unknown: 'unknown' } as const;
 const PRIORITY = Object.values(DISPLAY_STATES);
 // core の進行・待ち 300 秒、配達 60 秒、走査の生存 30 秒の最大値。
 export const STATE_SCAN_RETENTION_MS = Math.max(DEFAULT_STATE_POLICY.progressMs, DEFAULT_STATE_POLICY.waitingMs,
@@ -63,9 +64,10 @@ const hasEvidence = (fact: Fact): boolean => !!(object(fact.payload).last_eviden
  */
 interface RunContext {
   id: string; conversation_id: string; generation: unknown; started_ts: unknown; pid: unknown; start_fingerprint: unknown;
-  input?: StateInput; facts?: Fact[]; records?: NativeRecord[]; parent?: string; childId?: string;
+  input?: StateInput; facts?: Fact[]; records?: NativeRecord[]; files?: string[]; parent?: string; childId?: string;
+  inheritedEvidence?: StateEvidence[];
   // 配る今の状態。未評価の実行は state を持たない。
-  state?: string; decision?: StateDecision; decision_id?: string; turn_started_ts?: string | null; last_evidence_ts?: unknown;
+  state?: string; decision?: ConversationDecision; ownDecision?: StateDecision; ownDecisionId?: string; decision_id?: string; turn_started_ts?: string | null; last_evidence_ts?: unknown;
   reason?: string; activity_rank?: number; deliveredStarted?: unknown;
   // 最後の評価の版と時刻。
   evaluatedVersion?: number; evaluatedAt?: number; evaluatedUntil?: number;
@@ -82,7 +84,7 @@ function inputOf(context: RunContext): StateInput {
 export class CurrentState {
   private seq = -1;
   private dirty = true;
-  private hasConflicts = false;
+  private conflictPaths = new Set<string>();
   private nextEvaluation = 0;
   private contexts = new Map<string, RunContext>();
   private nativeById = new Map<string, Row>();
@@ -116,6 +118,7 @@ export class CurrentState {
     db.exec(`CREATE INDEX IF NOT EXISTS api_scan_time ON api_state_scans(json_extract(data, '$.at'));
       CREATE INDEX IF NOT EXISTS api_scan_provider_time ON api_state_scans(coalesce(json_extract(data, '$.provider'), 'claude'), json_extract(data, '$.at'));
       CREATE INDEX IF NOT EXISTS api_scan_provider_status_time ON api_state_scans(coalesce(json_extract(data, '$.provider'), 'claude'), json_extract(data, '$.status'), json_extract(data, '$.at'));
+      CREATE INDEX IF NOT EXISTS api_history_conflicts ON facts(seq) WHERE kind = 'observation.unsupported';
       CREATE INDEX IF NOT EXISTS api_remote_conversation_subject ON facts(subject)
         WHERE kind GLOB 'conversation.*' AND json_type(payload, '$.connection_id') = 'text'`);
     this.hasScans = !!db.prepare('SELECT 1 FROM api_state_scans LIMIT 1').get();
@@ -139,6 +142,18 @@ export class CurrentState {
       processes: scan.processes.map(row => ({ ...row, procStart: row.procStart === null ? null : normalizeProcessStart(row.procStart, 'local') })) };
   }
   get reevaluateAt(): number { return this.nextEvaluation; }
+  readTurnCoverage(since: number): Record<string, { runs: number; missing: number; ratio: number }> {
+    const coverage = { claude: { runs: 0, missing: 0, ratio: 0 }, codex: { runs: 0, missing: 0, ratio: 0 } };
+    for (const context of this.contexts.values()) {
+      const provider = this.nativeById.get(context.conversation_id)?.provider;
+      const at = Date.parse(String(context.last_evidence_ts ?? context.started_ts));
+      if (provider !== 'claude' && provider !== 'codex' || !(at >= since && at <= this.evaluatedAt)) continue;
+      const row = coverage[provider]; row.runs++;
+      if (!context.input?.turnId) row.missing++;
+    }
+    for (const row of Object.values(coverage)) row.ratio = row.runs ? row.missing / row.runs : 0;
+    return coverage;
+  }
   invalidateFacts(): void { this.seq = -1; }
   recordScan(scan: SessionScan): void {
     scan = this.normalizeScan(scan);
@@ -158,7 +173,7 @@ export class CurrentState {
     this.futureScanAt = typeof futureScan === 'number' ? futureScan : Infinity;
     this.nextEvaluation = Infinity;
     this.evaluatedAt = now;
-    const changed: string[] = [];
+    const changed = new Set<string>();
     // 実行の id の違いしかない入力は、同じ判定と id を共有する。1 万件の実行に判定を 1 万個作らない。
     const shared = new Map<string, { decision: StateDecision; id: string }>();
     // 自身の証拠も所持者もない実行は、提供元の走査と、走査に含まれるかと所持の印だけで入力が決まる。
@@ -201,27 +216,44 @@ export class CurrentState {
       }
       const { decision, until } = evaluated;
       this.nextEvaluation = Math.min(this.nextEvaluation, until);
-      const state = DISPLAY_STATES[decision.display.label];
       const reason = decision.turn.reason;
-      const rank = PRIORITY.indexOf(state);
       // 配る欄と判定の id が同じなら変化として扱わない。走査の時刻や証拠の id だけの更新で全件を配り直さない。
       // 会話と世代は実行の id に含まれるので、ここで変わるのは開始時刻だけである。
-      const stateChanged = context.state === undefined || context.state !== state || context.decision_id !== evaluated.id
+      const stateChanged = context.state === undefined || context.ownDecisionId !== evaluated.id
         || context.turn_started_ts !== turnStarted || context.last_evidence_ts !== lastEvidence || context.reason !== reason
-        || context.activity_rank !== rank || context.deliveredStarted !== context.started_ts;
-      if (stateChanged) changed.push(id);
+        || context.deliveredStarted !== context.started_ts;
+      if (stateChanged) changed.add(id);
       // 行は文脈そのものなので、作り直さずに欄を書き換える。
-      context.state = state; context.decision = decision; context.decision_id = evaluated.id; context.turn_started_ts = turnStarted;
-      context.last_evidence_ts = lastEvidence; context.reason = reason; context.activity_rank = rank; context.deliveredStarted = context.started_ts;
+      context.ownDecision = decision; context.ownDecisionId = evaluated.id;
+      context.turn_started_ts = turnStarted;
+      context.last_evidence_ts = lastEvidence; context.reason = reason; context.deliveredStarted = context.started_ts;
       context.evaluatedVersion = this.scanVersion; context.evaluatedAt = now; context.evaluatedUntil = until;
       if (reselect) this.selectConversation(context as unknown as Row);
     }
-    changed.push(...this.removedRuns);
+    const children = new Map<string, StateDecision[]>();
+    for (const row of this.conversations.values()) {
+      const child = row as unknown as RunContext;
+      if (!child.parent || !child.ownDecision) continue;
+      const group = children.get(child.parent) ?? [];
+      group.push(child.ownDecision); children.set(child.parent, group);
+    }
+    for (const context of this.contexts.values()) {
+      if (!context.ownDecision) continue;
+      const decision = renderConversationState(context.ownDecision,
+        this.conversations.get(context.conversation_id)?.id === context.id ? children.get(context.conversation_id) ?? [] : []);
+      const id = decision === context.ownDecision ? context.ownDecisionId!
+        : createHash('sha256').update(context.ownDecisionId! + ':waiting_agents').digest('hex').slice(0, 32);
+      if (id !== context.decision_id) changed.add(context.id);
+      context.decision = decision; context.decision_id = id;
+      const state = DISPLAY_STATES[decision.display.label];
+      context.state = state; context.activity_rank = PRIORITY.indexOf(state);
+    }
+    for (const id of this.removedRuns) changed.add(id);
     this.removedRuns = [];
     // 走査を記録した後の評価は全実行を通るので、ここで新しい会話の印を消してよい。
     this.recordedSessions.clear();
     if (this.scanWriter) this.pruneScans(now);
-    return changed;
+    return [...changed];
   }
   private pruneScans(now: number): void {
     // 期限のない終了証拠など、今回の判定が実際に読んだ走査も残す。
@@ -262,8 +294,17 @@ export class CurrentState {
     }
     this.remote = new Set(this.db.prepare("SELECT DISTINCT subject FROM facts WHERE kind GLOB 'conversation.*' AND json_type(payload, '$.connection_id') = 'text'").all().map(row => this.canonical(String(row.subject).slice('conversation:'.length))));
     const delta = this.seq >= 0 && seq > this.seq ? this.db.prepare('SELECT kind, subject, supersedes FROM facts WHERE seq > ? AND seq <= ?').all(this.seq, seq) : undefined;
-    const incremental = delta && !this.hasConflicts && !delta.some(row => row.supersedes || String(row.kind).startsWith('relation.') || row.kind === 'observation.unsupported'
-      || String(row.kind).startsWith('connection.'));
+    const unsupported = this.db.prepare("SELECT * FROM facts WHERE kind = 'observation.unsupported' AND seq <= ?").all(seq)
+      .map(row => ({ ...row, payload: row.payload ? JSON.parse(String(row.payload)) : null }) as Fact);
+    const conflictsByPath = new Map<string, Fact[]>();
+    for (const fact of orderActiveFacts(unsupported)) if (String(object(fact.payload).reason).startsWith('Conflicting history')) {
+      const path = basename(String(object(fact.payload).file_path ?? ''));
+      const matches = conflictsByPath.get(path) ?? []; matches.push(fact); conflictsByPath.set(path, matches);
+    }
+    const conflictPaths = new Set([...this.conflictPaths, ...conflictsByPath.keys()]);
+    this.conflictPaths = new Set(conflictsByPath.keys());
+    const incremental = delta && !delta.some(row => row.supersedes && row.kind !== 'observation.unsupported'
+      || String(row.kind).startsWith('relation.') || String(row.kind).startsWith('connection.'));
     const changedSubjects = incremental ? new Set(delta.filter(row => String(row.kind).startsWith('run.')).map(row => String(row.subject))) : undefined;
     const changedConversations = new Set(delta?.filter(row => String(row.kind).startsWith('conversation.'))
       .map(row => this.canonical(String(row.subject).slice('conversation:'.length))));
@@ -271,6 +312,7 @@ export class CurrentState {
     this.contexts = new Map();
     const subjects = new Map<string, RunContext[]>();
     const affected = new Set<RunContext>();
+    const affectedConversations = new Set<string>();
     for (const row of this.db.prepare('SELECT conversation_id, generation, started_ts, pid, start_fingerprint FROM runs').iterate()) {
       const conversation = this.canonical(String(row.conversation_id));
       const id = `${conversation}:${row.generation}`;
@@ -279,9 +321,9 @@ export class CurrentState {
       // 欄は作るときに全部置く。後から足すと、1 万件の物に欄の配列を別に作り直す。
       const context: RunContext = { id, conversation_id: conversation, generation: row.generation,
         started_ts: row.started_ts, pid: row.pid, start_fingerprint: row.start_fingerprint,
-        input: undefined, facts: undefined, records: undefined, parent: undefined, childId: undefined,
+        input: undefined, facts: undefined, records: undefined, files: undefined, parent: undefined, childId: undefined, inheritedEvidence: undefined,
         // 前に配った欄は変化の比較に使う。評価の時刻は引き継がず、読み直した実行は評価し直す。
-        state: old?.state, decision: old?.decision, decision_id: old?.decision_id, turn_started_ts: old?.turn_started_ts,
+        state: old?.state, decision: old?.decision, ownDecision: old?.ownDecision, ownDecisionId: old?.ownDecisionId, decision_id: old?.decision_id, turn_started_ts: old?.turn_started_ts,
         last_evidence_ts: old?.last_evidence_ts, reason: old?.reason, activity_rank: old?.activity_rank, deliveredStarted: old?.deliveredStarted,
         evaluatedVersion: undefined, evaluatedAt: undefined, evaluatedUntil: undefined,
         missNative: old?.missNative, missStarted: old?.missStarted, missUntil: old?.missUntil, firstFact: undefined, firstCreated: undefined };
@@ -295,29 +337,28 @@ export class CurrentState {
     if (changedSubjects) {
       for (const [subject, contexts] of subjects) {
         if (contexts.some(context => changedConversations.has(String(context.conversation_id))
-          || this.nativeById.get(String(context.conversation_id))?.type === 'subagent')) changedSubjects.add(subject);
+          || previous.get(context.id)?.files?.some(path => conflictPaths.has(path)))) changedSubjects.add(subject);
         for (const context of contexts) if (changedSubjects.has(subject) || !previous.has(String(context.id))) affected.add(context);
       }
+      for (const context of affected) affectedConversations.add(context.conversation_id);
       for (const [id, context] of this.contexts) if (!affected.has(context) && previous.has(id)) this.contexts.set(id, previous.get(id)!);
     }
     // 全件を読み直すときは、全実行の集合を別に作らない。
     const affectedContexts: Iterable<RunContext> = changedSubjects ? affected : this.contexts.values();
     for (const id of previous.keys()) if (!this.contexts.has(id)) this.removedRuns.push(id);
     const filter = changedSubjects ? ' AND subject IN (SELECT value FROM json_each(?))' : '';
-    const scope = `FROM facts WHERE seq <= ? AND (kind GLOB 'run.*' OR kind = 'observation.unsupported')${filter}`;
+    const scope = `FROM facts WHERE seq <= ? AND kind GLOB 'run.*'${filter}`;
     const parameters = changedSubjects ? [seq, JSON.stringify([...changedSubjects])] : [seq];
     // orderActiveFacts と同じく、読んだ組の中で置き換えられた事実を先に除く。
     const superseded = new Set(this.db.prepare(`SELECT supersedes ${scope} AND supersedes IS NOT NULL AND supersedes != ''`)
       .all(...parameters).map(row => String(row.supersedes)));
     // 全事実の配列は作らない。実行に残すのは、証拠を持つ事実と、開始時刻を事実から補う実行の事実だけにする。
     // 証拠を持たない事実は readEvidence で何も起こさないので、捨てても判定は変わらない。
-    const unsupported: Fact[] = [];
-    for (const row of this.db.prepare(`SELECT seq, fact_id, source, source_event_id, kind, subject, source_ts, observed_ts, confidence, supersedes, payload ${scope}`)
+    for (const row of this.db.prepare(`SELECT seq, fact_id, source, source_event_id, kind, subject, source_ts, observed_ts, confidence, supersedes, payload, cursor ${scope}`)
       .iterate(...parameters)) {
       if (superseded.has(String(row.fact_id))) continue;
       row.payload = row.payload ? JSON.parse(String(row.payload)) : null;
       const fact = row as unknown as Fact;
-      if (fact.kind === 'observation.unsupported') { unsupported.push(fact); continue; }
       if (!fact.kind.startsWith('run.')) continue;
       const candidates = subjects.get(fact.subject) ?? [];
       const generation = object(fact.payload).generation;
@@ -333,40 +374,36 @@ export class CurrentState {
         if (order.kind === 'run.created' && (!context.firstCreated || orderActiveFacts([context.firstCreated, order])[0] === order)) context.firstCreated = order;
       }
     }
-    this.hasConflicts = unsupported.length > 0;
+    const byConversation = new Map<string, RunContext[]>();
+    for (const context of this.contexts.values()) {
+      const group = byConversation.get(context.conversation_id) ?? [];
+      group.push(context); byConversation.set(context.conversation_id, group);
+    }
     for (const relation of this.db.prepare("SELECT * FROM relations WHERE type = 'delegated' AND active = 1 AND confidence = 'confirmed'").all()) {
       const child = this.canonical(String(relation.to_id));
       const parent = this.canonical(String(relation.from_id));
-      for (const context of this.contexts.values()) if (context.conversation_id === child) {
+      for (const context of byConversation.get(child) ?? []) {
         context.parent = parent;
         const native = this.nativeById.get(child)?.native_id;
         context.childId = String(native ?? '').replace(/^agent-/, '');
         inputOf(context).parentProcessAtLaunch = null;
       }
     }
-    const conflictsByPath = new Map<string, Fact[]>();
-    for (const fact of orderActiveFacts(unsupported)) if (String(object(fact.payload).reason).startsWith('Conflicting history')) {
-      const path = basename(String(object(fact.payload).file_path ?? ''));
-      const matches = conflictsByPath.get(path) ?? []; matches.push(fact); conflictsByPath.set(path, matches);
-    }
     for (const context of affectedContexts) {
       // 全体の安定な並べ替えを実行ごとに分けても、同じ実行の事実の順は変わらない。
       if (context.facts) context.facts = orderActiveFacts(context.facts);
       context.started_ts ??= context.firstCreated?.source_ts ?? context.firstFact?.source_ts;
       context.firstFact = context.firstCreated = undefined;
-      if (context.facts?.some(hasEvidence)) this.readEvidence(context);
-      if (conflictsByPath.size && context.facts) {
-        const paths = new Set(context.facts.map(f => object(object(f.payload).last_evidence).file_id).filter(Boolean));
-        const conflicts: StateEvidence[] = [...paths].flatMap(path => conflictsByPath.get(String(path)) ?? [])
-          .map(f => ({ kind: 'conflict', id: f.fact_id, at: Date.parse(f.source_ts), observedAt: Date.parse(f.observed_ts), runId: context.id, count: Number(object(f.payload).count ?? 1) }));
-        if (conflicts.length) inputOf(context).evidence = [...inputOf(context).evidence, ...conflicts];
-      }
+      if (context.facts?.some(hasEvidence)) this.readEvidence(context, conflictsByPath);
       context.facts = undefined;
     }
     // 親の通知は task-id と子の既知の turn で対応させる。親の promptId は使わない。
     for (const child of this.contexts.values()) {
-      if (!child.parent) continue;
-      const records = [...this.contexts.values()].filter(c => c.conversation_id === child.parent).flatMap(c => c.records ?? []);
+      if (!child.parent || changedSubjects && !affected.has(child) && !affectedConversations.has(child.parent)) continue;
+      child.evaluatedVersion = undefined;
+      const childInput = inputOf(child);
+      childInput.attempt = this.nativeById.get(child.conversation_id)?.type === 'subagent' ? { id: null, requiredStage: 'unknown' } : null;
+      const records = (byConversation.get(child.parent) ?? []).flatMap(c => c.records ?? []);
       const launches = records.filter(record => object(record.row.toolUseResult).agentId === child.childId
         || object(object(record.row.params).item).tool === 'spawnAgent' && (object(object(record.row.params).item).receiverThreadIds as unknown[] | undefined)?.includes(child.childId));
       for (const record of launches) {
@@ -381,8 +418,7 @@ export class CurrentState {
         inputOf(child).attempt = { id: JSON.stringify([record.runId, id, 1]), requiredStage: item.tool === 'spawnAgent' ? 'responded'
           : result.status === 'async_launched' && flag(result.isAsync) === true ? 'reported' : synchronous && result.status === 'completed' && flag(result.isAsync) !== true ? 'responded' : 'unknown' };
       }
-      const childInput = inputOf(child);
-      if (childInput.attempt?.id) childInput.evidence = childInput.evidence.map(e => e.kind === 'signal' ? { ...e, attemptId: childInput.attempt!.id } : e);
+      childInput.evidence = childInput.evidence.map(e => e.kind === 'signal' ? { ...e, attemptId: childInput.attempt?.id } : e);
       const starts = childInput.evidence.filter((e): e is Signal => e.kind === 'signal' && !!e.turnId).sort((a, b) => a.at - b.at);
       const additional = records.flatMap(record => {
         const turn = starts.findLast(start => start.at <= record.at);
@@ -390,11 +426,12 @@ export class CurrentState {
           id: `${record.id}:child:${childInput.runId}`, runId: childInput.runId!, turnId: turn?.turnId, childId: child.childId, attemptId: childInput.attempt?.id,
           row: { ...record.row, promptId: undefined } });
       });
-      childInput.evidence = [...childInput.evidence, ...additional];
+      child.inheritedEvidence = additional;
     }
   }
-  private readEvidence(context: RunContext): void {
+  private readEvidence(context: RunContext, conflictsByPath: Map<string, Fact[]>): void {
     const evidence: StateEvidence[] = [];
+    context.files = [...new Set((context.facts ?? []).map(f => string(object(object(f.payload).last_evidence).file_id)).filter((path): path is string => !!path))];
     const turns = new Map<string, string>();
     const calls = new Map<string, Row>();
     const codexTurns = new Map<string, string>();
@@ -425,8 +462,8 @@ export class CurrentState {
       if (fact.source === 'hook' && last.auxiliary !== true && last.hook_event_name) {
         source = 'hook'; row = { ...object(last.input), hook_event_name: last.hook_event_name };
       }
-      // agent_id を持つ hook は親の session に届く子の出来事であり、親の turn の境界や進行にしない。
-      if (source === 'hook' && string(row.agent_id)) continue;
+      // 子の開始・停止だけを除く。agent_id 付きの承認通知などは親自身の証拠にする。
+      if (source === 'hook' && string(row.agent_id) && ['SubagentStart', 'SubagentStop'].includes(String(row.hook_event_name))) continue;
       const end = object(payload.end_evidence);
       if (fact.confidence === 'confirmed' && fact.source.startsWith('host-') && end.kind === 'host_exit')
         evidence.push({ kind: 'signal', id: fact.fact_id, at, observedAt, runId: context.id, event: 'exit' });
@@ -472,8 +509,21 @@ export class CurrentState {
         if (string(row.uuid)) turns.set(String(row.uuid), turnId);
         if (Array.isArray(blocks)) for (const b of blocks) if (object(b).type === 'tool_use' && string(object(b).id)) { tools.set(String(object(b).id), turnId); calls.set(String(object(b).id), row); }
       }
-      (context.records ??= []).push(record);
       const internalNotification = String(row.content ?? JSON.stringify(blocks)).includes('<task-notification>');
+      // 親子相関のない本文・tool・UUID の辺は、この読み取りが終わったら保持しない。
+      const item = object(object(row.params).item), activity = object(object(row.payload).item);
+      if (string(object(row.toolUseResult).agentId) || internalNotification
+        || item.type === 'collabAgentToolCall' || activity.type === 'SubAgentActivity') (context.records ??= []).push(record);
+      for (const conflict of conflictsByPath.get(String(last.file_id)) ?? []) {
+        const rows = object(conflict.payload).rows;
+        if (turnId && Array.isArray(rows) && rows.some(value => {
+          const location = object(value);
+          return location.turn_id === turnId || location.at === fact.source_ts
+            && (location.uuid ? location.uuid === row.uuid
+              : location.offset !== undefined && fact.cursor && location.offset === object(JSON.parse(fact.cursor)).offset);
+        })) evidence.push({ kind: 'conflict', id: `${conflict.fact_id}:turn:${turnId}`, at: Date.parse(conflict.source_ts),
+          observedAt: Date.parse(conflict.observed_ts), runId: context.id, turnId, count: Number(object(conflict.payload).count ?? 1) });
+      }
       if (!internalNotification) evidence.push(...readNativeEvidence(record));
     }
     const starts = evidence.filter((e): e is Signal => e.kind === 'signal' && e.event === 'start' && !!e.turnId).sort((a, b) => b.at - a.at || b.id.localeCompare(a.id));
@@ -559,7 +609,7 @@ export class CurrentState {
   }
   private withScans(context: RunContext, now: number): StateInput {
     const base = context.input;
-    const input: StateInput & { evidence: StateEvidence[] } = base ? { ...base, evidence: [...base.evidence] }
+    const input: StateInput & { evidence: StateEvidence[] } = base ? { ...base, evidence: [...base.evidence, ...(context.inheritedEvidence ?? [])] }
       : { runId: context.id, turnId: null, process: null, parentProcessAtLaunch: 'independent', attempt: null, evidence: [] };
     if (typeof context.pid === 'number' && typeof context.start_fingerprint === 'string') input.process = { pid: context.pid, procStart: context.start_fingerprint };
     if (input.process && !context.parent) input.evidence = input.evidence.map(e => e.kind === 'signal' && e.event === 'exit' ? { ...e, process: input.process! } : e);

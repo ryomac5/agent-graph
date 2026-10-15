@@ -11,9 +11,59 @@ import { ProjectionFeed } from '../../packages/api/src/service/projection-feed.t
 import { SendWatch } from '../../packages/api/src/service/send-watch.ts';
 import { scanSessions } from '../../packages/api/src/service/session-scan.ts';
 import { evaluateState, readNativeEvidence } from '../../packages/core/src/state/index.ts';
+import { openLedger } from '../../packages/core/src/ledger/index.ts';
 
-// node scripts/e2e/prod-replay.mjs [--db /path/agent-graph.db] [--claude-home /path/.claude] [--codex-home /path/.codex] [--keep]
+// node --expose-gc scripts/e2e/prod-replay.mjs [--db /path/agent-graph.db] [--claude-home /path/.claude] [--codex-home /path/.codex] [--keep]
 // 終了値: 0=全判定成功、1=不一致、2=読み取りや走査を完了できず未確認。CLI・サーバーは起動しない。
+// 反映 1 秒の予算から poll 500 ms と配信・描画 200 ms を除き、同期 refresh は 300 ms に限る。
+export const MAX_APPEND_REFRESH_MS = 300;
+export const MAX_EVALUATED_HEAP_BYTES = 400 * 1024 * 1024;
+export const MAX_MISSING_TURN_RATIO = 0.01;
+export const RECENT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+export function checkReplay(name, operation, { present = true, absent = 'unavailable', reason } = {}) {
+  if (!present) return { name, status: absent, ok: null, reason };
+  try { return { name, status: 'passed', ok: true, ...operation() }; }
+  catch (error) { return { name, status: 'failed', ok: false, error: error.message }; }
+}
+export function replayExitCode(results) {
+  return results.some(row => row.status === 'failed') ? 1 : results.some(row => row.status === 'unavailable') ? 2 : 0;
+}
+export function assessReplayMetrics({ appendRefreshMs, heapBytes, coverage }) {
+  const results = [checkReplay('single-fact refresh <= 300 ms', () => {
+    assert.ok(Number.isFinite(appendRefreshMs) && appendRefreshMs <= MAX_APPEND_REFRESH_MS, `${appendRefreshMs} ms exceeds ${MAX_APPEND_REFRESH_MS} ms`);
+    return { value: appendRefreshMs, limit: MAX_APPEND_REFRESH_MS };
+  }, { present: appendRefreshMs !== undefined, reason: 'No existing run for the append refresh probe' }), checkReplay('evaluated heap <= 400 MiB', () => {
+    assert.ok(Number.isFinite(heapBytes) && heapBytes <= MAX_EVALUATED_HEAP_BYTES, `${heapBytes} bytes exceeds ${MAX_EVALUATED_HEAP_BYTES} bytes`);
+    return { value: heapBytes, limit: MAX_EVALUATED_HEAP_BYTES };
+  }, { present: heapBytes !== undefined, reason: 'Run with node --expose-gc to measure retained heap after evaluation' })];
+  for (const provider of ['claude', 'codex']) {
+    const row = coverage[provider];
+    results.push(checkReplay(`${provider}: recent runs without a turn key <= 1%`, () => {
+      assert.ok(row.ratio <= MAX_MISSING_TURN_RATIO, `${row.missing}/${row.runs} (${row.ratio}) exceeds ${MAX_MISSING_TURN_RATIO}`);
+      return { ...row, limit: MAX_MISSING_TURN_RATIO };
+    }, { present: row.runs > 0, absent: 'skip', reason: 'No runs with evidence or a start in the last 7 days' }));
+  }
+  return results;
+}
+
+export function measureAppendRefresh(path, feed, now) {
+  const db = new DatabaseSync(path, { readOnly: true });
+  const ledger = openLedger(path);
+  try {
+    // 最大の履歴を持つ実行への追記で測る。小さな新規 run だけで判定しない。
+    const target = db.prepare(`SELECT f.subject, r.conversation_id, r.generation, count(*) AS facts
+      FROM facts f JOIN run_subjects s ON f.subject = 'run:' || s.subject_id
+      JOIN runs r ON r.conversation_id = s.conversation_id AND r.generation = s.generation
+      WHERE f.kind GLOB 'run.*' GROUP BY f.subject, r.conversation_id, r.generation ORDER BY facts DESC LIMIT 1`).get();
+    if (!target) return undefined;
+    ledger.append({ source: 'ui', source_event_id: 'prod-replay-refresh-probe', kind: 'run.updated', subject: target.subject,
+      source_ts: new Date(now).toISOString(), observed_ts: new Date(now).toISOString(), confidence: 'confirmed',
+      payload: { conversation_id: target.conversation_id, generation: target.generation } });
+    const start = performance.now(); feed.refresh(now);
+    return { elapsedMs: performance.now() - start, subject: target.subject, facts: target.facts };
+  } finally { ledger.close(); db.close(); }
+}
 export function copyProductionDatabase(sourcePath, destination) {
   const source = new DatabaseSync(sourcePath, { readOnly: true });
   try { source.prepare('VACUUM INTO ?').run(destination); }
@@ -34,13 +84,17 @@ export function restoreLegacyE2(path) {
     if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='api_send_watches'").get()) return 'missing_table';
     const present = E2_WATCHES.filter(watch => db.prepare('SELECT 1 FROM api_send_watches WHERE id = ?').get(watch.id)).length;
     if (present === E2_WATCHES.length) return 'production';
-    if (present) throw new Error('E2 rows are partially present');
+    if (present) return 'unavailable';
+    const commands = [];
     for (const watch of E2_WATCHES) {
       const fact = db.prepare("SELECT payload FROM facts WHERE seq = ? AND kind = 'message.created'").get(watch.received_seq);
       const command = fact && /^<bash-input>([\s\S]*)<\/bash-input>$/u.exec(JSON.parse(fact.payload).body)?.[1];
-      if (command === undefined) throw new Error(`E2 received row missing: ${watch.received_seq}`);
+      if (command === undefined) return 'unavailable';
+      commands.push(command);
+    }
+    for (const [index, watch] of E2_WATCHES.entries()) {
       db.prepare(`INSERT INTO api_send_watches (id, conversation_id, body, sent_ts, baseline_seq, state, message_id, failed_ts, attachments)
-        VALUES (?, ?, ?, ?, ?, 'failed', NULL, ?, '[]')`).run(watch.id, E2_CONVERSATION, `!${command}`, watch.sent_ts, watch.baseline_seq, watch.failed_ts);
+        VALUES (?, ?, ?, ?, ?, 'failed', NULL, ?, '[]')`).run(watch.id, E2_CONVERSATION, `!${commands[index]}`, watch.sent_ts, watch.baseline_seq, watch.failed_ts);
     }
     return 'restored';
   } finally { db.close(); }
@@ -58,10 +112,7 @@ export async function replayProduction(options = {}) {
   const path = join(stateHome, 'agent-graph', 'agent-graph.db');
   let service, feed, watch, db;
   const results = [];
-  function check(name, operation) {
-    try { const detail = operation(); results.push({ name, ok: true, ...detail }); }
-    catch (error) { results.push({ name, ok: false, error: error.message }); }
-  }
+  function check(name, operation, availability) { results.push(checkReplay(name, operation, availability)); }
   try {
     copyProductionDatabase(sourcePath, path);
     const e2Source = restoreLegacyE2(path);
@@ -74,6 +125,9 @@ export async function replayProduction(options = {}) {
     Object.assign(process.env, env);
     service = openObservationService({ dbPath: path, home: isolatedHome, env });
     const ingestion = service.ingestOnce(); service.catchUp();
+    // 本番では取り込みは worker。評価のヒープにその snapshot を混ぜない。
+    service.close(); service = undefined; global.gc?.();
+    service = openObservationService({ dbPath: path, home: isolatedHome, env });
     feed = new ProjectionFeed(path, service.catchUp);
     watch = new SendWatch(path);
     db = new DatabaseSync(path);
@@ -87,7 +141,6 @@ export async function replayProduction(options = {}) {
     const deliveryMs = performance.now() - deliveryStart;
     const live = scan.sessions.filter(row => row.status === 'busy' && scan.processes.some(p => p.pid === row.pid && p.procStart === row.procStart));
     check('live busy Claude conversations', () => {
-      assert.ok(live.length, 'No live busy sessions: live-session assertion cannot be evaluated');
       for (const session of live) {
         const row = feed.current.conversations.get(JSON.stringify(['claude', session.sessionId]));
         assert.ok(row, `Missing current conversation: ${session.sessionId}`);
@@ -95,7 +148,7 @@ export async function replayProduction(options = {}) {
         assert.equal(row.decision.process.value, 'alive_confirmed', session.sessionId);
       }
       return { count: live.length };
-    });
+    }, { present: live.length > 0, absent: 'skip', reason: 'No live busy Claude sessions in the successful scan' });
     check('E1: stopped child remains Unknown, launched/incomplete', () => {
       const row = feed.current.conversations.get(JSON.stringify(['claude', 'agent-a46a60f85e3267c52']));
       assert.ok(row, 'E1 child missing');
@@ -108,17 +161,18 @@ export async function replayProduction(options = {}) {
       assert.equal(row.decision.result.value, 'incomplete');
       assert.equal(row.decision.display.result, null);
       return { label: row.decision.display.label, hosting };
-    });
+    }, { present: feed.current.conversations.has(JSON.stringify(['claude', 'agent-a46a60f85e3267c52'])), reason: 'E1 source conversation is absent from this copy' });
     check('E2: both legacy failed sends are Likely delivered', () => {
       for (const { id } of E2_WATCHES) {
         assert.equal(watch.decision(id)?.value, 'received_candidate', id);
         assert.equal(watch.decision(id)?.display, 'Likely delivered', id);
       }
       return { source: e2Source };
-    });
+    }, { present: ['production', 'restored'].includes(e2Source), reason: 'E2 watches or their source receipts are absent from this copy' });
+    const e3Rows = db.prepare('SELECT * FROM facts WHERE seq IN (301161,301162,301164,301165,301178,301179,301180)').all();
     check('E3: disputed historical runs are Unresolved without an invented run mapping', () => {
       // 表の E3 は二つの run の対応未解決を入力条件とする。現在の別世代の選択とは分けて原台帳の7件を再生する。
-      const rows = db.prepare('SELECT * FROM facts WHERE seq IN (301161,301162,301164,301165,301178,301179,301180)').all();
+      const rows = e3Rows;
       assert.equal(rows.length, 7, 'E3 source facts missing');
       assert.ok(rows.every(row => String(row.subject).includes('396247a1-5fc0-48e2-b984-2f4a8dac1f17')), 'E3 seq refers to another database');
       assert.equal(new Set(rows.map(row => row.subject)).size, 2);
@@ -129,7 +183,8 @@ export async function replayProduction(options = {}) {
       });
       const decision = evaluateState({ runId: null, turnId: null, process: null, parentProcessAtLaunch: 'independent', attempt: null, evidence }, scan.at);
       assert.equal(decision.display.label, 'Unresolved'); assert.equal(decision.process.value, 'unverified');
-    });
+    }, { present: e3Rows.length === 7 && e3Rows.every(row => String(row.subject).includes('396247a1-5fc0-48e2-b984-2f4a8dac1f17')),
+      reason: 'E3 source fact IDs are absent or belong to another database' });
     check('legacy closed deliveries retain received tombstones', () => {
       assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='api_send_watches'").get(), 'Legacy watch table missing');
       const rows = db.prepare("SELECT id, baseline_seq, message_id FROM api_send_watches WHERE state='closed' AND message_id IS NOT NULL").all();
@@ -145,8 +200,14 @@ export async function replayProduction(options = {}) {
     // 別接続の書き込みで facts の差分が無い場合の主スレッド時間も報告する。
     db.exec('CREATE TABLE replay_probe (id INTEGER); INSERT INTO replay_probe VALUES (1)');
     const recheckStart = performance.now(); watch.check(scan.at);
-    return { exitCode: results.every(row => row.ok) ? 0 : 1, results, ingestion,
-      timings: { refreshMs, deliveryMs, unrelatedCommitCheckMs: performance.now() - recheckStart }, ...(options.keep ? { copy: directory } : {}) };
+    const unrelatedCommitCheckMs = performance.now() - recheckStart;
+    const coverage = feed.current.readTurnCoverage(scan.at - RECENT_WINDOW_MS);
+    const appendRefresh = measureAppendRefresh(path, feed, scan.at);
+    global.gc?.();
+    const heapBytes = global.gc ? process.memoryUsage().heapUsed : undefined;
+    results.push(...assessReplayMetrics({ appendRefreshMs: appendRefresh?.elapsedMs, heapBytes, coverage }));
+    return { exitCode: replayExitCode(results), results, ingestion, coverage, heapBytes,
+      timings: { refreshMs, deliveryMs, unrelatedCommitCheckMs, appendRefresh }, ...(options.keep ? { copy: directory } : {}) };
   } catch (error) {
     return { exitCode: 2, results, error: error.message, ...(options.keep ? { copy: directory } : {}) };
   } finally {

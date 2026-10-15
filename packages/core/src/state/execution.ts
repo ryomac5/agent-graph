@@ -131,7 +131,7 @@ export function evaluateState(input: StateInput, evaluatedAt: number, policy: Re
   const evidence = selectEvidence(input.evidence, evaluatedAt);
   const signals = evidence.filter((e): e is Signal => e.kind === "signal" && e.runId === input.runId);
   const scans = evidence.filter((e): e is Scan => e.kind === "scan" && input.runId !== null && e.subjects.includes(input.runId));
-  const conflicts = evidence.filter(e => e.kind === "conflict" && e.runId === input.runId).map(e => e.id).sort(compareText);
+  const conflicts = evidence.filter(e => e.kind === "conflict" && e.runId === input.runId && (!e.turnId || e.turnId === input.turnId)).map(e => e.id).sort(compareText);
   const process = decideProcess(input, signals, scans, evaluatedAt);
   const hosting = decideHosting(scans, input.runId, evaluatedAt);
   const closure = decideClosure(signals, process.value);

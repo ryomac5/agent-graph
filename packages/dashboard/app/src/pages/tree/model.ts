@@ -11,7 +11,7 @@ export interface TreeNode {
   conversationId?: string; run?: Row; delegation?: Row; attempts: Row[];
   role: string; provider: string; model: string; state: string; cost?: number; children: string[];
 }
-const EXECUTION_STATES = new Set(['starting', 'running', 'waiting_approval', 'waiting_input', 'idle', 'ended', 'failed', 'unknown', 'stopped', 'closed', 'not_hosted', 'unresolved']);
+const EXECUTION_STATES = new Set(['starting', 'running', 'waiting_approval', 'waiting_input', 'waiting_agents', 'idle', 'ended', 'failed', 'unknown', 'stopped', 'closed', 'not_hosted', 'unresolved']);
 /** 委譲の状態を、実行の状態の語彙に寄せる。印と色は実行と同じ規則で出す。 */
 export function toExecutionState(state: string): ExecutionState {
   if (EXECUTION_STATES.has(state)) return state as ExecutionState;

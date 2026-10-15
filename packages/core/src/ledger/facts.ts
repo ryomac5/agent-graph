@@ -29,6 +29,8 @@ export interface UnsupportedObservationPayload {
   format_name: string;
   format_version: string;
   reason: string;
+  count?: number;
+  rows?: { at: string; uuid?: string; offset?: number; turn_id?: string }[];
 }
 
 export interface TaskPayload {

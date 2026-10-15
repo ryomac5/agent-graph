@@ -207,3 +207,67 @@ test("Codex の衝突記録と旧い隔離記録があっても、後の周期�
   assert.ok(facts.some(f => f.kind === "message.created" && f.payload?.native_id === "after"));
   assert.ok(facts.some(f => (f.payload as { reason?: string } | null)?.reason === "Conflicting history; file quarantined"));
 });
+
+for (const provider of ['claude', 'codex']) test(`${provider}: 全件再読で再現しない競合を supersede し、再起動後も印を戻さない`, t => {
+  const home = mkdtempSync(join(tmpdir(), 'history-conflict-scope-'));
+  const directory = join(home, provider === 'claude' ? '.claude/projects/test' : '.codex/sessions');
+  mkdirSync(directory, { recursive: true });
+  const path = join(directory, 'rollout-test.jsonl');
+  writeFileSync(path, provider === 'claude' ? claudeMessage('test') : codexMeta('test') + codexMessage('test'));
+  const options = { home, env: { HOME: home }, dbPath: join(home, 'ledger.db') };
+  let service = openObservationService(options);
+  t.after(() => { service.close(); rmSync(home, { recursive: true, force: true }); });
+  service.ingestOnce();
+  const old = service.ledger.append({ source: provider === 'claude' ? 'transcript-claude' : 'rollout-codex',
+    source_event_id: 'legacy-conflict', kind: 'observation.unsupported', subject: 'observation:legacy', source_ts: TS, confidence: 'confirmed',
+    payload: { source_kind: provider === 'claude' ? 'transcript-claude' : 'rollout-codex', file_path: path,
+      format_name: 'jsonl', format_version: 'unknown', reason: 'Conflicting history; existing facts retained', count: 5 } });
+  const before = fileReadMetrics.contentBytes;
+  service.ingestOnce();
+  const facts = service.ledger.readSince(0, Number.MAX_SAFE_INTEGER);
+  const correction = facts.find(fact => fact.supersedes === old.fact_id);
+  assert.ok(correction, 'full reread must withdraw the stale warning');
+  assert.equal(correction.kind === 'observation.unsupported' && correction.payload?.reason, 'History conflict resolved by full reread');
+  assert.ok(fileReadMetrics.contentBytes > before, 'resolution requires a full read, even for an unchanged file');
+  const length = facts.length;
+  service.close(); service = openObservationService(options); service.ingestOnce();
+  assert.equal(service.ledger.readSince(0, Number.MAX_SAFE_INTEGER).length, length);
+});
+
+test('競合の UUID と原記録時刻を保存し、書き換え後の全件再読で撤回する', t => {
+  const home = mkdtempSync(join(tmpdir(), 'history-conflict-row-'));
+  const directory = join(home, '.claude/projects/test'); mkdirSync(directory, { recursive: true });
+  const path = join(directory, 'test.jsonl');
+  const service = openObservationService({ home, env: { HOME: home }, dbPath: join(home, 'ledger.db') });
+  t.after(() => { service.close(); rmSync(home, { recursive: true, force: true }); });
+  writeFileSync(path, claudeMessage('same', 'original')); service.ingestOnce();
+  writeFileSync(path, claudeMessage('same', 'changed')); service.ingestOnce();
+  const conflict = service.ledger.readSince(0, Number.MAX_SAFE_INTEGER).find(f => f.kind === 'observation.unsupported' && f.payload?.count)!;
+  assert.deepEqual(conflict.kind === 'observation.unsupported' && conflict.payload?.rows, [{ at: TS, uuid: 'same' }]);
+  writeFileSync(path, claudeMessage('same', 'original')); service.ingestOnce();
+  const resolved = service.ledger.readSince(0, Number.MAX_SAFE_INTEGER).find(f => f.kind === 'observation.unsupported' && f.supersedes === conflict.fact_id && f.payload?.count === 0);
+  assert.ok(resolved);
+  writeFileSync(path, claudeMessage('same', 'changed')); service.ingestOnce();
+  assert.ok(service.ledger.readSince(0, Number.MAX_SAFE_INTEGER).some(f => f.kind === 'observation.unsupported' && f.supersedes === resolved.fact_id && f.payload?.count === 1));
+});
+
+for (const provider of ['claude', 'codex']) test(`${provider}: 末尾が不完全な全件再読では競合を撤回しない`, t => {
+  const home = mkdtempSync(join(tmpdir(), 'history-conflict-partial-'));
+  const directory = join(home, provider === 'claude' ? '.claude/projects/test' : '.codex/sessions');
+  mkdirSync(directory, { recursive: true });
+  const path = join(directory, 'rollout-test.jsonl');
+  const initial = provider === 'claude' ? claudeMessage('test') : codexMeta('test') + codexMessage('test');
+  writeFileSync(path, initial);
+  const service = openObservationService({ home, env: { HOME: home }, dbPath: join(home, 'ledger.db') });
+  t.after(() => { service.close(); rmSync(home, { recursive: true, force: true }); });
+  service.ingestOnce();
+  const old = service.ledger.append({ source: provider === 'claude' ? 'transcript-claude' : 'rollout-codex', source_event_id: 'legacy',
+    kind: 'observation.unsupported', subject: 'observation:legacy', source_ts: TS, confidence: 'confirmed',
+    payload: { source_kind: provider === 'claude' ? 'transcript-claude' : 'rollout-codex', file_path: path,
+      format_name: 'jsonl', format_version: 'unknown', reason: 'Conflicting history; existing facts retained' } });
+  const last = provider === 'claude' ? claudeMessage('after') : codexMessage('after');
+  appendFileSync(path, last.trimEnd()); service.ingestOnce();
+  assert.equal(service.ledger.readSince(0, Number.MAX_SAFE_INTEGER).some(fact => fact.supersedes === old.fact_id), false);
+  appendFileSync(path, '\n'); service.ingestOnce();
+  assert.ok(service.ledger.readSince(0, Number.MAX_SAFE_INTEGER).some(fact => fact.supersedes === old.fact_id));
+});

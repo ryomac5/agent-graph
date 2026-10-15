@@ -397,3 +397,110 @@ test('大量の無関係な OS プロセスを含む走査でも、同じ所有�
   }
   t.diagnostic(`120 conversations / 12000 processes refresh: ${elapsed.toFixed(1)} ms`);
 });
+
+for (const event of ['Notification', 'PreToolUse', 'UserPromptSubmit']) test(`agent_id 付きの ${event} は親自身の証拠を保つ`, t => {
+  const f = fixture(t); f.run('parent'); f.native('parent', start());
+  f.append('run.updated', 'run:parent', { conversation_id: f.id('parent'), generation: 1,
+    last_evidence: { hook_event_name: event, input: { agent_id: 'child', prompt_id: 'turn', notification_type: 'permission_prompt' } } }, NOW + 1, 'hook');
+  assert.equal(f.decision('parent', NOW + 1).display.label, event === 'Notification' ? 'Needs approval' : 'Working');
+  assert.ok(f.decision('parent', NOW + 1).turn.evidenceIds.some(id => id.endsWith(event === 'Notification' ? ':approval' : event === 'PreToolUse' ? ':progress' : ':start')));
+});
+
+test('履歴競合と subagent があっても、一件の追記で無関係な実行を読み直さない', t => {
+  const f = fixture(t);
+  for (const name of ['parent', 'conflicted', ...Array.from({ length: 12 }, (_, i) => `agent-${i}`)]) {
+    f.run(name, NOW, name.startsWith('agent-') ? 'subagent' : 'interactive');
+    f.append('run.updated', `run:${name}`, { conversation_id: f.id(name), generation: 1,
+      last_evidence: { native_source: 'claude', native_record: start(), file_id: `${name}.jsonl` } });
+  }
+  f.append('observation.unsupported', 'observation:conflict', { file_path: '/copy/conflicted.jsonl',
+    reason: 'Conflicting history; existing facts retained', rows: [{ at: new Date(NOW).toISOString(), uuid: 'user:turn' }] });
+  f.decision('parent', NOW);
+  const current = f.feed.current as unknown as { readEvidence: (...args: unknown[]) => void };
+  const read = current.readEvidence.bind(current); let reads = 0;
+  current.readEvidence = (...args) => { reads++; read(...args); };
+  f.native('parent', tool(), NOW + 1); f.decision('parent', NOW + 1);
+  assert.equal(reads, 2, 'only the updated run and the conflicted file are reread');
+  const incremental = f.feed.snapshot().projection;
+  f.reopen(); f.decision('parent', NOW + 1);
+  assert.deepEqual(f.feed.snapshot().projection, incremental);
+});
+
+test('通常の原記録を保持せず、親の後着通知だけで子の相関を更新する', t => {
+  const f = fixture(t); f.run('parent'); f.run('agent-child', NOW + 1, 'subagent');
+  f.append('relation.created', 'relation:child', { type: 'delegated', from_id: f.id('parent'), to_id: f.id('agent-child'), active: true, confidence: 'confirmed' });
+  f.native('parent', start()); f.native('agent-child', start('child-turn'), NOW + 1);
+  for (let index = 0; index < 100; index++) f.native('parent', { type: 'assistant', promptId: 'turn', message: { content: [{ type: 'text', text: 'unneeded'.repeat(1000) }] } }, NOW + index + 1);
+  f.decision('parent', NOW + 101);
+  assert.equal((f.feed.current.runs.get(`${f.id('parent')}:1`)!.records as unknown[] | undefined)?.length ?? 0, 0);
+  const current = f.feed.current as unknown as { readEvidence: (...args: unknown[]) => void };
+  const read = current.readEvidence.bind(current); let reads = 0;
+  current.readEvidence = (...args) => { reads++; read(...args); };
+  f.native('parent', { type: 'queue-operation', operation: 'enqueue', content: '<task-notification><task-id>child</task-id><status>stopped</status></task-notification>' }, NOW + 102);
+  assert.equal(f.decision('agent-child', NOW + 102).turn.reason, 'boundary_unavailable');
+  assert.equal(reads, 1, 'parent notifications reuse the child native evidence');
+  assert.equal((f.feed.current.runs.get(`${f.id('parent')}:1`)!.records as unknown[]).length, 1);
+  const incremental = f.feed.snapshot().projection;
+  f.append('conversation.updated', `conversation:${f.id('parent')}`, { name: 'Renamed' }, NOW + 103);
+  f.decision('parent', NOW + 103);
+  f.reopen(); assert.equal(f.decision('agent-child', NOW + 103).turn.reason, 'boundary_unavailable');
+  assert.deepEqual(f.feed.snapshot().projection.state_decisions, incremental.state_decisions);
+});
+
+test('競合した行の turn だけに印を付け、同じファイルの別 run と後続 turn へ広げない', t => {
+  const f = fixture(t); f.run('parent');
+  const native = (row: object, at: number, generation = 1) => f.append('run.updated', 'run:parent', { conversation_id: f.id('parent'), generation,
+    last_evidence: { native_source: 'claude', native_record: row, file_id: 'parent.jsonl' } }, at);
+  native(start('old'), NOW);
+  f.append('observation.unsupported', 'observation:conflict', { file_path: '/copy/parent.jsonl',
+    reason: 'Conflicting history; existing facts retained', rows: [{ at: new Date(NOW).toISOString(), uuid: 'user:old' }] });
+  assert.equal(f.decision('parent', NOW).conflicts.length, 1);
+  native(start('next'), NOW + 1);
+  assert.equal(f.decision('parent', NOW + 1).conflicts.length, 0);
+  f.append('run.created', 'run:parent', { conversation_id: f.id('parent'), generation: 2, started_ts: new Date(NOW + 2).toISOString() }, NOW + 2);
+  native(start('new-run'), NOW + 2, 2);
+  assert.equal(f.decision('parent', NOW + 2).conflicts.length, 0);
+  f.reopen(); assert.equal(f.decision('parent', NOW + 2).conflicts.length, 0);
+});
+
+test('Idle の親は進行中の子を Waiting for agents として配り、子停止・期限切れで Idle に戻す', t => {
+  const f = fixture(t); f.run('parent'); f.run('agent-child', NOW + 1, 'subagent');
+  f.append('relation.created', 'relation:child', { type: 'delegated', from_id: f.id('parent'), to_id: f.id('agent-child'), active: true, confidence: 'confirmed' });
+  f.native('parent', start());
+  f.native('parent', { type: 'assistant', promptId: 'turn', message: { content: [{ type: 'tool_use', id: 'agent', name: 'Agent', input: { run_in_background: true } }] } }, NOW + 1);
+  f.native('parent', { type: 'user', promptId: 'turn', message: { content: [{ type: 'tool_result', tool_use_id: 'agent' }] }, toolUseResult: { agentId: 'child', status: 'async_launched', isAsync: true } }, NOW + 2);
+  f.native('parent', { type: 'system', subtype: 'turn_duration', promptId: 'turn' }, NOW + 3);
+  f.native('agent-child', start('child-turn'), NOW + 1);
+  const parent = () => f.feed.current.conversations.get(f.id('parent'))!;
+  f.decision('parent', NOW + 3);
+  assert.equal((parent().decision as { display: { label: string } }).display.label, 'Waiting for agents');
+  assert.equal((parent().decision as StateDecision).turn.value, 'completed');
+  assert.equal(parent().state, 'waiting_agents');
+  const waitingId = parent().decision_id;
+  const snapshot = f.feed.snapshot().projection;
+  assert.ok(snapshot.conversations.some(row => row.id === f.id('parent') && row.state === 'waiting_agents'));
+  f.reopen(); f.decision('parent', NOW + 3); assert.equal(parent().decision_id, waitingId);
+  f.scan(NOW + 4, { status: 'failed', sessions: [], processes: [] }); f.decision('parent', NOW + 4);
+  const stableId = parent().decision_id;
+  f.scan(NOW + 5, { status: 'failed', sessions: [], processes: [] });
+  assert.equal(f.feed.refresh(NOW + 5), undefined, 'unchanged Waiting for agents is not redistributed on every scan');
+  assert.equal(parent().decision_id, stableId);
+  const patch = f.feed.refresh(NOW + 300_001);
+  assert.ok(patch && patch !== 'resync' && patch.changes.runs?.upsert.some(row => row.state === 'idle'));
+  assert.equal(parent().state, 'idle');
+  f.native('agent-child', start('again'), NOW + 300_002);
+  f.decision('parent', NOW + 300_002); assert.equal(parent().state, 'waiting_agents');
+  f.native('parent', { type: 'queue-operation', operation: 'enqueue', content: '<task-notification><task-id>child</task-id><status>stopped</status></task-notification>' }, NOW + 300_003);
+  f.decision('parent', NOW + 300_003); assert.equal(parent().state, 'idle');
+});
+
+test('直近7日の turn 鍵欠落率は提供元別に集計し、古い実行と未来は分母に入れない', t => {
+  const f = fixture(t); f.run('keyed'); f.native('keyed', start()); f.run('missing');
+  f.run('old', NOW - 8 * 86400_000); f.run('future', NOW + 1);
+  f.append('conversation.created', 'conversation:codex', { provider: 'codex', native_id: 'codex', type: 'interactive' });
+  f.append('run.created', 'run:codex', { conversation_id: 'codex', generation: 1, started_ts: new Date(NOW).toISOString() });
+  f.decision('keyed', NOW);
+  assert.deepEqual(f.feed.current.readTurnCoverage(NOW - 7 * 86400_000), {
+    claude: { runs: 2, missing: 1, ratio: 0.5 }, codex: { runs: 1, missing: 1, ratio: 1 },
+  });
+});

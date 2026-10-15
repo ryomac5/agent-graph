@@ -97,6 +97,10 @@ export function createIncrementalRolloutReader(ledger: Ledger, cache = new Map<s
     },
   };
   return { reader,
+    isComplete(path: string): boolean {
+      const cursor = staged.get(path)?.cursor;
+      return !!cursor && cursor.offset === cursor.size;
+    },
     decorate(input: FactInput): FactInput {
       if (input.source !== "rollout-codex" || !input.cursor || !current) return input;
       const original = JSON.parse(input.cursor);

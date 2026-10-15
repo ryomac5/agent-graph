@@ -154,3 +154,14 @@ for (const [name, source, row] of [
   assert.equal(result.display.label, 'Idle');
   assert.equal(result.turn.reason, 'turn_finished');
 });
+
+test('scoped history conflicts affect only their turn and can be superseded', () => {
+  const conflict: StateEvidence = { kind: 'conflict', id: 'conflict:old', at: 1, observedAt: 1, runId: 'run', turnId: 'old', count: 1 };
+  const current = stateInput([signal('start', 2), conflict]);
+  assert.deepEqual(evaluateState(current, 3).conflicts, []);
+  assert.equal(evaluateState(current, 3).turn.confidence, 'confirmed');
+  const old = stateInput([signal('start', 2, { turnId: 'old' }), conflict], { turnId: 'old' });
+  assert.deepEqual(evaluateState(old, 3).conflicts, ['conflict:old']);
+  const corrected = { ...old, evidence: [...old.evidence, { kind: 'unavailable' as const, id: 'reread', at: 3, observedAt: 3, runId: 'run', supersedes: ['conflict:old'] }] };
+  assert.deepEqual(evaluateState(corrected, 3).conflicts, []);
+});

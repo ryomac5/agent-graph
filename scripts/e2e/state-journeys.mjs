@@ -6,6 +6,7 @@ export const STATE_JOURNEYS = [
   ['state-drop-end', 'SessionEnd 欠落は OS の終了確認で Stopped'],
   ['state-child-tool', '子の tool_use 中の停止は Unknown'],
   ['state-child-notice', '親の子停止通知は子だけ Unknown'],
+  ['state-waiting-agents', 'Idle の親は背景の子の進行を Waiting for agents と出し、停止で Idle に戻る'],
   ['state-parent-restart', '親再起動後の子は生存を引き継がない'],
   ['state-approval', '許可の待ちは Needs approval'],
   ['state-long-tool', '300 秒を越える tool は同じプロセスの生存中 Working'],
@@ -63,6 +64,17 @@ export async function runStateJourneys({ check, seed, script, send, reply, idle,
     await script(session, 'child-stopped-notification');
     await expect(child, 'Unknown', d => d.turn.reason === 'boundary_unavailable');
     await expect(session.original, 'Idle');
+  });
+  await check('state-waiting-agents', async () => {
+    const session = await seed();
+    await decision(session.original, d => d.process.value === 'alive_confirmed');
+    const state = await script(session, 'background-child');
+    const child = JSON.stringify(['claude', state.child.id]);
+    await expect(child, 'Working', d => d.result.stage === 'launched' && d.result.value === 'incomplete');
+    await expect(session.original, 'Waiting for agents', d => d.turn.value === 'completed');
+    await script(session, 'child-stopped-notification');
+    await expect(child, 'Unknown');
+    await expect(session.original, 'Idle', d => d.turn.value === 'completed');
   });
   await check('state-parent-restart', async () => {
     const session = await seed(); const child = await childOf(session);

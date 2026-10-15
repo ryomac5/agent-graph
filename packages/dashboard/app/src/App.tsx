@@ -93,9 +93,10 @@ export function App({ target = store, client = unavailableClient, searchClient =
         pages[table] = { ...page, next: null };
         let after = page.next;
         while (after) {
-          const next = await fetchProjection<{ rows: Row[]; next: string | null; generation: number; identities?: ScreenIdentities }>(`/projection?table=${encodeURIComponent(table)}&after=${encodeURIComponent(after)}`, controller.signal);
+          const next = await fetchProjection<{ rows: Row[]; state_decisions?: Row[]; next: string | null; generation: number; identities?: ScreenIdentities }>(`/projection?table=${encodeURIComponent(table)}&after=${encodeURIComponent(after)}`, controller.signal);
           if (controller.signal.aborted || next.generation !== target.getSnapshot().generation) return;
           (projection[table] ??= []).push(...next.rows);
+          if (next.state_decisions) (projection.state_decisions ??= []).push(...next.state_decisions);
           identities = mergeIdentities(identities, next.identities);
           if (next.next === after) throw new Error('Unable to advance activity list');
           after = next.next;

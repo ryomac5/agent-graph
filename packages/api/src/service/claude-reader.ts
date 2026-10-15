@@ -4,11 +4,12 @@ import { basename, join, resolve } from "node:path";
 import { createNativeId, projectEntities } from "../../../core/src/ledger/index.ts";
 import type { Fact, FactInput, Ledger } from "../../../core/src/ledger/index.ts";
 import { observeClaudeFile } from "../observe/claude/index.ts";
-import { observeClaudeContext } from "../observe/claude/context.ts";
+import { observeClaudeContext, claudeUuidChainEventId } from "../observe/claude/context.ts";
 import { observeClaudeTitles } from "../observe/claude/titles.ts";
 import type { LocationResolver } from "../observe/location.ts";
 import type { ClaudeObservation } from "../observe/claude/index.ts";
 import type { FileCursor } from "../observe/files.ts";
+import { readAppendOnlyFile } from '../observe/files.ts';
 
 export function observeClaudeHistories(ledger: Ledger, directory: string, facts: Fact[],
   batch: <T>(operation: () => T) => T = (operation) => operation(),
@@ -85,12 +86,15 @@ export function observeClaudeHistories(ledger: Ledger, directory: string, facts:
     try {
       result = (fileBatch ? (operation: () => ClaudeObservation) => fileBatch(file, operation) : batch)(() => {
         const observation = observeClaudeFile(fileLedger, file, { cursor: start });
-        const titles = observeClaudeTitles(fileLedger, file, { lines: observation.lines,
-          fromStart: !start || observation.reset || start.offset === 0 });
+        const fromStart = !start || observation.reset || start.offset === 0;
+        const backfill = !fromStart && !start.claudeUuidChain && !history.some(fact => fact.source_event_id === claudeUuidChainEventId(id));
+        const lines = backfill ? readAppendOnlyFile(file).lines : observation.lines;
+        const titles = observeClaudeTitles(fileLedger, file, { lines,
+          fromStart: fromStart || backfill });
         // 発言の取り込みで読んだ行から、場所とターンの根拠を同じ取引で足す。
-        const context = observeClaudeContext(fileLedger, file, { lines: observation.lines,
+        const context = observeClaudeContext(fileLedger, file, { lines,
           modelBackfillLines: observation.modelBackfillLines,
-          fromStart: !start || observation.reset || start.offset === 0, ...(readLocation ? { locate: readLocation } : {}) });
+          fromStart: fromStart || backfill, ...(readLocation ? { locate: readLocation } : {}) });
         return { ...observation, conflicts: [...observation.conflicts, ...titles.filter(result => result.status === "conflict"), ...context.conflicts] };
       });
     }
@@ -99,7 +103,7 @@ export function observeClaudeHistories(ledger: Ledger, directory: string, facts:
       throw error;
     }
     results.push(result);
-    saved?.set(resolve(file), result.cursor);
+    saved?.set(resolve(file), { ...result.cursor, nativeStateEvidence: true, claudeUuidChain: true });
   }
   function visit(path: string): void {
     for (const entry of readdirSync(path, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {

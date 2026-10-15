@@ -1,3 +1,4 @@
+import { expandNativeEvidence } from '../../../core/src/ledger/native-evidence.ts';
 import type { Fact } from "../../../core/src/ledger/index.ts";
 import assert from "node:assert/strict";
 import { appendFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -41,10 +42,9 @@ test("S6: 共有ホストの会話、長いターン、承認待ち、子の先�
   assert.equal(view.relations.length, 1);
   assert.equal(view.relations[0].type, "delegated");
   assert.equal(view.relations[0].confidence, "confirmed");
-  assert.equal(view.runs.filter((run) => run.state === "idle").length, 2);
-  assert.equal(view.runs.filter((run) => run.state === "running").length, 1);
-  assert.ok(facts.some((fact) => fact.kind === "run.state_changed" && fact.payload?.state === "waiting_approval"));
-  const childStart = facts.find((fact) => fact.kind === "run.state_changed" && fact.source_ts === "2026-10-06T11:14:00.000Z")!;
+  assert.equal(view.runs.filter((run) => run.state === "unknown").length, 3);
+  assert.ok(facts.some((fact) => fact.source_event_id.startsWith("native-record:") && JSON.stringify(fact.payload).includes("waitingOnApproval")));
+  const childStart = facts.flatMap(expandNativeEvidence).find((fact) => fact.source_event_id.startsWith("native-record:") && fact.source_ts === "2026-10-06T11:14:00.000Z")!;
   const relation = facts.find((fact) => fact.kind === "relation.created")!;
   assert.ok(childStart.seq < relation.seq);
   assert.equal(relation.payload?.evidence && typeof relation.payload.evidence === "object"
@@ -63,7 +63,7 @@ test("S7: exec の paginated 本文を無人会話へ取り込み、作業・名
   assert.equal(view.aliases.length, 0);
   assert.equal(view.messages.length, 2);
   assert.ok(view.messages.every((message) => message.body_state === "stored"));
-  assert.equal(view.runs[0].state, "idle");
+  assert.equal(view.runs[0].state, "unknown");
   assert.ok(f.observe().every((result) => result.status === "duplicate"));
 });
 
@@ -100,9 +100,9 @@ test("同じファイルを再読しても増えず、追記と未完行は差�
   assert.deepEqual(f.read(), before);
   appendFileSync(path, Buffer.concat([bytes.subarray(split), Buffer.from("\n")]));
   const appended = f.observe().filter((result) => result.status === "appended");
-  assert.equal(appended.length, 2);
+  assert.equal(appended.length, 3);
   const after = f.read();
-  assert.equal(after.length, before.length + 2);
+  assert.equal(after.length, before.length + 3);
   const cursor = JSON.parse(after.at(-1)!.cursor!);
   assert.equal(cursor.offset, Buffer.byteLength(readFileSync(join(samples, "S7/rollout-exec.jsonl"))));
   assert.match(cursor.hash, /^[a-f0-9]{64}$/);
@@ -128,7 +128,7 @@ test("S6: archive だけが終了根拠となり、復帰は新しい世代に�
     payload: { type: "task_started", turn_id: "resumed-turn" } }) + "\n");
   assert.equal(f.observe().filter((result) => result.status === "appended").length, 1);
   const view = project(f.read());
-  assert.equal(view.runs.find((run) => run.generation === 2)?.state, "running");
+  assert.equal(view.runs.find((run) => run.generation === 2)?.state, "unknown");
   assert.equal(view.runs.find((run) => run.id === ended.id)?.state, "ended");
   assert.deepEqual(f.read().slice(0, before.length), before);
   renameSync(live, archive);
@@ -253,14 +253,14 @@ test("子の archive と復帰後、親側の通知はファイル位置に依�
   appendFileSync(parent, JSON.stringify({ timestamp: "2026-10-08T01:00:00.000Z", method: "turn/started",
     params: { threadId: "fiction-child", turnId: "fiction-resumed-child" } }) + "\n");
   f.observe();
-  const state = f.read().findLast((fact) => fact.kind === "run.state_changed" && fact.source_ts === "2026-10-08T01:00:00.000Z");
+  const state = f.read().flatMap(expandNativeEvidence).findLast((fact) => fact.source_event_id.startsWith("native-record:") && fact.source_ts === "2026-10-08T01:00:00.000Z");
   assert.equal(state?.subject, `run:${resumed.id}`);
-  assert.equal(project(f.read()).runs.find((run) => run.id === resumed.id)?.state, "running");
+  assert.equal(project(f.read()).runs.find((run) => run.id === resumed.id)?.state, "unknown");
   assert.equal(project(f.read()).runs.find((run) => run.conversation_id === resumed.conversation_id && run.generation === 1)?.state, "ended");
   assert.ok(f.observe().every((result) => result.status === "duplicate"));
 });
 
-test("20 ファイル × 100 行を二度走査しても台帳は各走査で一度だけ読む", (t) => {
+test("P6: 20 ファイル × 100 行は60事実にまとめ、二度の走査で原記録を重ねない", (t) => {
   const FILE_COUNT = 20;
   const LINE_COUNT = 100;
   const f = createFixture(t, "S7");
@@ -285,10 +285,11 @@ test("20 ファイル × 100 行を二度走査しても台帳は各走査で一
   for (let scan = 0; scan < 2; scan += 1) {
     const results = observeCodex(ledger, { ...f.options, codexHome: home });
     assert.equal(reads, scan + 1);
-    assert.equal(results.length, scan === 0 ? expectedFacts : FILE_COUNT * LINE_COUNT);
+    assert.equal(results.length, scan === 0 ? FILE_COUNT * 3 : FILE_COUNT);
     assert.ok(results.every((result) => result.status === (scan === 0 ? "appended" : "duplicate")));
   }
-  assert.equal(f.read().length, expectedFacts);
+  assert.equal(f.read().length, FILE_COUNT * 3);
+  assert.equal(f.read().flatMap(expandNativeEvidence).length, expectedFacts);
 });
 
 test("既知の補助行は ID がない場合も未対応にならない", (t) => {

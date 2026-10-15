@@ -14,7 +14,7 @@ test('snapshot・頁・patch は関係の重複欄だけ省き、独自 run 別�
   assert.equal(before.identities.runs['custom-host-run'], `${CHILD}:1`);
   assert.equal(before.identities.conversations[LEGACY], ROOT);
   assert.equal(before.projection.roots[0].state, 'running');
-  assert.equal(before.projection.send_watches[0].state, 'pending');
+  assert.equal(before.projection.send_watches[0].state, 'received_candidate');
   assert.equal((before.projection.conversations.find(row => row.id === ROOT)?.pending_inputs as unknown[]).length, 1);
   assert.deepEqual(f.feed.conversation(LEGACY), f.feed.conversation(ROOT));
   assert.deepEqual(f.feed.list('relations').rows, before.projection.relations);
@@ -50,4 +50,26 @@ test('関係の独自 ID と ID に一致しない訂正値は省略せずに配
   assert.equal(corrected.evidence, 'corrected evidence');
   assert.equal(corrected.type, undefined);
   assert.deepEqual({ ...page.rows.find(row => row.id === 'custom-relation') }, { ...rows[1], id: 'custom-relation' });
+});
+
+test('会話の null の ai_title は全配信経路で省き、値と解除を保つ', t => {
+  const directory = mkdtempSync(join(tmpdir(), 'compact-title-'));
+  const f = createCompactSnapshotFeed(join(directory, 'ledger.db'));
+  t.after(() => { f.close(); rmSync(directory, { recursive: true }); });
+  const read = (rows: Record<string, unknown>[]) => rows.find(row => row.id === ROOT)!;
+  const wire = (value: unknown) => JSON.parse(JSON.stringify(value));
+  assert.equal('ai_title' in read(wire(f.snapshot()).projection.conversations), false);
+  assert.equal('ai_title' in read(wire(f.feed.list('conversations')).rows), false);
+  assert.equal('ai_title' in read(wire(f.feed.conversation(ROOT)).projection.conversations), false);
+  f.append('conversation.updated', `conversation:${ROOT}`, { ai_title: 'New title' });
+  const patch = f.feed.refresh();
+  assert.ok(patch && patch !== 'resync');
+  assert.equal(read(patch.changes.conversations.upsert).ai_title, 'New title');
+  f.append('conversation.updated', `conversation:${ROOT}`, { ai_title: null });
+  const cleared = f.feed.refresh();
+  assert.ok(cleared && cleared !== 'resync');
+  assert.equal('ai_title' in read(wire(cleared).changes.conversations.upsert), false);
+  const rows = f.snapshot().projection.conversations;
+  const original = rows.map(row => ({ ...row, ai_title: row.ai_title ?? null }));
+  assert.equal(Buffer.byteLength(JSON.stringify(original)) - Buffer.byteLength(JSON.stringify(rows)), rows.length * 16);
 });

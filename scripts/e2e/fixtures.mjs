@@ -1,3 +1,4 @@
+import { stateNow } from './clock.mjs';
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync, openSync, closeSync } from 'node:fs';
 import { join } from 'node:path';
@@ -13,10 +14,10 @@ export const REPLY_PREFIX = 'E2E reply: ';
 export const COMPACT_SUMMARY = 'This session is being continued from a previous conversation. E2E synthetic compact summary.';
 
 export class Transcript {
-  constructor(provider, env, { id = randomUUID(), model, historyAgeMs = 0 } = {}) {
-    this.provider = provider; this.env = env; this.id = id; this.parent = null;
+  constructor(provider, env, { id = randomUUID(), model, historyAgeMs = 0, parentSessionId } = {}) {
+    this.parentSessionId = parentSessionId; this.provider = provider; this.env = env; this.id = id; this.parent = null;
     this.cwd = env.E2E_PROJECT; this.model = model || (provider === 'claude' ? 'sonnet' : 'gpt-6-sol');
-    this.createdAt = new Date(Date.now() - historyAgeMs).toISOString(); this.ordinal = 0;
+    this.createdAt = new Date(stateNow(env) - historyAgeMs).toISOString(); this.ordinal = 0;
     this.open();
     if (provider === 'codex') this.codex('session_meta', {
       id, timestamp: this.createdAt, cwd: this.cwd, originator: 'codex_cli_rs', cli_version: '0.160.1',
@@ -28,23 +29,24 @@ export class Transcript {
     }
   }
   open() {
-    const directory = this.provider === 'claude'
+    let directory = this.provider === 'claude'
       ? join(this.env.CLAUDE_CONFIG_DIR, 'projects', this.cwd.replace(/[^a-zA-Z0-9]/g, '-'))
       : join(this.env.CODEX_HOME, 'sessions', ...this.createdAt.slice(0, 10).split('-'));
+    if (this.parentSessionId) directory = join(directory, this.parentSessionId, 'subagents');
     mkdirSync(directory, { recursive: true });
     this.path = join(directory, this.provider === 'claude' ? `${this.id}.jsonl` : `rollout-${this.createdAt.replaceAll(':', '-')}-${this.id}.jsonl`);
     // Codex のホスト発見は lsof で実際に開いている rollout を調べる。
     this.fd = openSync(this.path, 'a');
   }
   append(row) { appendFileSync(this.fd, JSON.stringify(row) + '\n'); return row; }
-  base(type, timestamp = new Date().toISOString()) {
+  base(type, timestamp = new Date(stateNow(this.env)).toISOString()) {
     const uuid = randomUUID();
     const row = { parentUuid: this.parent, isSidechain: false, type, uuid, timestamp,
       userType: 'external', entrypoint: 'cli', cwd: this.cwd, sessionId: this.id, version: CLAUDE_VERSION, gitBranch: 'main' };
     this.parent = uuid;
     return row;
   }
-  codex(type, payload, timestamp = new Date().toISOString()) {
+  codex(type, payload, timestamp = new Date(stateNow(this.env)).toISOString()) {
     return this.append({ timestamp, ordinal: this.ordinal++, type, payload });
   }
   user(text, timestamp) {
@@ -55,8 +57,9 @@ export class Transcript {
       return this.codex('response_item', { type: 'message', id: randomUUID(), role: 'user', content: [{ type: 'input_text', text }] }, timestamp);
     }
     // 2.1.299 の打鍵した依頼の行の形。行の印は local() を使う。
+    this.turn = randomUUID();
     this.prompts = (this.prompts ?? 0) + 1;
-    return this.append({ ...this.base('user', timestamp), promptId: randomUUID(), message: { role: 'user', content: text }, permissionMode: 'default',
+    return this.append({ ...this.base('user', timestamp), promptId: this.turn, message: { role: 'user', content: text }, permissionMode: 'default',
       origin: { kind: 'human' }, promptSource: 'typed', turnOrigin: 'human', turnPosition: { promptIndex: this.prompts, turnIndex: this.prompts } });
   }
   local(text, fields = {}) {
@@ -76,13 +79,23 @@ export class Transcript {
       stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
     } });
   }
+  complete() {
+    if (this.provider === 'claude') this.append({ ...this.base('system', new Date(stateNow(this.env) + 1).toISOString()), promptId: this.turn, subtype: 'turn_duration' });
+  }
+  tool(name = 'Bash') {
+    this.append({ ...this.base('assistant'), promptId: this.turn, message: { role: 'assistant', stop_reason: 'tool_use', content: [{ type: 'tool_use', id: randomUUID(), name, input: {} }] } });
+  }
+  interrupt() {
+    if (this.provider === 'claude') this.append({ ...this.base('user'), promptId: this.turn, message: { role: 'user', content: '[Request interrupted by user]' } });
+    else this.codex('event_msg', { type: 'turn_aborted', turn_id: this.turn });
+  }
   enqueue(text) {
-    const item = { text, source: randomUUID(), delivery: randomUUID(), timestamp: new Date().toISOString() };
-    this.append({ type: 'queue-operation', operation: 'enqueue', timestamp: item.timestamp, sessionId: this.id, content: text });
+    const item = { text, source: randomUUID(), delivery: randomUUID(), timestamp: new Date(stateNow(this.env)).toISOString() };
+    this.append({ type: 'queue-operation', operation: 'enqueue', timestamp: item.timestamp, sessionId: this.id, content: text, commandUuid: item.source, deliveryId: item.delivery });
     return item;
   }
   absorb(item) {
-    this.append({ type: 'queue-operation', operation: 'remove', timestamp: new Date().toISOString(), sessionId: this.id,
+    this.append({ type: 'queue-operation', operation: 'remove', timestamp: new Date(stateNow(this.env)).toISOString(), sessionId: this.id,
       content: item.text, reason: 'absorbed_mid_turn', commandUuid: item.source, deliveryId: item.delivery });
     return this.append({ ...this.base('attachment'), session_id: this.id,
       attachment: { type: 'queued_command', prompt: item.text, source_uuid: item.source, delivery_id: item.delivery,
@@ -94,7 +107,7 @@ export class Transcript {
     const previous = this.id;
     const shared = readFileSync(this.path, 'utf8');
     const next = randomUUID();
-    this.append({ type: 'continued-in', timestamp: new Date().toISOString(), sessionId: previous, continuedInSessionId: next });
+    this.append({ type: 'continued-in', timestamp: new Date(stateNow(this.env)).toISOString(), sessionId: previous, continuedInSessionId: next });
     closeSync(this.fd); this.id = next; this.open();
     writeFileSync(this.path, shared);
     return { previous, next };

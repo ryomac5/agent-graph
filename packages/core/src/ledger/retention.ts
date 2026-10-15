@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { retainNativeMetadata } from './native-evidence.ts';
 import { createHash } from 'node:crypto';
 import type { Fact, JsonValue } from './facts.ts';
 import { DEFAULT_RETENTION_DAYS, STORAGE_SCOPES, type StorageScope } from './ledger.ts';
@@ -33,6 +34,8 @@ export function restrictStoredPayload(value: JsonValue, scope: StorageScope, too
   if (level < 0) throw new TypeError('Invalid storage scope');
   if (value === null || typeof value !== 'object') return value;
   if (Array.isArray(value)) return value.map(item => restrictStoredPayload(item, scope, toolBody));
+  const native = retainNativeMetadata(value);
+  if (native) return native;
   const tool = toolBody || value.type === 'tool_result' || value.type === 'tool_output' || value.role === 'tool';
   const entries = Object.entries(value).filter(([key]) =>
     (tool && ['body', 'text', 'content'].includes(key) ? 2 : FIELD_LEVELS[key] ?? 0) <= level);

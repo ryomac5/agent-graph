@@ -325,6 +325,8 @@ export function initializeSchema(db: DatabaseSync): void {
       MIGRATIONS[index](db);
       db.prepare("UPDATE schema_version SET version = ? WHERE id = 1").run(index + 1);
     }
+    db.exec(`CREATE INDEX IF NOT EXISTS facts_run_links ON facts(subject,
+      json_extract(payload, '$.conversation_id'), json_extract(payload, '$.generation')) WHERE kind GLOB 'run.*'`);
     initializeSearch(db);
     createProjectionStorage(db);
     db.exec("COMMIT");

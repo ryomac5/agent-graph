@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { evaluateDelivery } from "../../src/state/index.ts";
+import { evaluateDelivery, normalizeShellInput } from "../../src/state/index.ts";
 import type { Binding, DeliveryEvidence, DeliveryDecision, Operation, Receipt, Tombstone } from "../../src/state/index.ts";
 import { checkOrders, scan } from "./helpers.ts";
 
@@ -21,6 +21,14 @@ function expected(value: DeliveryDecision["value"], display: DeliveryDecision["d
 }
 
 export const deliveryCases: { name: string; evidence: DeliveryEvidence[]; now: number; expected: ReturnType<typeof expected> }[] = [
+  ...['! echo delivered', '!echo delivered', '!  echo delivered  '].map(body => ({
+    name: `shell receipt matches ${body}`, now: 30,
+    evidence: [op('emitted', 10, { bodyKey: normalizeShellInput(body) }), receipt(20, { bodyKey: normalizeShellInput('<bash-input> echo delivered</bash-input>') })],
+    expected: expected('received_candidate', 'Likely delivered', 'unique_candidate', 'inferred'),
+  })),
+  { name: 'shell output alone is not a receipt', now: 60_010,
+    evidence: [op('emitted', 10, { bodyKey: normalizeShellInput('! echo delivered') }), receipt(20, { bodyKey: normalizeShellInput('<bash-stdout>echo delivered</bash-stdout>') })],
+    expected: expected('unverifiable', 'Unconfirmed', 'delivery_expired') },
   { name: "no operation record cannot prove delivery", evidence: [], now: 30, expected: expected("unverifiable", "Unconfirmed", "missing_evidence") },
   { name: "accepted is Sending only before fixed deadline", evidence: [op("accepted")], now: 30, expected: expected("accepted", "Sending", "accepted", "confirmed") },
   { name: "hung acceptance becomes Unconfirmed", evidence: [op("accepted")], now: 60_000, expected: expected("unverifiable", "Unconfirmed", "delivery_expired") },

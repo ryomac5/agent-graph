@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { STATE_JOURNEYS } from './state-journeys.mjs';
 import { createWriteStream, existsSync } from 'node:fs';
 import { cp, mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -15,7 +16,7 @@ const directory = join(DIRECTORY, 'results', name);
 const git = args => execFileSync('git', args, { cwd: REPOSITORY, encoding: 'utf8' }).trim();
 const report = new Report(directory, { started, head: git(['rev-parse', 'HEAD']), main: git(['rev-parse', 'main']), branch: git(['branch', '--show-current']),
   productDiffFromMain: git(['diff', '--name-only', 'HEAD', 'main', '--', 'packages', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml']),
-  fakeClaudeVersion: '2.1.299', realProviderCalls: 0 });
+  stateFaults: STATE_JOURNEYS.map(([id, name]) => ({ id, name })), fakeClaudeVersion: '2.1.299', realProviderCalls: 0 });
 await report.initialize();
 let isolation, browser;
 const originalTemporaryEnvironment = Object.fromEntries(['TMPDIR', 'TMP', 'TEMP'].map(key => [key, process.env[key]]));

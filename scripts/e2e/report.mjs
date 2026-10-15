@@ -1,21 +1,23 @@
+import { STATE_JOURNEYS } from './state-journeys.mjs';
 import { mkdir, writeFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export const JOURNEYS = [
   ['1-claude', 'Claude: 新規会話・送信・返事'],
   ['1-codex', 'Codex: 新規会話・送信・返事'],
-  ['2', '作業中の追加送信・Queued・重複なし'],
+  ['2', '作業中の追加送信・Likely queued・重複なし'],
   ['3', '最新履歴・再読み込み・タブの往復'],
   ['4', 'fork・同じ根・古いタブから継続'],
   ['5-ui', '行の名前変更・サイドバー・タブ'],
   ['5-terminal', '端末の /rename・サイドバー・タブ'],
   ['6', 'Apply・モデル確認・二度送りの拒否'],
-  ['7', 'Working・Idle/Done・SessionEnd 後の継続'],
+  ['7', 'Working・Idle・SessionEnd 後の継続'],
   ['8-date', '行の日付が最新のやり取りになる'],
   ['8-root', '同じ根が二行に分かれない'],
   ['9-delivered', '届いた通常送信に未着の誤通知がない'],
   ['9-missing', '届かなかった通常送信を通知する'],
   ['9-bang', '! の配達確認・未着通知'],
+  ...STATE_JOURNEYS,
   ['10', 'pageerror・console error がない'],
 ];
 const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);

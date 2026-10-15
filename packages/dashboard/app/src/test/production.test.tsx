@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
-import { createStore } from '../lib/store.ts';
+import { createStore } from "./current-fixture.ts";
 import { orderSeries, selectRoots } from '../lib/roots.ts';
 import { visibleText } from '../lib/message-body.ts';
 import { formatWhen } from '../lib/format.ts';
@@ -52,7 +52,7 @@ it('orders a series by its last activity and shows the latest message last with 
   expect(texts[0]).toContain('September request');
   const tab = screen.getByRole('tab', { name: 'Repo-20260925' });
   expect(tab.querySelector('.status-running')).toBeTruthy();
-  expect(tab.title).toContain('Running');
+  expect(tab.title).toContain('Working');
 });
 it('keeps reviewer conversations out of the root list', () => {
   expect(selectRoots(store().getSnapshot()).map(root => root.id)).toEqual(['old']);
@@ -189,7 +189,7 @@ it('結果を返して待機に戻った Claude の子は完了と出し、gener
   const flow = screen.getByRole('complementary', { name: 'Panel' });
   fireEvent.click(within(flow).getByRole('treeitem', { name: /Today|Earlier/ }));
   const row = [...flow.querySelectorAll<HTMLElement>('.graph-row-main')].find(element => element.textContent?.includes('Task 1'))!;
-  expect(row.getAttribute('aria-label')).toContain('Done');
+  expect(row.getAttribute('aria-label')).toContain('Idle');
   expect(row.textContent).not.toContain('general-purpose');
 });
 

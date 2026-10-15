@@ -49,6 +49,7 @@ export class TerminalInputError extends Error {
   readonly terminalId: string;
   constructor(terminalId: string) { super('Terminal is not ready for a message. Continue in the terminal tab.'); this.terminalId = terminalId; }
 }
+export interface SendLifecycle { emitting(target: string, verify: () => Promise<void>): void | Promise<void>; emitted(): void | Promise<void> }
 export interface HostOptions {
   targets?: TargetService;
   targetOptions?: TargetOptions;
@@ -86,7 +87,7 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
   // Orca と同じく、入力中の行を消してから貼り付け、Enter は間を置いて別に書く。
   // 同じ書き込みに Enter を含めると、貼り付けの中身として扱われて送られないことがあるからである。
   // 送信は端末ごとに順に並べ、続けて送った発言が混ざらないようにする。
-  function writeMessage(host: Host, conversationId: string, text: string, paths: Promise<string[]> = Promise.resolve([])): Promise<SessionSendResult> {
+  function writeMessage(host: Host, conversationId: string, text: string, paths: Promise<string[]> = Promise.resolve([]), lifecycle?: SendLifecycle): Promise<SessionSendResult> {
     const delay = options.submitDelayMs ?? 500;
     const wait = options.wait ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
     const sending = (host.sending ?? Promise.resolve()).catch(() => {}).then(async (): Promise<SessionSendResult> => {
@@ -108,6 +109,14 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
       const slash = /^\/([^\s]+)(?:\s|$)/u.exec(text.trimStart());
       // 引数のないコマンドも空白で確定し、補完候補の先頭を誤実行しない。
       const body = slash && !/\s$/u.test(text) ? text + ' ' : text;
+      const verify = async () => {
+        await recheckLocalSession(host);
+        if (!hosts.has(host.terminalId) || host.disconnected || host.conversationId && host.conversationId !== conversationId) throw new Error('no_host');
+        if (host.inputRevision !== inputRevision || isInputBlocked(await host.screen.read(), provider)) throw new TerminalInputError(host.terminalId);
+      };
+      // 保存の再試行ごとに対象と画面を確認し、成功した保存から最初の書き込みへ進む。
+      if (lifecycle) await lifecycle.emitting(JSON.stringify([host.terminalId, host.startedAt]), verify);
+      else await verify();
       host.terminal.write('\x15');
       for (const path of pasted) host.terminal.write(`\x1b[200~${escapeAttachmentPath(path)}\x1b[201~`);
       if (pasted.length) await wait(300);
@@ -117,6 +126,7 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
       if (!hosts.has(host.terminalId) || host.disconnected) throw new Error('no_host');
       if (host.inputRevision !== inputRevision || isInputBlocked(await host.screen.read(), provider)) throw new TerminalInputError(host.terminalId);
       host.terminal.write('\r');
+      await lifecycle?.emitted();
       if (!slash) return {};
       let after = before;
       let previous = '';
@@ -226,7 +236,13 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
   return {
     hasTerminal(id: unknown) { return typeof id === 'string' && hosts.has(id); },
     detach(notify: Notify) { for (const host of hosts.values()) host.listeners.delete(notify); },
-    async handle(command: string, payload: unknown, notify: Notify): Promise<unknown> {
+    async target(conversation: string): Promise<string | undefined> {
+      await refresh();
+      const host = [...hosts.values()].find(host => host.conversationId === conversation
+        || !host.conversationId && host.resumeId && JSON.stringify([host.provider ?? 'claude', host.resumeId]) === conversation);
+      return host ? JSON.stringify([host.terminalId, host.startedAt]) : undefined;
+    },
+    async handle(command: string, payload: unknown, notify: Notify, lifecycle?: SendLifecycle): Promise<unknown> {
       if (closed) throw new Error('Terminal service closed');
       if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('Invalid session request');
       const request = payload as Record<string, unknown>;
@@ -325,7 +341,7 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
         else {
           const paths = attachments.resolve(request.attachments);
           void paths.catch(() => {});
-          return await writeMessage(host, request.conversationId as string, request.text as string, paths);
+          return await writeMessage(host, request.conversationId as string, request.text as string, paths, lifecycle);
         }
         return {};
       }

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { App } from '../App.tsx';
-import { createStore, type Row } from '../lib/store.ts';
+import { createStore, type Row } from "./current-fixture.ts";
 import { HomePage } from '../pages/home/HomePage.tsx';
 import { ConversationPage } from '../pages/conversation/ConversationPage.tsx';
 import { SearchPage } from '../pages/search/SearchPage.tsx';

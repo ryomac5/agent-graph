@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { createStore, type Row, type ScreenState } from '../lib/store.ts';
+import { createStore, type Row, type ScreenState } from "./current-fixture.ts";
 import { resolveParticipants } from '../components/conversation/participants.ts';
 import { selectRoots, startedAt } from '../lib/roots.ts';
 import { collectNotifications } from '../components/notifications/model.ts';
@@ -118,7 +118,7 @@ it('does not scan message times again when only run evidence changes', () => {
     const next = { ...state, seq: i + 2, projection: { ...state.projection,
       runs: [{ id: 'r', conversation_id: 'c', state: 'running', last_evidence_ts: new Date(Date.parse(TIME) + i * 1000).toISOString() }],
     } };
-    expect(selectRoots(next)[0].state).toBe('running');
+    expect(selectRoots(next)[0].state).toBe('idle');
     expect(startedAt(next, selectRoots(next)[0])).toBe(Date.parse(TIME));
   }
   expect(reads).toBe(0);
@@ -131,7 +131,7 @@ it('compares 1000 notification runs by id and checks state only for changed rows
   const rows = Array.from({ length: ROWS }, (_, i) => ({ get id() { reads++; return `r${i}`; }, conversation_id: `c${i}`,
     get state() { states++; return 'running'; }, last_evidence_ts: TIME }));
   const previous = createState({ runs: rows });
-  const next = { ...previous, seq: 2, projection: { runs: [...rows.slice(0, -1), { id: `r${ROWS - 1}`, conversation_id: `c${ROWS - 1}`, state: 'failed', last_evidence_ts: TIME }] } };
+  const next = { ...previous, seq: 2, projection: { runs: [...rows.slice(0, -1), { id: `r${ROWS - 1}`, conversation_id: `c${ROWS - 1}`, state: 'idle', decision_id: 'failure', last_evidence_ts: TIME }], state_decisions: [{ id: 'failure', result: { value: 'failed' } }] } };
   for (const row of next.projection.runs) previous.projection.runs.find(entry => entry.id === row.id);
   const before = reads;
   reads = 0; states = 0;

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
-import type { FactInput, Ledger } from "../../../core/src/ledger/index.ts";
+import type { FactInput, JsonValue, Ledger } from "../../../core/src/ledger/index.ts";
+import { captureNativeRecord } from "../../../core/src/state/capture.ts";
 import { readAppendOnlyFile } from "../observe/files.ts";
 import type { FileCursor } from "../observe/files.ts";
 import type { RolloutLine, RolloutReader } from "../observe/codex/files.ts";
@@ -51,11 +52,13 @@ export function createIncrementalRolloutReader(ledger: Ledger, cache = new Map<s
       const previous = cache.get(path);
       const persisted = saved.get(basename(path));
       const checkpoint = previous?.cursor ?? persisted?.fileCursor;
-      const backfill = checkpoint && checkpoint.codexHistoryDetailsVersion !== CODEX_HISTORY_DETAILS_VERSION;
+      const backfill = checkpoint && (!checkpoint.nativeStateEvidence || checkpoint.codexHistoryDetailsVersion !== CODEX_HISTORY_DETAILS_VERSION);
+      // 状態の原記録を持たない旧い cursor は、既読の行からも原記録を補う。他の事実は既読の位置から続ける。
+      const evidenceBackfill = !!checkpoint && !checkpoint.nativeStateEvidence;
       const reset = checkpoint && (backfill || !previous)
         ? readAppendOnlyFile(path, checkpoint).reset : false;
       const file = readAppendOnlyFile(path, backfill ? undefined : previous?.cursor);
-      file.cursor = { ...file.cursor, codexHistoryDetailsVersion: CODEX_HISTORY_DETAILS_VERSION };
+      file.cursor = { ...file.cursor, nativeStateEvidence: true, codexHistoryDetailsVersion: CODEX_HISTORY_DETAILS_VERSION };
       current = file.cursor;
       cursors = new Map();
       let offset = !backfill && !file.reset && previous ? previous.cursor.offset : 0;
@@ -92,11 +95,16 @@ export function createIncrementalRolloutReader(ledger: Ledger, cache = new Map<s
       // 最後の行は再読し、途中で止まった複数の事実の追記を補う。
       const resumeOffset = file.reset || reset ? 0 : backfill ? checkpoint.offset : previous ? 0 : persisted?.fileCursor?.offset ?? 0;
       return { lines: [...new Map([...retained.map((line) => ({ ...line, contextOnly: true })),
-        ...lines.filter((line) => line.offset >= resumeOffset || backfill && isCodexHistoryDetail(line.value))]
+        ...lines.flatMap((line) => line.offset >= resumeOffset || backfill && isCodexHistoryDetail(line.value) ? [line]
+          : evidenceBackfill && captureNativeRecord("codex", readObject(line.value) as Record<string, JsonValue>) ? [{ ...line, evidenceOnly: true }] : [])]
         .map((line) => [line.offset, line])).values()].sort((a, b) => a.offset - b.offset), completeBytes: file.cursor.offset };
     },
   };
   return { reader,
+    isComplete(path: string): boolean {
+      const cursor = staged.get(path)?.cursor;
+      return !!cursor && cursor.offset === cursor.size;
+    },
     decorate(input: FactInput): FactInput {
       if (input.source !== "rollout-codex" || !input.cursor || !current) return input;
       const original = JSON.parse(input.cursor);

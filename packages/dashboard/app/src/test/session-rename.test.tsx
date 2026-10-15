@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { MemoryRouter } from 'react-router';
 import { RootList } from '../components/RootViews.tsx';
 import { ConversationPage } from '../pages/conversation/ConversationPage.tsx';
-import { createStore } from '../lib/store.ts';
+import { createStore } from "./current-fixture.ts";
 import { selectRoots, type Root } from '../lib/roots.ts';
 afterEach(cleanup);
 const root: Root = { id: 'r', name: 'repo-20261001', project: 'p', state: 'idle', conversation_ids: ['r'], last_activity_ts: null, running_children: 0, total_children: 0 };

@@ -8,6 +8,8 @@ type NormalizedClaudeContent = { body?: JsonValue; role?: string; content_normal
 
 /** 行頭の対になった包みだけを読む。コード例の札はそのまま残す。 */
 function unwrapText(text: string): string {
+  const command = /^\s*<command-name>(\/[^<\s]+)<\/command-name>\s*(?:<command-message>[\s\S]*?<\/command-message>\s*)?(?:<command-args>([\s\S]*?)<\/command-args>\s*)?$/u.exec(text);
+  if (command) return [command[1], command[2]?.trim()].filter(Boolean).join(" ");
   const fences: [number, number][] = [];
   let start: number | undefined;
   let delimiter = "";

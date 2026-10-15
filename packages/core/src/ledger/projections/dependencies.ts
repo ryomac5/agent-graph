@@ -1,4 +1,5 @@
 import type { Fact } from "../facts.ts";
+import { expandNativeEvidence, isNativeArchive } from '../native-evidence.ts';
 
 export const PROJECTION_ENTITIES = {
   tasks: ["task"],
@@ -55,6 +56,8 @@ export function collectProjectionDependencies(fact: Fact): ProjectionDependency[
     add("offers", fact.subject);
     // 訂正が別 subject を参照しても純粋な投影と同じ事実の集合を渡す。
     add("offers", `fact:${fact.fact_id}`);
+    // 圧縮前の証拠を名指す後着訂正を解決する鍵だけを残す。実行・会話の重複する参照はまとめる。
+    if (isNativeArchive(fact)) for (const entry of expandNativeEvidence(fact)) add('offers', `fact:${entry.fact_id}`);
     if (fact.supersedes) share(`fact:${fact.supersedes}`);
     if (entity === "conversation" || entity === "message") {
       // provider が部分訂正で省略されても、候補を取りこぼさない。

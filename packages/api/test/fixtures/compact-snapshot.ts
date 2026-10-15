@@ -12,14 +12,14 @@ export function createCompactSnapshotFeed(path: string) {
   let sequence = 0;
   function append(kind: FactInput['kind'], subject: FactInput['subject'], payload: FactInput['payload']) {
     ledger.append({ source: 'host-claude', source_event_id: `event-${++sequence}`, source_ts: new Date(Date.parse(START) + sequence * 1000).toISOString(),
-      confidence: 'confirmed', kind, subject, payload } as FactInput);
+      observed_ts: START, confidence: 'confirmed', kind, subject, payload } as FactInput);
   }
   append('conversation.created', `conversation:${LEGACY}`, { provider: 'claude', native_id: 'root:with:colon',
     origin: 'observed', type: 'interactive', name: 'Snapshot root', cwd: '/repo' });
   append('conversation.created', `conversation:${CHILD}`, { provider: 'codex', native_id: 'child',
     origin: 'observed', type: 'subagent' });
   append('run.created', `run:${LEGACY}:1`, { conversation_id: LEGACY, generation: 1, state: 'running',
-    started_ts: START, last_evidence: { kind: 'turn_started' }, last_evidence_ts: START });
+    started_ts: START, last_evidence: { kind: 'turn_started', turn_id: 'turn-start' }, last_evidence_ts: START });
   append('run.created', 'run:custom-host-run', { conversation_id: CHILD, generation: 1, state: 'idle' });
   append('relation.created', 'relation:delegated', { type: 'delegated', from_id: LEGACY, to_id: CHILD, active: true,
     confidence: 'confirmed', evidence: { agentType: 'review', description: 'Review snapshot', source_ts: START } });
@@ -29,9 +29,11 @@ export function createCompactSnapshotFeed(path: string) {
   append('message_membership.created', 'message_membership:reply', { message_id: 'reply', conversation_id: LEGACY, active: true });
   append('conversation.input_queue_changed', `conversation:${ROOT}`, { input_queue_event: { operation: 'enqueue', body: 'Next step' } });
   const feed = new ProjectionFeed(path, () => applyIncremental(db, 0));
+  feed.refresh(Date.parse(START) + 192_000);
   const watch = new SendWatch(path);
   const now = Date.parse(START);
-  watch.record('send', ROOT, 'Next step', watch.capture(ROOT, now));
+  watch.record('send', ROOT, 'Next step', { ...watch.capture(ROOT, now), baseline_seq: sequence - 1 });
+  watch.check(now + 192_000);
   function snapshot(): ReturnType<ProjectionFeed['snapshot']> {
     const result = feed.snapshot();
     return { ...result, projection: { ...result.projection, send_watches: watch.list() } };

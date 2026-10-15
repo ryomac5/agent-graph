@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { ConversationPage } from '../pages/conversation/ConversationPage.tsx';
-import { createStore } from '../lib/store.ts';
+import { createStore } from "./current-fixture.ts";
 import type { Ack } from '../lib/client.ts';
 const id = JSON.stringify(['claude', '12345678-1234-1234-1234-123456789abc']);
 const ack = (result: unknown = {}): Ack => ({ type: 'ack', cmd_id: 'cmd', ok: true, result });
@@ -54,7 +54,7 @@ it('uploads image bytes then sends IDs and text, and clears attachments on succe
   const f = renderConversation(); drop(f.box, [image()]); await waitFor(() => expect(screen.getByRole('img', { name: 'image.png' }).getAttribute('src') ?? '').toMatch(/^data:/));
   fireEvent.change(f.input, { target: { value: 'Look here' } });
   fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-  await waitFor(() => expect(f.command).toHaveBeenCalledWith('session.send', { conversationId: id, text: 'Look here', attachments: ['image-id'] }));
+  await waitFor(() => expect(f.command).toHaveBeenCalledWith('session.send', { conversationId: id, text: 'Look here', attachments: ['image-id'] }, expect.any(String)));
   expect(f.command).toHaveBeenCalledWith('attachment.put', { name: 'image.png', mime: 'image/png', dataBase64: 'iVBORw0KGgo=' });
   await waitFor(() => expect(screen.queryAllByRole('img')).toHaveLength(0));
   expect(f.input).toHaveProperty('value', '');
@@ -66,7 +66,7 @@ it('sends an image without text and retains it after a failed send for retry', a
   drop(f.box, [image()]); await waitFor(() => expect(screen.getByRole('img', { name: 'image.png' }).getAttribute('src') ?? '').toMatch(/^data:/)); fireEvent.click(screen.getByRole('button', { name: 'Send' }));
   await screen.findByRole('alert');
   expect(screen.getByRole('img')).toBeTruthy();
-  expect(f.command).toHaveBeenCalledWith('session.send', { conversationId: id, text: '', attachments: ['image-id'] });
+  expect(f.command).toHaveBeenCalledWith('session.send', { conversationId: id, text: '', attachments: ['image-id'] }, expect.any(String));
   f.command.mockImplementation(async (name: string) => name === 'session.hosts' ? ack({ hosts: [{ conversationId: id, terminalId: 't' }] }) : ack());
   fireEvent.click(screen.getByRole('button', { name: 'Send' }));
   await waitFor(() => expect(screen.queryAllByRole('img')).toHaveLength(0));
@@ -95,18 +95,8 @@ it.each(['en', 'ja'] as const)('disables managed attachments with a reason in %s
   expect(f.command.mock.calls.some(([name]) => name === 'attachment.put')).toBe(false);
 });
 
-it('画像のパスの付いた記録の発言を、送った本文と同じ発言として扱う', async () => {
-  const { sameSent } = await import('../pages/conversation/ConversationPage.tsx');
-  expect(sameSent('/Users/r/.cache/agent-graph/attachments/2026-10-10/a.png この画像の色は', 'この画像の色は')).toBe(true);
-  expect(sameSent('/tmp/a.png /tmp/b.jpeg 2 枚を比べて', '2 枚を比べて')).toBe(true);
-  expect(sameSent('別の発言 この画像の色は', 'この画像の色は')).toBe(false);
-  expect(sameSent('この画像の色は', 'この画像の色は')).toBe(true);
-});
-
 it('記録の画像を縮小で描き、[Image #1] の印と画像の元の行を出さない', async () => {
-  const { sameSent } = await import('../pages/conversation/ConversationPage.tsx');
   const { harnessKind } = await import('../lib/message-body.ts');
-  expect(sameSent('[Image #1] もう一度、色を答えて', 'もう一度、色を答えて')).toBe(true);
   expect(harnessKind('[Image: source: /Users/r/.cache/agent-graph/attachments/2026-10-10/a.png]')).toBe('notification');
   const { Message } = await import('../components/conversation/Message.tsx');
   const { render: draw } = await import('@testing-library/react');

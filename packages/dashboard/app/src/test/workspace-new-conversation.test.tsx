@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { MemoryRouter, useLocation, useNavigate } from 'react-router';
 import { SessionCreate } from '../components/SessionCreate.tsx';
 import { WorkspacePage } from '../pages/workspace/WorkspacePage.tsx';
-import { createStore } from '../lib/store.ts';
+import { createStore } from "./current-fixture.ts";
 import { listPanes, workspaceKey, type PaneTree } from '../lib/panes.ts';
 import type { Ack } from '../lib/client.ts';
 

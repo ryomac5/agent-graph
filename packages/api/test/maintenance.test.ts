@@ -263,9 +263,17 @@ test('Settings commands work over authenticated WebSocket without runner and reb
   t.after(() => socket.terminate());
   const queue: Record<string, any>[] = [];
   const waiters: ((message: Record<string, any>) => void)[] = [];
+  let snapshotSeq = -1;
+  const currentStatePatches: Record<string, any>[] = [];
   socket.on('message', data => {
     const message = JSON.parse(data.toString());
     if (message.type === 'send_watches') return;
+    // hello への応答と期限による再評価は今の状態の patch であり、台帳の seq を進めない
+    // （state-decisions.md「API と画面への接続」、state-contract.md 6.3 の画面の接続）。ack や resync とは分けて数える。
+    if (message.type === 'patch' && message.from_seq === snapshotSeq && message.seq === snapshotSeq
+      && Object.keys(message.changes).every(table => ['runs', 'state_decisions', 'conversations', 'roots'].includes(table))) {
+      currentStatePatches.push(message); return;
+    }
     const resolve = waiters.shift();
     if (resolve) resolve(message); else queue.push(message);
   });
@@ -273,10 +281,13 @@ test('Settings commands work over authenticated WebSocket without runner and reb
     : new Promise<Record<string, any>>(resolve => waiters.push(resolve));
   await new Promise<void>((resolve, reject) => { socket.once('open', resolve); socket.once('error', reject); });
   const snapshot = await (await fetch(`${api.url}/snapshot`, { headers: { 'x-agent-graph-token': api.token } })).json();
+  snapshotSeq = snapshot.seq;
   socket.send(JSON.stringify({ type: 'hello', seq: snapshot.seq, generation: snapshot.generation }));
   socket.send(JSON.stringify({ type: 'cmd', cmd_id: 'preview-ws', command: 'maintenance.preview',
     payload: { operation: { kind: 'rescan', rules: { patterns: ['websocket-secret'] } } } }));
   const preview = await next();
+  assert.equal(currentStatePatches.length, 1);
+  assert.equal(typeof currentStatePatches[0].evaluated_at, 'number');
   assert.equal(preview.type, 'ack');
   assert.equal(preview.ok, true);
   assert.equal(preview.result.facts, 1);

@@ -3,7 +3,7 @@ import { DEFAULT_STATE_POLICY } from "./types.ts";
 import type { ClosureState, Decision, HostingState, ProcessState, Scan, Signal, Stage, StateDecision, StateInput, StatePolicy, TurnState } from "./types.ts";
 
 const STAGES: readonly Stage[] = ["launched", "responded", "reported", "verified", "reviewed"];
-const TURN_EVENTS = new Set(["start", "progress", "approval", "input", "complete", "stop_attempt"]);
+const TURN_EVENTS = new Set(["start", "progress", "approval", "input", "complete", "stop_attempt", "child_stopped"]);
 
 function decideProcess(input: StateInput, signals: Signal[], scans: Scan[], now: number): Decision<ProcessState> {
   const process = input.process;
@@ -73,12 +73,8 @@ function decideTurn(input: StateInput, signals: Signal[], process: Decision<Proc
   }
   const event = [...values][0];
   const confidence = latest.some(e => e.confidence === "inferred") ? "inferred" : "confirmed";
-  if (event === "complete") {
-    const interrupted = signals.filter(e => e.turnId === input.turnId && e.event === "interrupted" && latest.some(end => end.at === e.at));
-    return interrupted.length ? decide("unknown", "boundary_unavailable", [...latest, ...interrupted], null, "unknown")
-      : decide("completed", "turn_finished", latest, null, confidence);
-  }
-  if (event === "stop_attempt") return decide("unknown", "boundary_unavailable", latest, null, "unknown");
+  if (event === "complete") return decide("completed", "turn_finished", latest, null, confidence);
+  if (event === "stop_attempt" || event === "child_stopped") return decide("unknown", "boundary_unavailable", latest, null, "unknown");
   if (process.value === "exited_confirmed") return decide("unknown", "process_exited", latest, null, "unknown");
   const waiting = event === "approval" || event === "input";
   const runningTools = waiting ? [] : selectRunningTools(events);
@@ -135,7 +131,7 @@ export function evaluateState(input: StateInput, evaluatedAt: number, policy: Re
   const evidence = selectEvidence(input.evidence, evaluatedAt);
   const signals = evidence.filter((e): e is Signal => e.kind === "signal" && e.runId === input.runId);
   const scans = evidence.filter((e): e is Scan => e.kind === "scan" && input.runId !== null && e.subjects.includes(input.runId));
-  const conflicts = evidence.filter(e => e.kind === "conflict" && e.runId === input.runId).map(e => e.id).sort(compareText);
+  const conflicts = evidence.filter(e => e.kind === "conflict" && e.runId === input.runId && (!e.turnId || e.turnId === input.turnId)).map(e => e.id).sort(compareText);
   const process = decideProcess(input, signals, scans, evaluatedAt);
   const hosting = decideHosting(scans, input.runId, evaluatedAt);
   const closure = decideClosure(signals, process.value);

@@ -7,6 +7,8 @@ import test from 'node:test';
 import { createNativeId, openLedger, project } from '../../../../core/src/ledger/index.ts';
 import { observeCodexFile } from '../../../../api/src/observe/codex/index.ts';
 import { observeClaudeHistories } from '../../../../api/src/service/claude-reader.ts';
+import { openObservationService } from '../../../../api/src/service/index.ts';
+import { ProjectionFeed } from '../../../../api/src/service/projection-feed.ts';
 import type { ScreenState } from '../lib/store.ts';
 import { buildDelegationTree } from '../pages/tree/model.ts';
 import { conversationTitle } from '../lib/format.ts';
@@ -16,7 +18,10 @@ import { selectTimeline } from '../components/conversation/model.ts';
 
 test('uses imported native history in the existing root graph, conversation title, model and final answer', () => {
   const directory = mkdtempSync(join(tmpdir(), 'history-details-screen-'));
-  const ledger = openLedger(':memory:');
+  const path = join(directory, 'ledger.db');
+  const ledger = openLedger(path);
+  let service: ReturnType<typeof openObservationService> | undefined;
+  let feed: ProjectionFeed | undefined;
   try {
     const codexPath = join(directory, 'rollout-parent.jsonl');
     const claudePath = join(directory, 'session.jsonl');
@@ -25,8 +30,11 @@ test('uses imported native history in the existing root graph, conversation titl
     observeCodexFile(ledger, codexPath, { codexHome: directory });
     observeClaudeHistories(ledger, directory, ledger.readSince(0, Number.MAX_SAFE_INTEGER), undefined, [claudePath]);
     const projection = project(ledger.readSince(0, Number.MAX_SAFE_INTEGER));
+    service = openObservationService({ dbPath: path, home: directory, env: {} });
+    feed = new ProjectionFeed(path, service.catchUp);
+    const current = feed.snapshot().projection;
     const state: ScreenState = { seq: 1, generation: 1, connection: 'connected', deltas: {}, projection: {
-      conversations: projection.conversations.map(row => ({ ...row })), runs: projection.runs.map(row => ({ ...row })),
+      conversations: current.conversations, runs: current.runs, state_decisions: current.state_decisions,
       relations: projection.relations.map(row => ({ ...row })), roots: projection.roots.map(row => ({ ...row })),
       messages: projection.messages.map(row => ({ ...row })), message_memberships: projection.message_memberships.map(row => ({ ...row })),
     } };
@@ -49,5 +57,5 @@ test('uses imported native history in the existing root graph, conversation titl
     assert.equal(state.projection.runs!.find(row => row.conversation_id === conversation.id)?.model, 'claude-opus-5');
     const output = selectTimeline(state, String(conversation.id)).find(entry => entry.row.native_id === 'output')!;
     assert.equal(readMessageBody(output.row), 'Approved · The importer preserves native identifiers.');
-  } finally { ledger.close(); rmSync(directory, { recursive: true, force: true }); }
+  } finally { feed?.close(); service?.close(); ledger.close(); rmSync(directory, { recursive: true, force: true }); }
 });

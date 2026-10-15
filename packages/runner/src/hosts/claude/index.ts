@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { query, type AccountInfo, type CanUseTool, type Options, type PermissionResult, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { JsonValue } from "../../../../core/src/ledger/facts.ts";
+import { captureNativeRecord } from '../../../../core/src/state/capture.ts';
 import type { AgentHost, ApprovalId, Decision, ForkRequest, HostCapabilities, HostEvent, HostFact, HostLaunchOptions, IntegrationMode, ModelChoice, ModelInfo, ResumeRequest, RunHandle, StartRequest, UserInput } from "../../host/contract.ts";
 import { AsyncQueue } from "./queue.ts";
 import { resolveClaudeExecutable, type ClaudeExecutable } from "./executable.ts";
@@ -19,6 +20,7 @@ export interface ClaudeHostOptions extends HostLaunchOptions {
   resolveExecutable?: () => ClaudeExecutable;
 }
 interface OpenRun {
+  activeTurn?: string;
   request: StartRequest;
   integrationMode: IntegrationMode;
   sessionId: string;
@@ -161,6 +163,12 @@ export class ClaudeHost implements AgentHost {
     const uuid = randomUUID();
     run.lastInterrupted = false;
     run.turns.push(uuid);
+    if (run.turns.length === 1) {
+      run.activeTurn = uuid;
+      this.emitFact(run, { kind: 'run.updated', subject: `run:${id}`, payload: { last_evidence: {
+        native_source: 'claude', native_record: { type: 'user', uuid, promptId: uuid, message: { role: 'user', content: 'observed' } },
+      } } });
+    }
     run.input.push({ type: "user", uuid, session_id: run.sessionId, parent_tool_use_id: null, message: { role: "user", content: input.text } });
     if (!run.sawState) run.events.push({ type: "state", state: "running" });
   }
@@ -225,6 +233,9 @@ export class ClaudeHost implements AgentHost {
       this.emitFact(run, { kind: "approval.created", subject: `approval:${id}`, payload: {
         run_id: run.request.runId, conversation_id: run.request.conversationId, request_id: options.requestId || options.toolUseID,
         state: "pending", available_decisions: ["allow", "deny"], request: toJson({ name, input, tool_use_id: options.toolUseID }) } });
+      this.emitFact(run, { kind: 'run.updated', subject: `run:${run.request.runId}`, payload: { last_evidence: {
+        native_source: 'claude_sdk', native_record: { type: 'system', subtype: 'session_state_changed', state: 'requires_action' }, turn_id: run.turns[0] ?? null,
+      } } });
       run.events.push({ type: "state", state: "waiting_approval" });
     });
   }
@@ -265,6 +276,19 @@ export class ClaudeHost implements AgentHost {
   private wasInterrupted(run: OpenRun): boolean { return run.lastInterrupted || run.interrupted.size > 0; }
   private mapMessage(run: OpenRun, message: SDKMessage): void {
     const runSubject = `run:${run.request.runId}` as const;
+    const turnId = message.type === 'result' ? message.user_message_uuid ?? run.turns[0]
+      : message.type === 'system' && message.subtype === 'session_state_changed' && message.state === 'idle' ? run.activeTurn : run.turns[0];
+    const source = message.type === 'result' || message.type === 'system' ? 'claude_sdk' : 'claude';
+    const record = captureNativeRecord(source, toJson(message) as Record<string, JsonValue>);
+    if (message.type !== 'result' && record && turnId && !('parent_tool_use_id' in message && message.parent_tool_use_id)) {
+      if (run.activeTurn !== turnId) {
+        run.activeTurn = turnId;
+        this.emitFact(run, { kind: 'run.updated', subject: runSubject, payload: { state: 'running', last_evidence: { kind: 'turn_started', turn_id: turnId } } });
+      }
+      this.emitFact(run, { kind: 'run.updated', subject: runSubject, payload: { last_evidence: {
+        native_source: source, native_record: record, turn_id: turnId,
+      } } });
+    }
     if (message.type === "system" && message.subtype === "init") {
       if (message.session_id !== run.sessionId) throw new Error("Claude init session_id does not match the requested sessionId");
       this.emitFact(run, { kind: "run.updated", subject: runSubject, payload: { last_evidence: toJson({ kind: "init", integration_mode: run.integrationMode, mcp_servers: message.mcp_servers }) } });

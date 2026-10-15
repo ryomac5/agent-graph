@@ -4,7 +4,7 @@ import { useContext, useLayoutEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { MemoryRouter, useNavigate, useLocation } from 'react-router';
 import { WorkspacePage } from '../pages/workspace/WorkspacePage.tsx';
-import { createStore, type Row, type ScreenStore } from '../lib/store.ts';
+import { createStore, type Row, type ScreenStore } from "./current-fixture.ts";
 import { createWorkspace, listPanes, workspaceKey, type PaneTree } from '../lib/panes.ts';
 import type { Ack } from '../lib/client.ts';
 import { OpenWorkspaceFile, WorkspaceConversationHeader } from '../lib/workspace-context.ts';

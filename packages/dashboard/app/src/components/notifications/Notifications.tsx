@@ -14,7 +14,7 @@ import { collectNotifications, loadPreferences, NOTIFICATION_KINDS, notification
 const NOTICE_LIMIT = 100;
 export interface NotificationsProps { client: CommandClient; target?: ScreenStore; initiallyOpen?: boolean; compact?: boolean; language?: Language }
 export const Notifications = memo(function Notifications({ client, target = store, initiallyOpen = true, compact = false, language = 'en' }: NotificationsProps) {
-  const selectState = useMemo(() => selectScreenTables(['runs', 'approvals', 'conversations', 'roots', 'projects', 'aliases', 'relations', 'messages', 'message_memberships', 'artifacts', 'send_watches', 'tasks']), []);
+  const selectState = useMemo(() => selectScreenTables(['runs', 'approvals', 'conversations', 'roots', 'projects', 'aliases', 'relations', 'messages', 'message_memberships', 'artifacts', 'send_watches', 'tasks', 'state_decisions']), []);
   const state = useScreenStore(target, selectState);
   const text = (en: string, ja: string) => language === 'ja' ? ja : en;
   const previous = useRef<ScreenState | undefined>(undefined);
@@ -46,11 +46,11 @@ export const Notifications = memo(function Notifications({ client, target = stor
     }
     setNotices(items => {
       const retained = items.filter(notice => notice.kind !== 'delivery_failed'
-        || state.projection.send_watches?.some(row => row.id === notice.deliveryId && row.state === 'failed'));
+        || state.projection.send_watches?.some(row => row.id === notice.deliveryId && (row.decision as { display?: string } | undefined)?.display === 'Not delivered'));
       return visible.length ? [...visible.reverse(), ...retained].slice(0, NOTICE_LIMIT)
         : retained.length === items.length ? items : retained;
     });
-  }, [state.projection.runs, state.projection.approvals, state.projection.send_watches, state.generation, preferences, language]);
+  }, [state.projection.runs, state.projection.state_decisions, state.projection.approvals, state.projection.send_watches, state.generation, preferences, language]);
   useEffect(() => { if (open && focused) panel.current?.focus(); }, [open, focused]);
   useEffect(() => () => { for (const notification of browserNotices.current) notification.close(); }, []);
   async function changePreference(kind: typeof NOTIFICATION_KINDS[number], mode: NotificationMode) {

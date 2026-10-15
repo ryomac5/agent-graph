@@ -1,3 +1,5 @@
+import { scanCodexSessions } from '../observe/codex/sessions.ts';
+import { scanSessions, SESSION_SCAN_INTERVAL_MS, type SessionScan } from '../service/session-scan.ts';
 import { SendWatch } from '../service/send-watch.ts';
 import { addProject, listDirectories } from './projects.ts';
 import { renameSession } from './session-rename.ts';
@@ -28,7 +30,23 @@ const MAX_OPEN_CONVERSATIONS = 10;
 const PROJECTION_DELIVERY_MS = 25;
 const MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
 const MAX_SESSION_COMMANDS = 256;
+// 送出前の受付の保存は、観測の worker や runner の書き込み、checkpoint と重なると SQLITE_BUSY になる。
+// 主スレッドを止めずに短い間隔で読み直し、この時間内に保存できなければ runner を呼ばずに拒否する。
+const SEND_PERSIST_RETRY_MS = 2_000;
+const SEND_PERSIST_RETRY_DELAY_MS = 20;
+async function persistSend<T>(operation: () => T | Promise<T>): Promise<T> {
+  const deadline = performance.now() + SEND_PERSIST_RETRY_MS;
+  for (;;) {
+    try { return await operation(); }
+    catch (error) {
+      const busy = error instanceof Error && "errcode" in error && (Number(error.errcode) & 0xff) === 5;
+      if (!busy || performance.now() >= deadline) throw error;
+      await new Promise(resolve => setTimeout(resolve, SEND_PERSIST_RETRY_DELAY_MS));
+    }
+  }
+}
 export interface WebSocketOptions {
+  now?: () => number;
   usage?: UsageOptions;
   port?: number;
   runnerPath?: string;
@@ -40,26 +58,31 @@ export interface WebSocketOptions {
 
 export async function startWebSocketServer(service: ReturnType<typeof openObservationService>, options: WebSocketOptions = {}) {
   let feed!: ProjectionFeed;
+  const now = options.now ?? Date.now;
   let sendWatch!: SendWatch;
   let stopped = false;
   function readWatches<T>(read: () => T, fallback: T): T {
     try { return read(); }
     catch (error) { console.error('Send watch failed:', error); return fallback; }
   }
-  function captureWatch(conversation: string) {
-    return readWatches(() => sendWatch.capture(conversation), undefined);
-  }
-  async function recordWatch(...args: Parameters<SendWatch['recordAccepted']>) {
-    try {
-      await sendWatch.recordAccepted(...args);
-      if (stopped) return;
-      pollObservation(refresh);
-      publishWatches();
-    } catch (error) { console.error('Send watch recording failed:', error); }
-  }
   function publishWatches() {
     const rows = sendWatch.list();
     for (const socket of clients.keys()) send(socket, { type: "send_watches", rows });
+  }
+  function deliveryAck(id: string, result: object = {}) {
+    sendWatch.check(now());
+    const delivery = sendWatch.decision(id);
+    const ok = !!delivery && sendWatch.hasEmission(id) && delivery.value !== 'rejected' && delivery.reason !== 'cmd_id_conflict';
+    return { ok, result: { ...result, delivery }, ...(!ok ? { error: delivery?.reason ?? 'not_emitted' } : {}) };
+  }
+  async function savePhase(id: string, phase: Parameters<SendWatch['phase']>[1], verify?: () => Promise<void>): Promise<void> {
+    await persistSend(async () => { await verify?.(); sendWatch.phase(id, phase, now()); });
+  }
+  // 送出後の保存失敗は、送出をやり直す理由にも送信失敗の証拠にもならない。
+  async function finishPhase(id: string, phase: Parameters<SendWatch['phase']>[1]): Promise<void> {
+    try { await savePhase(id, phase); }
+    catch (error) { console.error('Send phase persistence failed:', error); }
+    readWatches(() => { sendWatch.check(now()); publishWatches(); }, undefined);
   }
   const token = createToken();
   const clients = new Map<WebSocket, { tables?: Set<string>; conversations: Set<string> }>();
@@ -82,9 +105,12 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
     feed.recordPatchBytes(patch, text);
     send(socket, message, text);
   }
+  function readScans(): Promise<SessionScan[]> {
+    return Promise.all([scanSessions(service.sessionDirectory, undefined, now), scanCodexSessions(service.codexHome, undefined, now)]);
+  }
   function refresh(): void {
     if (!feed) return;
-    const update = feed.refresh();
+    const update = feed.refresh(now());
     if (update) {
       // 接続がない間も、再接続用の履歴の保持量を制限する。
       if (update !== "resync" && !clients.size) feed.serializePatch(update);
@@ -96,7 +122,7 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
       }
     }
     // 台帳の差分を配り終えてから、補助の見張りを更新する。
-    try { if (sendWatch?.check()) publishWatches(); }
+    try { if (sendWatch?.check(now())) publishWatches(); }
     catch (error) { console.error('Send watch check failed:', error); }
   }
   const runner = new RunnerClient(options.runnerPath ?? runnerSocketPath(), (event) => {
@@ -120,6 +146,7 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
   });
   const sessionHosts = createSessionHosts(files.selectRoot, options.sessionHosts);
   const sessionCommands = new Map<string, Promise<unknown>>();
+  const activeCommands = new Map<string, Promise<void>>();
   const completedSessionCommands: string[] = [];
   const server = createServer((request, response) => {
     response.setHeader("Cache-Control", "no-store");
@@ -175,7 +202,7 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
         if (!Number.isSafeInteger(message.seq) || message.seq < 0
           || message.generation !== undefined && (!Number.isSafeInteger(message.generation) || message.generation < 0)
           || tables !== undefined && (!Array.isArray(tables) || tables.some((table: unknown) =>
-            typeof table !== "string" || table !== "projects" && table !== "roots" && !(PROJECTION_TABLES as readonly string[]).includes(table)))
+            typeof table !== "string" || table !== "projects" && table !== "roots" && table !== "state_decisions" && !(PROJECTION_TABLES as readonly string[]).includes(table)))
           || conversations !== undefined && (!Array.isArray(conversations) || conversations.length > MAX_OPEN_CONVERSATIONS || conversations.some((id: unknown) => typeof id !== "string" || !id))) {
           socket.close(1008, "Invalid hello"); return;
         }
@@ -186,11 +213,18 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
           send(socket, { type: "resync", reason: "Patch retention exhausted or projection rebuilt" });
           return;
         }
-        clients.set(socket, { tables: tables === undefined ? undefined : new Set<string>(tables), conversations: new Set<string>(conversations ?? []) });
+        clients.set(socket, { tables: tables === undefined ? undefined : new Set<string>([...tables, ...(tables.includes('runs') ? ['state_decisions'] : [])]), conversations: new Set<string>(conversations ?? []) });
         for (const patch of patches) sendPatch(socket, patch);
+        sendPatch(socket, feed.currentPatch());
         readWatches(() => send(socket, { type: "send_watches", rows: sendWatch.list() }), undefined);
       } else if (message.type === "cmd" && clients.has(socket) && typeof message.cmd_id === "string"
         && message.cmd_id.length > 0 && typeof message.command === "string" && message.command.length > 0) {
+        const previousCommand = activeCommands.get(message.cmd_id);
+        let finishCommand!: () => void;
+        const active = new Promise<void>(resolve => { finishCommand = resolve; });
+        activeCommands.set(message.cmd_id, active);
+        await previousCommand;
+        try {
         if (message.command === 'project.add' || message.command === 'fs.directories') {
           try {
             const result = message.command === 'project.add' ? await addProject(service.appendUi, message) : listDirectories(message.payload);
@@ -222,15 +256,36 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
         if ((TERMINAL_COMMANDS as readonly string[]).includes(message.command)) {
           const hosted = message.command === 'attachment.put' || ['ssh.read', 'ssh.write', 'ssh.test', 'worktree.create', 'git.branches'].includes(message.command) || message.command.startsWith('session.') || message.command === 'terminal.attach' || sessionHosts.hasTerminal(message.payload?.terminalId);
           const retained = ['attachment.put', 'session.launch', 'session.send', 'session.interrupt', 'worktree.create', 'ssh.write'].includes(message.command);
-          let result = retained ? sessionCommands.get(message.cmd_id) : undefined;
+          let result = retained && message.command !== 'session.send' ? sessionCommands.get(message.cmd_id) : undefined;
           if (!result) {
             const watched = message.command === 'session.send' && typeof message.payload?.conversationId === 'string' && typeof message.payload?.text === 'string';
             if (watched) pollObservation(refresh);
-            const captured = watched ? captureWatch(message.payload.conversationId) : undefined;
-            result = hosted ? sessionHosts.handle(message.command, message.payload, notify) : terminals.handle(message.command, message.payload);
+            const terminal = watched ? await sessionHosts.target(message.payload.conversationId) : undefined;
+            const captured = watched ? await persistSend(() => sendWatch.capture(message.payload.conversationId, now(), terminal)) : undefined;
+            if (captured && !await persistSend(() => sendWatch.begin(message.cmd_id, message.payload.conversationId, message.payload.text, captured, message.payload.attachments))) {
+              sendWatch.check(now());
+              const delivery = sendWatch.decision(message.cmd_id);
+              const prior = sessionCommands.get(message.cmd_id);
+              if (prior && delivery?.reason !== 'cmd_id_conflict') {
+                await prior.then(result => send(socket, { type: 'ack', cmd_id: message.cmd_id, ...deliveryAck(message.cmd_id),
+                  result: { ...result as object, delivery_decision: sendWatch.decision(message.cmd_id) } }), () => send(socket, { type: 'ack', cmd_id: message.cmd_id, ...deliveryAck(message.cmd_id) }));
+                return;
+              }
+              send(socket, { type: 'ack', cmd_id: message.cmd_id, ...deliveryAck(message.cmd_id) });
+              publishWatches(); return;
+            }
+            let emitting = false;
+            result = hosted ? sessionHosts.handle(message.command, message.payload, notify, captured ? {
+              emitting: async (target, verify) => {
+                if (target !== terminal) throw new Error('no_host');
+                await savePhase(message.cmd_id, 'emitting', verify); emitting = true;
+              }, emitted: () => finishPhase(message.cmd_id, 'emitted'),
+            } : undefined) : terminals.handle(message.command, message.payload);
             if (captured) result = result.then(value => {
-              if ((value as SessionSendResult).delivery !== 'terminal') void recordWatch(message.cmd_id, (value as SessionSendResult).conversationId ?? message.payload.conversationId, message.payload.text, captured, message.payload.attachments, message.payload.retryOf);
-              return value;
+              if ((value as SessionSendResult).delivery === 'terminal') sendWatch.handled(message.cmd_id, now());
+              readWatches(() => { sendWatch.check(now()); publishWatches(); }, undefined); return value;
+            }, async error => {
+              await finishPhase(message.cmd_id, emitting ? 'aborted' : 'rejected'); throw error;
             });
             if (hosted) result = result.then(value => {
               const response = value as SessionSendResult;
@@ -247,8 +302,11 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
               void result.then(finish, finish);
             }
           }
-          void result.then(result => {
-            send(socket, { type: "ack", cmd_id: message.cmd_id, ok: true, result });
+          await result.then(result => {
+            const watched = message.command === 'session.send' && sendWatch.has(message.cmd_id);
+            const delivery = watched ? deliveryAck(message.cmd_id) : undefined;
+            send(socket, { type: "ack", cmd_id: message.cmd_id, ok: true, ...delivery,
+              result: watched ? { ...result as object, delivery_decision: sendWatch.decision(message.cmd_id) } : result });
           }, error => {
             send(socket, { type: "ack", cmd_id: message.cmd_id, ok: false,
               ...(error instanceof TerminalInputError ? { result: { terminalId: error.terminalId } } : {}),
@@ -277,18 +335,34 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
         const watchedInput = ['send', 'start', 'adopt', 'fork'].includes(message.command) && typeof input?.text === 'string';
         if (watchedInput) pollObservation(refresh);
         const destination = message.payload?.conversationId ?? (message.payload?.runId ? feed.runConversation(message.payload.runId) : undefined);
-        const captured = watchedInput ? captureWatch(destination ?? '') : undefined;
-        if (captured && message.command !== 'send') captured.busy_run = null;
-        void runner.request(forwardScreenCommand(message)).then((result) => {
-          const { type, ...ack } = result;
-          send(socket, { type: "ack", ...ack });
-          if (captured && result.ok) {
-            const conversation = (result.result as { conversationId?: string } | undefined)?.conversationId ?? destination;
-            if (conversation) {
-              void recordWatch(message.cmd_id, conversation, input.text, captured, [], message.payload.retryOf);
-            }
+        const captured = watchedInput && destination ? await persistSend(() => sendWatch.capture(destination, now(), 'runner', message.payload?.runId)) : undefined;
+        if (captured && !await persistSend(() => sendWatch.begin(message.cmd_id, destination, input.text, captured))) {
+          sendWatch.check(now());
+          send(socket, { type: 'ack', cmd_id: message.cmd_id, ...deliveryAck(message.cmd_id) });
+          publishWatches(); return;
+        }
+        if (captured) {
+          try { await savePhase(message.cmd_id, 'emitting'); }
+          catch {
+            await finishPhase(message.cmd_id, 'rejected');
+            send(socket, { type: 'ack', cmd_id: message.cmd_id, ...deliveryAck(message.cmd_id) });
+            return;
           }
+        }
+        await runner.request(forwardScreenCommand(message)).then(async (result) => {
+          const { type, ...ack } = result;
+          if (captured) await finishPhase(message.cmd_id, result.ok ? 'emitted' : 'aborted');
+          send(socket, { type: "ack", ...ack, ...(captured && result.ok ? deliveryAck(message.cmd_id, result.result as object) : {}) });
+        }, async () => {
+          if (captured) await finishPhase(message.cmd_id, 'aborted');
+          send(socket, { type: "ack", cmd_id: message.cmd_id, ok: false, error: "Runner unavailable" });
         });
+        } catch {
+          send(socket, { type: 'ack', cmd_id: message.cmd_id, ok: false, error: 'Unable to persist send operation' });
+        } finally {
+          finishCommand();
+          if (activeCommands.get(message.cmd_id) === active) activeCommands.delete(message.cmd_id);
+        }
       } else socket.close(1008, "Expected hello or cmd");
     });
   });
@@ -297,8 +371,14 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
       server.once("error", reject);
       server.listen(port, "127.0.0.1", () => { server.off("error", reject); resolve(); });
     });
-    feed = new ProjectionFeed(service.dbPath, service.catchUp, options.patchRetention);
+    // 起動時の走査は最初の評価の前に入れる。走査なしで全実行を評価し、直後に全件を評価し直して配らない。
+    const initialScans = await readScans().catch(error => {
+      console.error('Session scan persistence failed:', error instanceof Error ? error.message : 'Unknown failure');
+      return [];
+    });
+    feed = new ProjectionFeed(service.dbPath, service.catchUp, options.patchRetention, initialScans);
     sendWatch = new SendWatch(service.dbPath, options.readRedactionRules);
+    for (const result of initialScans) sendWatch.recordScan(result);
   } catch (error) { sessionHosts.close(); runner.close(); sendWatch?.close(); feed?.close(); files.close(); searchDb.close(); wss.close(); server.close(); throw error; }
   port = (server.address() as { port: number }).port;
   searchOptions.port = port;
@@ -307,6 +387,16 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
     if (deliveryTimer) return;
     deliveryTimer = setTimeout(() => { deliveryTimer = undefined; pollObservation(refresh); }, PROJECTION_DELIVERY_MS);
   });
+  let scanning = false;
+  async function scan() {
+    if (scanning || stopped) return;
+    scanning = true;
+    try { const results = await readScans(); if (!stopped) { for (const result of results) { feed.recordScan(result); sendWatch.recordScan(result); } pollObservation(refresh); } }
+    catch (error) { console.error('Session scan persistence failed:', error instanceof Error ? error.message : 'Unknown failure'); }
+    finally { scanning = false; }
+  }
+  pollObservation(refresh);
+  const scanTimer = setInterval(() => { void scan(); }, SESSION_SCAN_INTERVAL_MS);
   const timer = setInterval(() => pollObservation(refresh), PROJECTION_POLL_MS);
   return {
     url: `http://127.0.0.1:${port}`, wsUrl: `ws://127.0.0.1:${port}/ws`, token, runner, feed, previews: files,
@@ -326,6 +416,7 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
       for (const socket of wss.clients) socket.terminate();
       await new Promise<void>((resolve) => wss.close(() => resolve()));
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      clearInterval(scanTimer);
       sendWatch.close();
       feed.close();
       searchDb.close();

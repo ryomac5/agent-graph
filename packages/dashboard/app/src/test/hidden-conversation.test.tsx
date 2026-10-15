@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { App } from '../App.tsx';
-import { createStore } from '../lib/store.ts';
+import { createStore } from "./current-fixture.ts";
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); localStorage.clear(); });
 const id = '["claude","hidden"]';

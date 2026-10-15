@@ -4,7 +4,7 @@ import { MemoryRouter } from 'react-router';
 import { ChoiceMenu } from '../components/ChoiceMenu.tsx';
 import { findOlderModels, readRecommendedModel, readVisibleModels } from '../components/conversation/models.ts';
 import { ConversationPage } from '../pages/conversation/ConversationPage.tsx';
-import { createStore } from '../lib/store.ts';
+import { createStore } from "./current-fixture.ts";
 import { buildRows } from '../pages/graph/rows.ts';
 
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
@@ -57,7 +57,7 @@ it.each(['en', 'ja'] as const)('preserves the provider default until the policy 
   fireEvent.change(screen.getByRole('textbox', { name: language === 'ja' ? '入力' : 'Message' }), { target: { value: 'Begin' } });
   fireEvent.click(screen.getByRole('button', { name: language === 'ja' ? '送信' : 'Send' }));
   await waitFor(() => expect(command).toHaveBeenCalledWith('session.launch', { projectId: 'p', provider: 'claude', model: 'opus' }));
-  await waitFor(() => expect(command).toHaveBeenCalledWith('session.send', { conversationId: '["claude","native"]', text: 'Begin' }));
+  await waitFor(() => expect(command).toHaveBeenCalledWith('session.send', { conversationId: '["claude","native"]', text: 'Begin' }, expect.any(String)));
 });
 it('adds sixteen pixels to row geometry in narrow panels without changing counts or grouping', () => {
   const tree = { roots: ['root'], edges: [], unresolved: [], nodes: [{ id: 'root', kind: 'conversation' as const, label: 'Root', role: 'orchestrate', state: 'idle', provider: 'claude', model: 'opus', children: ['child'], attempts: [] }, { id: 'child', kind: 'conversation' as const, label: 'Child', role: 'implement', state: 'running', provider: 'codex', model: 'gpt-6.1-sol', children: [], attempts: [] }] };
@@ -151,7 +151,7 @@ it.each(['poll', 'launch', 'hosts'] as const)('sends exactly once after unmount 
   discovered = true;
   await act(async () => { complete?.(); await vi.advanceTimersByTimeAsync(250); });
   expect(command.mock.calls.filter(([name]) => name === 'session.launch')).toHaveLength(1);
-  expect(command.mock.calls.filter(([name]) => name === 'session.send')).toEqual([['session.send', { conversationId: '["claude","native"]', text: 'Begin' }]]);
+  expect(command.mock.calls.filter(([name]) => name === 'session.send')).toEqual([['session.send', { conversationId: '["claude","native"]', text: 'Begin' }, expect.any(String)]]);
   expect(vi.getTimerCount()).toBe(0);
   expect(onConversation).not.toHaveBeenCalled();
   expect(sessionStorage.getItem('agent-graph-conversation-draft:new:p:/repo')).toBeNull();

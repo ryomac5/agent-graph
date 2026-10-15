@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import { App } from '../App.tsx';
-import { createStore } from '../lib/store.ts';
+import { createStore } from "./current-fixture.ts";
 import { READY_KEY, READ_KEY } from '../lib/turns.ts';
 import { PANEL_COLLAPSED_KEY, PANEL_WIDTH_KEY } from '../pages/workspace/WorkspacePanel.tsx';
 
@@ -50,7 +50,7 @@ it('1: groups sessions by turns and the current 24-hour boundary, collapses proj
   const turn = await within(sessions).findByRole('region', { name: 'Waiting' });
   expect(within(turn).getByRole('link', { name: 'Session approval' })).toBeTruthy();
   expect(within(turn).getByRole('link', { name: 'Session input' })).toBeTruthy();
-  expect(within(turn).getByRole('link', { name: 'Session unread' })).toBeTruthy();
+  expect(within(sessions).getByRole('link', { name: 'Session unread' }).querySelector('[data-state="idle"]')).toBeTruthy();
   const running = within(sessions).getByRole('link', { name: 'Session active' });
   expect(running.getAttribute('aria-current')).toBe('page');
   expect(running.querySelector('.root-state')?.getAttribute('data-state')).toBe('running');
@@ -139,7 +139,8 @@ it.each(['/p/p', '/c/active', '/p/p/graph', '/p/p/changes'])('5: retains route %
     expect(document.querySelector('.sidebar')).toBeTruthy();
     expect(document.querySelector('.workspace-conversation')).toBeTruthy();
     expect(screen.getByRole('complementary', { name: 'Panel' })).toBeTruthy();
-    expect(screen.getByText('Root response')).toBeTruthy();
+    if (route === '/c/active') expect(screen.getByText('Root response')).toBeTruthy();
+    else expect(screen.getByRole('tab', { name: 'Session approval' })).toBeTruthy();
   }
 });
 it('uses Japanese for session groups, panel tabs and mobile navigation', () => {

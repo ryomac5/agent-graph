@@ -1,3 +1,4 @@
+import { runStateJourneys } from './state-journeys.mjs';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { readFile, rename } from 'node:fs/promises';
@@ -148,7 +149,7 @@ export async function runJourneys({ browser, isolation, url, report, signal }) {
   async function idle(session) {
     await waitFor(async () => !(await actorState(session)).working, 'fake completed');
     const root = await rootFor(session.original);
-    await waitFor(async () => /\b(?:Idle|Done)\b/.test(await row(root).innerText()), 'Idle or Done');
+    await waitFor(async () => /\bIdle\b/.test(await row(root).innerText()), 'Idle');
     assert.equal(await active().getByRole('status', { name: 'Working', exact: true }).count(), 0);
   }
   async function terminal() {
@@ -163,13 +164,16 @@ export async function runJourneys({ browser, isolation, url, report, signal }) {
   }
   async function shot(name) { await page.screenshot({ path: join(report.directory, `${current}-${name}.png`), fullPage: true }); }
   async function closeSessions() {
-    for (const session of sessions) {
+    // 失敗しても次の項目へ持ち越さない。持ち越すと古い端末の失敗が後続の全項目へ連鎖する。
+    const targets = sessions; sessions = [];
+    for (const session of targets) {
       if (session.terminalId) {
+        // 項目自身が fake CLI を終了させた端末は、すでに runner から消えている。それは片付け済みとして扱う。
+        if ((await hosts()).every(host => host.terminalId !== session.terminalId)) continue;
         const acks = await commands([['terminal.attach', { terminalId: session.terminalId }], ['terminal.close', { terminalId: session.terminalId }]]);
         assert.ok(acks.every(ack => ack.ok), `Unable to close fixture terminal: ${JSON.stringify(acks)}`);
       } else { await script(session, 'exit'); }
     }
-    sessions = [];
   }
   async function evidence() {
     return { snapshot: await snapshot(), actors: await readActors(isolation.control), frames: frames.filter(frame => frame.step === current), browserErrors: browserErrors.filter(error => error.step === current) };
@@ -200,7 +204,7 @@ export async function runJourneys({ browser, isolation, url, report, signal }) {
     for (const provider of ['claude', 'codex']) await check(`1-${provider}`, async () => {
       const session = await seed(provider);
       assert.equal(await bubble(session.marker).count(), 1);
-      await assertWatch(session.original, session.marker, 'closed');
+      await assertWatch(session.original, session.marker, 'received_candidate');
       return '新規起動から最初の送信と返事まで、画面と実履歴で確認';
     });
     await check('2', async () => {
@@ -208,11 +212,11 @@ export async function runJourneys({ browser, isolation, url, report, signal }) {
       const first = session.marker + ' working', second = session.marker + ' queued';
       await send(first); await waitFor(async () => (await actorState(session)).working, 'working');
       await send(second);
-      await bubble(second).getByRole('status').filter({ hasText: 'Queued' }).waitFor(); await shot('queued');
-      await page.reload(); await bubble(second).getByRole('status').filter({ hasText: 'Queued' }).waitFor();
+      await bubble(second).getByRole('status').filter({ hasText: 'Likely queued' }).waitFor(); await shot('queued');
+      await page.reload(); await bubble(second).getByRole('status').filter({ hasText: 'Likely queued' }).waitFor();
       await script(session, 'release'); await reply(second);
-      await waitFor(async () => await bubble(second).count() === 1 && !(await bubble(second).innerText()).includes('Queued'), 'absorbed exactly once');
-      await assertWatch(session.original, second, 'closed');
+      await waitFor(async () => await bubble(second).count() === 1 && !(await bubble(second).innerText()).includes('Likely queued'), 'absorbed exactly once');
+      await assertWatch(session.original, second, 'received_candidate');
       await page.reload(); await reply(second); assert.equal(await bubble(second).count(), 1);
       const rows = (await readFile((await actorState(session)).path, 'utf8')).trim().split('\n').map(JSON.parse);
       assert.equal(rows.filter(row => row.attachment?.type === 'queued_command' && row.attachment.prompt === second).length, 1);
@@ -313,17 +317,17 @@ export async function runJourneys({ browser, isolation, url, report, signal }) {
       await page.reload(); await row(roots[0]).first().waitFor(); assert.equal(await row(roots[0]).count(), 1);
     });
     await check('9-delivered', async () => {
-      const session = await seed(); const watch = await assertWatch(session.original, session.marker, 'closed'); assert.ok(watch.message_id);
+      const session = await seed(); const watch = await assertWatch(session.original, session.marker, 'received_candidate'); assert.ok(watch.message_id);
       // 製品の 60 秒の配達期限を越えても誤通知が出ない。
       await delay(61_000); guard();
-      assert.equal((await watches(session.original)).find(row => row.body === session.marker).state, 'closed');
+      assert.equal((await watches(session.original)).find(row => row.body === session.marker).state, 'received_candidate');
       assert.equal(await bubble(session.marker).getByRole('alert').count(), 0);
     });
     await check('9-missing', async () => {
       const session = await seed(); await idle(session); await script(session, 'drop-next');
       const text = session.marker + ' dropped'; await send(text);
-      await assertWatch(session.original, text, 'failed', WATCH_TIMEOUT_MS);
-      await bubble(text).getByRole('alert').filter({ hasText: 'Not delivered' }).waitFor();
+      await assertWatch(session.original, text, 'unverifiable', WATCH_TIMEOUT_MS);
+      await bubble(text).getByRole('status').filter({ hasText: 'Unconfirmed' }).waitFor();
       assert.equal(await agentMessage(text).count(), 0);
     });
     await check('9-bang', async () => {
@@ -332,11 +336,17 @@ export async function runJourneys({ browser, isolation, url, report, signal }) {
       await send(delivered);
       await waitFor(async () => (await readFile((await actorState(session)).path, 'utf8')).includes('<bash-input> echo E2E-delivered</bash-input>'), '! was received');
       await script(session, 'drop-next'); await send(missing);
-      await assertWatch(session.original, missing, 'failed', WATCH_TIMEOUT_MS);
-      await bubble(missing).getByRole('alert').filter({ hasText: 'Not delivered' }).waitFor();
+      await assertWatch(session.original, missing, 'unverifiable', WATCH_TIMEOUT_MS);
+      await bubble(missing).getByRole('status').filter({ hasText: 'Unconfirmed' }).waitFor();
       const deliveredWatch = (await watches(session.original)).find(row => row.body === delivered);
-      assert.equal(deliveredWatch?.state, 'closed', '届いた ! 命令が未配達と扱われています');
+      assert.equal(deliveredWatch?.state, 'received_candidate', '届いた ! 命令が未配達と扱われています');
       assert.equal(await bubble(delivered).getByRole('alert').count(), 0);
+    });
+    await runStateJourneys({ check, seed, script, send, reply, idle, snapshot, watches, bubble, isolation,
+      open: async id => { await page.goto(origin + '/c/' + encodeURIComponent(id)); await active().waitFor(); },
+      // Working だけは会話本文の role=status。他の語は同じ pane の見出しの状態表示にだけ出る。
+      status: label => label === 'Working' ? active().getByRole('status', { name: label, exact: true })
+        : page.locator('section.workbench-pane').filter({ has: active() }).locator('header.workbench-tabs .status-label').and(page.locator(`[data-label=${JSON.stringify(label)}]`)),
     });
     await check('10', async () => {
       assert.deepEqual(browserErrors, [], 'browser errors');

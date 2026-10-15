@@ -5,8 +5,8 @@ import { mergeIdentities, resolveProjection, resolveRow, resolveRunId, type Scre
 
 export type ConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'runner_unavailable';
 export type Row = Record<string, unknown>;
-export interface Snapshot { seq: number; generation: number; projection: Record<string, Row[]>; identities?: ScreenIdentities; pages?: Record<string, { total: number; next: string | null }> }
-export interface Patch { type: 'patch'; from_seq: number; seq: number; generation: number;
+export interface Snapshot { evaluated_at?: number; seq: number; generation: number; projection: Record<string, Row[]>; identities?: ScreenIdentities; pages?: Record<string, { total: number; next: string | null }> }
+export interface Patch { evaluated_at?: number; type: 'patch'; from_seq: number; seq: number; generation: number;
   changes: Record<string, { upsert: Row[]; remove: string[] }>; identities?: ScreenIdentities }
 export interface Delta { runId: string; text: string; conversationId?: string; messageId?: string; existingMessageIds?: string[] }
 export interface ScreenState extends Snapshot {
@@ -42,7 +42,7 @@ export function createStore() {
     },
     applyPatch(patch: Patch): boolean {
       if (patch.generation !== state.generation || patch.from_seq > state.seq) return false;
-      if (patch.seq <= state.seq) return true;
+      if (patch.seq < state.seq || patch.seq === state.seq && (patch.evaluated_at === undefined || patch.evaluated_at < (state.evaluated_at ?? 0))) return true;
       const identities = mergeIdentities(state.identities, patch.identities);
       const projection = identities === state.identities ? { ...state.projection } : resolveProjection(state.projection, identities);
       const deltas = { ...state.deltas };
@@ -58,6 +58,10 @@ export function createStore() {
         }
         if (changed) projection[table] = [...rows.values()];
       }
+      if (projection.state_decisions) {
+        const used = new Set((projection.runs ?? []).map(row => row.decision_id));
+        projection.state_decisions = projection.state_decisions.filter(row => used.has(row.id));
+      }
       const completed = patch.changes.messages?.upsert ?? [];
       for (const [key, delta] of Object.entries(deltas)) {
         const conversationId = delta.conversationId ?? projection.runs?.find(row => row.id === delta.runId)?.conversation_id;
@@ -68,7 +72,7 @@ export function createStore() {
             && link.message_id === row.id && link.conversation_id === conversationId));
         if (messageComplete || conversationComplete) delete deltas[key];
       }
-      update({ ...state, seq: patch.seq, projection: Object.keys(projection).every(table => projection[table] === state.projection[table]) ? state.projection : projection,
+      update({ ...state, seq: patch.seq, evaluated_at: patch.evaluated_at ?? state.evaluated_at, projection: Object.keys(projection).every(table => projection[table] === state.projection[table]) ? state.projection : projection,
         deltas: Object.keys(deltas).length === Object.keys(state.deltas).length ? state.deltas : deltas, identities });
       return true;
     },

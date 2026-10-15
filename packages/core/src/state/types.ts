@@ -50,7 +50,7 @@ export interface Signal extends Evidence {
   attemptId?: string | null;
   event: "start" | "progress" | "approval" | "input" | "complete" | "stop_attempt"
     | "open" | "close" | "archive" | "exit" | "interrupt_request" | "failure"
-    | "interrupted" | "report_failure" | Stage;
+    | "interrupted" | "child_stopped" | "report_failure" | Stage;
   process?: ProcessIdentity;
   tools?: readonly { id: string | null; phase: "started" | "finished" }[];
   activity?: "session_busy";
@@ -60,6 +60,7 @@ export interface Signal extends Evidence {
 export interface Conflict extends Evidence {
   kind: "conflict";
   runId: string;
+  turnId?: string;
   count: number;
 }
 export interface Unavailable extends Evidence {

@@ -2,7 +2,7 @@ import { afterEach, expect, it, onTestFinished, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { Inbox } from '../src/pages/inbox/Inbox.tsx';
 import { answerApproval } from '../src/pages/inbox/model.ts';
-import { createStore, type Row } from '../src/lib/store.ts';
+import { createStore, type Row } from "../src/test/current-fixture.ts";
 
 afterEach(cleanup);
 const NOW = '2026-10-07T10:00:00Z';

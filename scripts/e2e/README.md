@@ -102,3 +102,19 @@ node --test scripts/e2e/harness.test.mjs
 調査のときは `--only=6,9-bang` のように項目を絞れる。除いた項目は blocked になり、公開の判定は失敗のままになる。
 
 製品コード、本番サービス、既存の smoke、依存と lockfile は変更していない。
+
+## 本番コピーの状態再生
+
+```sh
+node --expose-gc scripts/e2e/prod-replay.mjs
+# 保存場所が異なる場合
+node --expose-gc scripts/e2e/prod-replay.mjs --db /absolute/path/agent-graph.db --claude-home /absolute/path/.claude --codex-home /absolute/path/.codex
+```
+
+本番 DB は readOnly で開き、VACUUM INTO で一時ディレクトリへ複製する。取り込み・投影・走査保存はコピーだけに行う。履歴と sessions は読み取りのみで、CLI の起動、既存会話への送信、サービス再起動は行わない。現在の busy 会話、E1〜E3 の固定表、旧 closed 配達の墓標を検査し、結果と refresh／配達照合の時間を JSON で出す。E3 は表の「run 対応未解決」を入力条件として原台帳7件を評価する。
+
+最大の履歴を持つ既存実行へ一件追記し、refresh が300 ms以下、GC後の評価ヒープが400 MiB以下であることも判定する。300 msは表示反映1秒からpoll 500 msと配信・描画200 msを除いた予算である。取り込みのsnapshotは解放してから評価を測る。直近7日の実行のturn鍵欠落率はClaude／Codex別に件数と割合を出し、暫定上限1%で判定する。対象0件は理由付きskip、GCが使えない場合のヒープはunavailable。
+
+終了コードは 0（判定した項目が一致）、1（不一致）、2（不一致はなく、読み取り・走査不能または未確認項目あり）。E1〜E3の元IDが消えていればunavailable、busy会話がなければ理由付きskipとする。`--keep` でコピーを残せる。既定は検査後に一時ディレクトリを削除する。コピーの書き換えが元 DB と WAL を変えない検査と、上限・欠落・skipの回帰試験は `node --test scripts/e2e/prod-replay.test.mjs`。
+
+偽CLI・ブラウザe2eの `state-waiting-agents` は、Idleの親＋背景の子Working／launchedからWaiting for agentsを表示し、子停止通知で子Unknown／親Idleへ戻ることを検査する。親のturnはcompletedのままである。

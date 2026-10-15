@@ -1,3 +1,4 @@
+import { createStableRunLinkCheck } from './run-link.ts';
 import type { DatabaseSync, SQLInputValue, StatementSync } from 'node:sqlite';
 import type { Fact, JsonValue } from './facts.ts';
 import { isClaudeHiddenMessage, type ClaudeMessageFlags } from './claude-message-flags.ts';
@@ -142,11 +143,13 @@ function writeReferences(db: DatabaseSync, facts: readonly Fact[]): void {
 function expandReferences(db: DatabaseSync, seeds: Set<string>, upstream: boolean): Set<string> {
   const subjects = new Set(seeds);
   let frontier = [...subjects];
-  const peers = prepare(db, `SELECT DISTINCT target.subject FROM search_references origin
-    JOIN search_references target ON target.key = origin.key
-    WHERE origin.subject IN (SELECT value FROM json_each(?))
-    AND ((origin.direction = '${upstream ? 'needs' : 'offers'}' AND target.direction = '${upstream ? 'offers' : 'needs'}')
-      OR (origin.direction = 'offers' AND target.direction = 'offers'))`);
+  // 参照の行は事実ごとに同じ鍵を繰り返す。起点の鍵を先に一意にし、事実数の二乗の結合を作らない。
+  // 上流は needs／offers の鍵から offers へ、下流は offers の鍵から needs／offers へ辿る。
+  const peers = prepare(db, `SELECT DISTINCT target.subject
+    FROM (SELECT DISTINCT key FROM search_references
+      WHERE subject IN (SELECT value FROM json_each(?)) AND direction IN (${upstream ? "'needs', 'offers'" : "'offers'"})) AS origin
+    CROSS JOIN search_references AS target
+      ON target.key = origin.key AND target.direction IN (${upstream ? "'offers'" : "'needs', 'offers'"})`);
   while (frontier.length) {
     const next: string[] = [];
     for (const row of peers.all(JSON.stringify(frontier))) {
@@ -283,11 +286,12 @@ export function refreshSearch(db: DatabaseSync, added?: readonly Fact[], allFact
   let facts: StoredRow[];
   // 初回の反映は全件が追加分なので、参照の探索を省いて直接構築する。
   if (added && !initial) {
+    const stableLink = createStableRunLinkCheck(db);
     const relevant = added.filter(fact => {
       if (!/^(message|message_membership|task|conversation|run|artifact|finding|alias)\./.test(fact.kind)) return false;
       // 状態だけの更新は、検索先・絞り込み・本文のいずれも変えない。
       return !fact.kind.startsWith('run.') || Boolean(fact.supersedes)
-        || fact.kind === 'run.created' || Boolean(fact.payload && 'conversation_id' in fact.payload);
+        || fact.kind === 'run.created' || Boolean(fact.payload && ('conversation_id' in fact.payload || 'generation' in fact.payload)) && !stableLink(fact);
     });
     if (!relevant.length) { db.exec('DELETE FROM search_dirty'); return; }
     const seeds = relevant.filter(fact => !fact.kind.startsWith('task.')

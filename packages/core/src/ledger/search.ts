@@ -1,3 +1,4 @@
+import { createStableRunLinkCheck } from './run-link.ts';
 import type { DatabaseSync, SQLInputValue, StatementSync } from 'node:sqlite';
 import type { Fact, JsonValue } from './facts.ts';
 import { isClaudeHiddenMessage, type ClaudeMessageFlags } from './claude-message-flags.ts';
@@ -285,22 +286,12 @@ export function refreshSearch(db: DatabaseSync, added?: readonly Fact[], allFact
   let facts: StoredRow[];
   // 初回の反映は全件が追加分なので、参照の探索を省いて直接構築する。
   if (added && !initial) {
-    // 同じ実行の直前の対応と同じ会話・世代を繰り返す事実は、検索の対応を変えない。
-    // 証拠ごとの実行の事実で、実行の全事実と文脈の読み直しを繰り返さない。
-    const previousLink = prepare(db, `SELECT payload FROM facts WHERE subject = ? AND seq < ? AND kind GLOB 'run.*'
-      AND json_type(payload, '$.conversation_id') IS NOT NULL ORDER BY seq DESC LIMIT 1`);
-    const restatesLink = (fact: Fact): boolean => {
-      const row = previousLink.get(fact.subject, fact.seq);
-      if (!row) return false;
-      const before = JSON.parse(String(row.payload)) as Record<string, unknown>;
-      const after = fact.payload as Record<string, unknown>;
-      return before.conversation_id === after.conversation_id && before.generation === after.generation;
-    };
+    const stableLink = createStableRunLinkCheck(db);
     const relevant = added.filter(fact => {
       if (!/^(message|message_membership|task|conversation|run|artifact|finding|alias)\./.test(fact.kind)) return false;
       // 状態だけの更新は、検索先・絞り込み・本文のいずれも変えない。
       return !fact.kind.startsWith('run.') || Boolean(fact.supersedes)
-        || fact.kind === 'run.created' || Boolean(fact.payload && 'conversation_id' in fact.payload) && !restatesLink(fact);
+        || fact.kind === 'run.created' || Boolean(fact.payload && ('conversation_id' in fact.payload || 'generation' in fact.payload)) && !stableLink(fact);
     });
     if (!relevant.length) { db.exec('DELETE FROM search_dirty'); return; }
     const seeds = relevant.filter(fact => !fact.kind.startsWith('task.')

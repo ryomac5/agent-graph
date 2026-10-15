@@ -83,6 +83,10 @@ export class SendWatch {
       target: JSON.stringify([id, run ?? requestedRun ?? null, terminal]) };
   }
   decision(id: string): DeliveryDecision | undefined { return this.decisions.get(id); }
+  hasEmission(id: string): boolean {
+    return !!this.db.prepare('SELECT 1 FROM api_delivery_evidence WHERE id IN (?, ?, ?, ?, ?) LIMIT 1')
+      .get(...['emitting', 'emitted', 'aborted', 'legacy_failed', 'legacy_closed'].map(phase => `${id}:${phase}`));
+  }
   has(id: string): boolean { return !!this.db.prepare('SELECT 1 FROM api_delivery_operations WHERE id = ?').get(id); }
   begin(id: string, conversation: string, body: string, captured: ReturnType<SendWatch['capture']>, attachments: string[] = []): boolean {
     const data = { ...captured, sent_ts: new Date(captured.sent_ts).toISOString(), body: redact(body, this.rules()).text, body_hash: bodyKey(redact(body, this.rules()).text), attachments, attachments_hash: bodyKey(JSON.stringify(attachments)) };

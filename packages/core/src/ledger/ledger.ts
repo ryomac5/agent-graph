@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { retainNativeMetadata } from './native-evidence.ts';
 import { DatabaseSync } from "node:sqlite";
 import { CONFIDENCES, ENTITY_KINDS, SOURCES } from "./facts.ts";
 import type { Fact, FactInput, JsonValue } from "./facts.ts";
@@ -62,6 +63,8 @@ const FIELD_LEVELS: Readonly<Record<string, number>> = {
 function restrictPayload(value: JsonValue, level: number, toolBody = false): JsonValue {
   if (value === null || typeof value !== "object") return value;
   if (Array.isArray(value)) return value.map((item) => restrictPayload(item, level, toolBody));
+  const native = retainNativeMetadata(value);
+  if (native) return native;
   const isTool = toolBody || value.type === "tool_result" || value.type === "tool_output" || value.role === "tool";
   const result: Record<string, JsonValue> = {};
   for (const [key, child] of Object.entries(value)) {

@@ -713,7 +713,7 @@ test("証拠だけの実行の事実は表を書き換えず、実体の記録�
   const at = (second: number) => `2026-01-01T00:00:${String(second).padStart(2, "0")}.000Z`;
   const evidence = (id: string, second: number, conversation = "c"): FactInput => ({ source: "transcript-claude", source_event_id: id,
     source_ts: at(second), confidence: "confirmed", kind: "run.updated", subject: "run:r",
-    payload: { conversation_id: conversation, generation: 1, last_evidence: { native_source: "claude", native_record: { type: "assistant", uuid: id } },
+    payload: { conversation_id: conversation, generation: 1, last_evidence: { native_source: "claude", native_record: { type: "assistant", uuid: id, parentUuid: "root" } },
       last_evidence_ts: at(second) } } as FactInput);
   const restated = (id: string, second: number): FactInput => ({ source: "ui", source_event_id: id, source_ts: at(second),
     confidence: "confirmed", kind: "run.updated", subject: "run:r", payload: { conversation_id: "c", generation: 1 } } as FactInput);
@@ -770,4 +770,38 @@ test("証拠だけの実行の事実は表を書き換えず、実体の記録�
       position = end;
     }
   }
+});
+
+for (const batched of [false, true]) test(`P2: 後着の古い世代の証拠は generation のない属性の所属を更新する（batch=${batched}）`, t => {
+  const { writer, database } = openTestLedger(t);
+  const append = (id: string, at: number, payload: object) => writer.append({ source: 'transcript-claude', source_event_id: id,
+    kind: id.startsWith('create') ? 'run.created' : 'run.updated', subject: 'run:r', payload,
+    confidence: 'confirmed', source_ts: new Date(at).toISOString() } as FactInput);
+  append('create1', 100, { conversation_id: 'c', generation: 1, state: 'running', model: 'model-1' });
+  append('create2', 200, { conversation_id: 'c', generation: 2, state: 'running', model: 'model-2' });
+  append('end', 400, { state: 'ended', model: 'model-final' });
+  let seq = applyIncremental(database, 0).last_seq;
+  append('late', 300, { conversation_id: 'c', generation: 1, last_evidence: { native_source: 'claude', native_record: { uuid: 'old' } } });
+  if (batched) append('later', 500, { conversation_id: 'c', generation: 2, last_evidence: { native_source: 'claude', native_record: { uuid: 'new' } } });
+  applyIncremental(database, seq);
+  const rows = readTables(database);
+  assert.equal(rows.runs.find(row => row.id === 'c:1')?.model, 'model-final');
+  assert.equal(rows.runs.find(row => row.id === 'c:2')?.state, 'running');
+  rebuild(database); assert.deepEqual(readTables(database), rows);
+});
+
+test('P4: 到着順で隣接した同じ対応でも source_ts が検索先を変える', t => {
+  const { writer, database } = openTestLedger(t);
+  const append = (id: string, at: number, payload: object, kind = 'run.updated', subject = 'run:r') => writer.append({
+    source: 'ui', source_event_id: id, source_ts: new Date(at).toISOString(), confidence: 'confirmed', kind, subject, payload } as FactInput);
+  append('a', 100, { conversation_id: 'a', generation: 1 }, 'run.created');
+  append('b', 1000, { conversation_id: 'b', generation: 2 }, 'run.created');
+  append('diff', 1100, { run_id: 'r', version: 1, diff: 'searchable patch' }, 'artifact.created', 'artifact:x');
+  let seq = applyIncremental(database, 0).last_seq;
+  append('late-a', 200, { conversation_id: 'a', generation: 1 }); seq = applyIncremental(database, seq).last_seq;
+  assert.equal(database.prepare("SELECT conversation_id FROM search_documents WHERE kind = 'diff'").get()!.conversation_id, 'b');
+  append('new-a', 1200, { conversation_id: 'a', generation: 1 }); applyIncremental(database, seq);
+  assert.equal(database.prepare("SELECT conversation_id FROM search_documents WHERE kind = 'diff'").get()!.conversation_id, 'a');
+  const docs = database.prepare('SELECT * FROM search_documents ORDER BY id').all();
+  rebuild(database); assert.deepEqual(database.prepare('SELECT * FROM search_documents ORDER BY id').all(), docs);
 });

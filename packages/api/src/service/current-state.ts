@@ -1,3 +1,4 @@
+import { expandNativeEvidence } from '../../../core/src/ledger/native-evidence.ts';
 import { renderConversationState, type ConversationDecision } from './conversation-display.ts';
 import { basename } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -191,10 +192,7 @@ export class CurrentState {
       const provider = this.nativeById.get(context.conversation_id)?.provider;
       const at = Date.parse(String(context.last_evidence_ts ?? context.started_ts));
       if (provider !== 'claude' && provider !== 'codex' || !(at >= since && at <= this.evaluatedAt)) continue;
-      // セッションの開始と終了の hook だけを持つ実行には、依頼も turn もない。鍵の欠落に数えない。
-      // 証拠を一つも持たない実行は、原記録の取り込み漏れを見落とさないよう欠落に数える。
-      const evidence = context.input?.evidence ?? [];
-      if (evidence.length && evidence.every(e => e.kind === 'signal' && (e.event === 'open' || e.event === 'close'))) continue;
+      // 信号の欠落から依頼の不在は証明できない。用途の独立した証拠がない実行も分母に含める。
       const row = coverage[provider]; row.runs++;
       if (!context.input?.turnId) row.missing++;
     }
@@ -410,7 +408,7 @@ export class CurrentState {
       if (candidates.length) for (const row of this.db.prepare(`SELECT ${columns} FROM facts WHERE seq > ? AND seq <= ? AND kind GLOB 'run.*'
         AND subject IN (SELECT value FROM json_each(?)) ORDER BY seq`).iterate(this.seq, seq, JSON.stringify(candidates))) {
         const fact = decode(row);
-        const group = added.get(fact.subject) ?? []; group.push(fact); added.set(fact.subject, group);
+        const group = added.get(fact.subject) ?? []; group.push(...expandNativeEvidence(fact)); added.set(fact.subject, group);
       }
       for (const subject of candidates) {
         const facts = added.get(subject) ?? [];
@@ -437,17 +435,19 @@ export class CurrentState {
     // 証拠を持たない事実は readEvidence で何も起こさないので、捨てても判定は変わらない。
     if (fresh?.length !== 0) for (const row of this.db.prepare(`SELECT ${columns} ${scope}`).iterate(...(fresh ? [seq, JSON.stringify(fresh)] : [seq]))) {
       if (superseded.has(String(row.fact_id))) continue;
-      const fact = decode(row);
-      if (!fact.kind.startsWith('run.')) continue;
-      const matching = matchContexts(subjects.get(fact.subject) ?? [], fact);
-      // 証拠を持つ事実だけを実行に残す。持たない事実は readEvidence で何も起こさない。
-      if (hasEvidence(fact)) for (const context of matching) (context.facts ??= []).push(fact);
-      let order: Fact | undefined;
-      for (const context of matching) if (context.started_ts === null || context.started_ts === undefined) {
-        // 並べ替えに使う欄だけを残す。同じ順位なら先に読んだ事実を残し、全体の安定な並べ替えと同じ結果にする。
-        order ??= { fact_id: fact.fact_id, source: fact.source, source_event_id: fact.source_event_id, kind: fact.kind, source_ts: fact.source_ts } as Fact;
-        if (!context.firstFact || orderActiveFacts([context.firstFact, order])[0] === order) context.firstFact = order;
-        if (order.kind === 'run.created' && (!context.firstCreated || orderActiveFacts([context.firstCreated, order])[0] === order)) context.firstCreated = order;
+      for (const fact of expandNativeEvidence(decode(row))) {
+        if (superseded.has(fact.fact_id)) continue;
+        if (!fact.kind.startsWith('run.')) continue;
+        const matching = matchContexts(subjects.get(fact.subject) ?? [], fact);
+        // 証拠を持つ事実だけを実行に残す。持たない事実は readEvidence で何も起こさない。
+        if (hasEvidence(fact)) for (const context of matching) (context.facts ??= []).push(fact);
+        let order: Fact | undefined;
+        for (const context of matching) if (context.started_ts === null || context.started_ts === undefined) {
+          // 並べ替えに使う欄だけを残す。同じ順位なら先に読んだ事実を残し、全体の安定な並べ替えと同じ結果にする。
+          order ??= { fact_id: fact.fact_id, source: fact.source, source_event_id: fact.source_event_id, kind: fact.kind, source_ts: fact.source_ts } as Fact;
+          if (!context.firstFact || orderActiveFacts([context.firstFact, order])[0] === order) context.firstFact = order;
+          if (order.kind === 'run.created' && (!context.firstCreated || orderActiveFacts([context.firstCreated, order])[0] === order)) context.firstCreated = order;
+        }
       }
     }
     const byConversation = new Map<string, RunContext[]>();
@@ -471,7 +471,7 @@ export class CurrentState {
       const added = continued.get(context);
       if (added) {
         const state = this.evidenceStates.get(context.id)!;
-        if (state.derived) context.started_ts = state.derived.startedTs;
+        context.started_ts ??= state.derived?.startedTs;
         if (added.length) this.readEvidence(context, conflictsByPath, added, state);
         else this.applyEvidence(context, state);
         continue;

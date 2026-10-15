@@ -1,3 +1,4 @@
+import { expandNativeEvidence } from '../../core/src/ledger/native-evidence.ts';
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
@@ -56,7 +57,7 @@ test("Claude の会話の記録から、作業ツリーの場所を本体のリ�
   assert.equal(view.runs[0].started_ts, "2026-10-07T01:00:00.000Z");
   assert.equal(view.runs[0].repository_id, repositoryId);
   // 道具の開始と結果も判定の入力として残し、状態は API が評価する。
-  assert.equal(facts(ledger).filter((fact) => fact.source_event_id.startsWith("native-record:")).length, 3);
+  assert.equal(facts(ledger).flatMap(expandNativeEvidence).filter((fact) => fact.source_event_id.startsWith("native-record:")).length, 3);
   const cursor = observeClaudeFile(ledger, path).cursor;
   appendFileSync(path, row("assistant", "a2", "2026-10-07T01:01:00Z", [{ type: "text", text: "Done." }], { cwd: worktree }));
   // 続きの行だけを渡しても、直前の状態は台帳から引き継ぐ。

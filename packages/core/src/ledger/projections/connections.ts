@@ -1,3 +1,4 @@
+import { expandNativeEvidenceSet } from '../native-evidence.ts';
 import type { ConnectionPayload, Fact } from "../facts.ts";
 import { normalizeTimestampFields } from "../timestamps.ts";
 
@@ -5,6 +6,7 @@ export interface ConnectionProjection extends ConnectionPayload { id: string }
 
 // 訂正対象を集合から除き、到着順と seq を投影に使わない。
 export function orderActiveFacts(facts: readonly Fact[]): Fact[] {
+  facts = expandNativeEvidenceSet(facts);
   const superseded = new Set(facts.flatMap((fact) => fact.supersedes ? [fact.supersedes] : []));
   const active = facts.filter((fact) => !superseded.has(fact.fact_id));
   // 比較のたびに時刻を解釈しない。並びは各事実の Date.parse の値で決まり、結果は変わらない。

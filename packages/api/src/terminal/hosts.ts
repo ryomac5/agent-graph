@@ -49,7 +49,7 @@ export class TerminalInputError extends Error {
   readonly terminalId: string;
   constructor(terminalId: string) { super('Terminal is not ready for a message. Continue in the terminal tab.'); this.terminalId = terminalId; }
 }
-export interface SendLifecycle { emitting(target: string): void; emitted(): void }
+export interface SendLifecycle { emitting(target: string, verify: () => Promise<void>): void | Promise<void>; emitted(): void | Promise<void> }
 export interface HostOptions {
   targets?: TargetService;
   targetOptions?: TargetOptions;
@@ -109,9 +109,14 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
       const slash = /^\/([^\s]+)(?:\s|$)/u.exec(text.trimStart());
       // 引数のないコマンドも空白で確定し、補完候補の先頭を誤実行しない。
       const body = slash && !/\s$/u.test(text) ? text + ' ' : text;
-      await recheckLocalSession(host);
-      if (host.conversationId && host.conversationId !== conversationId) throw new Error('no_host');
-      lifecycle?.emitting(JSON.stringify([host.terminalId, host.startedAt]));
+      const verify = async () => {
+        await recheckLocalSession(host);
+        if (!hosts.has(host.terminalId) || host.disconnected || host.conversationId && host.conversationId !== conversationId) throw new Error('no_host');
+        if (host.inputRevision !== inputRevision || isInputBlocked(await host.screen.read(), provider)) throw new TerminalInputError(host.terminalId);
+      };
+      // 保存の再試行ごとに対象と画面を確認し、成功した保存から最初の書き込みへ進む。
+      if (lifecycle) await lifecycle.emitting(JSON.stringify([host.terminalId, host.startedAt]), verify);
+      else await verify();
       host.terminal.write('\x15');
       for (const path of pasted) host.terminal.write(`\x1b[200~${escapeAttachmentPath(path)}\x1b[201~`);
       if (pasted.length) await wait(300);
@@ -121,7 +126,7 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
       if (!hosts.has(host.terminalId) || host.disconnected) throw new Error('no_host');
       if (host.inputRevision !== inputRevision || isInputBlocked(await host.screen.read(), provider)) throw new TerminalInputError(host.terminalId);
       host.terminal.write('\r');
-      lifecycle?.emitted();
+      await lifecycle?.emitted();
       if (!slash) return {};
       let after = before;
       let previous = '';

@@ -1,3 +1,4 @@
+import { expandNativeEvidence } from '../../core/src/ledger/native-evidence.ts';
 import { DatabaseSync } from 'node:sqlite';
 import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
@@ -344,15 +345,20 @@ test('total_tokens_reminder を挟む UUID 連鎖を取り込み、再読と再�
   writeFileSync(path, rows.map(row => JSON.stringify(row)).join('\n') + '\n');
   let legacy = true;
   const ingest = () => observeClaudeHistories({ ...f.ledger, append(input) {
-    if (legacy && (JSON.stringify(input.payload).includes('total_tokens_reminder') || input.source_event_id.endsWith(':uuid-chain-backfill')))
+    if (legacy) {
+      if (input.source_event_id.endsWith(':uuid-chain-backfill')) return { status: 'duplicate', seq: 0, fact_id: 'legacy-omission' };
+      for (const fact of expandNativeEvidence(input as import('../../core/src/ledger/index.ts').Fact)) {
+        if (!JSON.stringify(fact.payload).includes('"uuid":"52698412-ec73-4a2a-81d6-c5550508c376"')) f.ledger.append(fact as FactInput);
+      }
       return { status: 'duplicate', seq: 0, fact_id: 'legacy-omission' };
+    }
     return f.ledger.append(input);
   } }, f.directory, f.ledger.readSince(0, Number.MAX_SAFE_INTEGER), undefined, [path]);
   ingest(); assert.equal(f.decision('chain', Date.now()).display.label, 'Unknown');
   legacy = false;
   ingest();
   const facts = f.ledger.readSince(0, Number.MAX_SAFE_INTEGER);
-  assert.ok(facts.some(fact => JSON.stringify(fact.payload).includes('total_tokens_reminder')));
+  assert.ok(facts.flatMap(expandNativeEvidence).some(fact => JSON.stringify(fact.payload).includes('"uuid":"52698412-ec73-4a2a-81d6-c5550508c376"')));
   assert.equal(JSON.stringify(facts).includes('private tokens'), false);
   assert.equal(f.decision('chain', Date.now()).display.label, 'Idle');
   ingest(); assert.equal(f.ledger.readSince(0, Number.MAX_SAFE_INTEGER).length, facts.length);
@@ -494,10 +500,10 @@ test('Idle の親は進行中の子を Waiting for agents として配り、子�
   f.decision('parent', NOW + 300_003); assert.equal(parent().state, 'idle');
 });
 
-test('直近7日の turn 鍵欠落率は提供元別に集計し、古い実行と未来とセッションの開始と終了だけの実行は分母に入れない', t => {
+test('直近7日の turn 鍵欠落率は提供元別に集計し、古い実行と未来を除き、用途不明の実行を分母に含める', t => {
   const f = fixture(t); f.run('keyed'); f.native('keyed', start()); f.run('missing');
   f.run('old', NOW - 8 * 86400_000); f.run('future', NOW + 1);
-  // 依頼のないセッションは開始と終了の hook だけを持つ。turn がないので欠落に数えない。
+  // 開始と終了だけでは依頼がないと証明できず、欠落に数える。
   f.run('session-only');
   for (const [hook, at] of [['SessionStart', NOW], ['SessionEnd', NOW + 1]] as const) f.append('run.updated', 'run:session-only', { conversation_id: f.id('session-only'), generation: 1,
     last_evidence: { hook_event_name: hook, input: { session_id: 'session-only' } } }, at - 2, 'hook');
@@ -505,7 +511,7 @@ test('直近7日の turn 鍵欠落率は提供元別に集計し、古い実行�
   f.append('run.created', 'run:codex', { conversation_id: 'codex', generation: 1, started_ts: new Date(NOW).toISOString() });
   f.decision('keyed', NOW);
   assert.deepEqual(f.feed.current.readTurnCoverage(NOW - 7 * 86400_000), {
-    claude: { runs: 2, missing: 1, ratio: 0.5 }, codex: { runs: 1, missing: 1, ratio: 1 },
+    claude: { runs: 3, missing: 2, ratio: 2 / 3 }, codex: { runs: 1, missing: 1, ratio: 1 },
   });
 });
 
@@ -568,4 +574,96 @@ for (const withStart of [true, false]) test(`事実の多い実行への追記�
   }
   assert.ok(continuedCount >= 8, `continued ${continuedCount} of ${serial}`);
   assert.ok(continuedCount < serial, 'out-of-order, late parents and re-read uuids fall back to a full read');
+});
+
+for (const withEvidence of [false, true]) test(`P3: 後着した正式な開始時刻を証拠キャッシュの補完値で戻さない（evidence=${withEvidence}）`, async t => {
+  const { CurrentState } = await import('../src/service/current-state.ts');
+  const f = fixture(t);
+  f.append('conversation.created', `conversation:${f.id('big')}`, { provider: 'claude', native_id: 'big', origin: 'observed', type: 'interactive' });
+  f.append('run.created', 'run:big', { conversation_id: f.id('big'), generation: 1 });
+  for (let i = 0; i < 501; i++) f.native('big', start(`turn-${i}`), NOW + i + 1);
+  f.decision('big', NOW + 1000);
+  f.append('run.updated', 'run:big', { started_ts: new Date(NOW + 100).toISOString(),
+    ...(withEvidence ? { last_evidence: { native_source: 'claude', native_record: start('next') } } : {}) }, NOW + 1001);
+  f.decision('big', NOW + 1002);
+  const db = new DatabaseSync(f.path); t.after(() => db.close());
+  const fresh = new CurrentState(db, id => id); fresh.refresh(f.feed.snapshot().seq, NOW + 1002);
+  const id = `${f.id('big')}:1`;
+  assert.equal(f.feed.current.runs.get(id)!.started_ts, new Date(NOW + 100).toISOString());
+  assert.equal(f.feed.current.runs.get(id)!.started_ts, fresh.runs.get(id)!.started_ts);
+});
+
+test('P5: SessionStart と user の所属がある部分取り込み漏れを分母から隠さない', t => {
+  const f = fixture(t); f.run('partial');
+  f.append('run.updated', 'run:partial', { conversation_id: f.id('partial'), generation: 1,
+    last_evidence: { hook_event_name: 'SessionStart', input: { session_id: 'partial' } } }, NOW, 'hook');
+  f.append('message.created', 'message:request', { role: 'user', body: 'work', version: 1, body_state: 'stored' });
+  f.append('message_membership.created', 'message_membership:request', { message_id: 'request', conversation_id: f.id('partial'), active: true });
+  f.decision('partial', NOW);
+  assert.deepEqual(f.feed.current.readTurnCoverage(NOW - 7 * 86400_000).claude, { runs: 1, missing: 1, ratio: 1 });
+});
+
+test('P6: ホストが原記録の外に持つ turn 相関を保存し承認待ちを判定する', t => {
+  const f = fixture(t); f.run('host'); f.native('host', start('host-turn'));
+  f.append('run.updated', 'run:host', { conversation_id: f.id('host'), generation: 1, last_evidence: {
+    native_source: 'codex', native_record: { method: 'thread/status/changed', params: { status: { type: 'active', activeFlags: ['waitingOnApproval'] } } },
+    turn_id: 'host-turn',
+  } }, NOW + 1, 'host-codex');
+  assert.equal(f.decision('host', NOW + 2).display.label, 'Needs approval');
+  f.reopen(); assert.equal(f.decision('host', NOW + 2).display.label, 'Needs approval');
+});
+
+test('P6: 圧縮した長い履歴と後着の祖先・訂正は非圧縮、再起動、再構築と同じ判定になる', async t => {
+  const { createNativeEvidenceBuffer } = await import('../src/observe/native-evidence.ts');
+  const { captureNativeRecord } = await import('../../core/src/state/capture.ts');
+  const packed = fixture(t), plain = fixture(t);
+  for (const f of [packed, plain]) f.run('big');
+  const inputs: FactInput[] = [];
+  for (let turn = 0; turn < 120; turn++) {
+    const rows = [start(`t${turn}`),
+      { type: 'assistant', uuid: `call-${turn}`, parentUuid: `user:t${turn}`, message: { content: [{ type: 'tool_use', id: `tool-${turn}`, name: 'Bash' }] } },
+      { type: 'attachment', uuid: `edge-${turn}`, parentUuid: `result-${turn}`, attachment: { type: 'total_tokens_reminder' } },
+      { type: 'user', uuid: `result-${turn}`, parentUuid: `call-${turn}`, message: { content: [{ type: 'tool_result', tool_use_id: `tool-${turn}` }] } },
+      { type: 'system', subtype: 'turn_duration', uuid: `end-${turn}`, parentUuid: `edge-${turn}` },
+    ];
+    for (const [i, row] of rows.entries()) {
+      const at = new Date(NOW + turn * 10 + i).toISOString();
+      inputs.push({ source: 'transcript-claude', source_event_id: `native-record:file:${turn * 5 + i}:hash`, kind: 'run.updated', subject: 'run:big',
+        source_ts: at, observed_ts: at, confidence: 'confirmed', cursor: null,
+        payload: { conversation_id: packed.id('big'), generation: 1, last_evidence_ts: at,
+          last_evidence: { native_source: 'claude', file_id: 'big.jsonl', native_record: captureNativeRecord('claude', row as never)! } } });
+    }
+  }
+  const ingest = (batch: FactInput[]) => {
+    const known = new Set(packed.ledger.readSince(0, Number.MAX_SAFE_INTEGER).flatMap(expandNativeEvidence).map(f => f.source_event_id));
+    const buffer = createNativeEvidenceBuffer(known, input => { packed.ledger.append(input); });
+    for (const input of batch) { buffer.add(input); plain.ledger.append(input); }
+    buffer.flush();
+  };
+  ingest(inputs);
+  const original = packed.ledger.readSince(0, 1000);
+  assert.equal(original.filter(f => f.source_event_id.startsWith('native-record:')).length, 5);
+  const compare = () => {
+    assert.deepEqual(packed.decision('big', NOW + 3000), plain.decision('big', NOW + 3000));
+    packed.reopen(); assert.deepEqual(packed.decision('big', NOW + 3000), plain.decision('big', NOW + 3000));
+    packed.service.rebuild(); assert.deepEqual(packed.decision('big', NOW + 3000), plain.decision('big', NOW + 3000));
+  };
+  compare();
+  // 読み取りの区切りと順を変えても、圧縮前の行の識別で再追記を防ぐ。
+  for (let i = inputs.length; i > 0; i -= 17) ingest(inputs.slice(Math.max(0, i - 17), i).reverse());
+  assert.deepEqual(packed.ledger.readSince(0, 1000), original);
+  const late = { ...inputs.at(-1)!, source_event_id: 'native-record:file:late:hash', source_ts: new Date(NOW + 2000).toISOString(),
+    observed_ts: new Date(NOW + 2000).toISOString(), payload: { conversation_id: packed.id('big'), generation: 1,
+      last_evidence_ts: new Date(NOW + 2000).toISOString(), last_evidence: { native_source: 'claude', file_id: 'big.jsonl',
+        native_record: { type: 'system', subtype: 'turn_duration', uuid: 'late-end', parentUuid: 'late-parent' } } } } as FactInput;
+  ingest([late]); compare();
+  ingest([{ ...late, source_event_id: 'native-record:file:parent:hash', source_ts: new Date(NOW + 1500).toISOString(),
+    payload: { ...late.payload, last_evidence_ts: new Date(NOW + 1500).toISOString(), last_evidence: { native_source: 'claude', file_id: 'big.jsonl',
+      native_record: { uuid: 'late-parent', parentUuid: 'end-119' } } } } as FactInput]);
+  compare();
+  const target = original.flatMap(expandNativeEvidence).find(f => f.source_event_id === inputs.at(-1)!.source_event_id)!;
+  for (const f of [packed, plain]) f.ledger.append({ ...inputs.at(-1)!, source_event_id: 'correction', supersedes: target.fact_id,
+    payload: { conversation_id: packed.id('big'), generation: 1, last_evidence: { native_source: 'claude', native_record: { uuid: 'end-119', parentUuid: 'edge-119' } } } } as FactInput);
+  compare();
+  assert.deepEqual(packed.ledger.readSince(0, 1000).slice(0, original.length), original);
 });

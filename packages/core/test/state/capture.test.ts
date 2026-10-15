@@ -43,3 +43,12 @@ for (const kind of ['completed', 'started', 'interacted']) test(`Codex SubAgentA
   assert.deepEqual(signals.map(signal => signal.kind === 'signal' && [signal.event, signal.turnId]), kind === 'completed' ? [['complete', 'child-turn']] : kind === 'started' ? [['launched', 'child-turn']] : []);
   assert.deepEqual(readNativeEvidence({ ...record, childId: 'other' }), []);
 });
+
+test('P6: 信号のない行には UUID の辺と明示の turn だけを残す', () => {
+  assert.equal(captureNativeRecord('claude', { type: 'assistant', uuid: 'root' }), undefined);
+  assert.deepEqual(captureNativeRecord('claude', { type: 'attachment', timestamp: '2026-01-01', uuid: 'edge', parentUuid: 'parent', promptId: 'turn',
+    attachment: { type: 'total_tokens_reminder', content: 'private' } }), { uuid: 'edge', parentUuid: 'parent', promptId: 'turn' });
+  assert.deepEqual(captureNativeRecord('codex', { type: 'turn_context', timestamp: '2026-01-01', payload: { turn_id: 'turn', model: 'model', cwd: '/private' } }),
+    { type: 'turn_context', payload: { turn_id: 'turn' } });
+  assert.equal(captureNativeRecord('codex', { type: 'turn_context', payload: { model: 'model' } }), undefined);
+});

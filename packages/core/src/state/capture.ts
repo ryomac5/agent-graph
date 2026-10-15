@@ -44,7 +44,14 @@ export function captureNativeRecord(source: NativeRecord['source'], row: Row): R
       object(record[key]).item = captured;
     }
   }
-  if (row.type === 'turn_context' || typeof row.uuid === 'string' && typeof row.parentUuid === 'string') return record;
   const signals = readNativeEvidence({ source, row: record, id: 'record', at: 0, observedAt: 0, runId: 'run' });
-  return object(record.attachment).type === 'queued_command' || signals.length || String(record.content ?? JSON.stringify(record.message)).includes('<task-notification>') ? record : undefined;
+  if (object(record.attachment).type === 'queued_command' || signals.length || String(record.content ?? JSON.stringify(record.message)).includes('<task-notification>')) return record;
+  // 信号のない行は UUID の辺と turn の境界だけを残す。添付や発言の殻を保存しない。
+  if (source === 'claude' && typeof row.uuid === 'string' && (typeof row.parentUuid === 'string' || typeof row.promptId === 'string')) return Object.fromEntries(
+    ['uuid', 'parentUuid', 'promptId'].filter(key => row[key] !== undefined).map(key => [key, row[key]]));
+  if (row.type === 'turn_context') {
+    const payload = object(row.payload);
+    if (typeof payload.turn_id === 'string') return { type: 'turn_context', payload: { turn_id: payload.turn_id } };
+  }
+  return undefined;
 }

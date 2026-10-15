@@ -34,10 +34,10 @@ const MAX_SESSION_COMMANDS = 256;
 // 主スレッドを止めずに短い間隔で読み直し、この時間内に保存できなければ runner を呼ばずに拒否する。
 const SEND_PERSIST_RETRY_MS = 2_000;
 const SEND_PERSIST_RETRY_DELAY_MS = 20;
-async function persistBeforeSend<T>(operation: () => T): Promise<T> {
+async function persistSend<T>(operation: () => T | Promise<T>): Promise<T> {
   const deadline = performance.now() + SEND_PERSIST_RETRY_MS;
   for (;;) {
-    try { return operation(); }
+    try { return await operation(); }
     catch (error) {
       const busy = error instanceof Error && "errcode" in error && (Number(error.errcode) & 0xff) === 5;
       if (!busy || performance.now() >= deadline) throw error;
@@ -68,6 +68,21 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
   function publishWatches() {
     const rows = sendWatch.list();
     for (const socket of clients.keys()) send(socket, { type: "send_watches", rows });
+  }
+  function deliveryAck(id: string, result: object = {}) {
+    sendWatch.check(now());
+    const delivery = sendWatch.decision(id);
+    const ok = !!delivery && sendWatch.hasEmission(id) && delivery.value !== 'rejected' && delivery.reason !== 'cmd_id_conflict';
+    return { ok, result: { ...result, delivery }, ...(!ok ? { error: delivery?.reason ?? 'not_emitted' } : {}) };
+  }
+  async function savePhase(id: string, phase: Parameters<SendWatch['phase']>[1], verify?: () => Promise<void>): Promise<void> {
+    await persistSend(async () => { await verify?.(); sendWatch.phase(id, phase, now()); });
+  }
+  // 送出後の保存失敗は、送出をやり直す理由にも送信失敗の証拠にもならない。
+  async function finishPhase(id: string, phase: Parameters<SendWatch['phase']>[1]): Promise<void> {
+    try { await savePhase(id, phase); }
+    catch (error) { console.error('Send phase persistence failed:', error); }
+    readWatches(() => { sendWatch.check(now()); publishWatches(); }, undefined);
   }
   const token = createToken();
   const clients = new Map<WebSocket, { tables?: Set<string>; conversations: Set<string> }>();
@@ -131,6 +146,7 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
   });
   const sessionHosts = createSessionHosts(files.selectRoot, options.sessionHosts);
   const sessionCommands = new Map<string, Promise<unknown>>();
+  const activeCommands = new Map<string, Promise<void>>();
   const completedSessionCommands: string[] = [];
   const server = createServer((request, response) => {
     response.setHeader("Cache-Control", "no-store");
@@ -203,6 +219,11 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
         readWatches(() => send(socket, { type: "send_watches", rows: sendWatch.list() }), undefined);
       } else if (message.type === "cmd" && clients.has(socket) && typeof message.cmd_id === "string"
         && message.cmd_id.length > 0 && typeof message.command === "string" && message.command.length > 0) {
+        const previousCommand = activeCommands.get(message.cmd_id);
+        let finishCommand!: () => void;
+        const active = new Promise<void>(resolve => { finishCommand = resolve; });
+        activeCommands.set(message.cmd_id, active);
+        await previousCommand;
         try {
         if (message.command === 'project.add' || message.command === 'fs.directories') {
           try {
@@ -240,30 +261,31 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
             const watched = message.command === 'session.send' && typeof message.payload?.conversationId === 'string' && typeof message.payload?.text === 'string';
             if (watched) pollObservation(refresh);
             const terminal = watched ? await sessionHosts.target(message.payload.conversationId) : undefined;
-            const captured = watched ? await persistBeforeSend(() => sendWatch.capture(message.payload.conversationId, now(), terminal)) : undefined;
-            if (captured && !await persistBeforeSend(() => sendWatch.begin(message.cmd_id, message.payload.conversationId, message.payload.text, captured, message.payload.attachments))) {
+            const captured = watched ? await persistSend(() => sendWatch.capture(message.payload.conversationId, now(), terminal)) : undefined;
+            if (captured && !await persistSend(() => sendWatch.begin(message.cmd_id, message.payload.conversationId, message.payload.text, captured, message.payload.attachments))) {
               sendWatch.check(now());
               const delivery = sendWatch.decision(message.cmd_id);
               const prior = sessionCommands.get(message.cmd_id);
               if (prior && delivery?.reason !== 'cmd_id_conflict') {
-                void prior.then(result => send(socket, { type: 'ack', cmd_id: message.cmd_id, ok: true, result }), () => send(socket, { type: 'ack', cmd_id: message.cmd_id, ok: false, error: 'Terminal request failed' }));
+                await prior.then(result => send(socket, { type: 'ack', cmd_id: message.cmd_id, ...deliveryAck(message.cmd_id),
+                  result: { ...result as object, delivery_decision: sendWatch.decision(message.cmd_id) } }), () => send(socket, { type: 'ack', cmd_id: message.cmd_id, ...deliveryAck(message.cmd_id) }));
                 return;
               }
-              send(socket, { type: 'ack', cmd_id: message.cmd_id, ok: delivery?.reason !== 'cmd_id_conflict', ...(delivery?.reason === 'cmd_id_conflict' ? { error: 'cmd_id_conflict' } : { result: { delivery } }) });
+              send(socket, { type: 'ack', cmd_id: message.cmd_id, ...deliveryAck(message.cmd_id) });
               publishWatches(); return;
             }
             let emitting = false;
             result = hosted ? sessionHosts.handle(message.command, message.payload, notify, captured ? {
-              emitting: target => {
+              emitting: async (target, verify) => {
                 if (target !== terminal) throw new Error('no_host');
-                sendWatch.phase(message.cmd_id, 'emitting', now()); emitting = true;
-              }, emitted: () => sendWatch.phase(message.cmd_id, 'emitted', now()),
+                await savePhase(message.cmd_id, 'emitting', verify); emitting = true;
+              }, emitted: () => finishPhase(message.cmd_id, 'emitted'),
             } : undefined) : terminals.handle(message.command, message.payload);
             if (captured) result = result.then(value => {
               if ((value as SessionSendResult).delivery === 'terminal') sendWatch.handled(message.cmd_id, now());
               readWatches(() => { sendWatch.check(now()); publishWatches(); }, undefined); return value;
-            }, error => {
-              sendWatch.phase(message.cmd_id, emitting ? 'aborted' : 'rejected', now()); sendWatch.check(now()); publishWatches(); throw error;
+            }, async error => {
+              await finishPhase(message.cmd_id, emitting ? 'aborted' : 'rejected'); throw error;
             });
             if (hosted) result = result.then(value => {
               const response = value as SessionSendResult;
@@ -280,8 +302,11 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
               void result.then(finish, finish);
             }
           }
-          void result.then(result => {
-            send(socket, { type: "ack", cmd_id: message.cmd_id, ok: true, result });
+          await result.then(result => {
+            const watched = message.command === 'session.send' && sendWatch.has(message.cmd_id);
+            const delivery = watched ? deliveryAck(message.cmd_id) : undefined;
+            send(socket, { type: "ack", cmd_id: message.cmd_id, ok: true, ...delivery,
+              result: watched ? { ...result as object, delivery_decision: sendWatch.decision(message.cmd_id) } : result });
           }, error => {
             send(socket, { type: "ack", cmd_id: message.cmd_id, ok: false,
               ...(error instanceof TerminalInputError ? { result: { terminalId: error.terminalId } } : {}),
@@ -310,24 +335,33 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
         const watchedInput = ['send', 'start', 'adopt', 'fork'].includes(message.command) && typeof input?.text === 'string';
         if (watchedInput) pollObservation(refresh);
         const destination = message.payload?.conversationId ?? (message.payload?.runId ? feed.runConversation(message.payload.runId) : undefined);
-        const captured = watchedInput && destination ? await persistBeforeSend(() => sendWatch.capture(destination, now(), 'runner', message.payload?.runId)) : undefined;
-        if (captured && !await persistBeforeSend(() => sendWatch.begin(message.cmd_id, destination, input.text, captured))) {
+        const captured = watchedInput && destination ? await persistSend(() => sendWatch.capture(destination, now(), 'runner', message.payload?.runId)) : undefined;
+        if (captured && !await persistSend(() => sendWatch.begin(message.cmd_id, destination, input.text, captured))) {
           sendWatch.check(now());
-          const delivery = sendWatch.decision(message.cmd_id);
-          send(socket, { type: 'ack', cmd_id: message.cmd_id, ok: delivery?.reason !== 'cmd_id_conflict', ...(delivery?.reason === 'cmd_id_conflict' ? { error: 'cmd_id_conflict' } : { result: { delivery } }) });
+          send(socket, { type: 'ack', cmd_id: message.cmd_id, ...deliveryAck(message.cmd_id) });
           publishWatches(); return;
         }
-        if (captured) sendWatch.phase(message.cmd_id, 'emitting', now());
-        void runner.request(forwardScreenCommand(message)).then((result) => {
+        if (captured) {
+          try { await savePhase(message.cmd_id, 'emitting'); }
+          catch {
+            await finishPhase(message.cmd_id, 'rejected');
+            send(socket, { type: 'ack', cmd_id: message.cmd_id, ...deliveryAck(message.cmd_id) });
+            return;
+          }
+        }
+        await runner.request(forwardScreenCommand(message)).then(async (result) => {
           const { type, ...ack } = result;
-          if (captured) readWatches(() => { sendWatch.phase(message.cmd_id, result.ok ? 'emitted' : 'aborted', now()); sendWatch.check(now()); publishWatches(); }, undefined);
-          send(socket, { type: "ack", ...ack });
-        }, () => {
-          if (captured) readWatches(() => { sendWatch.phase(message.cmd_id, "aborted", now()); sendWatch.check(now()); publishWatches(); }, undefined);
+          if (captured) await finishPhase(message.cmd_id, result.ok ? 'emitted' : 'aborted');
+          send(socket, { type: "ack", ...ack, ...(captured && result.ok ? deliveryAck(message.cmd_id, result.result as object) : {}) });
+        }, async () => {
+          if (captured) await finishPhase(message.cmd_id, 'aborted');
           send(socket, { type: "ack", cmd_id: message.cmd_id, ok: false, error: "Runner unavailable" });
         });
         } catch {
           send(socket, { type: 'ack', cmd_id: message.cmd_id, ok: false, error: 'Unable to persist send operation' });
+        } finally {
+          finishCommand();
+          if (activeCommands.get(message.cmd_id) === active) activeCommands.delete(message.cmd_id);
         }
       } else socket.close(1008, "Expected hello or cmd");
     });

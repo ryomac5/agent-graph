@@ -1,4 +1,5 @@
 import { CurrentState } from './current-state.ts';
+import { expandNativeEvidence } from '../../../core/src/ledger/native-evidence.ts';
 import { observeCodexTitles } from "../observe/codex/titles.ts";
 import { readRemoteMetadata, observeRemoteStatus } from '../remote/observation.ts';
 import { cacheRoot } from '../remote/index.ts';
@@ -347,12 +348,14 @@ export function openObservationService(options: ObservationOptions = {}) {
     const fullRead = pendingConflicts.has(path);
     const rows: { at: string; uuid?: string; offset?: number }[] = [];
     captureConflict = input => {
-      const payload = input.payload as Record<string, unknown>;
-      const last = payload.last_evidence as Record<string, unknown> | undefined;
-      const native = last?.native_record as Record<string, unknown> | undefined;
-      const uuid = native?.uuid ?? (source === 'transcript-claude' && input.kind.startsWith('message.') ? payload.native_id : undefined);
-      const offset = source === 'rollout-codex' && input.cursor ? JSON.parse(input.cursor).offset : undefined;
-      rows.push({ at: input.source_ts, ...(typeof uuid === 'string' ? { uuid } : {}), ...(typeof offset === 'number' ? { offset } : {}) });
+      for (const fact of expandNativeEvidence(input as Fact)) {
+        const payload = fact.payload as Record<string, unknown>;
+        const last = payload.last_evidence as Record<string, unknown> | undefined;
+        const native = last?.native_record as Record<string, unknown> | undefined;
+        const uuid = native?.uuid ?? (source === 'transcript-claude' && fact.kind.startsWith('message.') ? payload.native_id : undefined);
+        const offset = source === 'rollout-codex' && fact.cursor ? JSON.parse(fact.cursor).offset : undefined;
+        rows.push({ at: fact.source_ts, ...(typeof uuid === 'string' ? { uuid } : {}), ...(typeof offset === 'number' ? { offset } : {}) });
+      }
     };
     let result: T;
     try { result = buffered.batch(operation); }

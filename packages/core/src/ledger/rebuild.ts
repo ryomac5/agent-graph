@@ -1,3 +1,5 @@
+import { createStableRunLinkCheck } from './run-link.ts';
+import { expandNativeEvidence } from './native-evidence.ts';
 import { encodeEventOrder } from "./event-order.ts";
 import type { DatabaseSync, SQLInputValue, StatementSync } from "node:sqlite";
 import type { Fact, JsonValue } from "./facts.ts";
@@ -316,12 +318,10 @@ function appendEvidenceRecords(ledger: DatabaseSync, added: readonly Fact[], evi
     const existing = prepare(ledger, `SELECT max(source_ts) AS latest,
       coalesce(sum(source_ts NOT GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9]Z'), 0) AS irregular
       FROM facts WHERE subject = ? AND seq <= ?`).get(subject, lastSeq)!;
-    const ordered = [...facts].sort(compareProjectionFacts);
+    const ordered = facts.flatMap(expandNativeEvidence).sort(compareProjectionFacts);
     if (Number(existing.irregular) || typeof existing.latest !== "string" || ordered[0].source_ts < existing.latest) continue;
-    // 同じ時刻の既存の事実とは、全件の合成と同じ比較で後に並ぶことを確かめる。
-    if (ordered[0].source_ts === existing.latest && prepare(ledger, `SELECT fact_id, source, source_event_id, source_ts FROM facts
-      WHERE subject = ? AND seq <= ? AND source_ts = ?`).all(subject, lastSeq, existing.latest)
-      .some((row) => compareProjectionFacts(row as unknown as Fact, ordered[0]) >= 0)) continue;
+    // 同時刻の圧縮内の行とは、全件の合成で順序を決める。
+    if (ordered[0].source_ts === existing.latest) continue;
     let record = JSON.parse(String(stored.data)) as Record<string, JsonValue>;
     for (const fact of ordered) record = { ...record, ...fact.payload, id };
     prepare(ledger, "UPDATE entity_records SET data = ?, last_seq = ? WHERE entity = 'run' AND id = ?")
@@ -373,7 +373,8 @@ function updateProjection(ledger: DatabaseSync, sinceSeq?: number, initial = fal
         const throughSeq = added.at(-1)!.seq;
         const cache: SubjectFactCache = { throughSeq, facts: new Map(), size: 0 };
         // 証拠だけの事実は表の行を変えない。会話の多い実行で、追記ごとに全事実を読み直して投影しない。
-        const evidenceOnly = new Set(added.filter((fact) => isEvidenceOnly(ledger, fact)));
+        const stableLink = createStableRunLinkCheck(ledger);
+        const evidenceOnly = new Set(added.filter((fact) => isEvidenceOnly(ledger, fact) && stableLink(fact)));
         const projected = added.filter((fact) => !evidenceOnly.has(fact));
         if (projected.length) applyAffected(ledger, projected, state.last_seq, cache, throughSeq);
         const appended = appendEvidenceRecords(ledger, added, evidenceOnly, state.last_seq);

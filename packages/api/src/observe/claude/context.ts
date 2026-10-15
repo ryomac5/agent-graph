@@ -1,3 +1,5 @@
+import { expandNativeEvidence } from '../../../../core/src/ledger/native-evidence.ts';
+import { createNativeEvidenceBuffer } from '../native-evidence.ts';
 import { captureNativeRecord } from '../../../../core/src/state/capture.ts';
 import { basename, resolve } from "node:path";
 import { createNativeId, projectConversations } from "../../../../core/src/ledger/index.ts";
@@ -50,6 +52,7 @@ export function observeClaudeContext(ledger: Ledger, path: string, options: Clau
     else if (appended.status === "duplicate") result.duplicates += 1;
     else result.conflicts.push(appended);
   }
+  const nativeBuffer = createNativeEvidenceBuffer(new Set(existing.flatMap(fact => expandNativeEvidence(fact).map(row => row.source_event_id))), append);
   const belongs = (fact: Fact) => {
     const conversation = (fact.payload as Partial<RunPayload> | null)?.conversation_id;
     return conversation === id || conversation === hookConversation;
@@ -134,11 +137,12 @@ export function observeClaudeContext(ledger: Ledger, path: string, options: Clau
       models.set(target.subject, model);
     }
     if (modelsOnly || !native) continue;
-    append({ ...base, kind: "run.updated", subject: target.subject as `run:${string}`,
+    nativeBuffer.add({ ...base, kind: "run.updated", subject: target.subject as `run:${string}`,
       source_event_id: `native-record:${id}:${line.cursor.offset}:${line.cursor.hash}`,
       payload: { conversation_id: id, generation: target.generation,
         last_evidence: { native_source: "claude", native_record: native, file_id: basename(absolutePath) }, last_evidence_ts: timestamp } });
   }
+  nativeBuffer.flush();
   // 発言があるのに場所の記録がない会話は、旧い形式として場所なしで読み終えたことを残す。
   if (!located && firstMessageTs) {
     append({ source: "transcript-claude", confidence: "confirmed", source_ts: firstMessageTs, observed_ts: observedTs, cursor: null,

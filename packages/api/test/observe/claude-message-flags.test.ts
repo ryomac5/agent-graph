@@ -1,3 +1,4 @@
+import { expandNativeEvidence } from '../../../core/src/ledger/native-evidence.ts';
 import assert from "node:assert/strict";
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -98,7 +99,7 @@ test("実際の圧縮行の形を読み、人の引用は残し、要約・メ�
   const projection = assertMessages(ledger);
   assert.equal(projection.relations.filter(row => row.type === "compacted").length, 1);
   assert.equal(projection.runs[0].state, "unknown");
-  assert.ok(ledger.readSince(0, 1000).some(fact => fact.source_event_id.startsWith("native-record:") && fact.source_ts === "2026-10-13T04:07:51.000Z"));
+  assert.ok(ledger.readSince(0, 1000).flatMap(expandNativeEvidence).some(fact => fact.source_event_id.startsWith("native-record:") && fact.source_ts === "2026-10-13T04:07:51.000Z"));
   assert.deepEqual(projection.conversations[0].pending_inputs ?? [], []);
   applyIncremental(readLedgerDatabase(ledger), 0);
   assertSearch(readLedgerDatabase(ledger));

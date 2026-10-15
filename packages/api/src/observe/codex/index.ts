@@ -1,3 +1,5 @@
+import { expandNativeEvidence } from '../../../../core/src/ledger/native-evidence.ts';
+import { createNativeEvidenceBuffer } from '../native-evidence.ts';
 import { captureNativeRecord } from '../../../../core/src/state/capture.ts';
 import { classifyHistoryRow, findUnclassifiedKinds, identifyHistoryKind } from "../history-kinds.ts";
 import { observeCodexTitles } from "./titles.ts";
@@ -104,7 +106,7 @@ function readIndex(ledger: Ledger): ObservationIndex {
   const index: ObservationIndex = { unsupported: new Map(), subjects: new Set(), placeholders: new Map(),
     runs: new Map(), archivedRuns: new Map(), stateGenerations: new Map(), models: new Map() };
   // 全台帳の読み取りと世代の整列は、走査全体で一度だけ行う。
-  for (const fact of ledger.readSince(0, Number.MAX_SAFE_INTEGER)) indexFact(index, fact, fact.fact_id);
+  for (const stored of ledger.readSince(0, Number.MAX_SAFE_INTEGER)) for (const fact of expandNativeEvidence(stored)) indexFact(index, fact, fact.fact_id);
   for (const starts of index.runs.values()) starts.sort((a, b) => a.generation - b.generation);
   return index;
 }
@@ -170,10 +172,11 @@ function observeFile(ledger: Ledger, path: string, options: CodexObservationOpti
   const boundaries = new Map<string, RunBoundary[]>();
 
   function append(input: FactInput): void {
+    if (input.kind === 'relation.created') nativeBuffer.flush();
     const result = ledger.append(input);
     results.push(result);
     if (result.status === "appended") {
-      indexFact(index, input, result.fact_id);
+      for (const fact of expandNativeEvidence({ ...input, fact_id: result.fact_id, seq: result.seq } as Fact)) indexFact(index, fact, fact.fact_id);
     }
   }
   function createBase(key: string, timestamp: string, line?: RolloutLine) {
@@ -184,6 +187,7 @@ function observeFile(ledger: Ledger, path: string, options: CodexObservationOpti
         hash: line?.hash ?? file.lines.at(-1)?.hash ?? null }),
     };
   }
+  const nativeBuffer = createNativeEvidenceBuffer(new Set(index.stateGenerations.keys()), append);
   const unsupported = new Map<string, { line: RolloutLine; reason: string; recordType: string; payloadType: string; count: number }>();
   function reportUnsupported(line: RolloutLine, reason: string): void {
     const row = readObject(line.value);
@@ -314,7 +318,7 @@ function observeFile(ledger: Ledger, path: string, options: CodexObservationOpti
       ensureRun(id, timestamp);
       const eventId = `native-record:${fileId}:${line.offset}:${line.hash}`;
       const generation = index.stateGenerations.get(eventId) ?? boundaries.get(id)!.findLast(start => start.fileId !== fileId || start.offset <= line.offset)!.generation;
-      append({ ...createBase(eventId, timestamp, line),
+      nativeBuffer.add({ ...createBase(eventId, timestamp, line),
         kind: "run.updated", subject: `run:${identifyConversation(id)}:${generation}`,
         payload: { conversation_id: identifyConversation(id), generation,
           last_evidence: { native_source: "codex", native_record: native, file_id: fileId }, last_evidence_ts: timestamp } });
@@ -440,6 +444,7 @@ function observeFile(ledger: Ledger, path: string, options: CodexObservationOpti
         end_evidence: { kind: "archived", location: "archived_sessions" },
         last_evidence: { file_id: fileId, complete_bytes: file.completeBytes } } });
   }
+  nativeBuffer.flush();
   return results;
 }
 

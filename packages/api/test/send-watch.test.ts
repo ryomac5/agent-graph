@@ -398,3 +398,134 @@ test('差分照合は所属の後着・訂正・再構築でも受信集合を�
   f.feed.refresh(NOW + 4); assert.equal(f.decide('send', NOW + 4).value, 'emitted');
   f.service.rebuild(); f.feed.refresh(NOW + 4); assert.equal(f.decide('send', NOW + 4).value, 'emitted');
 });
+
+for (const phaseName of ['emitting', 'emitted'] as const) for (const transient of [true, false]) test(`P1: runner ${phaseName} の保存${transient ? '競合' : '失敗'}は送信を再実行せず記録された段階を返す`, async t => {
+  const f = createFixture(t); const a = await createApiFixture(t, f);
+  let sent = 0, failed = 0;
+  t.mock.method(a.api.runner, 'request', async (request: RunnerRequest) => {
+    assert.ok(f.db.prepare("SELECT 1 FROM api_delivery_evidence WHERE id = 'p1:emitting'").get());
+    sent++; return { type: 'res' as const, cmd_id: request.cmd_id, ok: true, result: {} };
+  });
+  const phase = SendWatch.prototype.phase;
+  t.mock.method(SendWatch.prototype, 'phase', function (this: SendWatch, ...[id, value, at]: Parameters<SendWatch['phase']>) {
+    if (id === 'p1' && value === phaseName && (!transient || failed++ === 0)) {
+      throw Object.assign(new Error('database is locked'), { errcode: transient ? 5 : 10 });
+    }
+    return phase.call(this, id, value, at);
+  });
+  try {
+    const payload = { runId: 'root', input: { text: 'Next step' } };
+    const first = await a.command('p1', 'send', payload);
+    a.frames.length = 0;
+    const second = await a.command('p1', 'send', payload);
+    const expected = !transient && phaseName === 'emitting' ? 'rejected' : !transient ? 'emitting' : 'emitted';
+    assert.equal(sent, expected === 'rejected' ? 0 : 1);
+    assert.equal(first.ok, expected !== 'rejected');
+    assert.equal(second.ok, expected !== 'rejected');
+    assert.equal(second.result.delivery.value, expected);
+    assert.equal(f.decide('p1').value, expected);
+  } finally { await a.api.close(); }
+});
+
+test('P1: 並行する同じ cmd_id は送出を一回にまとめ、保存後の同じ段階を返す', async t => {
+  const f = createFixture(t); const a = await createApiFixture(t, f);
+  let complete!: () => void;
+  const pending = new Promise<void>(resolve => { complete = resolve; });
+  const request = t.mock.method(a.api.runner, 'request', async (request: RunnerRequest) => {
+    await pending;
+    return { type: 'res' as const, cmd_id: request.cmd_id, ok: true, result: {} };
+  });
+  try {
+    const message = { type: 'cmd', cmd_id: 'parallel', command: 'send', payload: { runId: 'root', input: { text: 'Next step' } } };
+    const first = a.receive(message), second = a.receive(message);
+    await delay(20);
+    assert.equal(request.mock.callCount(), 1);
+    assert.equal(a.frames.filter(frame => frame.type === 'ack').length, 0);
+    complete(); await Promise.all([first, second]);
+    const responses = a.frames.filter(frame => frame.type === 'ack');
+    assert.equal(responses.length, 2);
+    for (const response of responses) { assert.equal(response.ok, true); assert.equal(response.result.delivery.value, 'emitted'); }
+    assert.equal(request.mock.callCount(), 1);
+  } finally { complete(); await a.api.close(); }
+});
+
+test('P1: 拒否の保存も失敗した再提示は accepted を返し成功にしない', async t => {
+  const f = createFixture(t); const a = await createApiFixture(t, f);
+  const request = t.mock.method(a.api.runner, 'request', async () => { assert.fail('must not send'); });
+  t.mock.method(SendWatch.prototype, 'phase', () => { throw new Error('storage unavailable'); });
+  try {
+    const payload = { runId: 'root', input: { text: 'Next step' } };
+    assert.equal((await a.command('accepted', 'send', payload)).ok, false);
+    a.frames.length = 0;
+    const retry = await a.command('accepted', 'send', payload);
+    assert.equal(retry.ok, false); assert.equal(retry.result.delivery.value, 'accepted');
+    t.mock.timers.tick(SEND_WATCH_TIMEOUT_MS + 1);
+    a.frames.length = 0;
+    const expired = await a.command('accepted', 'send', payload);
+    assert.equal(expired.ok, false); assert.equal(expired.result.delivery.value, 'unverifiable');
+    assert.equal(request.mock.callCount(), 0);
+  } finally { await a.api.close(); }
+});
+
+for (const phaseName of ['emitting', 'emitted'] as const) test(`P1: PTY の ${phaseName} 保存失敗は書き込みの前後で区別する`, async t => {
+  const f = createFixture(t);
+  const session = '12345678-1234-1234-1234-123456789abc';
+  const conversationId = JSON.stringify(['claude', session]);
+  f.append('project.created', 'project:project', { repository_id: 'project', root_path: f.directory, state: 'registered', display_name: 'Fixture' });
+  writeFileSync(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: session }));
+  const writes: string[] = [];
+  const a = await createApiFixture(t, f, {
+    sessionsDirectory: f.directory, listProcesses: async () => [], quietMs: 0, warmupMs: 0, submitDelayMs: 0, wait: async () => {},
+    openTerminal: () => ({ pid: 1000, resize() {}, kill() {},
+      onData(callback: (data: string) => void) { queueMicrotask(() => callback(promptFrame())); return { dispose() {} }; },
+      onExit: () => ({ dispose() {} }), write(data: string) { writes.push(data); },
+    }) as unknown as IPty,
+  });
+  const phase = SendWatch.prototype.phase;
+  t.mock.method(SendWatch.prototype, 'phase', function (this: SendWatch, ...[id, value, at]: Parameters<SendWatch['phase']>) {
+    if (value === phaseName) throw new Error('storage unavailable');
+    return phase.call(this, id, value, at);
+  });
+  try {
+    await a.command('launch', 'session.launch', { projectId: 'project', provider: 'claude', resume: session });
+    const payload = { conversationId, text: 'Next step' };
+    const first = await a.command('pty', 'session.send', payload);
+    a.frames.length = 0;
+    const second = await a.command('pty', 'session.send', payload);
+    assert.equal(writes.filter(data => data === '\r').length, phaseName === 'emitting' ? 0 : 1);
+    assert.equal(first.ok, phaseName === 'emitted'); assert.equal(second.ok, first.ok);
+    assert.equal(f.decide('pty').value, phaseName === 'emitting' ? 'rejected' : 'emitting');
+    assert.equal(f.db.prepare("SELECT 1 FROM api_delivery_evidence WHERE id = 'pty:aborted'").get(), undefined);
+  } finally { await a.api.close(); }
+});
+
+test('P1: emitting 保存の再試行中に端末の会話が変われば一文字も書かない', async t => {
+  const f = createFixture(t), session = '12345678-1234-1234-1234-123456789abc';
+  f.append('project.created', 'project:project', { repository_id: 'project', root_path: f.directory, state: 'registered', display_name: 'Fixture' });
+  const sessionPath = join(f.directory, '1000.json');
+  writeFileSync(sessionPath, JSON.stringify({ pid: 1000, sessionId: session }));
+  const writes: string[] = [];
+  const a = await createApiFixture(t, f, {
+    sessionsDirectory: f.directory, listProcesses: async () => [], quietMs: 0, warmupMs: 0, submitDelayMs: 0, wait: async () => {},
+    openTerminal: () => ({ pid: 1000, resize() {}, kill() {},
+      onData(callback: (data: string) => void) { queueMicrotask(() => callback(promptFrame())); return { dispose() {} }; },
+      onExit: () => ({ dispose() {} }), write(data: string) { writes.push(data); },
+    }) as unknown as IPty,
+  });
+  const phase = SendWatch.prototype.phase;
+  let attempts = 0;
+  t.mock.method(SendWatch.prototype, 'phase', function (this: SendWatch, ...[id, value, at]: Parameters<SendWatch['phase']>) {
+    if (value === 'emitting' && attempts++ === 0) {
+      writeFileSync(sessionPath, JSON.stringify({ pid: 1000, sessionId: '87654321-4321-4321-4321-cba987654321' }));
+      throw Object.assign(new Error('database is locked'), { errcode: 5 });
+    }
+    return phase.call(this, id, value, at);
+  });
+  try {
+    await a.command('launch', 'session.launch', { projectId: 'project', provider: 'claude', resume: session });
+    const ack = await a.command('changed', 'session.send', { conversationId: JSON.stringify(['claude', session]), text: 'Next step' });
+    assert.equal(ack.ok, false); assert.deepEqual(writes, []);
+    assert.equal(f.decide('changed').value, 'rejected');
+    assert.equal(attempts, 1);
+  } finally { await a.api.close(); }
+});

@@ -1,3 +1,5 @@
+import type { Fact } from "../facts.ts";
+import { projectEntities, projectConversationIds } from "./relations.ts";
 export interface RootProjection {
   id: string;
   name: string;
@@ -21,7 +23,7 @@ export interface RootConversation {
 interface RootRelation { from_id?: string; to_id?: string; type?: string; active?: boolean | number; confidence?: string }
 
 /** 確定した継続・対話の分岐と根のキット名で系列を作り、子の会話を同名の根に混ぜない。 */
-export function projectRoots(conversations: readonly RootConversation[], relations: readonly RootRelation[]): RootProjection[] {
+export function projectRoots(conversations: readonly RootConversation[], relations: readonly RootRelation[], facts?: readonly Fact[]): RootProjection[] {
   const hidden = new Set(conversations.filter(row => row.hidden).map(row => row.id));
   conversations = conversations.filter(row => !row.hidden);
   relations = relations.filter(row => !hidden.has(row.from_id ?? '') && !hidden.has(row.to_id ?? ''));
@@ -106,6 +108,20 @@ export function projectRoots(conversations: readonly RootConversation[], relatio
       project: first.project ?? first.repository_id ?? null, state: latest.state ?? 'unknown', last_activity_ts: activity,
       conversation_ids: group.map(row => row.id), current_conversation_id: latest.id, running_children: descendants.filter(row => row.state === 'running').length,
       total_children: descendants.length });
+  }
+  if (facts) {
+    // 系列全体を一つの実体として投影し、訂正と列ごとの事実順序を名前にも適用する。
+    const ids = projectConversationIds(facts);
+    const rootIds = new Map(roots.flatMap(root => root.conversation_ids.map(id => [id, root.id] as const)));
+    const names = new Map(projectEntities(facts, 'conversation', (_, id) => rootIds.get(ids.get(id) ?? id) ?? id,
+      fact => [fact.source.startsWith('host-') ? 1 : 0]).map(row => [row.id, row.user_name]));
+    for (const root of roots) {
+      const automatic = root.auto_name ?? root.name;
+      const name = names.get(root.id);
+      root.name = name || automatic;
+      delete root.user_name; delete root.auto_name;
+      if (name) { root.user_name = name; root.auto_name = automatic; }
+    }
   }
   return roots.sort((a, b) => a.id.localeCompare(b.id));
 }

@@ -46,7 +46,7 @@ export function project(facts: readonly Fact[]) {
     const task = conversations.tasks.find(task => task.id === row.task_id);
     return { ...row, project: task?.project ?? row.repository_id,
       state: run?.state, last_activity_ts: [activity.get(row.id), run?.last_evidence_ts, run?.ended_ts, run?.started_ts].filter((ts): ts is string => !!ts).sort().at(-1) };
-  }), conversations.relations);
+  }), conversations.relations, facts);
   return {
     roots,
     ...projectNames(facts),

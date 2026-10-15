@@ -261,7 +261,7 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
   const defaults = providerDefaults?.provider === provider && providerDefaults.cwd === defaultCwd ? providerDefaults.value : undefined;
   const recommendedModel = defaults?.model ?? '';
   const draftKey = conversationId || `new:${newSession?.projectId ?? ''}:${newSession?.cwd ?? ''}`;
-  const [input, setInput, clearSentDraft] = useConversationDraft(draftKey);
+  const [input, setInput, clearSentDraft] = useConversationDraft(draftKey, seriesIds);
   const attachments = useAttachments(conversationId, language, client);
   const [dragging, setDragging] = useState(false);
   const dragDepth = useRef(0);

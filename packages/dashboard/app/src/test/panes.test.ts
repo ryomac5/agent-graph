@@ -48,3 +48,13 @@ it('preserves empty panes when closing unrelated tabs or moving tabs and closes 
   expect(restoreWorkspace(JSON.stringify(nested), 'c')).toEqual(nested);
   expect(restoreWorkspace(JSON.stringify({ kind: 'pane', id: 'empty', tabs: [], active: 'missing' }), 'c')).toEqual(createWorkspace('c'));
 });
+
+it('migrates only conversation tabs in the root series while preserving pane, tab and terminal identities', () => {
+  const tree = { kind: 'pane' as const, id: 'pane', active: 'old-tab', tabs: [
+    { kind: 'conversation' as const, id: 'old-tab', conversationId: 'old' },
+    { kind: 'conversation' as const, id: 'child-tab', conversationId: 'child' },
+    { kind: 'terminal' as const, id: 'terminal-tab', terminalId: 'running-terminal', worktree: '/repo' },
+  ] };
+  expect(restoreWorkspace(JSON.stringify(tree), 'current', ['old', 'current'])).toEqual({ ...tree,
+    tabs: [{ ...tree.tabs[0], conversationId: 'current' }, ...tree.tabs.slice(1)] });
+});

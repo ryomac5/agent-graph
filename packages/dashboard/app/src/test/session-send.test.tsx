@@ -31,7 +31,7 @@ function fixture(origin = 'managed', state = 'idle', evidence?: unknown, provide
   const command = vi.fn((name: string): Promise<Ack> => name === 'list_models'
     ? Promise.resolve(ack([{ model: 'model-a', displayName: 'Model A' }])) : name === 'session.hosts' ? Promise.resolve(ack({ hosts: [] })) : name === 'session.launch' ? Promise.resolve(ack({ terminalId: 'terminal' })) : new Promise(resolve => { finish = resolve; }));
   const client: ConversationClient = { command };
-  function Wrapper() { return <MemoryRouter><Workbench project="p" session="root" conversationId={conversationId} client={client} language="ja"
+  function Wrapper() { return <MemoryRouter><Workbench project="p" session="root" conversationId={conversationId} client={client} language="ja" resolveRenameRoot={id => id === conversationId ? 'root' : undefined}
     renderConversation={(id, onConversation) => <ConversationPage target={target} client={client} conversationId={id} onConversation={onConversation} language="ja" embedded/>}/></MemoryRouter>; }
   return { target, command, client, Wrapper, finish: (value: Ack) => finish(value) };
 }
@@ -136,13 +136,24 @@ it.each(['claude', 'codex'])('creates a %s session from the project plus, opens 
   expect(f.command.mock.calls.filter(([name]) => name === 'session.launch')).toHaveLength(1);
 });
 
-it('renames tabs, cancels with Escape, restores names and order, and clears custom names', () => {
+it('renames sessions, cancels with Escape, restores names and order, and clears custom names', async () => {
   const f = fixture();
+  const original = f.command.getMockImplementation()!;
+  f.command.mockImplementation(async (name, ...args) => {
+    if (name !== 'session.rename') return original(name);
+    const payload = (args as unknown as [{ rootId: string; name: string }])[0];
+    expect(payload.rootId).toBe('root');
+    const state = f.target.getSnapshot();
+    f.target.applyPatch({ type: 'patch', from_seq: state.seq, seq: state.seq + 1, generation: 0, changes: { roots: { upsert: [{ ...state.projection.roots![0], name: payload.name || 'Session', user_name: payload.name || null, auto_name: 'Session' }], remove: [] } } });
+    return ack();
+  });
   localStorage.setItem(workspaceKey('p', 'root'), JSON.stringify({ kind: 'pane', id: 'pane', tabs: [{ kind: 'conversation', id: 'first', conversationId: 'c' }, { kind: 'conversation', id: 'second', conversationId: 'other', name: 'Other session' }], active: 'first' }));
   const view = render(<f.Wrapper/>);
   fireEvent.doubleClick(screen.getByRole('tab', { name: 'Session' }));
   let input = screen.getByRole('textbox', { name: 'タブの名前' });
   fireEvent.change(input, { target: { value: '作業の相談' } }); fireEvent.keyDown(input, { key: 'Enter' });
+  await screen.findByRole('tab', { name: '作業の相談' });
+  expect(f.command).toHaveBeenCalledWith('session.rename', { rootId: 'root', name: '作業の相談' });
   fireEvent.contextMenu(screen.getByRole('tab', { name: '作業の相談' }));
   fireEvent.click(screen.getByRole('menuitem', { name: '名前を変える' }));
   input = screen.getByRole('textbox', { name: 'タブの名前' });
@@ -157,7 +168,8 @@ it('renames tabs, cancels with Escape, restores names and order, and clears cust
   fireEvent.doubleClick(screen.getByRole('tab', { name: '作業の相談' }));
   input = screen.getByRole('textbox', { name: 'タブの名前' });
   fireEvent.change(input, { target: { value: '   ' } }); fireEvent.keyDown(input, { key: 'Enter' });
-  expect(screen.getAllByRole('tab', { name: 'Session' })).toHaveLength(1);
+  expect(await screen.findAllByRole('tab', { name: 'Session' })).toHaveLength(1);
+  expect(f.command).toHaveBeenCalledWith('session.rename', { rootId: 'root', name: '' });
   expect(screen.getByRole('tab', { name: 'Other session' })).toBeTruthy();
 });
 

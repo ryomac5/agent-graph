@@ -34,7 +34,7 @@ function setup(messages: Row[] = [], state = 'running') {
   return { target, client };
 }
 function mount(f: ReturnType<typeof setup>, breadcrumb?: React.ReactNode) {
-  return render(<MemoryRouter><Workbench project="p" session="root" conversationId="c" client={f.client} language="en"
+  return render(<MemoryRouter><Workbench project="p" session="root" conversationId="c" client={f.client} language="en" resolveRenameRoot={() => 'root'}
     renderConversation={(id, onConversation) => <ConversationPage conversationId={id} target={f.target} client={f.client} language="en" embedded onConversation={onConversation} breadcrumb={breadcrumb}/>}/></MemoryRouter>);
 }
 it.each([['running', 'running'], ['waiting_approval', 'waiting'], ['waiting_input', 'input'], ['failed', 'failed']])('names the tab with the user name and shows the %s dot with status and model in its title', async (state, tone) => {
@@ -48,8 +48,9 @@ it.each([['running', 'running'], ['waiting_approval', 'waiting'], ['waiting_inpu
   fireEvent.doubleClick(tab);
   fireEvent.change(screen.getByRole('textbox', { name: 'Tab name' }), { target: { value: 'My tab' } });
   fireEvent.keyDown(screen.getByRole('textbox', { name: 'Tab name' }), { key: 'Enter' });
-  expect(screen.getByRole('tab', { name: 'My tab' })).toBeTruthy();
-  await act(async () => {});
+  await vi.waitFor(() => expect(f.client.command).toHaveBeenCalledWith('session.rename', { rootId: 'root', name: 'My tab' }));
+  act(() => f.target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: { roots: { upsert: [{ ...f.target.getSnapshot().projection.roots![0], name: 'My tab', user_name: 'My tab' }], remove: [] } } }));
+  expect(await screen.findByRole('tab', { name: 'My tab' })).toBeTruthy();
 });
 it('places the three icon actions in order, opens details and changed files above the timeline, and opens the hosted terminal', async () => {
   const f = setup([{ id: 'edit', role: 'assistant', body: [{ type: 'tool_use', name: 'Edit', input: { file_path: '/repo/a.ts', old_string: 'before', new_string: 'after' } }] }]);

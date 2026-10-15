@@ -313,6 +313,23 @@ test('runner への送信対象は表示上の最新 run ではなく要求し�
   assert.equal(f.watch.capture(CONVERSATION, NOW + 1000, 'runner', 'root').target, original);
 });
 
+test('受付の後で会話と run の別名が解決しても、同じ start の再提示を衝突にしない', t => {
+  const f = createFixture(t);
+  const captured = f.watch.capture('c-new', NOW, 'runner', 'r-new');
+  assert.equal(captured.target, JSON.stringify(['c-new', 'r-new', 'runner']));
+  assert.equal(f.watch.begin('start', 'c-new', 'hello', captured), true);
+  f.append('run.created', 'run:r-new', { conversation_id: 'c-new', generation: 1, state: 'starting', started_ts: new Date(NOW + 1).toISOString() }, NOW + 1);
+  f.append('conversation.created', 'conversation:c-new', { provider: 'claude', native_id: 'native-new', origin: 'managed', type: 'interactive', history_format: 'jsonl' }, NOW + 1);
+  f.feed.refresh(NOW + 1);
+  const replay = f.watch.capture('c-new', NOW + 2, 'runner', 'r-new');
+  assert.notEqual(replay.target, captured.target);
+  assert.equal(f.watch.begin('start', 'c-new', 'hello', replay), false);
+  assert.notEqual(f.decide('start', NOW + 2).reason, 'cmd_id_conflict');
+  assert.deepEqual(f.watch.history(JSON.stringify(['claude', 'native-new'])).map(row => row.id), ['start']);
+  assert.equal(f.watch.begin('start', 'c-new', 'other', f.watch.capture('c-new', NOW + 3, 'runner', 'r-new')), false);
+  assert.equal(f.decide('start', NOW + 3).reason, 'cmd_id_conflict');
+});
+
 for (const state of ['failed', 'closed']) test(`旧い ${state} の baseline_seq と message_id を移行し、再起動でも配達を保つ`, t => {
   const f = createFixture(t);
   const sent = Date.parse('2026-10-14T09:08:58.299Z');

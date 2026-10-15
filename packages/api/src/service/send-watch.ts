@@ -64,14 +64,23 @@ export class SendWatch {
   private canonical(id: string): string {
     return String(this.db.prepare('SELECT canonical_id FROM api_conversation_ids WHERE id = ?').get(id)?.canonical_id ?? id);
   }
+  private resolveRun(run: string): string | undefined {
+    const row = this.db.prepare(`SELECT r.id FROM runs r LEFT JOIN run_subjects s ON s.conversation_id = r.conversation_id AND s.generation = r.generation
+      WHERE r.id = ? OR s.subject_id = ? ORDER BY r.started_ts DESC, r.generation DESC LIMIT 1`).get(run, run);
+    return row ? String(row.id) : undefined;
+  }
+  /** 受付の後で会話や実行の別名が解決しても、同じ宛先を同じ鍵として比べる。 */
+  private resolvedTarget(target: string): string {
+    const [conversation, run, terminal] = JSON.parse(target) as [string, string | null, string];
+    return JSON.stringify([this.canonical(conversation), run === null ? null : this.resolveRun(run) ?? run, terminal]);
+  }
   capture(conversation: string, now = Date.now(), terminal = 'unresolved', requestedRun?: string) {
     const id = this.canonical(conversation);
     const run = requestedRun === undefined ? this.db.prepare(`SELECT id FROM runs WHERE conversation_id = ? OR conversation_id IN
-      (SELECT id FROM api_conversation_ids WHERE canonical_id = ?) ORDER BY started_ts DESC, generation DESC LIMIT 1`).get(id, id)
-      : this.db.prepare(`SELECT r.id FROM runs r LEFT JOIN run_subjects s ON s.conversation_id = r.conversation_id AND s.generation = r.generation
-        WHERE r.id = ? OR s.subject_id = ? ORDER BY r.started_ts DESC, r.generation DESC LIMIT 1`).get(requestedRun, requestedRun);
+      (SELECT id FROM api_conversation_ids WHERE canonical_id = ?) ORDER BY started_ts DESC, generation DESC LIMIT 1`).get(id, id)?.id
+      : this.resolveRun(requestedRun);
     return { sent_ts: new Date(now).toISOString(), baseline_seq: Number(this.db.prepare('SELECT coalesce(max(seq), 0) AS seq FROM facts').get()!.seq),
-      target: JSON.stringify([id, run?.id ?? requestedRun ?? null, terminal]) };
+      target: JSON.stringify([id, run ?? requestedRun ?? null, terminal]) };
   }
   decision(id: string): DeliveryDecision | undefined { return this.decisions.get(id); }
   has(id: string): boolean { return !!this.db.prepare('SELECT 1 FROM api_delivery_operations WHERE id = ?').get(id); }
@@ -80,7 +89,7 @@ export class SendWatch {
     const existing = this.db.prepare('SELECT conversation_id, data FROM api_delivery_operations WHERE id = ?').get(id);
     if (existing) {
       const previous = JSON.parse(String(existing.data));
-      if (existing.conversation_id !== this.canonical(conversation) || previous.target !== data.target || (previous.body_hash ?? bodyKey(previous.body)) !== data.body_hash || (previous.attachments_hash ?? bodyKey(JSON.stringify(previous.attachments))) !== data.attachments_hash) {
+      if (this.canonical(String(existing.conversation_id)) !== this.canonical(conversation) || this.resolvedTarget(previous.target) !== this.resolvedTarget(data.target) || (previous.body_hash ?? bodyKey(previous.body)) !== data.body_hash || (previous.attachments_hash ?? bodyKey(JSON.stringify(previous.attachments))) !== data.attachments_hash) {
         this.add({ kind: 'operation', id: id + ':conflict:' + bodyKey(JSON.stringify([data.body, attachments])), cmdId: id,
           target: captured.target, bodyKey: bodyKey(JSON.stringify([data.body, attachments])), phase: 'accepted', at: Date.parse(data.sent_ts), observedAt: Date.parse(data.sent_ts) });
       }
@@ -117,7 +126,7 @@ export class SendWatch {
   private rows(): Row[] {
     return this.db.prepare('SELECT * FROM api_delivery_operations ORDER BY rowid').all().map(row => ({ id: row.id, conversation_id: row.conversation_id, ...JSON.parse(String(row.data)) }));
   }
-  history(conversation: string): Row[] { return this.list().filter(row => row.conversation_id === this.canonical(conversation)).slice(-HISTORY_LIMIT).reverse(); }
+  history(conversation: string): Row[] { const id = this.canonical(conversation); return this.list().filter(row => this.canonical(String(row.conversation_id)) === id).slice(-HISTORY_LIMIT).reverse(); }
   list(): Row[] {
     return this.rows().filter(row => !row.archived).map(row => ({ ...row, message_id: this.messages.get(String(row.id)) ?? row.message_id, queue_id: this.queues.get(String(row.id)), decision: this.decisions.get(String(row.id)), state: this.decisions.get(String(row.id))?.value ?? 'accepted' }));
   }

@@ -21,6 +21,31 @@ export function copyProductionDatabase(sourcePath, destination) {
   chmodSync(destination, 0o600);
 }
 
+// 本番の api は failed の送信行を 24 時間で消す。E2 の行が写しに無いときだけ、
+// docs/agents/architecture-critique.md の E2 の表の値で写しの旧表に戻す。本文は受信行の <bash-input> から復元する。
+const E2_CONVERSATION = '["claude","1c0d055c-8912-452b-b273-47e9874df7e8"]';
+export const E2_WATCHES = [
+  { id: '896eb201-37af-453c-ab95-05c0ed07ed4d', sent_ts: '2026-10-14T09:08:58.299Z', baseline_seq: 301134, received_seq: 301136, failed_ts: '2026-10-14T09:09:58.785Z' },
+  { id: '8dceda21-b727-4ec8-bcbf-70017d8f5738', sent_ts: '2026-10-14T09:09:13.099Z', baseline_seq: 301144, received_seq: 301145, failed_ts: '2026-10-14T09:10:13.310Z' },
+];
+export function restoreLegacyE2(path) {
+  const db = new DatabaseSync(path);
+  try {
+    if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='api_send_watches'").get()) return 'missing_table';
+    const present = E2_WATCHES.filter(watch => db.prepare('SELECT 1 FROM api_send_watches WHERE id = ?').get(watch.id)).length;
+    if (present === E2_WATCHES.length) return 'production';
+    if (present) throw new Error('E2 rows are partially present');
+    for (const watch of E2_WATCHES) {
+      const fact = db.prepare("SELECT payload FROM facts WHERE seq = ? AND kind = 'message.created'").get(watch.received_seq);
+      const command = fact && /^<bash-input>([\s\S]*)<\/bash-input>$/u.exec(JSON.parse(fact.payload).body)?.[1];
+      if (command === undefined) throw new Error(`E2 received row missing: ${watch.received_seq}`);
+      db.prepare(`INSERT INTO api_send_watches (id, conversation_id, body, sent_ts, baseline_seq, state, message_id, failed_ts, attachments)
+        VALUES (?, ?, ?, ?, ?, 'failed', NULL, ?, '[]')`).run(watch.id, E2_CONVERSATION, `!${command}`, watch.sent_ts, watch.baseline_seq, watch.failed_ts);
+    }
+    return 'restored';
+  } finally { db.close(); }
+}
+
 export async function replayProduction(options = {}) {
   const original = { ...process.env };
   const home = homedir();
@@ -39,6 +64,7 @@ export async function replayProduction(options = {}) {
   }
   try {
     copyProductionDatabase(sourcePath, path);
+    const e2Source = restoreLegacyE2(path);
     // 走査できない環境では、大きな履歴の取り込みより先に未確認で終了する。
     const preflight = await scanSessions(join(claudeHome, 'sessions'));
     if (preflight.status !== 'succeeded') throw new Error(`sessions/ps scan incomplete: ${preflight.status}`);
@@ -73,16 +99,22 @@ export async function replayProduction(options = {}) {
     check('E1: stopped child remains Unknown, launched/incomplete', () => {
       const row = feed.current.conversations.get(JSON.stringify(['claude', 'agent-a46a60f85e3267c52']));
       assert.ok(row, 'E1 child missing');
-      assert.equal(row.decision.display.label, 'Unknown');
+      // 表の Unknown は親の生存中の値である。親の不在を走査が示せば、R32 の優先順で Not hosted が代表になる。
+      const hosting = row.decision.hosting.value;
+      assert.equal(row.decision.display.label, hosting === 'not_hosted' ? 'Not hosted' : 'Unknown');
+      assert.equal(row.decision.turn.value, 'unknown');
       assert.equal(row.decision.turn.reason, 'boundary_unavailable');
       assert.equal(row.decision.result.stage, 'launched');
       assert.equal(row.decision.result.value, 'incomplete');
+      assert.equal(row.decision.display.result, null);
+      return { label: row.decision.display.label, hosting };
     });
     check('E2: both legacy failed sends are Likely delivered', () => {
-      for (const id of ['896eb201-37af-453c-ab95-05c0ed07ed4d', '8dceda21-b727-4ec8-bcbf-70017d8f5738']) {
+      for (const { id } of E2_WATCHES) {
         assert.equal(watch.decision(id)?.value, 'received_candidate', id);
         assert.equal(watch.decision(id)?.display, 'Likely delivered', id);
       }
+      return { source: e2Source };
     });
     check('E3: disputed historical runs are Unresolved without an invented run mapping', () => {
       // 表の E3 は二つの run の対応未解決を入力条件とする。現在の別世代の選択とは分けて原台帳の7件を再生する。

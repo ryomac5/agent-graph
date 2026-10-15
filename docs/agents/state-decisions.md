@@ -210,3 +210,11 @@ E1の親12153行目をreadFileSyncだけで読み、queue-operation/enqueueのti
 schema 版・投影版・依存は変更しない。UUID 補完の印は既存の conversation.updated の空 payload として追記するため、台帳の事実数だけが一会話につき一件増える。
 
 本番の確認は `node scripts/e2e/prod-replay.mjs`。`--db`、`--claude-home`、`--codex-home` で読み取り元を指定でき、`--keep` は隔離コピーを調査用に残す。readOnly 接続の VACUUM INTO でコピーし、HOME・XDG の書き先を隔離して取り込む。元の outbox は消さず、CLI や API/runner は起動しない。終了値は 0=全判定成功、1=期待との差、2=読み取り／走査未完了。E1 はコピーから組み立てた子の現在値、E2 は実 watch ID の移行結果、E3 は対応未解決という表の入力条件のままコピーの原台帳7件を再生して検査する。E3 の現在の別世代との同一性を新しく断定する試験ではない。
+
+### socket と本番の写しで見つけた不具合（2026-10-16）
+
+- 同じ cmd_id の再提示は、受付時と再提示時の宛先を同じ解決の後で比べる。受付の後で会話と run の別名が解決しても、R34 の衝突にしない。送信履歴も会話の別名を解決して引く。
+- agent_id を持つ hook は、親の session に届いた子の出来事である。親の turn の境界や進行にしない。本番では内部の子の SubagentStop が親を Unknown/boundary_unavailable に落としていた。
+- Claude の原記録の時刻は親子の順と一致しない。PostToolUse の attachment は親の tool_result より前の時刻を持つ。turn の対応は uuid の辺を先に集め、祖先の promptId を辿って決める。
+- 本番の旧い api は failed の送信行を 24 時間で消す。prod-replay は E2 の行が写しに無いとき、critique の E2 の表の値で写しにだけ戻す。本文は受信行の `<bash-input>` から復元するので、本文の一致はこの再生では検査していない。
+- E1 の表の Unknown は親の生存中の値である。親の不在を走査が示せば、R32 の優先順で Not hosted が代表になる。prod-replay は所持の値に応じて代表を検査し、turn と結果の段階は表のまま検査する。

@@ -113,6 +113,34 @@ for (const hook of ['Stop', 'SubagentStop']) test(`${hook} は完了を捏造せ
   const d = f.decision('parent', NOW + 2); assert.equal(d.display.label, 'Unknown'); assert.equal(d.turn.reason, 'boundary_unavailable');
 });
 
+test('親の session に届く子の SubagentStop は親の turn の境界にしない', t => {
+  const f = fixture(t); f.run('parent'); f.native('parent', start()); f.native('parent', tool(), NOW + 1);
+  // 本番の hook 事実と同じく、親の run に hook の入力をそのまま載せる。
+  const childStop = (agent: string, at: number) => f.append('run.updated', 'run:parent', { conversation_id: f.id('parent'), generation: 1,
+    last_evidence: { hook_event_name: 'SubagentStop', input: { session_id: 'parent', agent_id: agent, agent_type: '' } } }, at, 'hook');
+  childStop('internal', NOW + 2);
+  f.native('parent', { hook_event_name: 'SubagentStop', agent_id: 'named', prompt_id: 'turn' }, NOW + 2, 'hook');
+  assert.equal(f.decision('parent', NOW + 2).display.label, 'Working');
+  f.native('parent', { type: 'system', subtype: 'turn_duration', promptId: 'turn' }, NOW + 3);
+  childStop('later', NOW + 4);
+  const d = f.decision('parent', NOW + 4); assert.equal(d.display.label, 'Idle'); assert.equal(d.turn.value, 'completed');
+});
+
+test('親より前の時刻の PostToolUse を挟んでも、turn_duration を祖先の turn に対応させる', t => {
+  const f = fixture(t); f.run('parent'); f.native('parent', start());
+  f.native('parent', { type: 'assistant', uuid: 'call', parentUuid: 'user:turn', message: { stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'agent', name: 'Agent' }] } }, NOW + 1);
+  // 実物と同じく、PostToolUse の attachment は親の tool_result より前の時刻を持つ。
+  f.native('parent', { type: 'attachment', uuid: 'post', parentUuid: 'result', attachment: { type: 'hook_success', hookEvent: 'PostToolUse', toolUseID: 'agent' } }, NOW + 2);
+  f.native('parent', { type: 'user', uuid: 'result', parentUuid: 'call', promptId: 'turn', message: { content: [{ type: 'tool_result', tool_use_id: 'agent' }] } }, NOW + 3);
+  f.native('parent', { type: 'assistant', uuid: 'reply', parentUuid: 'post', message: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'done' }] } }, NOW + 4);
+  f.native('parent', { type: 'attachment', uuid: 'stop', parentUuid: 'reply', attachment: { type: 'hook_success', hookEvent: 'Stop' } }, NOW + 5);
+  f.append('run.updated', 'run:parent', { conversation_id: f.id('parent'), generation: 1,
+    last_evidence: { hook_event_name: 'Stop', input: { session_id: 'parent', prompt_id: 'turn' } } }, NOW + 5, 'hook');
+  f.native('parent', { type: 'system', subtype: 'stop_hook_summary', uuid: 'summary', parentUuid: 'stop' }, NOW + 6);
+  f.native('parent', { type: 'system', subtype: 'turn_duration', uuid: 'duration', parentUuid: 'summary' }, NOW + 7);
+  const d = f.decision('parent', NOW + 7); assert.equal(d.display.label, 'Idle'); assert.equal(d.turn.value, 'completed');
+});
+
 test('長い tool は生存確認で保持し、走査失敗は期限を延ばさず正確な境界で Unknown', t => {
   const f = fixture(t); f.run('parent'); f.native('parent', start()); f.native('parent', tool(), NOW + 1);
   f.scan(NOW + 310_000);

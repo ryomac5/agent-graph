@@ -399,6 +399,24 @@ export class CurrentState {
     const calls = new Map<string, Row>();
     const codexTurns = new Map<string, string>();
     const tools = new Map<string, string>();
+    // 原記録の時刻は親子の順と一致しない。tool_result より前の時刻の PostToolUse が先に並ぶため、
+    // 親を読む前でも祖先の promptId を辿れるよう、uuid の辺を先に集める。
+    const parents = new Map<string, string | undefined>(), prompts = new Map<string, string>();
+    for (const fact of context.facts ?? []) {
+      const last = object(object(fact.payload).last_evidence), row = object(last.native_record), uuid = string(row.uuid);
+      if (last.native_source !== 'claude' || !uuid) continue;
+      parents.set(uuid, string(row.parentUuid));
+      const own = readNativeTurnId('claude', row);
+      if (own) prompts.set(uuid, own);
+    }
+    const ancestorTurn = (uuid: string): string | undefined => {
+      const seen = new Set<string>();
+      for (let id: string | undefined = uuid; id && !seen.has(id); id = parents.get(id)) {
+        seen.add(id);
+        const turn = turns.get(id) ?? prompts.get(id);
+        if (turn) return turn;
+      }
+    };
     for (const fact of context.facts ?? []) {
       const payload = object(fact.payload), last = object(payload.last_evidence);
       const at = Date.parse(fact.source_ts), observedAt = Date.parse(fact.observed_ts);
@@ -407,6 +425,8 @@ export class CurrentState {
       if (fact.source === 'hook' && last.auxiliary !== true && last.hook_event_name) {
         source = 'hook'; row = { ...object(last.input), hook_event_name: last.hook_event_name };
       }
+      // agent_id を持つ hook は親の session に届く子の出来事であり、親の turn の境界や進行にしない。
+      if (source === 'hook' && string(row.agent_id)) continue;
       const end = object(payload.end_evidence);
       if (fact.confidence === 'confirmed' && fact.source.startsWith('host-') && end.kind === 'host_exit')
         evidence.push({ kind: 'signal', id: fact.fact_id, at, observedAt, runId: context.id, event: 'exit' });
@@ -432,7 +452,7 @@ export class CurrentState {
         else turnId ??= codexTurns.get(file);
       }
       const parent = string(row.parentUuid);
-      if (!turnId && parent) turnId = turns.get(parent);
+      if (!turnId && parent) turnId = ancestorTurn(parent);
       const blocks = object(row.message).content;
       if (!turnId && Array.isArray(blocks)) {
         const ids = new Set(blocks.map(b => tools.get(String(object(b).tool_use_id))).filter(Boolean));

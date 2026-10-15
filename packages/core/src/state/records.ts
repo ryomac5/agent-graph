@@ -78,6 +78,10 @@ function readNativeSignals(record: NativeRecord): Signal[] {
     return [];
   }
   if (source === "codex_child") {
+    const payload = readObject(row.payload), activity = readObject(payload.item);
+    if (payload.type === "item_completed" && activity.type === "SubAgentActivity" && record.childId && activity.agent_thread_id === record.childId) {
+      return activity.kind === "completed" ? emit("complete") : activity.kind === "started" ? emit("launched") : [];
+    }
     const item = readObject(readObject(row.params).item);
     if (row.method !== "item/completed" || item.type !== "collabAgentToolCall" || item.status !== "completed" ||
       !record.childId || !Array.isArray(item.receiverThreadIds) || !item.receiverThreadIds.includes(record.childId)) return [];

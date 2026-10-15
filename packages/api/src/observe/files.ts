@@ -6,6 +6,7 @@ const READ_SIZE = 64 * 1024;
 const PREFIX_SIZE = 4096;
 export interface FileCursor {
   nativeStateEvidence?: boolean;
+  claudeUuidChain?: boolean;
   claudeQueuedCommandsVersion?: number;
   claudeMessageFlagsVersion?: number;
   claudeHistoryDetailsVersion?: number;

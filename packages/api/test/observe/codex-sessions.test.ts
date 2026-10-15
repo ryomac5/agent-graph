@@ -15,7 +15,14 @@ test('Codex の open file と OS の開始値を対応し、補助ホストを�
     assert.deepEqual(pids, [41]); return `p41\nn${FILE}\n`;
   } }, () => NOW, starts);
   assert.equal(scan.status, 'succeeded'); assert.equal(scan.at, NOW); assert.equal(scan.provider, 'codex');
-  assert.deepEqual(scan.sessions, [{ sessionId: ID, pid: 41, procStart: START, startedAt: Date.parse(START) }]);
+  assert.deepEqual(scan.sessions, [{ sessionId: ID, pid: 41, procStart: String(Date.parse(START)), startedAt: Date.parse(START) }]);
+});
+
+test('UTC の ps を epoch にした値でも Codex の startedAt は有限の同じ時刻になる', async () => {
+  const epoch = Date.parse('2026-10-14T04:50:09Z');
+  const scan = await scanCodexSessions(HOME, { listProcesses: () => PS, readOpenFiles: () => `p41\nn${FILE}\n` }, () => epoch + 1,
+    async () => new Map([[41, String(epoch)]]));
+  assert.equal(scan.sessions[0].startedAt, epoch); assert.equal(scan.processes[0].procStart, String(epoch));
 });
 
 for (const files of ['p41\nn/dev/null\n', `p41\nn${HOME}/archived_sessions/${FILE.split('/').at(-1)}\n`, `p41\nn/other/sessions/${FILE.split('/').at(-1)}\n`]) test(`対象外のファイルは所持を作らない: ${files.trim()}`, async () => {

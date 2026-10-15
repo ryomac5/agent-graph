@@ -39,12 +39,12 @@ export function captureNativeRecord(source: NativeRecord['source'], row: Row): R
     if (p.status) { const status = object(p.status); object(record[key]).status = typeof p.status === 'string' ? p.status : { type: status.type ?? null, activeFlags: status.activeFlags ?? [] }; }
     if (p.item) {
       const item = object(p.item);
-      const captured = Object.fromEntries(Object.entries(item).filter(([key]) => ['type', 'id', 'phase', 'role', 'status', 'tool', 'receiverThreadIds'].includes(key)));
+      const captured = Object.fromEntries(Object.entries(item).filter(([key]) => ['type', 'id', 'phase', 'role', 'status', 'tool', 'receiverThreadIds', 'kind', 'agent_thread_id'].includes(key)));
       if (item.agentsStates) captured.agentsStates = Object.fromEntries(Object.entries(object(item.agentsStates)).map(([id, state]) => [id, { status: object(state).status ?? null, message: text(object(state).message) }]));
       object(record[key]).item = captured;
     }
   }
-  if (row.type === 'turn_context') return record;
+  if (row.type === 'turn_context' || typeof row.uuid === 'string' && typeof row.parentUuid === 'string') return record;
   const signals = readNativeEvidence({ source, row: record, id: 'record', at: 0, observedAt: 0, runId: 'run' });
   return object(record.attachment).type === 'queued_command' || signals.length || String(record.content ?? JSON.stringify(record.message)).includes('<task-notification>') ? record : undefined;
 }

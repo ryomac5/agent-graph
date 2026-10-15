@@ -356,7 +356,7 @@ export function openObservationService(options: ObservationOptions = {}) {
       watchState ??= new CurrentState(projectionDb, id => {
         const row = projectionDb.prepare("SELECT id FROM conversations WHERE id = ? OR provider || ':' || native_id = ?").get(id, id);
         return String(row?.id ?? id);
-      });
+      }, false);
       watchState.refresh(seq);
       watchExpires = watchState.reevaluateAt;
       const active = new Set([...watchState.conversations.values()].filter(row => ['running', 'waiting_approval', 'waiting_input'].includes(String(row.state)))
@@ -425,7 +425,7 @@ export function openObservationService(options: ObservationOptions = {}) {
         const remoteFiles = changes ? cachedRemoteFiles : list(remoteProjects, name => name.endsWith(".jsonl"));
         const claudeFiles = changes ? cachedClaudeFiles : [...remoteFiles.filter(path => !path.includes("/codex/")), ...list(claudeProjects, (name) => name.endsWith(".jsonl"))];
         const claudePaths = claudeFiles.filter((path) => changes
-          ? changes.has(path) && hasChanged(path) : hasChanged(path) || !checkpoints.get(path)?.nativeStateEvidence || needsClaudeContext(path)
+          ? changes.has(path) && hasChanged(path) : hasChanged(path) || !checkpoints.get(path)?.claudeUuidChain || needsClaudeContext(path)
             || checkpoints.get(path)?.claudeQueuedCommandsVersion !== CLAUDE_QUEUED_COMMANDS_VERSION
             || checkpoints.get(path)?.claudeHistoryDetailsVersion !== CLAUDE_HISTORY_DETAILS_VERSION
             || checkpoints.get(path)?.claudeMessageFlagsVersion !== CLAUDE_MESSAGE_FLAGS_VERSION);

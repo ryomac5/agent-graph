@@ -195,3 +195,18 @@ E1の親12153行目をreadFileSyncだけで読み、queue-operation/enqueueのti
 推測: 前後の性能差を再現できず、報告の 53.5 ms は一時的な負荷変動と判断する。当時の負荷は記録されていないため、競合した処理までは特定できない。
 
 最終確認: `ws.test.ts` は最終コードで 5 回とも失敗なし（各回 6 合格・ソケット禁止による 6 skip）。core は 552 合格、API は 838 合格・既存の 21 skip、dashboard `test:app` は 934 合格。API と dashboard app の型検査と `git diff --check` も合格した。ソケット版 S17 の実際の待受と再起動は、この環境では未確認である。
+
+### 状態の置き換えのレビュー 8 点（2026-10-16）
+
+- プロセスの開始値は epoch milliseconds に正規化する。公開型の `procStart` は文字列のまま epoch を格納する。Claude sessions の ctime は UTC、保存済み ps と Codex の開始値は OS のローカル時刻として読む。新しい ps は `LC_ALL=C TZ=UTC` で取得する。API 起動時に保存済み所持者と走査も正規化し、過去の文字列不一致を死亡証拠として残さない。
+- Claude の uuid→parentUuid の辺は、信号のない attachment でも保持する。本文は保存しない。既読範囲は一度だけ読み直して欠けた辺を追記し、補完済みの事実と cursor の印で再起動後の全件再読を防ぐ。
+- 旧送信行は baseline_seq と message_id を引き継ぐ。closed＋message_id は received の墓標、failed は元の baseline から候補を再評価する。誤って移行済みの行も元表から補修する。これはユーザーが指定した移行契約であり、旧 closed を一律候補にする以前の記述に優先する。
+- state だけを送るホストは supervisor が turn の鍵を付ける。running・待ち・idle は同じ鍵を共有し、idle 後の running で新しい鍵にする。鍵のない過去の host 終端を、別の turn へ推定で付け替えない。
+- Codex の SubAgentActivity completed は、agent_thread_id が子 ID と一致し、その時点の子自身の turn が既知の場合にだけ complete にする。親の turn_id を使わず、responded や Done は作らない。started は launched、interacted は相手の状態を変えない。
+- 走査の削除は feed の CurrentState だけが行う。worker の個体は削除しない。
+- 受信照合は投影済み seq の差分を読む。候補を保持したまま後着の同文・相関を再評価する。所属の後着・訂正・再構築では受信集合を読み直す。状態の評価では走査ごとに session/PID を索引化し、対象 PID の照会結果だけを純粋関数へ渡す。
+- 通知は idle と result の succeeded/failed を読む。Stopped・Not hosted・Unknown・Closed を成功通知にしない。グラフは API の状態をそのまま使い、承認の有無で上書きしない。承認・入力待ちでも turn_started_ts を保持する。
+
+schema 版・投影版・依存は変更しない。UUID 補完の印は既存の conversation.updated の空 payload として追記するため、台帳の事実数だけが一会話につき一件増える。
+
+本番の確認は `node scripts/e2e/prod-replay.mjs`。`--db`、`--claude-home`、`--codex-home` で読み取り元を指定でき、`--keep` は隔離コピーを調査用に残す。readOnly 接続の VACUUM INTO でコピーし、HOME・XDG の書き先を隔離して取り込む。元の outbox は消さず、CLI や API/runner は起動しない。終了値は 0=全判定成功、1=期待との差、2=読み取り／走査未完了。E1 はコピーから組み立てた子の現在値、E2 は実 watch ID の移行結果、E3 は対応未解決という表の入力条件のままコピーの原台帳7件を再生して検査する。E3 の現在の別世代との同一性を新しく断定する試験ではない。

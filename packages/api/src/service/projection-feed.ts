@@ -154,7 +154,7 @@ export class ProjectionFeed {
       this.cursor = Number(this.prepare("SELECT coalesce(max(cursor), 0) AS cursor FROM api_projection_changes").get()!.cursor);
       this.prepare("DELETE FROM api_projection_changes WHERE cursor <= ?").run(this.cursor);
       this.updateInputQueues();
-      this.current = new CurrentState(this.db, id => this.conversationId(id));
+      this.current = new CurrentState(this.db, id => this.conversationId(id), true);
       for (const scan of scans) this.current.recordScan(scan);
       this.current.refresh(this.state.last_seq);
       this.roots = this.readRoots();

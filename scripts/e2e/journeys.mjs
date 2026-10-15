@@ -164,13 +164,16 @@ export async function runJourneys({ browser, isolation, url, report, signal }) {
   }
   async function shot(name) { await page.screenshot({ path: join(report.directory, `${current}-${name}.png`), fullPage: true }); }
   async function closeSessions() {
-    for (const session of sessions) {
+    // 失敗しても次の項目へ持ち越さない。持ち越すと古い端末の失敗が後続の全項目へ連鎖する。
+    const targets = sessions; sessions = [];
+    for (const session of targets) {
       if (session.terminalId) {
+        // 項目自身が fake CLI を終了させた端末は、すでに runner から消えている。それは片付け済みとして扱う。
+        if ((await hosts()).every(host => host.terminalId !== session.terminalId)) continue;
         const acks = await commands([['terminal.attach', { terminalId: session.terminalId }], ['terminal.close', { terminalId: session.terminalId }]]);
         assert.ok(acks.every(ack => ack.ok), `Unable to close fixture terminal: ${JSON.stringify(acks)}`);
       } else { await script(session, 'exit'); }
     }
-    sessions = [];
   }
   async function evidence() {
     return { snapshot: await snapshot(), actors: await readActors(isolation.control), frames: frames.filter(frame => frame.step === current), browserErrors: browserErrors.filter(error => error.step === current) };

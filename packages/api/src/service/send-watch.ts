@@ -30,6 +30,10 @@ export class SendWatch {
   private reevaluateAt = 0;
   private messages = new Map<string, string>();
   private queues = new Map<string, string>();
+  private receiptCache = new Map<string, { seq: number; receipts: Map<string, Receipt>; messages: Map<string, string> }>();
+  private queuedMessages = new Map<string, string>();
+  private queueSeq = 0;
+  private generation = -1;
   private rules: () => RedactionRules;
   constructor(path: string, rules: () => RedactionRules = () => ({})) {
     this.rules = rules;
@@ -40,10 +44,18 @@ export class SendWatch {
     const legacy = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'api_send_watches'").get();
     if (legacy) for (const row of this.db.prepare('SELECT * FROM api_send_watches').all()) {
       const id = String(row.id);
-      if (this.has(id)) continue;
-      const captured = this.capture(String(row.conversation_id), Date.parse(String(row.sent_ts)));
-      this.begin(id, String(row.conversation_id), String(row.body), captured, JSON.parse(String(row.attachments ?? '[]')));
-      this.phase(id, row.state === 'closed' ? 'legacy_closed' : 'legacy_failed', Date.parse(String(row.sent_ts)));
+      const captured = { ...this.capture(String(row.conversation_id), Date.parse(String(row.sent_ts))), baseline_seq: Number(row.baseline_seq) };
+      if (!this.has(id)) {
+        this.begin(id, String(row.conversation_id), String(row.body), captured, JSON.parse(String(row.attachments ?? '[]')));
+        this.phase(id, row.state === 'closed' ? 'legacy_closed' : 'legacy_failed', Date.parse(String(row.sent_ts)));
+      }
+      const data = JSON.parse(String(this.db.prepare('SELECT data FROM api_delivery_operations WHERE id = ?').get(id)!.data));
+      // 移行済みの行も元の照合範囲と受領を復元する。旧い失敗は再評価に残す。
+      data.baseline_seq = captured.baseline_seq;
+      if (row.message_id) data.message_id = String(row.message_id);
+      this.db.prepare('UPDATE api_delivery_operations SET data = ? WHERE id = ?').run(JSON.stringify(data), id);
+      if (row.state === 'closed' && row.message_id) this.add({ kind: 'tombstone', id: `${id}:legacy-received`, cmdId: id,
+        target: data.target, bodyKey: data.body_hash, value: 'received', at: Date.parse(String(row.sent_ts)), observedAt: Date.parse(String(row.sent_ts)) });
     }
     // 再起動で残った送出は再実行しない。候補や相関は引き続き再評価する。
     for (const row of this.rows().filter(row => !row.archived)) this.phase(String(row.id), 'owner_lost');
@@ -107,47 +119,75 @@ export class SendWatch {
   }
   history(conversation: string): Row[] { return this.list().filter(row => row.conversation_id === this.canonical(conversation)).slice(-HISTORY_LIMIT).reverse(); }
   list(): Row[] {
-    return this.rows().filter(row => !row.archived).map(row => ({ ...row, message_id: this.messages.get(String(row.id)), queue_id: this.queues.get(String(row.id)), decision: this.decisions.get(String(row.id)), state: this.decisions.get(String(row.id))?.value ?? 'accepted' }));
+    return this.rows().filter(row => !row.archived).map(row => ({ ...row, message_id: this.messages.get(String(row.id)) ?? row.message_id, queue_id: this.queues.get(String(row.id)), decision: this.decisions.get(String(row.id)), state: this.decisions.get(String(row.id))?.value ?? 'accepted' }));
   }
   check(now = Date.now()): boolean {
-    const seq = Number(this.db.prepare('SELECT coalesce(max(seq), 0) AS seq FROM facts').get()!.seq);
+    const projection = this.db.prepare('SELECT last_seq, generation FROM projection_state WHERE id = 1').get()!;
+    const seq = Number(projection.last_seq);
+    if (this.generation !== Number(projection.generation) || seq < this.seq) {
+      this.receiptCache.clear(); this.queuedMessages.clear(); this.queueSeq = 0; this.dirty = true;
+      this.generation = Number(projection.generation);
+    }
     const dataVersion = Number(this.db.prepare('PRAGMA data_version').get()!.data_version);
     if (!this.dirty && seq === this.seq && dataVersion === this.dataVersion && now >= this.evaluatedAt && now < this.reevaluateAt) return false;
+    // 所属の後着・訂正・再構築は受信集合を変える。通常の追加だけは差分を継ぎ足す。
+    if (this.seq >= 0 && seq > this.seq) {
+      const delta = this.db.prepare("SELECT kind, subject, payload, supersedes FROM facts WHERE seq > ? AND seq <= ? AND (kind GLOB 'message*' OR supersedes IS NOT NULL)").all(this.seq, seq);
+      const created = new Set(delta.filter(row => row.kind === 'message.created').flatMap(row => {
+        const payload = JSON.parse(String(row.payload)) ?? {};
+        return [String(row.subject).slice('message:'.length), JSON.stringify([payload.provider, payload.native_id])];
+      }));
+      if (delta.some(row => row.supersedes || row.kind === 'message.corrected' || String(row.kind).startsWith('message_membership.')
+        && !created.has(String(JSON.parse(String(row.payload))?.message_id)))) this.receiptCache.clear();
+    }
     this.seq = seq; this.dataVersion = dataVersion; this.evaluatedAt = now; this.reevaluateAt = Infinity;
     const rows = this.rows();
     const evidence = this.db.prepare('SELECT data FROM api_delivery_evidence').all().map(row => JSON.parse(String(row.data)) as DeliveryEvidence);
     for (const item of evidence) if (item.kind === 'scan' && item.at + item.validForMs > now) this.reevaluateAt = Math.min(this.reevaluateAt, item.at + item.validForMs);
     const receipts = new Map<string, Receipt>();
     const receiptMessages = new Map<string, string>();
-    const queuedMessages = new Map<string, string>();
-    for (const row of this.db.prepare(`SELECT payload FROM facts WHERE kind = 'run.updated' AND json_extract(payload, '$.last_evidence.native_record.attachment.type') = 'queued_command'`).all()) {
+    for (const row of this.db.prepare(`SELECT payload FROM facts WHERE seq > ? AND seq <= ? AND kind = 'run.updated' AND json_extract(payload, '$.last_evidence.native_record.attachment.type') = 'queued_command'`).all(this.queueSeq, seq)) {
       const native = JSON.parse(String(row.payload)).last_evidence.native_record;
-      if (native.attachment.delivery_id && native.uuid) queuedMessages.set(JSON.stringify(['claude', native.uuid]), native.attachment.delivery_id);
+      if (native.attachment.delivery_id && native.uuid) this.queuedMessages.set(JSON.stringify(['claude', native.uuid]), native.attachment.delivery_id);
     }
-    for (const watch of rows.filter(row => !row.archived)) {
+    this.queueSeq = seq;
+    const settled = new Set(evidence.flatMap(item => item.kind === 'tombstone' && ['received', 'rejected'].includes(item.value) ? [item.cmdId] : []));
+    for (const watch of rows.filter(row => !row.archived && !settled.has(String(row.id)))) {
       const conversation = this.canonical(String(watch.conversation_id));
-      for (const row of this.db.prepare(`SELECT m.id, m.body, m.source_ts, f.observed_ts, f.seq FROM messages m
-        JOIN message_memberships mm ON mm.message_id = m.id AND mm.conversation_id = ? AND mm.active = 1
-        JOIN facts f ON f.kind = 'message.created' AND (f.subject = 'message:' || m.id OR
-          json_array(json_extract(f.payload, '$.provider'), json_extract(f.payload, '$.native_id')) = m.id)
-        WHERE m.role = 'user' AND f.seq > ?`).iterate(conversation, Number(watch.baseline_seq))) {
-        const id = `receipt:${watch.target}:${row.id}`;
-        receipts.set(id, { kind: 'receipt', id, target: String(watch.target), inputId: queuedMessages.get(String(row.id)) ?? String(row.id), bodyKey: bodyKey(JSON.parse(String(row.body ?? 'null'))),
-          phase: 'consumed', at: Date.parse(String(row.source_ts)), observedAt: Date.parse(String(row.observed_ts)) });
-        receiptMessages.set(id, String(row.id));
+      const cacheKey = JSON.stringify([watch.target, conversation, watch.baseline_seq]);
+      let cached = this.receiptCache.get(cacheKey);
+      if (!cached) { cached = { seq: Number(watch.baseline_seq), receipts: new Map(), messages: new Map() }; this.receiptCache.set(cacheKey, cached); }
+      if (seq > cached.seq) {
+        for (const row of this.db.prepare(`WITH incoming AS MATERIALIZED (SELECT * FROM facts WHERE seq > ? AND seq <= ? AND kind = 'message.created')
+          SELECT m.id, m.body, m.source_ts, f.observed_ts, f.seq FROM incoming f JOIN messages m ON
+            (f.subject = 'message:' || m.id OR json_array(json_extract(f.payload, '$.provider'), json_extract(f.payload, '$.native_id')) = m.id)
+          JOIN message_memberships mm ON mm.message_id = m.id AND mm.conversation_id = ? AND mm.active = 1
+          WHERE m.role = 'user'`).iterate(cached.seq, seq, conversation)) {
+          const id = `receipt:${watch.target}:${row.id}`;
+          cached.receipts.set(id, { kind: 'receipt', id, target: String(watch.target), inputId: this.queuedMessages.get(String(row.id)) ?? String(row.id), bodyKey: bodyKey(JSON.parse(String(row.body ?? 'null'))),
+            phase: 'consumed', at: Date.parse(String(row.source_ts)), observedAt: Date.parse(String(row.observed_ts)) });
+          cached.messages.set(id, String(row.id));
+        }
+        for (const row of this.db.prepare(`SELECT fact_id, source_event_id, source_ts, observed_ts, payload FROM facts WHERE kind = 'conversation.input_queue_changed'
+          AND subject IN ('conversation:' || ?, 'conversation:' || ?) AND seq > ? AND seq <= ?`).iterate(conversation, String(watch.conversation_id), cached.seq, seq)) {
+          const input = JSON.parse(String(row.payload)).input_queue_event;
+          if (input?.operation !== 'enqueue') continue;
+          const id = `queue:${watch.target}:${row.fact_id}`;
+          cached.receipts.set(id, { kind: 'receipt', id, target: String(watch.target), inputId: input.delivery_id ?? String(row.source_event_id), bodyKey: bodyKey(input.body),
+            phase: 'queued', at: Date.parse(String(row.source_ts)), observedAt: Date.parse(String(row.observed_ts)) });
+          cached.messages.set(id, String(row.source_event_id));
+        }
+        cached.seq = seq;
       }
-      for (const row of this.db.prepare(`SELECT fact_id, source_event_id, source_ts, observed_ts, payload FROM facts WHERE kind = 'conversation.input_queue_changed'
-        AND subject IN ('conversation:' || ?, 'conversation:' || ?) AND seq > ?`).iterate(conversation, String(watch.conversation_id), Number(watch.baseline_seq))) {
-        const input = JSON.parse(String(row.payload)).input_queue_event;
-        if (input?.operation !== 'enqueue') continue;
-        const id = `queue:${watch.target}:${row.fact_id}`;
-        receipts.set(id, { kind: 'receipt', id, target: String(watch.target), inputId: input.delivery_id ?? String(row.source_event_id), bodyKey: bodyKey(input.body),
-          phase: 'queued', at: Date.parse(String(row.source_ts)), observedAt: Date.parse(String(row.observed_ts)) });
-        receiptMessages.set(id, String(row.source_event_id));
+      for (const [id, receipt] of cached.receipts) {
+        const message = cached.messages.get(id)!;
+        if (receipt.phase === 'consumed') receipt.inputId = this.queuedMessages.get(message) ?? message;
+        receipts.set(id, receipt); receiptMessages.set(id, message);
       }
     }
     // 端末が異なる同文操作も一つの照合集合に入れる。対象の版を失わないため受信には候補の対象を列挙する。
     evidence.push(...receipts.values());
+    for (const item of evidence) for (const at of [item.at, item.observedAt]) if (at > now) this.reevaluateAt = Math.min(this.reevaluateAt, at);
     this.messages.clear(); this.queues.clear();
     let changed = this.dirty;
     for (const row of rows) {

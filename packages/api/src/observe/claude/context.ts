@@ -11,6 +11,9 @@ import { findUnsupportedReason, parseRow } from "./index.ts";
 export function claudeLocationEventId(conversationId: string): string {
   return `conversation:${conversationId}:location`;
 }
+export function claudeUuidChainEventId(conversationId: string): string {
+  return `conversation:${conversationId}:uuid-chain-backfill`;
+}
 /** 会話の記録のファイルから、会話の識別を決める。子のファイルもファイル名の ID を使う。 */
 export function claudeConversationId(path: string): string {
   return createNativeId("claude", basename(path, ".jsonl"));
@@ -140,6 +143,10 @@ export function observeClaudeContext(ledger: Ledger, path: string, options: Clau
   if (!located && firstMessageTs) {
     append({ source: "transcript-claude", confidence: "confirmed", source_ts: firstMessageTs, observed_ts: observedTs, cursor: null,
       kind: "conversation.updated", subject: `conversation:${id}`, source_event_id: locationId, payload: {} });
+  }
+  if (!existing.some(fact => fact.source_event_id === claudeUuidChainEventId(id)) && (firstMessageTs || conversation?.created_ts)) {
+    append({ source: 'transcript-claude', confidence: 'confirmed', source_ts: firstMessageTs ?? conversation!.created_ts!, observed_ts: observedTs, cursor: null,
+      kind: 'conversation.updated', subject: `conversation:${id}`, source_event_id: claudeUuidChainEventId(id), payload: {} });
   }
   return result;
 }

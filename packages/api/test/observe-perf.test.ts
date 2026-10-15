@@ -240,8 +240,9 @@ test("Codex の旧形式メタでも追記だけを読み、新しいディレ�
   const newDirectory = join(home, ".claude", "projects", "new-project", "nested");
   mkdirSync(newDirectory, { recursive: true });
   writeFileSync(join(newDirectory, "new-session.jsonl"), createMessage("new-message"));
-  // 発言と所属と会話に加え、場所と題名の補完の印と会話の記録の実行と最初のターンの根拠を足す。
-  assert.equal(service.ingestOnce().appended, 7);
+  // 発言と所属と会話に加え、場所・題名・UUID 連鎖の補完の印と実行とターンの根拠を足す。
+  assert.equal(service.ingestOnce().appended, 8);
+  assert.equal(service.ledger.readSince(0, Number.MAX_SAFE_INTEGER).filter(fact => fact.source_event_id === 'conversation:["claude","new-session"]:uuid-chain-backfill').length, 1);
   rmSync(join(newDirectory, "new-session.jsonl"));
   assert.equal(service.ingestOnce().appended, 0);
 });

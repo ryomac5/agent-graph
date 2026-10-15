@@ -19,6 +19,7 @@ export class Supervisor {
   private captures = new Map<string, Promise<void>>();
   private pendingCaptures = new Set<string>();
   private openRuns = new Set<string>();
+  private stateTurns = new Map<string, { id: string; completed: boolean }>();
 
   private epoch = randomUUID();
   private counter = 0;
@@ -175,6 +176,7 @@ export class Supervisor {
       throw error;
     } finally {
       this.openRuns.delete(request.runId);
+      this.stateTurns.delete(request.runId);
       await this.captures.get(request.runId);
     }
   }
@@ -198,7 +200,13 @@ export class Supervisor {
       return;
     }
     if (event.type === "exit" && !Number.isInteger(event.exitCode)) throw new TypeError("Invalid exit code");
-    const payload = event.type === "state" ? { state: event.state, reason: event.reason }
+    let turn = this.stateTurns.get(request.runId);
+    if (event.type === "state") {
+      if (!turn || turn.completed && event.state === "running") turn = { id: randomUUID(), completed: false };
+      turn.completed = event.state === "idle";
+      this.stateTurns.set(request.runId, turn);
+    }
+    const payload = event.type === "state" ? { state: event.state, reason: event.reason, turn_id: turn!.id }
       : { state: event.exitCode === 0 ? "ended" as const : "failed" as const,
         cause: event.exitCode === 0 ? undefined : event.cause ?? `Child exited with code ${event.exitCode}`,
         end_evidence: { kind: "host_exit", exit_code: event.exitCode, ...(event.turnId ? { turn_id: event.turnId } : {}) },

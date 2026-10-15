@@ -102,3 +102,15 @@ node --test scripts/e2e/harness.test.mjs
 調査のときは `--only=6,9-bang` のように項目を絞れる。除いた項目は blocked になり、公開の判定は失敗のままになる。
 
 製品コード、本番サービス、既存の smoke、依存と lockfile は変更していない。
+
+## 本番コピーの状態再生
+
+```sh
+node scripts/e2e/prod-replay.mjs
+# 保存場所が異なる場合
+node scripts/e2e/prod-replay.mjs --db /absolute/path/agent-graph.db --claude-home /absolute/path/.claude --codex-home /absolute/path/.codex
+```
+
+本番 DB は readOnly で開き、VACUUM INTO で一時ディレクトリへ複製する。取り込み・投影・走査保存はコピーだけに行う。履歴と sessions は読み取りのみで、CLI の起動、既存会話への送信、サービス再起動は行わない。現在の busy 会話、E1〜E3 の固定表、旧 closed 配達の墓標を検査し、結果と refresh／配達照合の時間を JSON で出す。E3 は表の「run 対応未解決」を入力条件として原台帳7件を評価する。
+
+終了コードは 0（全件一致）、1（不一致または標本欠落）、2（読み取り・走査不能）。`--keep` でコピーを残せる。既定は検査後に一時ディレクトリを削除する。コピーの書き換えが元 DB と WAL を変えない検査は `node --test scripts/e2e/prod-replay.test.mjs`。

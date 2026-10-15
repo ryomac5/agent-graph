@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { basename, relative, resolve } from "node:path";
 import { readProcessStarts, type SessionScan } from "../../service/session-scan.ts";
+import { normalizeProcessStart } from '../../../../core/src/state/process.ts';
 
 const COMMAND_TIMEOUT_MS = 5_000;
 const COMMAND_MAX_BYTES = 16 * 1024 * 1024;
@@ -84,11 +85,11 @@ export async function scanCodexSessions(codexHome: string, reader: CodexProcessR
   try {
     const live = await readLiveConversations(reader, codexHome, new AbortController().signal);
     const starts = await readStarts();
-    processes = [...starts].map(([pid, procStart]) => ({ pid, procStart }));
+    processes = [...starts].map(([pid, procStart]) => ({ pid, procStart: normalizeProcessStart(procStart, 'local') }));
     for (const [sessionId, pid] of live) {
-      const procStart = starts.get(pid);
+      const procStart = processes.find(process => process.pid === pid)?.procStart;
       if (!procStart) { status = 'partial'; continue; }
-      sessions.push({ sessionId, pid, procStart, startedAt: Date.parse(procStart) });
+      sessions.push({ sessionId, pid, procStart, startedAt: /^\d+$/.test(procStart) ? Number(procStart) : Date.parse(procStart) });
     }
   } catch { status = 'failed'; }
   const at = now();

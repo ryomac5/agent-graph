@@ -28,9 +28,9 @@ function createFixture(t: TestContext, busy = false) {
   const path = join(directory, 'ledger.db');
   const ledger = openLedger(path);
   let event = 0;
-  function append(kind: FactInput['kind'], subject: FactInput['subject'], payload: FactInput['payload'], now: number | string = NOW) {
+  function append(kind: FactInput['kind'], subject: FactInput['subject'], payload: FactInput['payload'], now: number | string = NOW, supersedes?: string) {
     ledger.append({ source: 'host-claude', source_event_id: `test-${++event}`, kind, subject, payload,
-      source_ts: typeof now === 'string' ? now : new Date(now).toISOString(), observed_ts: new Date(typeof now === 'string' ? NOW : now).toISOString(), confidence: 'confirmed' } as FactInput);
+      source_ts: typeof now === 'string' ? now : new Date(now).toISOString(), observed_ts: new Date(typeof now === 'string' ? NOW : now).toISOString(), confidence: 'confirmed', supersedes } as FactInput);
   }
   append('conversation.created', `conversation:${CONVERSATION}`, { provider: 'claude', native_id: 'fixture', origin: 'observed', type: 'interactive' });
   append('run.created', 'run:root', { conversation_id: CONVERSATION, generation: 1, state: busy ? 'running' : 'idle', started_ts: new Date(NOW).toISOString() });
@@ -311,4 +311,59 @@ test('runner への送信対象は表示上の最新 run ではなく要求し�
   f.feed.refresh(NOW + 1000);
   assert.notEqual(f.watch.capture(CONVERSATION, NOW + 1000, 'runner').target, original);
   assert.equal(f.watch.capture(CONVERSATION, NOW + 1000, 'runner', 'root').target, original);
+});
+
+for (const state of ['failed', 'closed']) test(`旧い ${state} の baseline_seq と message_id を移行し、再起動でも配達を保つ`, t => {
+  const f = createFixture(t);
+  const sent = Date.parse('2026-10-14T09:08:58.299Z');
+  t.mock.timers.setTime(sent);
+  f.db.prepare("UPDATE sqlite_sequence SET seq = 301133 WHERE name = 'facts'").run();
+  f.append('run.updated', 'run:root', { model: 'before-send' }, sent);
+  const baseline = f.watch.capture(CONVERSATION, sent).baseline_seq;
+  assert.equal(baseline, 301134);
+  f.append('run.updated', 'run:root', { model: 'after-send' }, sent);
+  const message = JSON.stringify(['claude', '88548f43-087b-4425-9cd0-61bbb2b6bc54']);
+  addMessage(f, message, '<bash-input> echo delivered</bash-input>', sent + 1000);
+  f.db.exec('CREATE TABLE api_send_watches (id TEXT PRIMARY KEY, conversation_id TEXT, body TEXT, sent_ts TEXT, baseline_seq INTEGER, state TEXT, message_id TEXT, attachments TEXT)');
+  f.db.prepare('INSERT INTO api_send_watches VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run('legacy', CONVERSATION, '! echo delivered', new Date(sent).toISOString(), baseline, state, state === 'closed' ? message : null, '[]');
+  for (let i = 0; i < 2; i++) {
+    const watch = new SendWatch(f.path);
+    watch.check(sent + SEND_WATCH_TIMEOUT_MS);
+    const row = watch.list().find(row => row.id === 'legacy')!;
+    assert.equal(row.baseline_seq, baseline); assert.equal(row.message_id, message);
+    assert.equal(watch.decision('legacy')!.display, state === 'closed' ? 'Delivered' : 'Likely delivered');
+    assert.equal(watch.decision('legacy')!.resendAutomatically, false);
+    watch.close();
+    if (i === 0) {
+      const data = JSON.parse(String(f.db.prepare("SELECT data FROM api_delivery_operations WHERE id = 'legacy'").get()!.data));
+      data.baseline_seq = 301999; delete data.message_id;
+      f.db.prepare("UPDATE api_delivery_operations SET data = ? WHERE id = 'legacy'").run(JSON.stringify(data));
+    }
+  }
+});
+
+test('他接続のコミットで既に読んだ受信を結合し直さず、後着の競合入力は再評価する', t => {
+  const f = createFixture(t); record(f); addMessage(f, 'first', 'Next step');
+  assert.equal(f.decide('send', NOW + 3).display, 'Likely delivered');
+  const prepare = DatabaseSync.prototype.prepare; let joins = 0;
+  t.mock.method(DatabaseSync.prototype, 'prepare', function(this: DatabaseSync, sql: string) {
+    if (sql.includes('JOIN messages') || sql.includes('FROM messages')) joins++;
+    return prepare.call(this, sql);
+  });
+  f.db.exec('CREATE TABLE unrelated (id INTEGER); INSERT INTO unrelated VALUES (1)');
+  assert.equal(f.decide('send', NOW + 3).display, 'Likely delivered'); assert.equal(joins, 0);
+  addMessage(f, 'second', 'Next step', NOW + 2);
+  assert.equal(f.decide('send', NOW + 3).reason, 'ambiguous_candidates');
+});
+
+test('差分照合は所属の後着・訂正・再構築でも受信集合を更新する', t => {
+  const f = createFixture(t); record(f);
+  f.append('message.created', 'message:late-link', { role: 'user', body: 'Next step', body_state: 'stored', version: 1 }, NOW + 1);
+  f.feed.refresh(NOW + 2); assert.equal(f.decide('send', NOW + 2).value, 'emitted');
+  f.append('message_membership.created', 'message_membership:late-link', { message_id: 'late-link', conversation_id: CONVERSATION, active: true }, NOW + 1);
+  f.feed.refresh(NOW + 3); assert.equal(f.decide('send', NOW + 3).value, 'received_candidate');
+  f.append('message.corrected', 'message:late-link', { role: 'user', body: 'Different', body_state: 'stored', version: 2 }, NOW + 2,
+    f.ledger.readSince(0, Number.MAX_SAFE_INTEGER).find(fact => fact.subject === 'message:late-link')!.fact_id);
+  f.feed.refresh(NOW + 4); assert.equal(f.decide('send', NOW + 4).value, 'emitted');
+  f.service.rebuild(); f.feed.refresh(NOW + 4); assert.equal(f.decide('send', NOW + 4).value, 'emitted');
 });

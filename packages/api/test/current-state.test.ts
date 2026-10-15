@@ -282,3 +282,90 @@ test('10秒周期の走査は日をまたいでも保持期限と対象数に応
   }
   assert.equal(database.prepare('SELECT count(*) AS count FROM api_state_scans').get()!.count, 31);
 });
+
+test('UTC procStart と JST ps を epoch で照合し、保存済み所持者と誤った不在も修復する', async t => {
+  const zone = process.env.TZ; process.env.TZ = 'Asia/Tokyo';
+  t.after(() => { if (zone === undefined) delete process.env.TZ; else process.env.TZ = zone; });
+  const f = fixture(t); f.run('parent'); f.native('parent', start()); f.native('parent', tool(), NOW + 1);
+  const utc = 'Wed Oct 14 04:50:09 2026', local = 'Wed Oct 14 13:50:09 2026';
+  const owner = { pid: 41658, procStart: utc };
+  const directory = join(f.directory, 'sessions'); mkdirSync(directory);
+  writeFileSync(join(directory, '41658.json'), JSON.stringify({ ...owner, sessionId: 'parent', startedAt: NOW - 1, status: 'busy', statusUpdatedAt: NOW + 310_000 }));
+  const scan = await scanSessions(directory, async () => new Map([[41658, local]]), () => NOW + 310_001);
+  const epoch = String(Date.parse('2026-10-14T04:50:09Z'));
+  assert.equal(scan.sessions[0].procStart, epoch); assert.equal(scan.processes[0].procStart, epoch);
+  const db = new DatabaseSync(f.path);
+  db.prepare('INSERT INTO api_run_owners VALUES (?, ?)').run(`${f.id('parent')}:1`, JSON.stringify(owner));
+  db.prepare('INSERT INTO api_state_scans VALUES (?, ?)').run('old-scan', JSON.stringify({ ...scan, id: 'old-scan', at: NOW + 2,
+    sessions: [{ ...owner, sessionId: 'parent', startedAt: NOW - 1 }], processes: [{ pid: 41658, procStart: local }] }));
+  f.reopen(); f.feed.recordScan(scan);
+  const decision = f.decision('parent', scan.at);
+  assert.equal(decision.display.label, 'Working'); assert.equal(decision.process.value, 'alive_confirmed'); assert.equal(decision.hosting.value, 'hosted');
+  assert.equal(JSON.parse(String(db.prepare('SELECT data FROM api_run_owners').get()!.data)).procStart, epoch);
+  f.reopen(); assert.equal(f.decision('parent', scan.at).display.label, 'Working'); db.close();
+});
+
+test('total_tokens_reminder を挟む UUID 連鎖を取り込み、再読と再起動でも turn_duration が同じ turn を閉じる', async t => {
+  const { observeClaudeHistories } = await import('../src/service/claude-reader.ts');
+  const f = fixture(t); const path = join(f.directory, 'chain.jsonl');
+  const rows = [
+    { type: 'user', uuid: '4edcf548-e60b-4cd4-b608-0ca8ff71a534', parentUuid: null, message: { role: 'user', content: 'work' } },
+    { type: 'attachment', uuid: '52698412-ec73-4a2a-81d6-c5550508c376', parentUuid: '4edcf548-e60b-4cd4-b608-0ca8ff71a534', attachment: { type: 'total_tokens_reminder', text: 'private tokens' } },
+    { type: 'system', subtype: 'turn_duration', uuid: '99f3317f-d905-4ca6-a731-dbe42c4c8e60', parentUuid: '52698412-ec73-4a2a-81d6-c5550508c376', durationMs: 2 },
+  ].map((row, i) => ({ ...row, sessionId: 'chain', timestamp: new Date(NOW + i).toISOString() }));
+  writeFileSync(path, rows.map(row => JSON.stringify(row)).join('\n') + '\n');
+  let legacy = true;
+  const ingest = () => observeClaudeHistories({ ...f.ledger, append(input) {
+    if (legacy && (JSON.stringify(input.payload).includes('total_tokens_reminder') || input.source_event_id.endsWith(':uuid-chain-backfill')))
+      return { status: 'duplicate', seq: 0, fact_id: 'legacy-omission' };
+    return f.ledger.append(input);
+  } }, f.directory, f.ledger.readSince(0, Number.MAX_SAFE_INTEGER), undefined, [path]);
+  ingest(); assert.equal(f.decision('chain', Date.now()).display.label, 'Unknown');
+  legacy = false;
+  ingest();
+  const facts = f.ledger.readSince(0, Number.MAX_SAFE_INTEGER);
+  assert.ok(facts.some(fact => JSON.stringify(fact.payload).includes('total_tokens_reminder')));
+  assert.equal(JSON.stringify(facts).includes('private tokens'), false);
+  assert.equal(f.decision('chain', Date.now()).display.label, 'Idle');
+  ingest(); assert.equal(f.ledger.readSince(0, Number.MAX_SAFE_INTEGER).length, facts.length);
+  f.reopen(); assert.equal(f.decision('chain', Date.now()).turn.reason, 'turn_finished');
+});
+
+test('承認・入力待ちでも同じ turn の開始時刻を保持する', t => {
+  const f = fixture(t); f.run('parent'); f.native('parent', start());
+  for (const state of ['waiting_approval', 'waiting_input']) {
+    f.append('run.state_changed', 'run:parent', { state, turn_id: 'turn' }, NOW + (state === 'waiting_approval' ? 1 : 2), 'host-claude');
+    f.decision('parent', NOW + 3);
+    assert.equal(f.feed.current.conversations.get(f.id('parent'))!.turn_started_ts, new Date(NOW).toISOString());
+  }
+});
+
+test('走査を受け取らない worker の CurrentState は feed の死亡証拠を掃除しない', async t => {
+  const { CurrentState } = await import('../src/service/current-state.ts');
+  const f = fixture(t);
+  const db = new DatabaseSync(f.path); t.after(() => db.close());
+  const worker = new CurrentState(db, id => id, false);
+  f.run('parent'); f.native('parent', start()); f.scan(NOW + 1); f.decision('parent', NOW + 1);
+  f.scan(NOW + 2, { sessions: [], processes: [] }); f.decision('parent', NOW + 2);
+  f.scan(NOW + 310_000); f.decision('parent', NOW + 310_000);
+  worker.refresh(0, NOW + 600_000);
+  assert.ok(db.prepare('SELECT 1 FROM api_state_scans WHERE id = ?').get(`scan:${NOW + 2}`));
+  f.reopen(); assert.equal(f.decision('parent', NOW + 600_000).display.label, 'Stopped');
+});
+
+test('大量の無関係な OS プロセスを含む走査でも、同じ所有者の判定と短い refresh を保つ', t => {
+  const f = fixture(t);
+  for (let index = 0; index < 120; index++) { f.run(`session-${index}`); f.native(`session-${index}`, start()); }
+  f.feed.refresh(NOW);
+  const sessions = Array.from({ length: 120 }, (_, index) => ({ sessionId: `session-${index}`, pid: index + 1, procStart: `epoch-${index}`, startedAt: NOW - 1, status: 'busy', statusUpdatedAt: NOW }));
+  const processes = Array.from({ length: 12000 }, (_, index) => ({ pid: index + 1, procStart: `epoch-${index}` }));
+  f.scan(NOW + 1, { sessions, processes }); f.feed.refresh(NOW + 1);
+  f.scan(NOW + 2, { sessions, processes });
+  const started = performance.now(); f.feed.refresh(NOW + 2); const elapsed = performance.now() - started;
+  assert.ok(elapsed < 200, `refresh blocked for ${elapsed.toFixed(1)} ms`);
+  for (let index = 0; index < 120; index++) {
+    const decision = f.feed.current.conversations.get(f.id(`session-${index}`))!.decision as StateDecision;
+    assert.equal(decision.display.label, 'Working'); assert.equal(decision.process.value, 'alive_confirmed');
+  }
+  t.diagnostic(`120 conversations / 12000 processes refresh: ${elapsed.toFixed(1)} ms`);
+});

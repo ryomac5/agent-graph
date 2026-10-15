@@ -6,6 +6,7 @@ import type { StateDecision, StateInput, StateEvidence, Signal, Scan, NativeReco
 import { orderActiveFacts } from '../../../core/src/ledger/projections/connections.ts';
 import type { Fact } from '../../../core/src/ledger/facts.ts';
 import { SESSION_SCAN_VALID_MS, type SessionScan } from './session-scan.ts';
+import { normalizeProcessStart } from '../../../core/src/state/process.ts';
 
 type Row = Record<string, unknown>;
 const object = (value: unknown): Row => value && typeof value === 'object' && !Array.isArray(value) ? value as Row : {};
@@ -96,6 +97,8 @@ export class CurrentState {
   private scanCache = new Map<string, SessionScan>();
   private scanStatements = new Map<string, StatementSync>();
   private scanQueries = new Map<string, SessionScan | undefined>();
+  private scanHistory = new Map<string, SessionScan[]>();
+  private scanIndexes = new WeakMap<SessionScan, { sessions: Map<string, SessionScan['sessions'][number]>; processes: Map<number, string | null> }>();
   private scanVersion = 0;
   // 実行ごとの今の行は文脈に置き、別の 1 万件の表を持たない。
   readonly runs = { get: (id: string): Row | undefined => { const context = this.contexts.get(id); return context?.state === undefined ? undefined : context as unknown as Row; } };
@@ -104,7 +107,9 @@ export class CurrentState {
   evaluatedAt = 0;
   private db: DatabaseSync;
   private canonical: (id: string) => string;
-  constructor(db: DatabaseSync, canonical: (id: string) => string) {
+  private scanWriter: boolean;
+  constructor(db: DatabaseSync, canonical: (id: string) => string, scanWriter = false) {
+    this.scanWriter = scanWriter;
     this.db = db; this.canonical = canonical;
     db.exec(`CREATE TABLE IF NOT EXISTS api_state_scans (id TEXT PRIMARY KEY, data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS api_run_owners (run_id TEXT PRIMARY KEY, data TEXT NOT NULL)`);
@@ -114,13 +119,32 @@ export class CurrentState {
       CREATE INDEX IF NOT EXISTS api_remote_conversation_subject ON facts(subject)
         WHERE kind GLOB 'conversation.*' AND json_type(payload, '$.connection_id') = 'text'`);
     this.hasScans = !!db.prepare('SELECT 1 FROM api_state_scans LIMIT 1').get();
-    for (const row of db.prepare('SELECT * FROM api_run_owners').all()) this.owners.set(String(row.run_id), JSON.parse(String(row.data)));
+    for (const row of db.prepare('SELECT * FROM api_run_owners').all()) {
+      const owner = JSON.parse(String(row.data)) as ProcessIdentity | null;
+      if (owner) {
+        const conversation = String(row.run_id).replace(/:\d+$/, '');
+        const provider = db.prepare('SELECT provider FROM conversations WHERE id = ?').get(conversation)?.provider;
+        owner.procStart = normalizeProcessStart(owner.procStart, provider === 'codex' ? 'local' : 'UTC');
+      }
+      this.owners.set(String(row.run_id), owner);
+      if (scanWriter && JSON.stringify(owner) !== row.data) db.prepare('UPDATE api_run_owners SET data = ? WHERE run_id = ?').run(JSON.stringify(owner), row.run_id);
+    }
+    if (scanWriter) for (const row of db.prepare('SELECT * FROM api_state_scans').all()) {
+      const scan = this.normalizeScan(JSON.parse(String(row.data)));
+      if (JSON.stringify(scan) !== row.data) db.prepare('UPDATE api_state_scans SET data = ? WHERE id = ?').run(JSON.stringify(scan), row.id);
+    }
+  }
+  private normalizeScan(scan: SessionScan): SessionScan {
+    return { ...scan, sessions: scan.sessions.map(row => ({ ...row, procStart: normalizeProcessStart(row.procStart, scan.provider === 'codex' ? 'local' : 'UTC') })),
+      processes: scan.processes.map(row => ({ ...row, procStart: row.procStart === null ? null : normalizeProcessStart(row.procStart, 'local') })) };
   }
   get reevaluateAt(): number { return this.nextEvaluation; }
   invalidateFacts(): void { this.seq = -1; }
   recordScan(scan: SessionScan): void {
+    scan = this.normalizeScan(scan);
     this.db.prepare('INSERT OR IGNORE INTO api_state_scans VALUES (?, ?)').run(scan.id, JSON.stringify(scan));
     this.hasScans = true; this.scanCache.clear();
+    this.scanHistory.clear();
     for (const session of scan.sessions) this.recordedSessions.add(session.sessionId);
     this.scanVersion++;
     this.dirty = true;
@@ -172,7 +196,7 @@ export class CurrentState {
         const signals = input.evidence.filter((e): e is Signal => e.kind === 'signal' && e.turnId === input.turnId);
         const start = signals.filter(e => e.event === 'start').sort((a, b) => a.at - b.at)[0];
         const latest = signals.filter(e => e.at <= now).sort((a, b) => b.at - a.at)[0];
-        if (result.decision.turn.value === 'running' && start) turnStarted = new Date(start.at).toISOString();
+        if (['running', 'waiting_approval', 'waiting_input'].includes(result.decision.turn.value) && start) turnStarted = new Date(start.at).toISOString();
         if (latest) lastEvidence = new Date(latest.at).toISOString();
       }
       const { decision, until } = evaluated;
@@ -196,13 +220,13 @@ export class CurrentState {
     this.removedRuns = [];
     // 走査を記録した後の評価は全実行を通るので、ここで新しい会話の印を消してよい。
     this.recordedSessions.clear();
-    this.pruneScans(now);
+    if (this.scanWriter) this.pruneScans(now);
     return changed;
   }
   private pruneScans(now: number): void {
     // 期限のない終了証拠など、今回の判定が実際に読んだ走査も残す。
     // 対象の最新登録と最新 busy は、後から届く実行の所持者・進行の照会にも使う。
-    this.db.prepare(`WITH retained AS (
+    const removed = this.db.prepare(`WITH retained AS (
       SELECT id, row_number() OVER (
         PARTITION BY coalesce(json_extract(data, '$.provider'), 'claude'), json_extract(data, '$.status')
         ORDER BY json_extract(data, '$.at') DESC, id) AS position
@@ -219,6 +243,7 @@ export class CurrentState {
         AND id NOT IN (SELECT id FROM retained WHERE position = 1)
         AND id NOT IN (SELECT id FROM sessions WHERE position = 1)`)
       .run(now - STATE_SCAN_RETENTION_MS, JSON.stringify([...this.scanCache.keys()]));
+    if (removed.changes) this.scanHistory.clear();
   }
   private selectConversation(row: Row): void {
     const conversation = String(row.conversation_id);
@@ -358,7 +383,7 @@ export class CurrentState {
       }
       const childInput = inputOf(child);
       if (childInput.attempt?.id) childInput.evidence = childInput.evidence.map(e => e.kind === 'signal' ? { ...e, attemptId: childInput.attempt!.id } : e);
-      const starts = childInput.evidence.filter((e): e is Signal => e.kind === 'signal' && e.event === 'start' && !!e.turnId).sort((a, b) => a.at - b.at);
+      const starts = childInput.evidence.filter((e): e is Signal => e.kind === 'signal' && !!e.turnId).sort((a, b) => a.at - b.at);
       const additional = records.flatMap(record => {
         const turn = starts.findLast(start => start.at <= record.at);
         return readNativeEvidence({ ...record, source: record.source === 'codex' ? 'codex_child' : 'claude_child',
@@ -447,8 +472,28 @@ export class CurrentState {
     const row = statement.get(provider, ...values);
     if (!row) { if (cache) this.scanQueries.set(key, undefined); return; }
     let scan = this.scanCache.get(String(row.id));
-    if (!scan) { scan = JSON.parse(String(row.data)) as SessionScan; this.scanCache.set(scan.id, scan); }
+    if (!scan) { scan = this.normalizeScan(JSON.parse(String(row.data))); this.scanCache.set(scan.id, scan); }
     if (cache) this.scanQueries.set(key, scan);
+    return scan;
+  }
+  private indexScan(scan: SessionScan) {
+    let index = this.scanIndexes.get(scan);
+    if (!index) {
+      index = { sessions: new Map(scan.sessions.map(row => [row.sessionId, row])), processes: new Map(scan.processes.map(row => [row.pid, row.procStart])) };
+      this.scanIndexes.set(scan, index);
+    }
+    return index;
+  }
+  /** JSON の展開と PID/session の探索は走査ごとに一度だけ行う。 */
+  private findScan(provider: string, matches: (scan: SessionScan) => boolean, first = false): SessionScan | undefined {
+    let scans = this.scanHistory.get(provider);
+    if (!scans) {
+      scans = this.db.prepare(`SELECT data FROM api_state_scans WHERE coalesce(json_extract(data, '$.provider'), 'claude') = ?
+        ORDER BY json_extract(data, '$.at') DESC, id`).all(provider).map(row => this.normalizeScan(JSON.parse(String(row.data))));
+      this.scanHistory.set(provider, scans);
+    }
+    const scan = first ? scans.findLast(matches) : scans.find(matches);
+    if (scan) this.scanCache.set(scan.id, scan);
     return scan;
   }
   /** 提供元ごとの最新の走査と、成功した最新の走査。評価の間は同じ値を使う。 */
@@ -485,8 +530,9 @@ export class CurrentState {
     // withScans と同じく、同じ走査は一度だけ数える。
     for (const scan of [latest, good?.id === latest?.id ? undefined : good]) {
       if (!scan) continue;
-      const session = scan.at < started ? undefined : scan.sessions.find(row => row.sessionId === native.native_id);
-      const hosted = !!session && scan.processes.some(p => p.pid === session.pid && p.procStart === session.procStart);
+      const index = this.indexScan(scan);
+      const session = scan.at < started ? undefined : index.sessions.get(String(native.native_id));
+      const hosted = !!session && index.processes.get(session.pid) === session.procStart;
       key += `\u0000${scan.id}\u0000${scan.at < started ? 'before' : hosted ? 'hosted' : 'not_hosted'}`;
     }
     return key;
@@ -503,18 +549,17 @@ export class CurrentState {
     const native = this.nativeById.get(conversation);
     if (!native || !['claude', 'codex'].includes(String(native.provider))) return input;
     const provider = String(native.provider);
-    const successful = "json_extract(data, '$.status') = 'succeeded' AND json_extract(data, '$.at') <= ?";
+    const successful = (scan: SessionScan) => scan.status === 'succeeded' && scan.at <= now;
     const [latest, good] = this.readProviderScans(provider, now);
     const started = Date.parse(String(context.started_ts ?? ''));
     let owner: ProcessIdentity | null = this.owners.get(input.runId!) ?? input.process;
     const knownMiss = this.isKnownOwnerMiss(context, native, started, now);
     if (!this.owners.has(input.runId!) && !knownMiss) {
       // 起動前に観測した親だけを固定する。既存の子を現在の親で補わない。
-      const scan = this.readScan(provider, successful + ` AND EXISTS (SELECT 1 FROM json_each(data, '$.sessions') session
-        WHERE json_extract(session.value, '$.sessionId') = ? AND json_extract(session.value, '$.startedAt') <= ?)
-        ${context.parent ? "AND json_extract(data, '$.at') <= ? AND json_extract(data, '$.at') > ?" : ''}`,
-        [now, String(native.native_id), started, ...(context.parent ? [started, started - SESSION_SCAN_VALID_MS] : [])], false, false);
-      const session = scan?.sessions.find(row => row.sessionId === native.native_id);
+      const scan = this.findScan(provider, scan => successful(scan)
+        && (this.indexScan(scan).sessions.get(String(native.native_id))?.startedAt ?? Infinity) <= started
+        && (!context.parent || scan.at <= started && scan.at > started - SESSION_SCAN_VALID_MS));
+      const session = scan && this.indexScan(scan).sessions.get(String(native.native_id));
       if (session) owner = { pid: session.pid, procStart: session.procStart };
       if (owner || context.parent) {
         this.db.prepare('INSERT OR IGNORE INTO api_run_owners VALUES (?, ?)').run(input.runId!, JSON.stringify(owner));
@@ -522,27 +567,27 @@ export class CurrentState {
         context.missNative = context.missStarted = context.missUntil = undefined;
       } else { context.missNative = native.native_id; context.missStarted = started; context.missUntil = this.futureScanAt; }
     }
-    const current = good?.sessions.find(row => row.sessionId === native.native_id);
+    const current = good && this.indexScan(good).sessions.get(String(native.native_id));
     input.process = context.parent && current ? { pid: current.pid, procStart: current.procStart } : owner;
     input.parentProcessAtLaunch = context.parent ? owner : 'independent';
     if (owner && !context.parent) input.evidence = input.evidence.map(e => e.kind === 'signal' && e.event === 'exit' ? { ...e, process: owner! } : e);
-    const absent = owner ? this.readScan(provider, successful + ` AND json_extract(data, '$.at') >= ?
-      AND NOT EXISTS (SELECT 1 FROM json_each(data, '$.processes') process WHERE json_extract(process.value, '$.pid') = ?
-        AND (json_extract(process.value, '$.procStart') IS NULL OR json_extract(process.value, '$.procStart') = ?))`,
-      [now, started, owner.pid, owner.procStart], true) : undefined;
+    const absent = owner ? this.findScan(provider, scan => successful(scan) && scan.at >= started
+      && this.indexScan(scan).processes.get(owner.pid) !== null && this.indexScan(scan).processes.get(owner.pid) !== owner.procStart, true) : undefined;
     const start = input.evidence.filter((e): e is Signal => e.kind === 'signal' && e.event === 'start' && e.turnId === input.turnId).sort((a, b) => b.at - a.at)[0];
-    const busy = start && !context.parent ? this.readScan(provider, `json_extract(data, '$.at') <= ? AND json_extract(data, '$.at') >= ?
-      AND EXISTS (SELECT 1 FROM json_each(data, '$.sessions') session WHERE json_extract(session.value, '$.sessionId') = ?
-        AND json_extract(session.value, '$.status') = 'busy' AND json_extract(session.value, '$.statusUpdatedAt') >= ?)`,
-      [now, started, String(native.native_id), start.at]) : undefined;
+    const busy = start && !context.parent ? this.findScan(provider, scan => {
+      const session = this.indexScan(scan).sessions.get(String(native.native_id));
+      return scan.at <= now && scan.at >= started && session?.status === 'busy' && (session.statusUpdatedAt ?? -Infinity) >= start.at;
+    }) : undefined;
     // 最新の健康・所持と、物理終了の最初の証拠だけで判定する。参照した走査は期限後も DB に残す。
     const scans = new Map([latest, good, absent, busy].filter((scan): scan is SessionScan => !!scan).map(scan => [scan.id, scan]));
     for (const scan of scans.values()) {
       if (scan.at < started) continue;
-      const session = scan.sessions.find(row => row.sessionId === native.native_id);
+      const index = this.indexScan(scan), session = index.sessions.get(String(native.native_id));
+      const processes = input.process && index.processes.has(input.process.pid)
+        ? [{ pid: input.process.pid, procStart: index.processes.get(input.process.pid)! }] : [];
       const proof: Scan = { kind: 'scan', id: scan.id, at: scan.at, observedAt: scan.at, source: `${native.provider}_sessions`, scope: 'local',
-        subjects: [input.runId!], status: scan.status, validForMs: SESSION_SCAN_VALID_MS, processes: scan.processes,
-        hosted: session && scan.processes.some(p => p.pid === session.pid && p.procStart === session.procStart) ? [input.runId!] : [] };
+        subjects: [input.runId!], status: scan.status, validForMs: SESSION_SCAN_VALID_MS, processes,
+        hosted: session && index.processes.get(session.pid) === session.procStart ? [input.runId!] : [] };
       input.evidence.push(proof);
       if (session && !context.parent && start && session.statusUpdatedAt !== undefined && session.statusUpdatedAt >= start.at) input.evidence.push(...readNativeEvidence({ id: `${scan.id}:busy:${input.runId}`, at: scan.at, observedAt: scan.at,
         source: 'claude_session', runId: input.runId!, turnId: input.turnId, row: { ...session } }));

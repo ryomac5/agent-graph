@@ -160,3 +160,14 @@ it('resolves the root assignment display name while keeping model-less children 
   expect(document.querySelector('[data-node-id="work"] .graph-row-who')?.textContent).toBe('実装 · Codex');
   expect(document.querySelector('[data-node-id="docs"] .graph-row-who')?.textContent).toBe('ドキュメント · Claude Opus 5.5');
 });
+
+it('does not replace the API state with waiting_approval when an approval row remains', () => {
+  const target = fixture();
+  const snapshot = target.getSnapshot();
+  const run = snapshot.projection.runs.find(row => row.conversation_id === 'work')!;
+  target.setSnapshot({ ...snapshot, projection: { ...snapshot.projection,
+    approvals: [{ id: 'stale-approval', run_id: run.id, conversation_id: 'work', state: 'pending' }],
+  } });
+  render(<MemoryRouter initialEntries={['/p/repo?root=root']}><GraphPage project="repo" target={target} client={{ command: vi.fn() }} embedded/></MemoryRouter>);
+  expect(document.querySelector('[data-node-id="work"] [role="treeitem"]')?.getAttribute('aria-label')).toMatch(/Working$/);
+});

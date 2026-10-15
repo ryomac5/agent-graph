@@ -248,9 +248,10 @@ test("4500 発言と 301 ファイルをまとめて投影し、空の送信待�
   const initialMs = performance.now() - started;
   t.diagnostic(`initial ingest: ${initialMs.toFixed(1)} ms`);
   assert.ok(initialMs < INITIAL_INGEST_LIMIT_MS, `initial ingest exceeded ${INITIAL_INGEST_LIMIT_MS} ms`);
-  // 各会話は作成に加え、場所と題名の補完の印と会話の記録の実行と最初のターンの根拠を 1 件ずつ持つ。
-  assert.equal(report.appended, messages * 3 + (BULK_FILE_COUNT + 1) * 4);
+  // 各会話は場所・題名・UUID 連鎖の補完の印と会話の記録の実行を持つ。
+  assert.equal(report.appended, messages * 3 + (BULK_FILE_COUNT + 1) * 5);
   const before = f.read();
+  assert.equal(before.filter(fact => fact.source_event_id.endsWith(':uuid-chain-backfill')).length, BULK_FILE_COUNT + 1);
   const projection = readProjection(f.dbPath);
   assert.equal(projection.messages.length, messages);
   assert.equal(projection.memberships.length, messages);
@@ -298,7 +299,7 @@ test("一時 HOME の標本を CLI で二度取り込んでも増えず、停止
   appendFileSync(join(codexDirectory, "rollout-exec.jsonl"), createCodexMessage("service-codex-added"));
   const next = f.run("ingest", "--once");
   // 新しい会話は、場所と題名の補完の印と会話の記録の実行と最初のターンの根拠も持つ。
-  assert.equal(next.appended, 13);
+  assert.equal(next.appended, 14);
   assert.equal(next.unsupported, 0);
   assert.equal(f.run("ingest", "--once").appended, 0);
   const facts = f.read();
@@ -731,10 +732,10 @@ for (const live of [false, true]) {
       positions.push(Number(reader.prepare("SELECT last_seq FROM projection_state").get()!.last_seq));
       return result;
     };
-    // 3 件の発言と所属、会話、場所、題名の補完の印、会話の記録の実行、最初のターンの根拠を 1 回の走査で追記する。
-    assert.equal(service.ingestOnce().appended, 13);
-    assert.deepEqual(positions, Array(13).fill(0));
-    assert.equal(reader.prepare("SELECT last_seq FROM projection_state").get()!.last_seq, 13);
+    // 3 件の発言と所属、会話、場所・題名・UUID 連鎖の補完の印、実行とターンの根拠を一度に投影する。
+    assert.equal(service.ingestOnce().appended, 14);
+    assert.deepEqual(positions, Array(14).fill(0));
+    assert.equal(reader.prepare("SELECT last_seq FROM projection_state").get()!.last_seq, 14);
     assert.equal(service.ingestOnce().appended, 0);
   });
 }

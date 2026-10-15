@@ -1,0 +1,81 @@
+{
+  "hide": [
+    {
+      "provider": "claude",
+      "nativeId": "dccfc0e3-0c77-405d-9f25-66d3989b47aa",
+      "sha256": "d476bf64777c78ebab5262825878fbeaa0b95473b7658a3b1f7fa652f9fa249f"
+    },
+    {
+      "provider": "claude",
+      "nativeId": "34db3ddb-1568-4913-9a6d-97410a03a544",
+      "sha256": "c95f30540ffff1d799b25874789224650a9217832326f8fc9e11b596f8a68f32"
+    },
+    {
+      "provider": "claude",
+      "nativeId": "72c34a27-09b3-48f4-a36f-be6c89238682",
+      "sha256": "df8ac92766b4cf1dbadb5dcc7808340c4127596690d727e6f732c979e61639b0"
+    },
+    {
+      "provider": "claude",
+      "nativeId": "e7c321b5-4964-43f9-aafe-c3f841db2480",
+      "sha256": "51dab4acb6234b86b66ca20413a3183cca6616a9763ead4c8a7f0f50c641bb7e"
+    },
+    {
+      "provider": "claude",
+      "nativeId": "61a2f785-738c-4944-a053-c01e5528b935",
+      "sha256": "53b563170bd2444d88ea7358c7966e4b9f492d35e23df10339df45ea5491b3df"
+    },
+    {
+      "provider": "claude",
+      "nativeId": "ae1f6dc5-e7e1-4797-8085-f7c7dbf99e10",
+      "sha256": "153e815760955084721a79c39a6f8bf6a55aa7593058104193a9549b81fbbb44"
+    },
+    {
+      "provider": "claude",
+      "nativeId": "563d809d-608b-44ea-b865-6059a37c85f0",
+      "sha256": "3dab508ccf319859c24a3a142485078edd8a81d46f44bd01b0b7e88c3e86d037"
+    },
+    {
+      "provider": "claude",
+      "nativeId": "580177f6-47bf-408e-9718-d03a024111a1",
+      "sha256": "0bdaabd13763b227b891cc73d391c58f36c85a3dadc5ca47a970f1a38ec785cd"
+    },
+    {
+      "provider": "claude",
+      "nativeId": "7e05e985-d348-4aa9-baeb-a88559bfc5c1",
+      "sha256": "6b6b044736973febc42bd31bf8ffac4aabe35db3f7cce7decf924b51dbbb632c"
+    }
+  ],
+  "excluded": [
+    {
+      "provider": "claude",
+      "nativeId": "8f583846-b943-4b19-8a46-086f571d7fbd",
+      "reason": "JSONL not found; origin unverified"
+    },
+    {
+      "provider": "claude",
+      "nativeId": "a3b77d2d-be99-4cda-91d7-58f3897f2bd2",
+      "reason": "JSONL not found; origin unverified"
+    },
+    {
+      "provider": "claude",
+      "nativeId": "daaa5263-9d20-4390-8c5f-a52c7cac7316",
+      "reason": "JSONL not found; origin unverified"
+    },
+    {
+      "provider": "claude",
+      "nativeId": "0af4408d-fa75-487c-8dd8-403da9c082cd",
+      "reason": "JSONL not found; origin unverified"
+    },
+    {
+      "provider": "claude",
+      "nativeId": "33810f8b-10be-4838-8336-48f0d57239a1",
+      "reason": "Only /model haiku; human input cannot be ruled out"
+    },
+    {
+      "provider": "codex",
+      "nativeId": "01a139c5-7bb4-7421-8e0b-b0c43482b394",
+      "reason": "Only /model gpt-5.5; human input cannot be ruled out"
+    }
+  ]
+}

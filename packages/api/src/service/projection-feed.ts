@@ -275,9 +275,9 @@ export class ProjectionFeed {
     const excerpt = last?.body ? getMessageText(JSON.parse(String(last.body))).slice(0, EXCERPT_LENGTH) : "";
     this.prepare("INSERT OR REPLACE INTO api_conversation_summaries VALUES (?, ?, ?, ?)").run(id, count, last?.source_ts ?? null, excerpt);
   }
-  private readList(table: string, ids?: string[], after = ""): Record<string, unknown>[] {
+  private readList(table: string, ids?: string[], after = "", includeHidden = false): Record<string, unknown>[] {
     const where = (ids ? "WHERE t.id IN (SELECT value FROM json_each(?))" : "WHERE t.id > ?")
-      + (table === 'conversations' ? ` AND (${VISIBLE_CONVERSATION_SQL})` : '');
+      + (table === 'conversations' && !includeHidden ? ` AND (${VISIBLE_CONVERSATION_SQL})` : '');
     const parameter = ids ? JSON.stringify(ids) : after;
     const limit = ids ? "" : `LIMIT ${LIST_PAGE_SIZE}`;
     // 会話の名前と依頼の抜粋は core の投影の値をそのまま配る。画面は本文から名前を導かない。
@@ -285,6 +285,7 @@ export class ProjectionFeed {
     if (table === "conversations") {
       const rows = this.prepare(`SELECT t.id, t.provider, t.origin, t.type, t.task_id, t.kit_name, t.user_name, t.created_ts, substr(t.name, 1, ${NAME_LENGTH}) AS name,
       t.name_is_provisional, substr(t.ai_title, 1, ${NAME_LENGTH}) AS ai_title, substr(t.first_request_excerpt, 1, ${NAME_LENGTH}) AS first_request_excerpt, t.cwd,
+      coalesce((SELECT json_extract(data, '$.hidden') FROM projection_records WHERE projection = 'conversations' AND entity_id = t.id), 0) AS hidden,
       r.project_id AS project, coalesce(r.state, 'unregistered') AS project_state,
       coalesce(s.message_count, 0) AS message_count, s.last_message_ts, coalesce(s.last_message_excerpt, '') AS last_message_excerpt
       FROM conversations t LEFT JOIN tasks task ON task.id = t.task_id
@@ -440,7 +441,7 @@ export class ProjectionFeed {
     }
     const queueIds = new Set<string>();
     for (const row of this.prepare(`SELECT DISTINCT substr(subject, 14) AS id FROM facts
-      WHERE seq > ? AND seq <= ? AND kind = 'conversation.input_queue_changed'`).all(previous.last_seq, state.last_seq)) {
+      WHERE seq > ? AND seq <= ? AND kind IN ('conversation.input_queue_changed', 'conversation.hidden')`).all(previous.last_seq, state.last_seq)) {
       const id = this.conversationId(String(row.id));
       ids.add(id); queueIds.add(id);
     }
@@ -507,9 +508,9 @@ export class ProjectionFeed {
     const conversations: RootConversation[] = [];
     let after = "";
     for (;;) {
-      const page = this.readList("conversations", undefined, after);
+      const page = this.readList("conversations", undefined, after, true);
       // 根の投影に使わない一覧の列と抜粋を、全会話分の中間配列へ複製しない。
-      for (const row of page) conversations.push({ id: String(row.id), type: row.type as string,
+      for (const row of page) conversations.push({ id: String(row.id), type: row.type as string, hidden: Boolean(row.hidden),
         user_name: row.user_name as string | null, name: row.name as string | null, kit_name: row.kit_name as string | null, project: row.project as string | null,
         created_ts: row.created_ts as string | null, last_activity_ts: row.last_message_ts as string | null, state: "unknown" });
       if (page.length < LIST_PAGE_SIZE) break;
@@ -625,7 +626,7 @@ export class ProjectionFeed {
     }
     const memberships = messages.map(row => ({ id: row.membership_id, message_id: row.id, conversation_id: id, active: 1 }));
     return { seq: this.state.last_seq, generation: this.state.generation,
-      projection: { conversations: this.readList("conversations", [id]),
+      projection: { conversations: this.readList("conversations", [id], "", true),
         messages: messages.map(({ membership_id, ...row }) => row), message_memberships: memberships },
       hasOlder, olderCursor, next: window?.latest || window?.before || window?.message ? null : messages.length === DETAIL_PAGE_SIZE ? messages.at(-1)!.id : null };
   }

@@ -12,6 +12,7 @@ export interface RootProjection {
   total_children: number;
 }
 export interface RootConversation {
+  hidden?: boolean;
   user_name?: string | null;
   id: string; type?: string; name?: string | null; kit_name?: string | null;
   project?: string | null; repository_id?: string | null; created_ts?: string | null;
@@ -21,6 +22,9 @@ interface RootRelation { from_id?: string; to_id?: string; type?: string; active
 
 /** 確定した継続・対話の分岐と根のキット名で系列を作り、子の会話を同名の根に混ぜない。 */
 export function projectRoots(conversations: readonly RootConversation[], relations: readonly RootRelation[]): RootProjection[] {
+  const hidden = new Set(conversations.filter(row => row.hidden).map(row => row.id));
+  conversations = conversations.filter(row => !row.hidden);
+  relations = relations.filter(row => !hidden.has(row.from_id ?? '') && !hidden.has(row.to_id ?? ''));
   const rows = new Map(conversations.map(row => [row.id, row]));
   const parents = new Map(conversations.map(row => [row.id, row.id]));
   function find(id: string): string {

@@ -5,6 +5,7 @@ import { sendJson } from '../ws/compression.ts';
 import { classifyHookEvent } from "../../../core/src/ledger/index.ts";
 import type { FactInput, JsonValue, Ledger } from "../../../core/src/ledger/index.ts";
 import { defaultLocationResolver, type LocationResolver } from "../observe/location.ts";
+import { verificationVisibility } from '../verification.ts';
 
 export const HOOK_REQUEST_TIMEOUT_MS = 5000;
 export const HOOK_PATH = "/hook-v2";
@@ -52,7 +53,7 @@ export function createHookFacts(event: HookEvent, locate: LocationResolver = def
     kind: "conversation.created", subject: `conversation:${conversationId}`,
     payload: { provider: "claude", native_id: event.session_id, origin: "observed",
       type: event.input.entrypoint === "sdk-cli" ? "unattended" : "interactive",
-      history_format: "jsonl" } };
+      history_format: "jsonl", ...verificationVisibility(typeof event.input.cwd === 'string' ? event.input.cwd : '') } };
   const run: FactInput = { ...base, kind: "run.updated", subject: `run:${runId}`,
     payload: { conversation_id: conversationId, generation: event.generation,
       last_evidence: evidence, last_evidence_ts: event.source_ts } };

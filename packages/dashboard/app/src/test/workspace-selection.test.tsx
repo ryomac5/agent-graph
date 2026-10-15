@@ -118,7 +118,10 @@ it('keeps the URL conversation through the snapshot and delayed root and convers
   expect(JSON.parse(localStorage.getItem(workspaceKey('other', 'older-root'))!)).toMatchObject({ kind: 'split', direction: 'horizontal', ratio: 0.7 });
 });
 
-it('shows Conversation not found only after all pages finish without the URL conversation', () => {
+it('shows Conversation not found only after all pages and the direct lookup confirm absence', async () => {
+  let finish: (value: unknown) => void = () => {};
+  const response = new Promise(resolve => { finish = resolve; });
+  vi.stubGlobal('fetch', vi.fn(() => response));
   const target = createStore(); setFirstPage(target); openConversation(target);
   expectRequestedConversation();
   act(() => target.mergeProjection({}, 1, undefined,
@@ -126,6 +129,9 @@ it('shows Conversation not found only after all pages finish without the URL con
   expectRequestedConversation();
   act(() => target.mergeProjection({}, 1, undefined,
     { roots: { total: 1001, next: null }, conversations: { total: 1001, next: null } }));
+  expectRequestedConversation();
+  expect(screen.queryByText('Conversation not found')).toBeNull();
+  await act(async () => { finish({ ok: true, json: async () => ({ generation: 1, projection: { conversations: [], messages: [] }, next: null }) }); });
   expect(screen.getByRole('status').textContent).toBe('Conversation not found');
   expect(screen.queryByTestId('open-conversation')).toBeNull();
   expect(screen.queryByRole('tab', { name: 'Conversation' })).toBeNull();

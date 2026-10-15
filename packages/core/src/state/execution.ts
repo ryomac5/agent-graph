@@ -8,6 +8,11 @@ const TURN_EVENTS = new Set(["start", "progress", "approval", "input", "complete
 function decideProcess(input: StateInput, signals: Signal[], scans: Scan[], now: number): Decision<ProcessState> {
   const process = input.process;
   if (!process) return decide("unverified", "missing_evidence", [], null, "unknown");
+  const parent = input.parentProcessAtLaunch;
+  // 現在の親の生存を、別の起動回の子へ貸さない。
+  if (parent !== undefined && (!parent || parent.pid !== process.pid || parent.procStart !== process.procStart)) {
+    return decide("unverified", parent ? "owner_restarted" : "missing_evidence", [], null, "unknown");
+  }
   const exits = signals.filter(e => e.event === "exit" && e.process?.pid === process.pid && e.process.procStart === process.procStart);
   const checks = scans.filter(e => e.status === "succeeded" && e.processes &&
     !e.processes.some(p => p.pid === process.pid && p.procStart === null));

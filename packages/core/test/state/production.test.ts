@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { evaluateDelivery, evaluateState, readNativeEvidence, readNativeTurnId } from "../../src/state/index.ts";
 import type { DeliveryEvidence, NativeRecord, StateEvidence, StateInput } from "../../src/state/index.ts";
-import { checkOrders, expectedState, stateInput, summarizeState } from "./helpers.ts";
+import { checkOrders, expectedState, PROCESS, scan, stateInput, summarizeState } from "./helpers.ts";
 import type { StateSummary } from "./helpers.ts";
 
 interface Sample { line: number; row: Record<string, unknown> & { timestamp: string; promptId?: string; message?: Record<string, unknown>; toolUseResult?: Record<string, unknown> } }
@@ -62,6 +62,25 @@ export const productionCases: { name: string; input: StateInput; now: number; ex
 for (const c of productionCases) test(c.name, () => {
   assert.deepEqual(summarizeState(evaluateState(c.input, c.now)), c.expected);
   checkOrders(c.input.evidence, evidence => evaluateState({ ...c.input, evidence }, c.now));
+});
+
+test("E1: fresh current-parent scan cannot revive a child from a previous process incarnation", () => {
+  // 原記録にない PID・procStart は合成条件。E1 の子の時刻と未完了 Bash は実物を使う。
+  const evidence = [...childEvidence, scan(now)];
+  const target = { ...productionCases[0].input, evidence, process: PROCESS,
+    parentProcessAtLaunch: { pid: 40, procStart: "E1-launch-parent" } };
+  assert.ok(now - childEvidence[0].at > 31 * 60 * 60 * 1000);
+  const output = evaluateState(target, now);
+  assert.equal(output.process.value, "unverified"); assert.equal(output.process.reason, "owner_restarted");
+  assert.equal(output.display.label, "Unknown"); assert.equal(output.turn.reason, "progress_expired");
+  assert.equal(output.display.details.includes("running tool"), false);
+  assert.equal(output.result.value, "incomplete"); assert.equal(output.result.stage, "launched");
+  checkOrders(evidence, evidence => evaluateState({ ...target, evidence }, now));
+
+  const sameParent = evaluateState({ ...target, parentProcessAtLaunch: { ...PROCESS } }, now);
+  assert.equal(sameParent.process.value, "alive_confirmed");
+  assert.equal(sameParent.display.label, "Working"); assert.equal(sameParent.turn.reason, "running_tool");
+  assert.ok(sameParent.display.details.includes("running tool"));
 });
 
 const deliveries: DeliveryEvidence[] = production.E2.watches.flatMap((w, i): DeliveryEvidence[] => [

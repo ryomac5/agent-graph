@@ -10,6 +10,7 @@
 - `Signal.tools` は開始／結果と呼び出しIDを保持する。`source=claude_session` はsessionsのsnapshotを読み、`activity=session_busy` とPID・procStartを伴う進行へ写す。
 - 時刻は UTC の epoch milliseconds とし、出来事／照会完了の `at`、取得の `observedAt`、評価の `evaluatedAt` を分ける。
 - `runId`、`turnId`、所有プロセス、依頼・試行、配達対象は呼び出し側が確認済みの対応を渡し、この層は同一性の推定・統合・最新世代選択をしない。
+- 親に生存を頼る子は、起動時に記録したPID・procStartを `parentProcessAtLaunch` に固定し、現在の親を `process` に渡す。起動時の組が未記録なら明示的に `null`、独立した実行だけ省略する。現在の親の組で起動時の組を補完・更新しない。
 - 配達の `target` は会話・実行・端末の版を含む解決済みの鍵、`bodyKey` は正規化済みの内容の比較用の鍵とし、本文は判定に渡さなくてよい。
 - 配達の入力には照合範囲内の他の操作・受信も含め、同文の操作を一件ずつ切り離して一意だと判断しない。
 - OS照会、走査、記録の永続化、送出、タイマー、再構築、snapshot配信、画面への接続は今回の範囲外とする。
@@ -29,14 +30,14 @@
 - R10: 所持の不在は期限付きの Not hosted とし、物理終了・論理閉鎖・turn完了へ写さない。
 - R11: SessionEnd／thread closed／archive は論理閉鎖と対応するturnの終端とし、物理終了とは区別する。
 - R12: 論理閉鎖の後の確認済みの新しいturn開始は open に戻せるが、道具の進行だけでは閉鎖を解除しない。
-- R13: 通常の開始・進行・待ちは出来事のatから期限を数える；同じturnの未完了toolがあり所有プロセスの生存を確認できる間は、生存確認のvalidUntilを根拠にWorking／running_toolとrunning toolの印を返す。
+- R13: 通常の開始・進行・待ちは出来事のatから期限を数える；同じturnの未完了toolがあり所有プロセスの生存を確認できる間だけ、生存確認のvalidUntilを根拠にWorking／running_toolとrunning toolの印を返す。親に生存を頼る子はR20の起動回の一致も必須とし、不一致・欠落なら通常の進行のatから300秒でUnknownへ落とす。
 - R14: 証拠の期限到達時（evaluatedAt >= validUntil）はその証拠による保持を解く；長いtoolの生存が失効し通常の進行も古ければUnknownとし、終了・成功・不在を作らない。
 - R15: Stop／SubagentStopのhook・attachment、終端の `stop_reason` は停止の試みとし、turn終了を確認できないため Unknown／boundary_unavailable にする。
-- R16: 本文・tool・PreToolUse／PostToolUse（hookとattachment）は進行とし、toolの開始と結果を呼び出しIDで対応させる；未完了toolの保持は対応結果／PostToolUse・Stop・待ち・turn終端・プロセス終了で解き、SubagentHandbackの呼び出しもturn完了にしない。
+- R16: 本文・tool・PreToolUse／PostToolUse（hookとattachment）は進行とし、toolの開始と結果を呼び出しIDで対応させる；AskUserQuestionのtool_useとPreToolUse hookはinput、Notification hookのpermission_promptはapproval、idle_promptはstop_attempt（Unknown／boundary_unavailable）へ写す。対応結果／PostToolUse・Stop・待ち・idle_prompt・turn終端・プロセス終了で未完了toolの保持を解き、後の通常進行・生存確認では古いtoolを復活させない。SubagentHandbackやidle_promptをturn完了にしない。
 - R17: turn_duration、対応済みの同期Agent completed、SDK result／idle、Codexのturn終端は完了の証拠とし、過去の完了は失効させない；run_in_backgroundのfalse／"false"は同期、true／"true"は非同期として読む。
 - R18: 確認済みの完了後に同じturnの進行がある場合は証拠競合として Unknown にし、別turnへの対応を推測して補わない。
 - R19: 旧turnの終端や鍵のない終端は選択した別turnを閉じず、run自体が未解決なら代表表示を Unresolved にする。
-- R20: 子の生存に同じ所有プロセスを渡せても、子のturnと結果は子自身の証拠だけで決める。
+- R20: 子の生存は起動時の親のPID・procStartと現在の親の組が両方一致するときだけOS走査から確認する。同じsession_idでもどちらかが変わればunverified／owner_restarted、起動時の組が未記録ならunverified／missing_evidenceとし、新しい親の生存を引き継がない。一致する起動回の長いtoolは保持するが、子のturnと結果は子自身の証拠だけで決める。
 - R21: Agent async_launched と Codex spawnAgent の操作完了は launched のみであり、応答・完了・Doneを作らない。
 - R22: Codexのcollabからrespondedを得るには、完了したwait、対象のreceiverThreadIds、対象のagentsStatesのcompletedと応答、解決済みの依頼への対応をすべて要求する。
 - R23: closeAgentや応答のないwaitはrespondedを作らず、子の最終応答と親の操作の完了を区別する。
@@ -99,6 +100,18 @@ ID付きの並行toolは別々に閉じる。IDのない開始は次の結果で
 新鮮なbusyは通常の進行と同じく生存未確認でもWorking＋liveness unverifiedになり得る。busyを再読しても期限は延びず、確定した死亡・新しいStop・完了を上書きしない。生存未確認の新鮮な進行を表示するR33と、300秒を越えるtool保持の条件を区別する。
 
 配達期限内のqueueと期限後の吸収が同じinputIdを持つ場合は、一入力のLikely deliveredへ進める。期限後に新しく手入力した同文は候補にしない。相関IDで確定した受領は、この候補用の窓に制限しない。
+
+## 0c1b908のレビューからの修正
+
+生存の根拠を「現在の親」から「子を起動した回の親」へ絞った。`parentProcessAtLaunch` は呼び出し側が保持する起動時の組であり、純粋関数は永続化や現在値からの補完をしない。不一致を物理終了とは断定せず、通常の進行の期限へ戻す。同じ回でも、生存期限・失敗した走査・停止・待ち・結果などの既存の制約は維持する。
+
+NotificationとAskUserQuestionは、既存のapproval／input／stop_attemptへ写す。toolの名前や通知ごとの保持例外を状態判定に増やさず、既存の待ち・停止境界で未完了toolを解く。AskUserQuestionの直後のPreToolUse hookもinputにすることで、質問中に通常toolへ戻らない。
+
+- E1の子の実物記録に、新しい親の生存走査と別の起動回の組を与えると、開始から31時間後でもUnknownになる。同じ回の組ならWorking／running_toolを保つ。
+- PIDだけの変更、同じPIDでprocStartの変更、両方の変更、起動時の組の欠落を別々に検査する。旧い親がOS上に残る場合でも、新しい親へ生存を付け替えない。
+- permission_promptはNeeds approval、AskUserQuestionはWaiting、idle_promptはUnknownになる。生存しているまま15,492秒後へ進めてもWorkingにならず、結果や新しいtoolで進行を再開できる。
+- 起動時のPID・procStartとOS走査、待ちの原記録は合成条件である。15,492秒はレビュー報告の長さを使った試験であり、今回の本番再計測ではない。
+- 作業ツリー内の隔離コピーでexecution.tsだけを0c1b908へ戻すと起動回の5試験、records.tsだけを戻すと待ちの5試験が失敗することを確認した。作業中の実装は戻していない。
 
 ## 本番fixtureと正しい出力
 

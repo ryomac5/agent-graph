@@ -53,9 +53,12 @@ function readNativeSignals(record: NativeRecord): Signal[] {
   if (source === "hook" || source === "claude" && row.type === "attachment") {
     const hook = source === "hook" ? row.hook_event_name : attachment.hookEvent;
     const toolId = readString(source === "hook" ? row.tool_use_id : attachment.toolUseID) ?? null;
-    const events: Record<string, Signal["event"][]> = { Stop: ["stop_attempt"], SubagentStop: ["stop_attempt"], PreToolUse: ["progress"], PostToolUse: ["progress"],
-      ...(source === "hook" ? { SessionStart: ["open"], UserPromptSubmit: ["start"], SessionEnd: ["close"] } : {}) };
-    return emit(...(events[String(hook)] ?? [])).map(signal => hook === "PreToolUse" || hook === "PostToolUse"
+    const notifications: Record<string, Signal["event"][]> = { permission_prompt: ["approval"], idle_prompt: ["stop_attempt"] };
+    const events: Record<string, Signal["event"][]> = { Stop: ["stop_attempt"], SubagentStop: ["stop_attempt"],
+      PreToolUse: [source === "hook" && row.tool_name === "AskUserQuestion" ? "input" : "progress"], PostToolUse: ["progress"],
+      ...(source === "hook" ? { SessionStart: ["open"], UserPromptSubmit: ["start"], SessionEnd: ["close"],
+        Notification: notifications[String(row.notification_type)] ?? [] } : {}) };
+    return emit(...(events[String(hook)] ?? [])).map(signal => signal.event === "progress" && (hook === "PreToolUse" || hook === "PostToolUse")
       ? { ...signal, tools: [{ id: toolId, phase: hook === "PreToolUse" ? "started" : "finished" }] } : signal);
   }
   if (source === "claude_child") {
@@ -99,6 +102,7 @@ function readNativeSignals(record: NativeRecord): Signal[] {
     }
     if (row.type === "assistant") {
       const tools = blocks.filter(b => b.type === "tool_use" || b.type === "server_tool_use");
+      if (tools.some(b => b.type === "tool_use" && b.name === "AskUserQuestion")) return emit("input");
       if (tools.length || message.stop_reason === "tool_use" || message.stop_reason === "pause_turn") return emit("progress").map(signal => ({ ...signal,
         tools: tools.map(b => ({ id: readString(b.id) ?? null, phase: "started" as const })) }));
       if (["end_turn", "stop_sequence", "max_tokens", "refusal", "model_context_window_exceeded"].includes(String(message.stop_reason))) return emit("stop_attempt");

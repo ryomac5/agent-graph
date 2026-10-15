@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { evaluateState, readNativeEvidence } from "../../src/state/index.ts";
-import type { NativeRecord, Signal, StateEvidence } from "../../src/state/index.ts";
+import type { NativeRecord, ProcessIdentity, Signal, StateEvidence } from "../../src/state/index.ts";
 import { checkOrders, PROCESS, scan, signal, stateInput } from "./helpers.ts";
 
 function native(source: NativeRecord["source"], row: Record<string, unknown>, at = 0, extra: Partial<NativeRecord> = {}) {
@@ -57,6 +57,99 @@ test("long tool loses Working at the exact liveness deadline, failed scans do no
   assert.equal(expired.display.details.includes("running tool"), false);
   checkOrders(evidence, evidence => evaluateState(input(evidence), 420_000));
   assert.equal(evaluateState(input([...evidence, scan(420_001)]), 420_001).display.label, "Working");
+});
+
+const parentChanges: { name: string; parent: ProcessIdentity | null }[] = [
+  { name: "different PID", parent: { ...PROCESS, pid: 40 } },
+  { name: "different procStart with reused PID", parent: { ...PROCESS, procStart: "previous-start" } },
+  { name: "different PID and procStart", parent: { pid: 40, procStart: "previous-start" } },
+  { name: "unrecorded launch process", parent: null },
+];
+for (const { name, parent } of parentChanges) test(`child cannot borrow current parent liveness: ${name}`, () => {
+  // 旧い親も走査に残す。OS 上の不在ではなく、起動回の対応だけで保持を解く。
+  const evidence = [tool("started"), scan(299_999, { processes: parent ? [PROCESS, parent] : [PROCESS] })];
+  const target = { ...input(evidence), parentProcessAtLaunch: parent };
+  const fresh = evaluateState(target, 299_999);
+  assert.equal(fresh.display.label, "Working"); assert.equal(fresh.turn.reason, "turn_progress");
+  assert.equal(fresh.turn.validUntil, 300_000);
+  const expired = evaluateState(target, 300_000);
+  assert.equal(expired.process.value, "unverified");
+  assert.equal(expired.process.reason, parent ? "owner_restarted" : "missing_evidence");
+  assert.equal(expired.display.label, "Unknown"); assert.equal(expired.turn.reason, "progress_expired");
+  assert.equal(expired.display.details.includes("running tool"), false);
+  checkOrders(evidence, evidence => evaluateState({ ...target, evidence }, 300_000));
+});
+
+test("child long Bash keeps Working only while the launch parent's liveness lease is valid", () => {
+  const evidence = [tool("started"), alive, scan(419_999, { status: "failed" })];
+  const target = { ...input(evidence), parentProcessAtLaunch: { ...PROCESS } };
+  const output = evaluateState(target, 419_999);
+  assert.equal(output.process.value, "alive_confirmed");
+  assert.equal(output.display.label, "Working"); assert.equal(output.turn.reason, "running_tool");
+  assert.ok(output.display.details.includes("running tool"));
+  assert.equal(output.turn.validUntil, 420_000); assert.ok(output.turn.evidenceIds.includes(alive.id));
+  assert.equal(evaluateState(target, 420_000).display.label, "Unknown");
+  assert.equal(evaluateState({ ...target, process: null }, 419_999).display.label, "Unknown");
+  assert.equal(evaluateState({ ...target, evidence: [...evidence, scan(420_001)] }, 420_001).display.label, "Working");
+  checkOrders(evidence, evidence => evaluateState({ ...target, evidence }, 419_999));
+});
+
+const waits = [
+  { name: "Notification permission_prompt", source: "hook", row: { hook_event_name: "Notification", notification_type: "permission_prompt", prompt_id: "turn" },
+    event: "approval", label: "Needs approval", reason: "approval_requested" },
+  { name: "Notification idle_prompt", source: "hook", row: { hook_event_name: "Notification", notification_type: "idle_prompt", prompt_id: "turn" },
+    event: "stop_attempt", label: "Unknown", reason: "boundary_unavailable" },
+  { name: "AskUserQuestion tool_use", source: "claude", row: { type: "assistant", promptId: "turn", message: { content: [{ type: "tool_use", id: "question", name: "AskUserQuestion" }] } },
+    event: "input", label: "Waiting", reason: "input_requested" },
+  { name: "AskUserQuestion PreToolUse", source: "hook", row: { hook_event_name: "PreToolUse", prompt_id: "turn", tool_use_id: "question", tool_name: "AskUserQuestion" },
+    event: "input", label: "Waiting", reason: "input_requested" },
+] as const;
+for (const c of waits) test(`${c.name}: live process cannot keep a human wait Working`, () => {
+  const proof = native(c.source, c.row, 310_000, { turnId: null });
+  assert.deepEqual(proof.map(e => (e as Signal).event), [c.event]);
+  assert.deepEqual(proof.map(e => (e as Signal).turnId), ["turn"]);
+  const evidence = [tool("started"), ...proof, scan(310_000)];
+  const output = evaluateState(input(evidence), 310_000);
+  assert.equal(output.process.value, "alive_confirmed");
+  assert.equal(output.display.label, c.label); assert.equal(output.turn.reason, c.reason);
+  assert.equal(output.display.details.includes("running tool"), false);
+  checkOrders(evidence, evidence => evaluateState(input(evidence), 310_000));
+
+  // 実測された15,492秒と同じ長さを合成入力で検査する。再読と生存確認は待ちを進行にしない。
+  const laterAt = 310_000 + 15_492_000;
+  const later = [...evidence, ...native(c.source, c.row, 310_000, { turnId: null, observedAt: laterAt }), scan(laterAt)];
+  const expired = evaluateState(input(later), laterAt);
+  assert.equal(expired.process.value, "alive_confirmed");
+  assert.equal(expired.display.label, "Unknown");
+  assert.equal(expired.turn.reason, c.event === "stop_attempt" ? "boundary_unavailable" : "waiting_expired");
+  assert.equal(expired.display.details.includes("running tool"), false);
+  checkOrders(later, evidence => evaluateState(input(evidence), laterAt));
+
+  const resumed = [...evidence, signal("progress", 320_000), scan(620_000)];
+  assert.equal(evaluateState(input(resumed), 320_000).turn.reason, "turn_progress");
+  assert.equal(evaluateState(input(resumed), 620_000).turn.reason, "progress_expired");
+  assert.equal(evaluateState(input([...resumed, tool("started", 620_001, "new-tool")]), 620_001).turn.reason, "running_tool");
+});
+
+test("AskUserQuestion stays input wait through PreToolUse and resumes on its result", () => {
+  const evidence = [...native("claude", waits[2].row, 10), ...native("hook", waits[3].row, 20), alive];
+  assert.equal(evaluateState(input(evidence), 300_019).display.label, "Waiting");
+  assert.equal(evaluateState(input(evidence), 300_020).turn.reason, "waiting_expired");
+  for (const [source, row] of [
+    ["claude", { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "question" }] } }],
+    ["hook", { hook_event_name: "PostToolUse", tool_use_id: "question", tool_name: "AskUserQuestion" }],
+  ] as const) {
+    const resumed = [...evidence, ...native(source, row, 310_000)];
+    assert.equal(evaluateState(input(resumed), 310_000).turn.reason, "turn_progress");
+    const expired = evaluateState(input([...resumed, scan(610_000)]), 610_000);
+    assert.equal(expired.display.label, "Unknown"); assert.equal(expired.turn.reason, "progress_expired");
+  }
+});
+
+test("unrelated Notification types do not create a wait or finish a tool", () => {
+  for (const notification_type of ["auth_success", "elicitation_dialog", undefined]) {
+    assert.deepEqual(native("hook", { hook_event_name: "Notification", notification_type }), []);
+  }
 });
 
 for (const [name, end] of [

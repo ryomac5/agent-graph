@@ -118,6 +118,7 @@ interface RunContext {
   // 開始時刻のない実行は、事実の順で最初の事実と最初の run.created から開始時刻を補う。事実の全体は持たない。
   firstFact?: Fact; firstCreated?: Fact;
 }
+export interface TurnCoverageRun { conversation_id: string; generation: unknown; provider: string; type: string; native_id: string }
 function inputOf(context: RunContext): StateInput {
   return context.input ??= { runId: context.id, turnId: null, process: null, parentProcessAtLaunch: 'independent', attempt: null, evidence: [] };
 }
@@ -186,13 +187,15 @@ export class CurrentState {
       processes: scan.processes.map(row => ({ ...row, procStart: row.procStart === null ? null : normalizeProcessStart(row.procStart, 'local') })) };
   }
   get reevaluateAt(): number { return this.nextEvaluation; }
-  readTurnCoverage(since: number): Record<string, { runs: number; missing: number; ratio: number }> {
+  readTurnCoverage(since: number, withoutRequest?: (run: TurnCoverageRun) => boolean): Record<string, { runs: number; missing: number; ratio: number }> {
     const coverage = { claude: { runs: 0, missing: 0, ratio: 0 }, codex: { runs: 0, missing: 0, ratio: 0 } };
     for (const context of this.contexts.values()) {
-      const provider = this.nativeById.get(context.conversation_id)?.provider;
+      const native = this.nativeById.get(context.conversation_id), provider = native?.provider;
       const at = Date.parse(String(context.last_evidence_ts ?? context.started_ts));
       if (provider !== 'claude' && provider !== 'codex' || !(at >= since && at <= this.evaluatedAt)) continue;
-      // 信号の欠落から依頼の不在は証明できない。用途の独立した証拠がない実行も分母に含める。
+      // 信号の欠落から依頼の不在は証明できない。呼び出し側が台帳の外の独立した記録で依頼がないと示した実行だけを外す。
+      if (!context.input?.turnId && withoutRequest?.({ conversation_id: context.conversation_id, generation: context.generation,
+        provider, type: String(native!.type), native_id: String(native!.native_id) })) continue;
       const row = coverage[provider]; row.runs++;
       if (!context.input?.turnId) row.missing++;
     }

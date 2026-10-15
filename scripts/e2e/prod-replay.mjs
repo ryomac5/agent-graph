@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { mkdtempSync, mkdirSync, chmodSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, chmodSync, rmSync, existsSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -12,6 +12,7 @@ import { SendWatch } from '../../packages/api/src/service/send-watch.ts';
 import { scanSessions } from '../../packages/api/src/service/session-scan.ts';
 import { evaluateState, readNativeEvidence } from '../../packages/core/src/state/index.ts';
 import { openLedger } from '../../packages/core/src/ledger/index.ts';
+import { USAGE_PROBE_PATH } from '../../packages/api/src/usage/probe-path.ts';
 
 // node --expose-gc scripts/e2e/prod-replay.mjs [--db /path/agent-graph.db] [--claude-home /path/.claude] [--codex-home /path/.codex] [--keep] [--inspect <Claude の会話 ID>]
 // --inspect は判定に加えず、取り込み直後の走査でその会話の表示と、競合の印が付いた turn の数を報告する。
@@ -48,6 +49,39 @@ export function assessReplayMetrics({ appendRefreshMs, heapBytes, coverage }) {
   return results;
 }
 
+// turn 鍵のない実行のうち、台帳の外の独立した記録で依頼がないと示せるものだけを分母から外す。
+// 使用量確認は製品の一覧の除外と同じ規則（unattended かつ探索用の cwd）で決める。
+// 対話の実行は原記録を読み、開始から終了までの間に時刻を持つ行が一つもない場合だけ外す。原記録が無いのは、依頼を受ける前に閉じた起動である。
+// 原記録の取り込み漏れはこの判定を通らず、欠落に数える。
+export function noRequestEvidence(db, claudeHome, now, probePath = USAGE_PROBE_PATH) {
+  const counts = { usageProbe: 0, emptyTranscriptWindow: 0 };
+  const projects = join(claudeHome, 'projects');
+  const directories = existsSync(projects) ? readdirSync(projects) : [];
+  const predicate = run => {
+    if (run.provider !== 'claude') return false;
+    const conversation = db.prepare('SELECT cwd FROM conversations WHERE id = ?').get(run.conversation_id);
+    if (run.type === 'unattended' && conversation?.cwd === probePath) { counts.usageProbe++; return true; }
+    if (run.type !== 'interactive') return false;
+    // runs の会話 ID は旧い provider:native の形でも保存されている。どちらの形も引き、見つからなければ外さない。
+    const row = db.prepare('SELECT started_ts, ended_ts FROM runs WHERE conversation_id IN (?, ?) AND generation = ?')
+      .get(run.conversation_id, `${run.provider}:${run.native_id}`, run.generation);
+    const start = Date.parse(String(row?.started_ts)), end = row?.ended_ts ? Date.parse(String(row.ended_ts)) : now;
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
+    for (const directory of directories) {
+      const file = join(projects, directory, `${run.native_id}.jsonl`);
+      if (!existsSync(file)) continue;
+      for (const line of readFileSync(file, 'utf8').split('\n')) {
+        if (!line) continue;
+        let at;
+        try { at = Date.parse(JSON.parse(line).timestamp); } catch { return false; }
+        // 時刻のない行（題名など）は依頼ではない。依頼と返事の行は必ず時刻を持つ。
+        if (at >= start && at <= end) return false;
+      }
+    }
+    counts.emptyTranscriptWindow++; return true;
+  };
+  return { predicate, counts };
+}
 export function measureAppendRefresh(path, feed, now) {
   const db = new DatabaseSync(path, { readOnly: true });
   const ledger = openLedger(path);
@@ -222,13 +256,14 @@ export async function replayProduction(options = {}) {
     db.exec('CREATE TABLE replay_probe (id INTEGER); INSERT INTO replay_probe VALUES (1)');
     const recheckStart = performance.now(); watch.check(scan.at);
     const unrelatedCommitCheckMs = performance.now() - recheckStart;
-    const coverage = feed.current.readTurnCoverage(scan.at - RECENT_WINDOW_MS);
+    const noRequest = noRequestEvidence(db, claudeHome, scan.at);
+    const coverage = feed.current.readTurnCoverage(scan.at - RECENT_WINDOW_MS, noRequest.predicate);
     const inspected = options.inspect ? inspectConversation(feed, scan, options.inspect) : undefined;
     const appendRefresh = measureAppendRefresh(path, feed, scan.at);
     global.gc?.();
     const heapBytes = global.gc ? process.memoryUsage().heapUsed : undefined;
     results.push(...assessReplayMetrics({ appendRefreshMs: appendRefresh?.elapsedMs, heapBytes, coverage }));
-    return { exitCode: replayExitCode(results), results, ingestion, coverage, heapBytes, ...(inspected ? { inspected } : {}),
+    return { exitCode: replayExitCode(results), results, ingestion, coverage, excludedWithoutRequest: noRequest.counts, heapBytes, ...(inspected ? { inspected } : {}),
       timings: { refreshMs, deliveryMs, unrelatedCommitCheckMs, appendRefresh }, ...(options.keep ? { copy: directory } : {}) };
   } catch (error) {
     return { exitCode: 2, results, error: error.message, ...(options.keep ? { copy: directory } : {}) };

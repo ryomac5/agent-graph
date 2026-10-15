@@ -603,6 +603,15 @@ test('P5: SessionStart と user の所属がある部分取り込み漏れを分
   assert.deepEqual(f.feed.current.readTurnCoverage(NOW - 7 * 86400_000).claude, { runs: 1, missing: 1, ratio: 1 });
 });
 
+test('turn 鍵欠落率は、呼び出し側が独立した記録で依頼なしと示した鍵のない実行だけを分母から外す', t => {
+  const f = fixture(t); f.run('keyed'); f.native('keyed', start()); f.run('probe', NOW, 'unattended'); f.run('partial');
+  f.decision('keyed', NOW);
+  const asked: string[] = [];
+  const coverage = f.feed.current.readTurnCoverage(NOW - 7 * 86400_000, run => { asked.push(run.native_id); return run.type === 'unattended'; });
+  assert.deepEqual(coverage.claude, { runs: 2, missing: 1, ratio: 1 / 2 });
+  assert.deepEqual(asked.sort(), ['partial', 'probe'], 'turn 鍵のある実行は外す候補にしない');
+});
+
 test('P6: ホストが原記録の外に持つ turn 相関を保存し承認待ちを判定する', t => {
   const f = fixture(t); f.run('host'); f.native('host', start('host-turn'));
   f.append('run.updated', 'run:host', { conversation_id: f.id('host'), generation: 1, last_evidence: {

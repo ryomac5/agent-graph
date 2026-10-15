@@ -241,7 +241,7 @@ schema 版・投影版・依存は変更しない。UUID 補完の印は既存�
 
 prod-replay の上限は一件追記後の同期 refresh が **300 ms**、GC 後の評価プロセスのヒープが **400 MiB**。300 ms は設計書の追記から表示まで1秒から、poll 500 ms と配信・描画の余裕200 msを除いた予算であり、実測で決めた値ではない。最大の履歴を持つ既存実行へコピー内で一件追記して測る。取り込み worker の snapshot は閉じて解放し、評価用サービスを開き直す。`node --expose-gc scripts/e2e/prod-replay.mjs` で実行し、GC が使えない場合はヒープを未確認とする。
 
-turn 鍵欠落率の上限は提供元別 **1%（暫定）**。`readTurnCoverage` の分母は最終証拠（なければ開始）が直近7日以内の実行とし、0件は理由付き skip とする。open/close だけの信号から「依頼なし」は証明できないので除外しない。証拠なし・部分取り込みも turn 鍵がなければ欠落に数える。依頼なしの用途を確認できる独立した記録は現在ない。E1〜E3 の元の ID が消えている場合は失敗でなく unavailable、busy 会話がなければ理由付き skip とする。終了コードは不一致があれば1、失敗がなく未確認があれば2、それ以外は0。単体試験は3300 ms・1 GiB・欠落率2%を拒否する。
+turn 鍵欠落率の上限は提供元別 **1%（暫定）**。`readTurnCoverage` の分母は最終証拠（なければ開始）が直近7日以内の実行とし、0件は理由付き skip とする。open/close だけの信号から「依頼なし」は証明できないので、信号では除外しない。証拠なし・部分取り込みも turn 鍵がなければ欠落に数える。分母から外すのは、turn 鍵がなく、台帳の外の独立した記録が依頼なしを示す実行だけである。一つは使用量確認で、製品の一覧の除外と同じく unattended かつ cwd が `USAGE_PROBE_PATH` の会話とする。もう一つは対話の実行で、原記録が無いか、開始から終了までに時刻を持つ行が無いものとする。判定は prod-replay の `noRequestEvidence` が原記録を直接読んで行い、外した件数を `excludedWithoutRequest` に出す。E1〜E3 の元の ID が消えている場合は失敗でなく unavailable、busy 会話がなければ理由付き skip とする。終了コードは不一致があれば1、失敗がなく未確認があれば2、それ以外は0。単体試験は3300 ms・1 GiB・欠落率2%を拒否する。
 
 偽 CLI の e2e 項目 `state-waiting-agents` は、背景の子の起動→親 Waiting for agents→子停止通知→子 Unknown／親 Idle を、API とブラウザの双方で検査する。本番コピーでの実測、socket の待受、ブラウザ e2e の実行結果は別環境で記録する。schema 版・投影版・依存は変更していない。
 
@@ -282,8 +282,10 @@ HEAD 11c8e36 で三つの関門を流し、次の六つが落ちた。いずれ�
 | P2 暗黙の世代 | `isEvidenceOnly` と `createStableRunLinkCheck` の両方を満たす場合だけ投影を省く。100=gen1、200=gen2、400=世代なし終了の後に300=gen1の証拠を足すと、gen1に終了が移る。別々の取り込み／同じ取り込みの両方を `rebuild.test.ts` で全件再構築と照合する。 |
 | P3 正式な開始時刻 | `CurrentState` の継続経路は `started_ts ??= state.derived?.startedTs` とし、補完値で正式値を上書きしない。501証拠の後の正式値 .100Z を、証拠付き／属性だけの更新で新規個体と比較する。 |
 | P4 検索の会話 | 検索も `createStableRunLinkCheck` を使う。会話a/100→b/1000→後着a/200→a/1200で、artifactの検索先はaになり、再構築と一致する。複数対応がある履歴の省略は行わない。 |
-| P5 欠落率 | `readTurnCoverage` からopen/closeだけの除外を削除した。SessionStart＋user発言＋所属がありnative証拠がない入力を runs=1/missing=1 とする。 |
+| P5 欠落率 | `readTurnCoverage` からopen/closeだけの除外を削除した。SessionStart＋user発言＋所属がありnative証拠がない入力を runs=1/missing=1 とする。外す判定は呼び出し側が独立した記録で与え、turn 鍵のない実行にだけ問う。 |
 | P6 証拠の保持と圧縮 | `captureNativeRecord` は信号を持つ構造と、信号のない行のuuid/parentUuid/promptIdまたはCodex turn_idだけを残す。`createNativeEvidenceBuffer` と `packNativeEvidence` が同じ実行・会話・世代の新しい証拠を最大128行の可逆なtupleへまとめる。128→1事実、600→5事実、20ファイル2020事実相当→60事実を検査し、再読・再起動・時刻逆転・後着祖先・訂正・再構築後の判定を非圧縮と比較する。 |
+
+P5の後の本番の写しでは、Claude の欠落が 970/1158 になった。欠落の実行は、使用量確認と、依頼前に閉じた対話 7 件だった。7 件のうち 6 件は原記録が無く、1 件は resume の後に原記録へ行が無かった。どれも SessionStart と SessionEnd だけを持つ。上の規則で外した再実行では、使用量確認 960 件と対話 7 件が外れた。残りは Claude 0/188、Codex 0/192 だった。7 日の窓が動くため、二つの実行の件数は少しずれる。
 
 P6の保持単位は経過日数ではなく、再構築に必要な構造である。旧turnや失効した進行の証拠も、後着のUUID祖先・tool・子の相関に必要になるため捨てない。補完で新しく保存する古い証拠も圧縮し、繰り返す実行・会話・世代・ファイル・observed_tsを共有する。信号の本文は「存在」や境界の印にし、本文保持期限からは独立させる。`retainNativeMetadata` はmetadata保存範囲と保持処理でもこの構造だけを残し、秘匿処理は通す。
 

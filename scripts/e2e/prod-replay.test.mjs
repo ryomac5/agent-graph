@@ -86,3 +86,28 @@ test('refresh probe appends exactly one fact to the largest existing history on 
   assert.equal(ledger.readSince(0, 100).length, before + 1);
   assert.equal(feed.snapshot().seq, ledger.readSince(0, 100).at(-1).seq);
 });
+
+test('依頼なしで分母から外すのは、使用量確認の規則と、実行の期間に行のない原記録の対話だけ', async t => {
+  const { noRequestEvidence } = await import('./prod-replay.mjs');
+  const { mkdirSync, writeFileSync } = await import('node:fs');
+  const directory = mkdtempSync(join(tmpdir(), 'replay-no-request-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const db = new DatabaseSync(':memory:'); t.after(() => db.close());
+  db.exec('CREATE TABLE conversations (id TEXT, cwd TEXT); CREATE TABLE runs (conversation_id TEXT, generation INTEGER, started_ts TEXT, ended_ts TEXT)');
+  const probePath = '/home/test/.cache/agent-graph/usage-probe';
+  const project = join(directory, 'projects', '-repo'); mkdirSync(project, { recursive: true });
+  const rows = { probe: probePath, 'other-unattended': '/repo', 'no-file': '/repo', 'empty-window': '/repo', partial: '/repo', subagent: '/repo' };
+  for (const [name, cwd] of Object.entries(rows)) {
+    db.prepare('INSERT INTO conversations VALUES (?, ?)').run(name, cwd);
+    db.prepare('INSERT INTO runs VALUES (?, 1, ?, ?)').run(name === 'partial' ? name : `claude:${name}`, '2026-10-10T08:00:00.000Z', '2026-10-10T09:00:00.000Z');
+  }
+  // 実行の前に終わった行と時刻のない題名だけの原記録は、期間に依頼がない。期間内に行があれば取り込み漏れとして数える。
+  writeFileSync(join(project, 'empty-window.jsonl'), [{ type: 'user', timestamp: '2026-10-10T07:59:59.000Z' }, { type: 'custom-title' }].map(r => JSON.stringify(r)).join('\n') + '\n');
+  writeFileSync(join(project, 'partial.jsonl'), JSON.stringify({ type: 'user', timestamp: '2026-10-10T08:30:00.000Z' }) + '\n');
+  const { predicate, counts } = noRequestEvidence(db, directory, Date.parse('2026-10-11T00:00:00.000Z'), probePath);
+  const types = { probe: 'unattended', 'other-unattended': 'unattended', subagent: 'subagent' };
+  const excluded = Object.keys(rows).filter(name => predicate({ conversation_id: name, generation: 1, provider: 'claude', type: types[name] ?? 'interactive', native_id: name }));
+  assert.deepEqual(excluded, ['probe', 'no-file', 'empty-window']);
+  assert.deepEqual(counts, { usageProbe: 1, emptyTranscriptWindow: 2 });
+  assert.equal(predicate({ conversation_id: 'no-file', generation: 1, provider: 'codex', type: 'interactive', native_id: 'no-file' }), false);
+});

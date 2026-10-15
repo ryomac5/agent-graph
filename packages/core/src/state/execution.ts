@@ -40,22 +40,46 @@ function decideClosure(signals: Signal[], process: ProcessState): Decision<Closu
   return decide(value, value === "open" ? "run_opened" : "run_closed", latest);
 }
 
-function decideTurn(input: StateInput, signals: Signal[], process: ProcessState, now: number, policy: StatePolicy): Decision<TurnState> {
+function selectRunningTools(events: Signal[]): Signal[] {
+  const boundaryAt = Math.max(-Infinity, ...events.filter(e => e.event !== "progress" && e.event !== "start").map(e => e.at));
+  const finished = new Map<string | null, number>();
+  let lastFinish = -Infinity;
+  for (const e of events) for (const tool of e.tools ?? []) {
+    if (tool.phase !== "finished") continue;
+    finished.set(tool.id, Math.max(finished.get(tool.id) ?? -Infinity, e.at));
+    lastFinish = Math.max(lastFinish, e.at);
+  }
+  // ID のない開始は、いずれかの結果で閉じる。停止・待ちの境界を越えて持ち越さない。
+  return events.filter(e => e.at > boundaryAt && e.tools?.some(tool => tool.phase === "started" &&
+    e.at > (tool.id === null ? lastFinish : Math.max(finished.get(tool.id) ?? -Infinity, finished.get(null) ?? -Infinity))));
+}
+
+function decideTurn(input: StateInput, signals: Signal[], process: Decision<ProcessState>, now: number, policy: StatePolicy): Decision<TurnState> {
   if (!input.turnId) return decide("unknown", "identity_unresolved", [], null, "unknown");
-  const events = signals.filter(e => e.turnId === input.turnId && (TURN_EVENTS.has(e.event) || e.event === "close"));
+  const events = signals.filter(e => e.turnId === input.turnId && (TURN_EVENTS.has(e.event) || e.event === "close" || e.event === "archive") &&
+    (e.activity !== "session_busy" || e.process?.pid === input.process?.pid && e.process?.procStart === input.process?.procStart));
   const latest = selectLatest(events);
   if (!latest.length) return decide("unknown", "missing_evidence", [], null, "unknown");
-  const values = new Set(latest.map(e => e.event === "close" ? "complete" : e.event === "start" ? "progress" : e.event));
-  const completed = events.filter(e => e.event === "complete" || e.event === "close");
-  if (values.size !== 1 || (completed.length && latest.some(e => e.event !== "complete" && e.event !== "close"))) {
+  const isComplete = (e: Signal) => e.event === "complete" || e.event === "close" || e.event === "archive";
+  const values = new Set(latest.map(e => isComplete(e) ? "complete" : e.event === "start" ? "progress" : e.event));
+  const completed = events.filter(isComplete);
+  if (values.size !== 1 || (completed.length && latest.some(e => !isComplete(e)))) {
     return decide("unknown", "evidence_conflict", [...completed, ...latest], null, "unknown");
   }
   const event = [...values][0];
   const confidence = latest.some(e => e.confidence === "inferred") ? "inferred" : "confirmed";
   if (event === "complete") return decide("completed", "turn_finished", latest, null, confidence);
   if (event === "stop_attempt") return decide("unknown", "boundary_unavailable", latest, null, "unknown");
-  if (process === "exited_confirmed") return decide("unknown", "process_exited", latest, null, "unknown");
+  if (process.value === "exited_confirmed") return decide("unknown", "process_exited", latest, null, "unknown");
   const waiting = event === "approval" || event === "input";
+  const runningTools = waiting ? [] : selectRunningTools(events);
+  if (runningTools.length && process.value === "alive_confirmed") {
+    const proof = [...runningTools, ...latest];
+    const decision = decide<TurnState>("running", "running_tool", proof, process.validUntil,
+      proof.some(e => e.confidence === "inferred") ? "inferred" : confidence);
+    decision.evidenceIds = [...new Set([...decision.evidenceIds, ...process.evidenceIds])].sort(compareText);
+    return decision;
+  }
   const until = latest[0].at + (waiting ? policy.waitingMs : policy.progressMs);
   if (now >= until) return decide("unknown", waiting ? "waiting_expired" : "progress_expired", latest, until, "unknown");
   if (event === "approval") return decide("waiting_approval", "approval_requested", latest, until, confidence);
@@ -106,7 +130,8 @@ export function evaluateState(input: StateInput, evaluatedAt: number, policy: Re
   const process = decideProcess(input, signals, scans, evaluatedAt);
   const hosting = decideHosting(scans, input.runId, evaluatedAt);
   const closure = decideClosure(signals, process.value);
-  const turn = decideTurn(input, signals, process.value, evaluatedAt, policy);
+  const turn = decideTurn(input, signals, process, evaluatedAt, policy);
+  const runningTool = turn.reason === "running_tool";
   if (conflicts.length && turn.value !== "unknown") { turn.confidence = "inferred"; turn.reason = "history_conflict"; }
   const result = decideResult(input, signals, process.value);
   const groups = new Map<string, Scan[]>();
@@ -120,6 +145,7 @@ export function evaluateState(input: StateInput, evaluatedAt: number, policy: Re
       state: last.some(e => e.status !== "succeeded") ? "failed" : last.some(e => evaluatedAt >= e.at + e.validForMs) ? "delayed" : "healthy" };
   });
   const details: string[] = [];
+  if (runningTool) details.push("running tool");
   if (turn.confidence === "inferred") details.push("unconfirmed");
   if (process.value === "unverified") details.push("liveness unverified");
   if (turn.value === "completed" && process.value !== "alive_confirmed") details.push("last seen");

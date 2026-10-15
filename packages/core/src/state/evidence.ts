@@ -8,11 +8,10 @@ export function selectEvidence<T extends Evidence>(evidence: readonly T[], now: 
   const unique = new Map<string, T>();
   for (const e of known) {
     if (superseded.has(e.id)) continue;
-    const key = JSON.stringify({ ...e, observedAt: 0 });
-    const previous = unique.get(key);
-    if (!previous || e.observedAt < previous.observedAt) unique.set(key, e);
+    const previous = unique.get(e.id);
+    if (!previous || e.observedAt < previous.observedAt) unique.set(e.id, e);
   }
-  return [...unique.values()].sort((a, b) => a.at - b.at || compareText(a.id, b.id) || compareText(JSON.stringify(a), JSON.stringify(b)));
+  return [...unique.values()].sort((a, b) => a.at - b.at || compareText(a.id, b.id));
 }
 
 export function compareText(a: string, b: string): number { return a < b ? -1 : a > b ? 1 : 0; }

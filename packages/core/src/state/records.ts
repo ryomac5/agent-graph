@@ -2,7 +2,7 @@ import type { Evidence, Signal, StateEvidence } from "./types.ts";
 
 type Row = Record<string, unknown>;
 export interface NativeRecord extends Evidence {
-  source: "claude" | "hook" | "codex" | "claude_sdk" | "claude_child" | "codex_child";
+  source: "claude" | "hook" | "codex" | "claude_sdk" | "claude_child" | "codex_child" | "claude_session";
   runId: string;
   row: Row;
   // native の相関がない場合だけ、外部で確かめた対応を渡す。現在の turn で補わない。
@@ -15,6 +15,7 @@ export interface NativeRecord extends Evidence {
 
 function readObject(value: unknown): Row { return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Row : {}; }
 function readString(value: unknown): string | undefined { return typeof value === "string" && value.length > 0 ? value : undefined; }
+function readBoolean(value: unknown): boolean | undefined { return value === true || value === "true" ? true : value === false || value === "false" ? false : undefined; }
 function readBlocks(value: unknown): Row[] { return Array.isArray(value) ? value.map(readObject) : typeof value === "string" ? [{ type: "text", text: value }] : []; }
 
 function readNativeTurnIds(source: NativeRecord["source"], row: Row): string[] {
@@ -41,16 +42,28 @@ function readNativeSignals(record: NativeRecord): Signal[] {
   }));
   const message = readObject(row.message);
   const blocks = readBlocks(message.content);
-  if (source === "hook") {
-    const events: Record<string, Signal["event"][]> = { SessionStart: ["open"], UserPromptSubmit: ["start"], Stop: ["stop_attempt"], SubagentStop: ["stop_attempt"], SessionEnd: ["close"] };
-    return emit(...(events[String(row.hook_event_name)] ?? []));
+  if (source === "claude" && (row.isMeta === true || row.isCompactSummary === true || row.isVisibleInTranscriptOnly === true)) return [];
+  if (source === "claude_session") {
+    if (row.status !== "busy" || typeof row.statusUpdatedAt !== "number" || !Number.isFinite(row.statusUpdatedAt) ||
+      typeof row.pid !== "number" || !Number.isInteger(row.pid) || row.pid <= 0 || !readString(row.procStart)) return [];
+    return emit("progress").map(signal => ({ ...signal, at: row.statusUpdatedAt as number,
+      activity: "session_busy", process: { pid: row.pid as number, procStart: row.procStart as string } }));
+  }
+  const attachment = readObject(row.attachment);
+  if (source === "hook" || source === "claude" && row.type === "attachment") {
+    const hook = source === "hook" ? row.hook_event_name : attachment.hookEvent;
+    const toolId = readString(source === "hook" ? row.tool_use_id : attachment.toolUseID) ?? null;
+    const events: Record<string, Signal["event"][]> = { Stop: ["stop_attempt"], SubagentStop: ["stop_attempt"], PreToolUse: ["progress"], PostToolUse: ["progress"],
+      ...(source === "hook" ? { SessionStart: ["open"], UserPromptSubmit: ["start"], SessionEnd: ["close"] } : {}) };
+    return emit(...(events[String(hook)] ?? [])).map(signal => hook === "PreToolUse" || hook === "PostToolUse"
+      ? { ...signal, tools: [{ id: toolId, phase: hook === "PreToolUse" ? "started" : "finished" }] } : signal);
   }
   if (source === "claude_child") {
     const result = readObject(row.toolUseResult);
     const call = readBlocks(readObject(record.parentCall?.message).content).find(b => b.name === "Agent" && blocks.some(r => r.type === "tool_result" && r.tool_use_id === b.id));
     if (!call || !record.childId || result.agentId !== record.childId) return [];
-    if (result.status === "async_launched" && result.isAsync === true) return emit("launched");
-    if (result.status === "completed" && result.isAsync !== true && readObject(call.input).run_in_background === false &&
+    if (result.status === "async_launched" && readBoolean(result.isAsync) === true) return emit("launched");
+    if (result.status === "completed" && readBoolean(result.isAsync) !== true && readBoolean(readObject(call.input).run_in_background) === false &&
       readBlocks(result.content).some(b => b.type === "text" && readString(b.text))) return emit("responded", "complete");
     return [];
   }
@@ -70,17 +83,14 @@ function readNativeSignals(record: NativeRecord): Signal[] {
     return [];
   }
   if (source === "claude") {
-    if (row.isMeta === true || row.isCompactSummary === true || row.isVisibleInTranscriptOnly === true) return [];
     if (row.type === "system") return row.subtype === "turn_duration" ? emit("complete") : [];
-    if (row.type === "attachment") {
-      const hook = readObject(row.attachment).hookEvent;
-      return hook === "Stop" || hook === "SubagentStop" ? emit("stop_attempt") : [];
-    }
     if (row.type === "user") {
       if (blocks.some(b => b.type === "tool_result")) {
         const handback = readBlocks(readObject(record.parentCall?.message).content).find(b => b.name === "SubagentHandback" && blocks.some(r => r.tool_use_id === b.id));
         const result = readObject(row.toolUseResult);
-        return handback && typeof result.success === "boolean" ? emit("progress", result.success ? "reported" : "report_failure") : emit("progress");
+        const signals = handback && typeof result.success === "boolean" ? emit("progress", result.success ? "reported" : "report_failure") : emit("progress");
+        return signals.map(signal => signal.event === "progress" ? { ...signal, tools: blocks.filter(b => b.type === "tool_result")
+          .map(b => ({ id: readString(b.tool_use_id) ?? null, phase: "finished" as const })) } : signal);
       }
       const text = blocks.map(b => typeof b.text === "string" ? b.text : "").join("\n").trim();
       if (/^\[Request interrupted by user(?: for tool use)?\]/u.test(text)) return emit("complete", "interrupted");
@@ -88,7 +98,9 @@ function readNativeSignals(record: NativeRecord): Signal[] {
       return text || blocks.some(b => b.type === "image" || b.type === "document") ? emit("start") : [];
     }
     if (row.type === "assistant") {
-      if (blocks.some(b => b.type === "tool_use" || b.type === "server_tool_use") || message.stop_reason === "tool_use" || message.stop_reason === "pause_turn") return emit("progress");
+      const tools = blocks.filter(b => b.type === "tool_use" || b.type === "server_tool_use");
+      if (tools.length || message.stop_reason === "tool_use" || message.stop_reason === "pause_turn") return emit("progress").map(signal => ({ ...signal,
+        tools: tools.map(b => ({ id: readString(b.id) ?? null, phase: "started" as const })) }));
       if (["end_turn", "stop_sequence", "max_tokens", "refusal", "model_context_window_exceeded"].includes(String(message.stop_reason))) return emit("stop_attempt");
       return blocks.length ? emit("progress") : [];
     }
@@ -112,6 +124,14 @@ function readNativeSignals(record: NativeRecord): Signal[] {
     return flags.includes("waitingOnApproval") ? emit("approval") : flags.includes("waitingOnUserInput") ? emit("input") : status.type === "active" ? emit("progress") : [];
   }
   const item = row.type === "response_item" ? payload : readObject(params.item);
+  if (row.type === "response_item" && ["function_call", "custom_tool_call", "function_call_output", "custom_tool_call_output"].includes(String(item.type))) {
+    return emit("progress").map(signal => ({ ...signal, tools: [{ id: readString(item.call_id) ?? null,
+      phase: String(item.type).endsWith("_output") ? "finished" : "started" }] }));
+  }
+  if ((event === "item/started" || event === "item/completed") && ["commandExecution", "mcpToolCall", "collabAgentToolCall"].includes(String(item.type))) {
+    return emit("progress").map(signal => ({ ...signal, tools: [{ id: readString(item.id) ?? null,
+      phase: event === "item/completed" ? "finished" : "started" }] }));
+  }
   if (row.type === "response_item" || event === "item/completed" || event === "item/started" || event === "item/agentMessage/delta") {
     return (row.type === "response_item" || event === "item/completed") && item.phase === "final_answer" &&
       (item.type === "agentMessage" || item.type === "message" && item.role === "assistant") ? emit("progress", "responded") : emit("progress");

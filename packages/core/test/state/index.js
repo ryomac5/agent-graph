@@ -2,3 +2,5 @@
 import "./execution.test.ts";
 import "./production.test.ts";
 import "./delivery.test.ts";
+import "./evidence.test.ts";
+import "./long-tools.test.ts";

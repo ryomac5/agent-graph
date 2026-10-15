@@ -8,7 +8,7 @@ export type ResultState = "incomplete" | "succeeded" | "failed" | "interrupted" 
 export type Reason =
   | "missing_evidence" | "identity_unresolved" | "process_observed" | "process_exited"
   | "liveness_expired" | "scan_failed" | "scan_expired" | "scan_succeeded" | "out_of_scope"
-  | "hosting_observed" | "run_opened" | "run_closed" | "turn_progress" | "turn_finished"
+  | "hosting_observed" | "run_opened" | "run_closed" | "turn_progress" | "running_tool" | "turn_finished"
   | "approval_requested" | "input_requested" | "progress_expired" | "waiting_expired"
   | "boundary_unavailable" | "evidence_conflict" | "history_conflict" | "unsupported_evidence"
   | "required_stage_unknown" | "stage_reached" | "stage_missing" | "attempt_failed"
@@ -52,6 +52,8 @@ export interface Signal extends Evidence {
     | "open" | "close" | "archive" | "exit" | "interrupt_request" | "failure"
     | "interrupted" | "report_failure" | Stage;
   process?: ProcessIdentity;
+  tools?: readonly { id: string | null; phase: "started" | "finished" }[];
+  activity?: "session_busy";
   interruptId?: string;
   confidence?: "confirmed" | "inferred";
 }

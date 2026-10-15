@@ -14,7 +14,7 @@ function binding(extra: Partial<Binding> = {}): Binding {
   return { kind: "binding", id: "binding", cmdId: "cmd", target: "target-v1", correlation: { protocol: "codex", id: "native-turn" }, at: 10, observedAt: 10, ...extra };
 }
 const sent = [op("accepted"), op("emitting", 10), op("emitted", 15)];
-const correlated = receipt(20, { correlation: { protocol: "codex", id: "native-turn" } });
+const correlated = receipt(20, { id: "correlated-20", correlation: { protocol: "codex", id: "native-turn" } });
 function summarize(s: DeliveryDecision) { return { value: s.value, display: s.display, reason: s.reason, confidence: s.confidence, resendAutomatically: s.resendAutomatically }; }
 function expected(value: DeliveryDecision["value"], display: DeliveryDecision["display"], reason: DeliveryDecision["reason"], confidence: DeliveryDecision["confidence"] = "unknown") {
   return { value, display, reason, confidence, resendAutomatically: false };
@@ -85,6 +85,38 @@ test("deadline and clock-skew boundaries are explicit", () => {
   const evidence = [...sent, receipt(8)];
   assert.equal(evaluateDelivery({ cmdId: "cmd", evidence }, 60_010).value, "unverifiable");
   assert.equal(evaluateDelivery({ cmdId: "cmd", evidence }, 60_010, { deadlineMs: 60_000, clockSkewMs: 2 }).value, "received_candidate");
+});
+
+test("same text typed at or after the delivery deadline cannot restore Likely delivered", () => {
+  for (const at of [60_010, 60_011, 100_000]) {
+    const evidence = [...sent, receipt(at)];
+    const output = evaluateDelivery({ cmdId: "cmd", evidence }, 100_001);
+    assert.equal(output.display, "Unconfirmed"); assert.equal(output.reason, "delivery_expired");
+    checkOrders(evidence, evidence => evaluateDelivery({ cmdId: "cmd", evidence }, 100_001));
+    assert.equal(evaluateDelivery({ cmdId: "cmd", evidence }, 100_001, { deadlineMs: 60_000, clockSkewMs: 2 }).display, "Unconfirmed");
+  }
+  const evidence = [...sent, receipt(60_009, { observedAt: 100_000 })];
+  assert.equal(evaluateDelivery({ cmdId: "cmd", evidence }, 100_001).display, "Likely delivered");
+});
+
+test("each same-text operation has its own bounded candidate window", () => {
+  const evidence = [op("emitting", 10), receipt(20), op("emitting", 70_000, { cmdId: "second" }), receipt(70_010)];
+  for (const cmdId of ["cmd", "second"]) {
+    assert.equal(evaluateDelivery({ cmdId, evidence }, 80_000).display, "Likely delivered");
+    checkOrders(evidence, evidence => evaluateDelivery({ cmdId, evidence }, 80_000));
+  }
+});
+
+test("a queue input received before the deadline can be consumed afterwards", () => {
+  const evidence = [...sent, receipt(20, { phase: "queued", inputId: "input" }), receipt(70_000, { inputId: "input" })];
+  assert.equal(evaluateDelivery({ cmdId: "cmd", evidence }, 80_000).display, "Likely delivered");
+  checkOrders(evidence, evidence => evaluateDelivery({ cmdId: "cmd", evidence }, 80_000));
+});
+
+test("a late correlated receipt still proves delivery after the candidate window closes", () => {
+  const evidence = [...sent, binding(), receipt(100_000, { correlation: { protocol: "codex", id: "native-turn" } })];
+  assert.equal(evaluateDelivery({ cmdId: "cmd", evidence }, 100_001).display, "Delivered");
+  checkOrders(evidence, evidence => evaluateDelivery({ cmdId: "cmd", evidence }, 100_001));
 });
 
 test("tombstone survives loss of body and reconnect without new emission", () => {

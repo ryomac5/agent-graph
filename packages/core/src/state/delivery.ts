@@ -107,7 +107,8 @@ export function evaluateDelivery(input: DeliveryInput, evaluatedAt: number, poli
     for (const [cmdId, ops] of eligible) {
       const starts = ops.filter(e => ["emitting", "emitted", "aborted", "legacy_failed", "legacy_closed"].includes(e.phase));
       if (ops.some(e => e.phase === "rejected") || !starts.length || new Set(ops.map(e => e.bodyKey)).size !== 1) continue;
-      if (r.bodyKey === ops[0].bodyKey && r.at >= Math.min(...starts.map(e => e.at)) - policy.clockSkewMs) owners.add(cmdId);
+      const startedAt = Math.min(...starts.map(e => e.at));
+      if (r.bodyKey === ops[0].bodyKey && r.at >= startedAt - policy.clockSkewMs && r.at < startedAt + policy.deadlineMs) owners.add(cmdId);
     }
     candidates.set(r.inputId, new Set([...(candidates.get(r.inputId) ?? []), ...owners]));
     candidateRows.set(r.inputId, [...(candidateRows.get(r.inputId) ?? []), r]);

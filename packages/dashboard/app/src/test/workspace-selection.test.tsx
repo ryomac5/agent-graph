@@ -285,6 +285,21 @@ it('keeps the normal project default, restores each selected root and creates on
   expect(within(screen.getByLabelText('Workbench')).getAllByRole('tab')).toHaveLength(3);
 });
 
+it('saves a child conversation tab name locally without sending session.rename', async () => {
+  const target = createStore();
+  target.setSnapshot({ seq: 1, generation: 1, projection: { roots: [latestRoot], conversations: [{ id: latestId }, { id: requestedId, type: 'child' }] } });
+  const client = { command: vi.fn(async (): Promise<Ack> => ({ type: 'ack', cmd_id: 'rename', ok: false, error: 'Unknown session' })) };
+  render(<MemoryRouter initialEntries={[`/c/${encodeURIComponent(requestedId)}`]}><WorkspacePage project="other" conversationId={requestedId} target={target} client={client} showRootList={false}/></MemoryRouter>);
+  fireEvent.contextMenu(screen.getByRole('tab', { name: 'Conversation' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'Tab name' }), { target: { value: 'Child tab' } });
+  fireEvent.keyDown(screen.getByRole('textbox', { name: 'Tab name' }), { key: 'Enter' });
+  await vi.waitFor(() => expect(screen.queryByRole('textbox', { name: 'Tab name' })).toBeNull());
+  expect(screen.getByRole('tab', { name: 'Child tab' })).toBeTruthy();
+  expect(readSavedTabs(requestedId)[0].name).toBe('Child tab');
+  expect(client.command).not.toHaveBeenCalledWith('session.rename', expect.anything());
+});
+
 it('renames the root through the existing tab context menu instead of saving a local tab label', async () => {
   const target = createStore();
   target.setSnapshot({ seq: 1, generation: 1, projection: { roots: [latestRoot], conversations: [{ id: latestId }] } });

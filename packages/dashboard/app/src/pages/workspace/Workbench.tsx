@@ -211,16 +211,17 @@ export function Workbench({ project, session, unresolvedConversationId, conversa
     if (!renaming || renamePending.current) return;
     const { pane, tab, value } = renaming;
     const item = tree && listPanes(tree).flatMap(node => node.tabs).find(item => item.id === tab);
-    if (item?.kind === 'conversation' && item.conversationId) {
+    const rootId = item?.kind === 'conversation' && item.conversationId ? resolveRenameRoot?.(item.conversationId) : undefined;
+    if (rootId) {
       renamePending.current = true;
       setRenameError('');
       try {
-        const ack = await client.command('session.rename', { rootId: resolveRenameRoot?.(item.conversationId) ?? item.conversationId, name: value.trim() });
+        const ack = await client.command('session.rename', { rootId, name: value.trim() });
         if (!ack.ok) throw new Error(ack.error);
       } catch { setRenameError(ja ? '名前を変更できませんでした' : 'Unable to rename'); return; }
       finally { renamePending.current = false; }
     }
-    setTree(current => current && updatePane(current, pane, node => ({ ...node, tabs: node.tabs.map(item => item.id === tab ? { ...item, name: item.kind === 'conversation' && item.conversationId ? undefined : value.trim() || undefined } : item) })));
+    setTree(current => current && updatePane(current, pane, node => ({ ...node, tabs: node.tabs.map(item => item.id === tab ? { ...item, name: rootId ? undefined : value.trim() || undefined } : item) })));
     setRenaming(undefined);
   }
   function replaceConversation(paneId: string, tabId: string, conversationId: string) {

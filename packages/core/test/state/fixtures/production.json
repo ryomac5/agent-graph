@@ -1,0 +1,745 @@
+{
+  "extractedAt": "2026-10-15T08:03:25.082Z",
+  "maxSeq": 308120,
+  "provenance": "Source paths and seq are documented in architecture-critique E1–E6 and state-contract-review-3. IDs pseudonymized consistently; text, tool input/output, paths and credentials omitted. Timestamps retained. No inferred process or scan success added.",
+  "facts": [
+    {
+      "seq": 251644,
+      "source": "transcript-claude",
+      "kind": "message.created",
+      "source_ts": "2026-10-10T11:32:15.891Z",
+      "observed_ts": "2026-10-10T11:32:18.277Z",
+      "payload": {}
+    },
+    {
+      "seq": 259872,
+      "source": "rollout-codex",
+      "kind": "run.state_changed",
+      "source_ts": "2026-10-11T08:29:57.121Z",
+      "observed_ts": "2026-10-11T08:29:57.121Z",
+      "payload": {
+        "state": "idle",
+        "generation": 1,
+        "last_evidence": {
+          "kind": "process_absent",
+          "checked_ts": "2026-10-11T08:29:57.121Z"
+        }
+      }
+    },
+    {
+      "seq": 289242,
+      "source": "transcript-claude",
+      "kind": "message.corrected",
+      "source_ts": "2026-10-10T11:32:15.891Z",
+      "observed_ts": "2026-10-13T11:53:00.831Z",
+      "payload": {
+        "transcript_flags": {
+          "isCompactSummary": true,
+          "isVisibleInTranscriptOnly": true
+        }
+      }
+    },
+    {
+      "seq": 298560,
+      "source": "transcript-claude",
+      "kind": "message.created",
+      "source_ts": "2026-10-14T00:10:09.552Z",
+      "observed_ts": "2026-10-14T00:10:09.641Z",
+      "payload": {}
+    },
+    {
+      "seq": 298573,
+      "source": "transcript-claude",
+      "kind": "run.created",
+      "source_ts": "2026-10-14T00:10:09.463Z",
+      "observed_ts": "2026-10-14T00:10:10.871Z",
+      "payload": {
+        "state": "unknown",
+        "generation": 1791936609463
+      }
+    },
+    {
+      "seq": 298574,
+      "source": "transcript-claude",
+      "kind": "run.state_changed",
+      "source_ts": "2026-10-14T00:10:09.463Z",
+      "observed_ts": "2026-10-14T00:10:10.871Z",
+      "payload": {
+        "state": "running",
+        "generation": 1791936609463,
+        "last_evidence": {
+          "kind": "turn_started"
+        }
+      }
+    },
+    {
+      "seq": 301024,
+      "source": "transcript-claude",
+      "kind": "observation.unsupported",
+      "source_ts": "2026-10-14T04:57:03.942Z",
+      "observed_ts": "2026-10-14T04:57:03.942Z",
+      "payload": {
+        "count": 5
+      }
+    },
+    {
+      "seq": 301136,
+      "source": "transcript-claude",
+      "kind": "message.created",
+      "source_ts": "2026-10-14T09:08:58.312Z",
+      "observed_ts": "2026-10-14T09:09:00.516Z",
+      "payload": {}
+    },
+    {
+      "seq": 301145,
+      "source": "transcript-claude",
+      "kind": "message.created",
+      "source_ts": "2026-10-14T09:09:13.110Z",
+      "observed_ts": "2026-10-14T09:09:13.981Z",
+      "payload": {}
+    },
+    {
+      "seq": 301161,
+      "source": "transcript-claude",
+      "kind": "run.created",
+      "source_ts": "2026-10-14T09:09:19.857Z",
+      "observed_ts": "2026-10-14T09:09:20.482Z",
+      "payload": {
+        "state": "unknown",
+        "generation": 1791968959857
+      }
+    },
+    {
+      "seq": 301162,
+      "source": "transcript-claude",
+      "kind": "run.state_changed",
+      "source_ts": "2026-10-14T09:09:19.857Z",
+      "observed_ts": "2026-10-14T09:09:20.482Z",
+      "payload": {
+        "state": "running",
+        "generation": 1791968959857,
+        "last_evidence": {
+          "kind": "turn_started"
+        }
+      }
+    },
+    {
+      "seq": 301164,
+      "source": "hook",
+      "kind": "run.updated",
+      "source_ts": "2026-10-14T09:09:19.909Z",
+      "observed_ts": "2026-10-14T09:09:20.522Z",
+      "payload": {
+        "state": "running",
+        "generation": 1791968959355,
+        "last_evidence": {
+          "input": {
+            "hook_event_name": "UserPromptSubmit",
+            "prompt_id": "native-21"
+          }
+        }
+      }
+    },
+    {
+      "seq": 301165,
+      "source": "hook",
+      "kind": "run.created",
+      "source_ts": "2026-10-14T09:09:19.369Z",
+      "observed_ts": "2026-10-14T09:09:20.523Z",
+      "payload": {
+        "state": "idle",
+        "generation": 1791968959355,
+        "last_evidence": {
+          "input": {
+            "hook_event_name": "SessionStart"
+          }
+        }
+      }
+    },
+    {
+      "seq": 301178,
+      "source": "transcript-claude",
+      "kind": "run.state_changed",
+      "source_ts": "2026-10-14T09:09:24.643Z",
+      "observed_ts": "2026-10-14T09:09:27.331Z",
+      "payload": {
+        "state": "idle",
+        "generation": 1791968959857,
+        "last_evidence": {
+          "kind": "turn_completed"
+        }
+      }
+    },
+    {
+      "seq": 301179,
+      "source": "hook",
+      "kind": "run.updated",
+      "source_ts": "2026-10-14T09:09:27.829Z",
+      "observed_ts": "2026-10-14T09:09:27.964Z",
+      "payload": {
+        "state": "ended",
+        "generation": 1791968959355,
+        "last_evidence": {
+          "input": {
+            "hook_event_name": "SessionEnd",
+            "reason": "other",
+            "prompt_id": "native-21"
+          }
+        }
+      }
+    },
+    {
+      "seq": 301180,
+      "source": "hook",
+      "kind": "run.updated",
+      "source_ts": "2026-10-14T09:09:27.254Z",
+      "observed_ts": "2026-10-14T09:09:27.966Z",
+      "payload": {
+        "state": "idle",
+        "generation": 1791968959355,
+        "last_evidence": {
+          "input": {
+            "hook_event_name": "Stop",
+            "prompt_id": "native-21"
+          }
+        }
+      }
+    }
+  ],
+  "E1": {
+    "parent": [
+      {
+        "line": 12136,
+        "row": {
+          "type": "assistant",
+          "timestamp": "2026-10-14T00:10:09.018Z",
+          "version": "2.1.296",
+          "uuid": "native-1",
+          "parentUuid": "native-2",
+          "message": {
+            "role": "assistant",
+            "stop_reason": "tool_use",
+            "id": "native-3",
+            "content": [
+              {
+                "type": "tool_use",
+                "name": "Agent",
+                "id": "native-4",
+                "input": {
+                  "run_in_background": "true"
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "line": 12138,
+        "row": {
+          "type": "user",
+          "timestamp": "2026-10-14T00:10:09.552Z",
+          "version": "2.1.296",
+          "uuid": "native-5",
+          "parentUuid": "native-1",
+          "promptId": "native-6",
+          "message": {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "native-4"
+              }
+            ]
+          },
+          "toolUseResult": {
+            "status": "async_launched",
+            "isAsync": true,
+            "agentId": "native-7"
+          }
+        }
+      }
+    ],
+    "child": [
+      {
+        "line": 1,
+        "row": {
+          "type": "user",
+          "timestamp": "2026-10-14T00:10:09.463Z",
+          "version": "2.1.296",
+          "uuid": "native-8",
+          "parentUuid": null,
+          "promptId": "native-6",
+          "agentId": "native-7",
+          "message": {
+            "role": "user",
+            "content": "<redacted>"
+          }
+        }
+      },
+      {
+        "line": 271,
+        "row": {
+          "type": "assistant",
+          "timestamp": "2026-10-14T00:18:12.045Z",
+          "version": "2.1.296",
+          "uuid": "native-9",
+          "parentUuid": "native-10",
+          "agentId": "native-7",
+          "message": {
+            "role": "assistant",
+            "stop_reason": null,
+            "id": "native-11",
+            "content": [
+              {
+                "type": "tool_use",
+                "name": "Bash",
+                "id": "native-12"
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "lineCount": 271,
+    "lastDescendsFromFirst": true
+  },
+  "E2": {
+    "watches": [
+      {
+        "sent_ts": "2026-10-14T09:08:58.299Z",
+        "baseline_seq": 301134,
+        "state": "failed",
+        "message_id": null,
+        "failed_ts": "2026-10-14T09:09:58.785Z",
+        "id": "cmd-1",
+        "bodyKey": "body-1",
+        "normalizationMatched": true,
+        "receiverCmdIdPresent": false
+      },
+      {
+        "sent_ts": "2026-10-14T09:09:13.099Z",
+        "baseline_seq": 301144,
+        "state": "failed",
+        "message_id": null,
+        "failed_ts": "2026-10-14T09:10:13.310Z",
+        "id": "cmd-2",
+        "bodyKey": "body-2",
+        "normalizationMatched": true,
+        "receiverCmdIdPresent": false
+      }
+    ],
+    "receipts": [
+      {
+        "line": 137,
+        "row": {
+          "type": "user",
+          "timestamp": "2026-10-14T09:08:58.312Z",
+          "version": "2.1.299",
+          "uuid": "native-13",
+          "parentUuid": "native-14",
+          "promptId": "native-15",
+          "message": {
+            "role": "user",
+            "content": "<bash-input>fixture-command-1</bash-input>"
+          }
+        }
+      },
+      {
+        "line": 145,
+        "row": {
+          "type": "user",
+          "timestamp": "2026-10-14T09:09:13.110Z",
+          "version": "2.1.299",
+          "uuid": "native-16",
+          "parentUuid": "native-17",
+          "promptId": "native-18",
+          "message": {
+            "role": "user",
+            "content": "<bash-input>fixture-command-2</bash-input>"
+          }
+        }
+      }
+    ]
+  },
+  "E3": {
+    "rows": [
+      {
+        "line": 5,
+        "row": {
+          "type": "user",
+          "timestamp": "2026-10-14T09:09:19.857Z",
+          "version": "2.1.299",
+          "uuid": "native-19",
+          "parentUuid": "native-20",
+          "promptId": "native-21",
+          "message": {
+            "role": "user",
+            "content": "<redacted>"
+          }
+        }
+      },
+      {
+        "line": 31,
+        "row": {
+          "type": "assistant",
+          "timestamp": "2026-10-14T09:09:24.643Z",
+          "version": "2.1.299",
+          "uuid": "native-22",
+          "parentUuid": "native-23",
+          "message": {
+            "role": "assistant",
+            "stop_reason": "end_turn",
+            "id": "native-24",
+            "content": [
+              {
+                "type": "thinking"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "line": 32,
+        "row": {
+          "type": "assistant",
+          "timestamp": "2026-10-14T09:09:27.149Z",
+          "version": "2.1.299",
+          "uuid": "native-25",
+          "parentUuid": "native-22",
+          "message": {
+            "role": "assistant",
+            "stop_reason": "end_turn",
+            "id": "native-24",
+            "content": [
+              {
+                "type": "text",
+                "text": "<redacted>"
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "E4": {
+    "rows": [
+      {
+        "line": 136,
+        "row": {
+          "type": "user",
+          "timestamp": "2026-10-10T11:32:15.891Z",
+          "version": "2.1.292",
+          "isCompactSummary": true,
+          "isVisibleInTranscriptOnly": true,
+          "uuid": "native-26",
+          "parentUuid": "native-27",
+          "promptId": "native-28",
+          "message": {
+            "role": "user",
+            "content": "<redacted>"
+          }
+        }
+      }
+    ]
+  },
+  "E5": {
+    "rejectedAppends": 5,
+    "locationsAvailable": false
+  },
+  "E6": {
+    "rows": [
+      {
+        "line": 2,
+        "row": {
+          "type": "event_msg",
+          "timestamp": "2026-10-11T08:26:40.092Z",
+          "payload": {
+            "type": "task_started",
+            "turn_id": "native-29"
+          }
+        }
+      },
+      {
+        "line": 8,
+        "row": {
+          "type": "turn_context",
+          "timestamp": "2026-10-11T08:26:41.366Z",
+          "payload": {
+            "turn_id": "native-29"
+          }
+        }
+      },
+      {
+        "line": 42,
+        "row": {
+          "type": "event_msg",
+          "timestamp": "2026-10-11T08:27:21.580Z",
+          "payload": {
+            "type": "item_completed",
+            "turn_id": "native-29"
+          }
+        }
+      },
+      {
+        "line": 43,
+        "row": {
+          "type": "response_item",
+          "timestamp": "2026-10-11T08:27:21.582Z",
+          "payload": {
+            "type": "message",
+            "phase": "commentary",
+            "role": "assistant"
+          }
+        }
+      }
+    ],
+    "lineCount": 43,
+    "terminalCount": 0
+  },
+  "supplemental": [
+    {
+      "line": 1,
+      "row": {
+        "type": "user",
+        "timestamp": "2026-10-15T06:03:58.002Z",
+        "version": "2.1.299",
+        "uuid": "native-30",
+        "parentUuid": null,
+        "promptId": "native-31",
+        "agentId": "native-32",
+        "message": {
+          "role": "user",
+          "content": "<redacted>"
+        }
+      }
+    },
+    {
+      "line": 13,
+      "row": {
+        "type": "assistant",
+        "timestamp": "2026-10-15T06:04:00.582Z",
+        "version": "2.1.299",
+        "uuid": "native-33",
+        "parentUuid": "native-34",
+        "agentId": "native-32",
+        "message": {
+          "role": "assistant",
+          "stop_reason": null,
+          "id": "native-35",
+          "content": [
+            {
+              "type": "text",
+              "text": "<redacted>"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "line": 14,
+      "row": {
+        "type": "assistant",
+        "timestamp": "2026-10-15T06:04:01.532Z",
+        "version": "2.1.299",
+        "uuid": "native-36",
+        "parentUuid": "native-33",
+        "agentId": "native-32",
+        "message": {
+          "role": "assistant",
+          "stop_reason": null,
+          "id": "native-35",
+          "content": [
+            {
+              "type": "tool_use",
+              "name": "Read",
+              "id": "native-37"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "line": 176,
+      "row": {
+        "type": "assistant",
+        "timestamp": "2026-10-15T06:07:04.598Z",
+        "version": "2.1.299",
+        "uuid": "native-38",
+        "parentUuid": "native-39",
+        "agentId": "native-32",
+        "message": {
+          "role": "assistant",
+          "stop_reason": null,
+          "id": "native-40",
+          "content": [
+            {
+              "type": "text",
+              "text": "<redacted>"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "line": 177,
+      "row": {
+        "type": "assistant",
+        "timestamp": "2026-10-15T06:11:18.764Z",
+        "version": "2.1.299",
+        "uuid": "native-41",
+        "parentUuid": "native-38",
+        "agentId": "native-32",
+        "message": {
+          "role": "assistant",
+          "stop_reason": "tool_use",
+          "id": "native-40",
+          "content": [
+            {
+              "type": "tool_use",
+              "name": "Write",
+              "id": "native-42"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "line": 190,
+      "row": {
+        "type": "assistant",
+        "timestamp": "2026-10-15T06:11:39.167Z",
+        "version": "2.1.299",
+        "uuid": "native-43",
+        "parentUuid": "native-44",
+        "agentId": "native-32",
+        "message": {
+          "role": "assistant",
+          "stop_reason": null,
+          "id": "native-45",
+          "content": [
+            {
+              "type": "tool_use",
+              "name": "SubagentHandback",
+              "id": "native-46"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "line": 192,
+      "row": {
+        "type": "user",
+        "timestamp": "2026-10-15T06:11:39.755Z",
+        "version": "2.1.299",
+        "uuid": "native-47",
+        "parentUuid": "native-43",
+        "promptId": "native-48",
+        "agentId": "native-32",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "native-46"
+            }
+          ]
+        },
+        "toolUseResult": {
+          "success": true
+        }
+      }
+    },
+    {
+      "line": 194,
+      "row": {
+        "type": "attachment",
+        "timestamp": "2026-10-15T06:11:39.772Z",
+        "version": "2.1.299",
+        "uuid": "native-49",
+        "parentUuid": "native-50",
+        "agentId": "native-32",
+        "attachment": {
+          "type": "hook_success",
+          "hookEvent": "SubagentStop"
+        }
+      }
+    }
+  ],
+  "synchronous": [
+    {
+      "line": 37,
+      "row": {
+        "type": "assistant",
+        "timestamp": "2026-10-06T17:12:16.537Z",
+        "version": "2.1.291",
+        "uuid": "native-51",
+        "parentUuid": "native-52",
+        "message": {
+          "role": "assistant",
+          "stop_reason": "tool_use",
+          "id": "native-53",
+          "content": [
+            {
+              "type": "tool_use",
+              "name": "Agent",
+              "id": "native-54",
+              "input": {
+                "run_in_background": false
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "line": 39,
+      "row": {
+        "type": "user",
+        "timestamp": "2026-10-06T17:16:00.028Z",
+        "version": "2.1.291",
+        "uuid": "native-55",
+        "parentUuid": "native-51",
+        "promptId": "native-56",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "native-54"
+            }
+          ]
+        },
+        "toolUseResult": {
+          "status": "completed",
+          "agentId": "native-57",
+          "content": [
+            {
+              "type": "text",
+              "text": "<redacted>"
+            },
+            {
+              "type": "text",
+              "text": "<redacted>"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "synchronousChild": {
+    "line": 1,
+    "row": {
+      "type": "user",
+      "timestamp": "2026-10-06T17:12:16.747Z",
+      "uuid": "sync-child-row",
+      "promptId": "native-56",
+      "parentUuid": null,
+      "message": {
+        "role": "user",
+        "content": "<redacted>"
+      }
+    },
+    "parentPromptMatches": true
+  }
+}

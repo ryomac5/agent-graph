@@ -14,6 +14,8 @@ import { currentRootConversation, selectRoots } from '../lib/roots.ts';
 import { isWorkingTurn, publishTurns, resolveWorkingTurn, workingElapsed } from '../lib/turns.ts';
 import * as conversationModel from '../components/conversation/model.ts';
 import * as activityModel from '../lib/activity.ts';
+import { createSessionEndFacts, SESSION, RESUME } from '../../../../core/test/ledger/fixtures/session-end.ts';
+import { recordTransitions, selectTurns } from '../lib/turns.ts';
 
 const START = '2026-10-11T00:00:00Z';
 const NOW = Date.parse(START) + 192_000;
@@ -27,6 +29,46 @@ beforeEach(() => {
 afterEach(() => { cleanup(); publishTurns(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 const client: ConversationClient = { command: async name => ({ type: 'ack', cmd_id: 'cmd', ok: true,
   result: name === 'session.hosts' ? { hosts: [] } : name === 'list_models' ? [] : {} }) };
+it('reopens the projected SessionEnd run in the row, tab and Working indicator; unread starts only at Stop', async () => {
+  const target = createStore();
+  const canonicalId = JSON.stringify(['claude', SESSION]);
+  const facts = createSessionEndFacts().map(fact => ({ ...fact,
+    payload: { ...fact.payload, conversation_id: canonicalId } })) as Fact[];
+  const conversation: Fact = { ...facts[0], fact_id: 'conversation', source_event_id: 'conversation',
+    kind: 'conversation.created', subject: `conversation:${canonicalId}`,
+    payload: { provider: 'claude', native_id: SESSION, origin: 'observed', type: 'interactive', user_name: 'Resumed session', repository_id: 'repo' } };
+  function update(count: number) {
+    const projection = JSON.parse(JSON.stringify(project([conversation, ...facts.slice(0, count)])));
+    target.setSnapshot({ seq: count, generation: 1, projection: { ...projection,
+      projects: [{ id: 'repo', display_name: 'Repo', root_path: '/repo', state: 'registered' }] } });
+  }
+  update(2);
+  const ended = selectRoots(target.getSnapshot());
+  expect(ended[0].state).toBe('ended');
+  vi.setSystemTime(Date.parse(RESUME) + 40_000);
+  update(3);
+  const running = selectRoots(target.getSnapshot());
+  expect(running[0].state).toBe('running');
+  const history = recordTransitions(ended, running, { read: {}, ready: {}, recent: [] });
+  expect(selectTurns(target.getSnapshot(), history)).toEqual([]);
+  const view = render(<MemoryRouter initialEntries={['/p/repo?root=' + encodeURIComponent(running[0].id)]}>
+    <RootList roots={running} state={target.getSnapshot()} language="en"/>
+    <WorkspacePage project="repo" target={target} client={client}/>
+  </MemoryRouter>);
+  await act(async () => {});
+  expect(screen.getByRole('status', { name: 'Working' }).textContent).toContain('40s');
+  expect(document.querySelector('.root-row .activity-mark')?.getAttribute('data-state')).toBe('running');
+  expect(within(screen.getByRole('tablist', { name: 'Workspace tabs' })).getByRole('tab', { selected: true }).querySelector('.status-running')).toBeTruthy();
+  act(() => update(4));
+  expect(screen.queryByRole('status', { name: 'Working' })).toBeNull();
+  const idle = selectRoots(target.getSnapshot());
+  expect(idle[0].state).toBe('idle');
+  const ready = recordTransitions(running, idle, history);
+  const turns = selectTurns(target.getSnapshot(), ready);
+  expect(turns.map(turn => turn.kind)).toEqual(['idle']);
+  expect(selectTurns(target.getSnapshot(), { ...ready, read: { [turns[0].conversationId]: turns[0].time } })).toEqual([]);
+  view.unmount();
+});
 function setup(state = 'idle') {
   const target = createStore();
   target.setSnapshot({ seq: 1, generation: 0, projection: {

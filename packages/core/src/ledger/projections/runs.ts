@@ -40,8 +40,37 @@ function confirmEnd(fact: Fact, run: RunProjection, evidence: { [key: string]: J
   }
 }
 
+function matchClaudeConversation(left: string, right: string): boolean {
+  const normalize = (id: string) => id.startsWith("claude:") ? JSON.stringify(["claude", id.slice("claude:".length)]) : id;
+  return normalize(left) === normalize(right);
+}
+
+function canResumeSession(fact: Fact, run: RunProjection, payload: Partial<RunPayload>): boolean {
+  if (run.state !== "ended" || readObject(run.end_evidence)?.kind !== "session_end"
+    || fact.confidence !== "confirmed" || payload.state !== "running"
+    || payload.generation !== run.generation || !payload.conversation_id
+    || !matchClaudeConversation(payload.conversation_id, run.conversation_id)) return false;
+  const evidence = readObject(payload.last_evidence);
+  const sessionId = readObject(evidence?.input)?.session_id;
+  if (sessionId !== undefined && (typeof sessionId !== "string"
+    || !matchClaudeConversation(`claude:${sessionId}`, run.conversation_id))) return false;
+  const startsTurn = fact.source === "hook" && evidence?.hook_event_name === "UserPromptSubmit" && evidence.auxiliary !== true
+    || fact.source === "transcript-claude" && evidence?.kind === "turn_started";
+  const ended = Date.parse(run.ended_ts ?? "");
+  return startsTurn && Date.parse(fact.source_ts) > ended
+    && Date.parse(payload.last_evidence_ts ?? fact.source_ts) > ended;
+}
+
 /** 各世代は独立した run subject を使う。同じ subject の再登録も世代別に分離する。 */
 export function projectRuns(facts: readonly Fact[]): RunProjection[] {
+  return projectRunHistory(facts).runs;
+}
+
+/** 再開後も、終了前の未配達入力を復活させないための境界を残す。 */
+export function projectRunHistory(facts: readonly Fact[]): {
+  runs: RunProjection[]; ends: { conversation_id: string; ended_ts: string }[];
+} {
+  const ends: { conversation_id: string; ended_ts: string }[] = [];
   const runs = new Map<string, RunProjection>();
   const currentGeneration = new Map<string, number>();
   const hookStates = new Set<string>();
@@ -96,7 +125,17 @@ export function projectRuns(facts: readonly Fact[]): RunProjection[] {
     const launch = (fact.payload as { launch?: JsonValue }).launch;
     if (launch !== undefined) run.launch = launch;
     const evidence = readObject(payload.end_evidence);
-    const terminal = run.state === "ended" || run.state === "failed";
+    const resumes = canResumeSession(fact, run, payload);
+    // SessionEnd は同じ世代の新しいターンで覆せる。ホストの終了などは覆さない。
+    if (resumes) {
+      delete run.ended_ts;
+      delete run.end_evidence;
+      delete run.cause;
+    }
+    const confirmsLaterEnd = run.state === "ended" && readObject(run.end_evidence)?.kind === "session_end"
+      && (payload.state === "ended" || payload.state === "failed" && payload.cause)
+      && evidence && confirmEnd(fact, run, evidence);
+    const terminal = (run.state === "ended" || run.state === "failed") && !resumes && !confirmsLaterEnd;
     // ターンの根拠のない live な状態は、状態の規則に従って不明にする。
     const unobserved = rejectUnobservedLiveState(fact);
     if (payload.state && !terminal && !auxiliaryState && unobserved) {
@@ -116,8 +155,10 @@ export function projectRuns(facts: readonly Fact[]): RunProjection[] {
             run.reason = "missing_failure_cause";
           } else {
             run.end_evidence = interrupted ? { ...evidence, interrupted: true } : { ...evidence };
+            hookStates.delete(key);
             delete run.turn_started_ts;
             run.ended_ts = payload.ended_ts ?? fact.source_ts;
+            ends.push({ conversation_id: run.conversation_id, ended_ts: run.ended_ts });
             if (run.state === "failed") run.cause = payload.cause;
             delete run.reason;
             run.last_evidence = { fact_id: fact.fact_id, kind: fact.kind };
@@ -152,6 +193,6 @@ export function projectRuns(facts: readonly Fact[]): RunProjection[] {
     run.last_evidence_ts ??= fact.source_ts;
     runs.set(key, run);
   }
-  return [...runs.values()].map(normalizeTimestampFields)
-    .sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0);
+  return { runs: [...runs.values()].map(normalizeTimestampFields)
+    .sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0), ends };
 }

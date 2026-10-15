@@ -511,6 +511,13 @@ CREATE TABLE facts (
 世代が新しい実行は、古い世代の PID と開始指紋を引き継がない。
 `unknown` から先へは、根拠のある事実が来たときだけ動く。
 
+外の Claude の `SessionEnd` は、同じ session_id・同じ世代で、終了時刻より後の確認済みの
+`UserPromptSubmit` または履歴の `turn_started` が来た場合に限り `running` へ戻せる。
+単なる `running` の値、idle、道具の通知、受信時刻の新しさだけでは戻さない。
+ホスト終了・プロセス死亡・利用者の訂正などで終了が確定した実行と `failed` は戻さない。
+復帰時は現在の終了情報を外すが、Queued の計算には過去の有効な終了境界を残す。
+実測と制約は `research/2026-10-15-session-end-run-projection.md` を参照する。
+
 #### 接続
 
 接続は、実行と外の手段を結ぶ。種類は `mcp`、`herdr`、`app`、`pid`、`ws` である。

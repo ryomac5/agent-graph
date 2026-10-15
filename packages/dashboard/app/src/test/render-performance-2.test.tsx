@@ -168,11 +168,12 @@ it('does not commit Notifications or ConversationTabHeader on 30 clock ticks', a
   console.info('30 ticks: Notifications commits 0; ConversationTabHeader commits 0; live tab tooltip commits 30');
 });
 
-it('updates root start labels at midnight instead of every second', async () => {
+it('updates root activity labels at midnight instead of every second', async () => {
   vi.useFakeTimers(); vi.setSystemTime(new Date(2026, 9, 13, 23, 58));
   const { target } = createFixture();
   const before = target.getSnapshot();
   target.setSnapshot({ ...before, projection: { ...before.projection, runs: [{ id: 'r', conversation_id: 'c', state: 'idle' }],
+    roots: before.projection.roots.map(root => ({ ...root, last_activity_ts: new Date(2026, 9, 13, 9).toISOString() })),
     messages: [{ ...before.projection.messages[0], source_ts: new Date(2026, 9, 13, 9).toISOString() }],
   } });
   const state = target.getSnapshot();

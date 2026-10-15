@@ -258,6 +258,17 @@ else process.stdout.write(JSON.stringify(await probeLargeLedger(path)));
     const measured = await runChild("probe", path);
     t.diagnostic(JSON.stringify(measured));
     if (measured.socketBlocked) t.diagnostic("TCP listen blocked; measured the API service and its projection feed with the same 500ms polling loop.");
+    // socket の可否によらず、走査ありの容量も独立に固定する。
+    const service = openObservationService({ dbPath: path, readerOnly: true });
+    const feed = new ProjectionFeed(path, service.catchUp);
+    try {
+      const at = Date.now();
+      feed.recordScan({ provider: 'codex', id: `realdata-scan:${at}`, at, status: 'failed', sessions: [], processes: [] });
+      feed.refresh(at);
+      const bytesWithScan = Buffer.byteLength(JSON.stringify(feed.snapshot()));
+      assert.ok(bytesWithScan <= SNAPSHOT_LIMIT_BYTES, `snapshot with scan: ${bytesWithScan}`);
+      t.diagnostic(JSON.stringify({ bytesWithScan }));
+    } finally { feed.close(); service.close(); }
   });
 
   test("realdata: legacy titles, task headings, review names and terminal evidence survive correction and repeated migration", async t => {

@@ -1,7 +1,8 @@
 import { captureNativeRecord } from '../../../../core/src/state/capture.ts';
 import { basename, resolve } from "node:path";
 import { createNativeId, projectConversations } from "../../../../core/src/ledger/index.ts";
-import type { AppendResult, Fact, FactInput, Ledger, RunPayload } from "../../../../core/src/ledger/index.ts";
+import type { AppendResult, Fact, FactInput, JsonValue, Ledger, RunPayload } from "../../../../core/src/ledger/index.ts";
+import { getMessageText } from "../../../../core/src/ledger/projections/messages.ts";
 import { readAppendOnlyFile, type FileLine } from "../files.ts";
 import { defaultLocationResolver, type LocationResolver, type ObservedLocation } from "../location.ts";
 import { findUnsupportedReason, parseRow } from "./index.ts";
@@ -104,8 +105,11 @@ export function observeClaudeContext(ledger: Ledger, path: string, options: Clau
     }
     if (!turns) continue;
     const native = captureNativeRecord("claude", row);
-    const message = row.message as { model?: string } | undefined;
-    const model = message?.model && message.model !== '<synthetic>' ? message.model : undefined;
+    const message = row.message as { model?: string; content?: JsonValue } | undefined;
+    const confirmedModel = row.type === "user"
+      ? /^\s*<local-command-stdout>Set model to\s+([^<\r\n]+)<\/local-command-stdout>\s*$/u.exec(getMessageText(message?.content ?? null))?.[1].trim().replace(/^`([^`]+)`$/u, "$1")
+      : undefined;
+    const model = confirmedModel || (message?.model && message.model !== '<synthetic>' ? message.model : undefined);
     if (!native && !model) continue;
     const time = Date.parse(timestamp);
     // 行より前に始まった実行のうち、最も新しいものに結ぶ。

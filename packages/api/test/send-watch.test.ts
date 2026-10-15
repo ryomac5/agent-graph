@@ -221,6 +221,19 @@ test('本文の包みは API で正規化し、画面では同文を照合しな
   assert.equal(normalizeSentBody('<bash-input>echo hello</bash-input>'), '!echo hello');
 });
 
+for (const body of ['! echo delivered', '!echo delivered', '!  echo delivered  ']) {
+  test(`9-bang: bash-input と送信を現在の配達規則で照合する: ${body}`, t => {
+    const f = createFixture(t);
+    record(f, body);
+    addMessage(f, 'wrong', '<bash-input> echo other</bash-input>');
+    addMessage(f, 'output', '<bash-stdout>echo delivered</bash-stdout>');
+    assert.equal(f.decide('send', NOW + 1000).value, 'emitted');
+    addMessage(f, 'delivered', '<bash-input> echo delivered</bash-input>');
+    assert.equal(f.decide('send', NOW + SEND_WATCH_TIMEOUT_MS).value, 'received_candidate');
+    assert.equal(f.read('send', NOW + SEND_WATCH_TIMEOUT_MS)?.message_id, 'delivered');
+  });
+}
+
 test('本番 API 経路は送出前に永続化し、seq 不変でも期限を配信する', async t => {
   const f = createFixture(t); const a = await createApiFixture(t, f);
   try {

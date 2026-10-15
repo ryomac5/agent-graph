@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import { evaluateDelivery } from '../../../core/src/state/index.ts';
+import { evaluateDelivery, normalizeShellInput } from '../../../core/src/state/index.ts';
 import { SESSION_SCAN_VALID_MS, type SessionScan } from './session-scan.ts';
 import type { DeliveryDecision, DeliveryEvidence, Operation, Receipt } from '../../../core/src/state/index.ts';
 import { getMessageText } from '../../../core/src/ledger/projections/messages.ts';
@@ -15,9 +15,7 @@ export function normalizeSentBody(body: unknown): string {
   const text = getMessageText(body as JsonValue);
   const command = /<command-name>([^<]+)<\/command-name>/u.exec(text)?.[1];
   if (command) return `${command} ${/<command-args>([\s\S]*?)<\/command-args>/u.exec(text)?.[1] ?? ''}`.trim();
-  const shell = /<bash-input>([\s\S]*?)<\/bash-input>/u.exec(text)?.[1];
-  if (shell !== undefined) return `!${shell}`;
-  return text.replace(/<\/?pasted_content\b[^>]*>/gu, '').replace(/\[Image #\d+\]/gu, '').trim();
+  return normalizeShellInput(text.replace(/<\/?pasted_content\b[^>]*>/gu, '').replace(/\[Image #\d+\]/gu, ''));
 }
 const bodyKey = (body: unknown) => createHash('sha256').update(normalizeSentBody(body)).digest('hex');
 

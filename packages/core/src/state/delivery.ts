@@ -38,6 +38,11 @@ export type DeliveryEvidence = Operation | Binding | Receipt | TerminalEvidence 
 export interface DeliveryInput { cmdId: string; evidence: readonly DeliveryEvidence[] }
 export interface DeliveryPolicy { deadlineMs: number; clockSkewMs: number }
 export const DEFAULT_DELIVERY_POLICY: Readonly<DeliveryPolicy> = Object.freeze({ deadlineMs: 60_000, clockSkewMs: 0 });
+/** 端末の送信と履歴の包みを同じ照合語にする。出力の札は受領に使わない。 */
+export function normalizeShellInput(text: string): string {
+  return text.trim().replace(/^(?:!\s*([\s\S]*?)|<bash-input>([\s\S]*?)<\/bash-input>)$/u,
+    (_whole, command: string | undefined, bash: string | undefined) => `!${(command ?? bash ?? '').trim()}`);
+}
 export interface DeliveryDecision extends Decision<DeliveryState> {
   evaluatedAt: number;
   display: "Sending" | "Delivered" | "Queued" | "Likely delivered" | "Likely queued" | "Unconfirmed" | "Not delivered" | "Handled in terminal";

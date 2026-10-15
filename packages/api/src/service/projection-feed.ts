@@ -311,7 +311,7 @@ export class ProjectionFeed {
         const current = this.current?.conversations.get(String(row.id));
         return { id: row.id, provider: row.provider, origin: row.origin, type: row.type, task_id: row.task_id,
           kit_name: row.kit_name, user_name: row.user_name, created_ts: row.created_ts, name: row.name,
-          name_is_provisional: row.name_is_provisional === 1, ai_title: row.ai_title, first_request_excerpt: row.first_request_excerpt,
+          name_is_provisional: row.name_is_provisional === 1, ai_title: row.ai_title ?? undefined, first_request_excerpt: row.first_request_excerpt,
           cwd: row.cwd, hidden: row.hidden, project: row.project, project_state: row.project_state,
           message_count: row.message_count, last_message_ts: row.last_message_ts, last_message_excerpt: row.last_message_excerpt,
           state: current?.state ?? 'unknown', current_run_id: current?.id,

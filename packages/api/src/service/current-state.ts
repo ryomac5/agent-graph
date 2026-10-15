@@ -19,8 +19,10 @@ function identifyDecision(decision: StateDecision, input: StateInput): string {
   // 走査の証拠は保持し、識別には照会時刻でなく対象プロセスと結果を使う。
   const evidence = new Map(input.evidence.map(proof => {
     const { id, at, observedAt, ...content } = proof;
+    // 走査の対象はこの実行自身であり、所持の有無は hosted に畳む。対象の ID を残すと、
+    // 同じ内容の判定が実行ごとに別の ID になり、同じ判定を一度だけ配れない。
     const identity = proof.kind === 'scan'
-      ? { ...content, processes: proof.processes?.filter(p => p.pid === input.process?.pid)
+      ? { ...content, subjects: undefined, processes: proof.processes?.filter(p => p.pid === input.process?.pid)
         .map(p => [p.pid, p.procStart]).sort(), hosted: proof.hosted?.includes(input.runId!) }
       : proof.kind === 'signal' && proof.activity === 'session_busy' ? content : id;
     return [id, JSON.stringify(identity)];

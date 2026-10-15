@@ -25,6 +25,34 @@ function readDurableProjection(path: string) {
       db.prepare(`SELECT * FROM ${table}`).all().sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))]));
   } finally { db.close(); }
 }
+// 今の状態の patch は台帳の seq を進めず（from_seq === seq）、判定と評価時刻だけを配り直す。
+// state-decisions.md「API と画面への接続」: 事実の seq が進まなくても期限で再評価し、評価時刻は patch の外側の evaluated_at で配る。
+// state-contract.md 6.3: 画面の接続には最新の版を返す。hello への応答は、再送の patch の後に今の状態の patch を 1 件送る。
+const CURRENT_STATE_TABLES = ["runs", "state_decisions", "conversations", "roots"];
+function assertCurrentStatePatch(patch: any, seq: number): void {
+  assert.equal(patch.type, "patch");
+  assert.equal(patch.from_seq, seq);
+  assert.equal(patch.seq, seq);
+  assert.equal(typeof patch.evaluated_at, "number");
+  for (const table of Object.keys(patch.changes)) assert.ok(CURRENT_STATE_TABLES.includes(table), `${table} is not current state`);
+}
+// S17 の実行の行を、長く残る投影の欄と今の状態の欄に分けて確かめる。
+// 長く残る欄（expected.run）は台帳から作り直せるので、配信の行と永続の runs 表の両方で厳密に一致させる。
+// 今の状態の欄（state と判定）は走査の証拠と評価時刻から作られ、作り直しでは再現しない。与えた走査ごとの期待と比べる。
+function assertS17Run(projection: any, durable: Record<string, any[]>, expectedRun: Record<string, unknown>,
+  current: { state: string; hosting: string }, hostingEvidence: string[]): void {
+  assert.equal(projection.runs.length, 1);
+  assert.equal(durable.runs.length, 1);
+  for (const [key, value] of Object.entries(expectedRun)) {
+    assert.deepEqual(projection.runs[0][key], value);
+    assert.deepEqual(durable.runs[0][key], value);
+  }
+  const decision = projection.state_decisions.find((row: any) => row.id === projection.runs[0].decision_id);
+  assert.ok(decision, "run decision is delivered with the run");
+  assert.equal(projection.runs[0].state, current.state);
+  assert.equal(decision.hosting.value, current.hosting);
+  assert.deepEqual(decision.hosting.evidenceIds, hostingEvidence);
+}
 function createFixture(t: TestContext) {
   const directory = mkdtempSync(join(tmpdir(), "ag-ws-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
@@ -100,10 +128,18 @@ async function connect(api: ApiServer, seq = 0, extra: object = {}) {
   await new Promise<void>((resolve, reject) => { socket.once("open", resolve); socket.once("error", reject); });
   socket.send(JSON.stringify({ type: "hello", seq, ...extra }));
   await new Promise<void>((resolve) => { socket.once("pong", resolve); socket.ping(); });
-  return { socket, messages, send(message: object) { socket.send(JSON.stringify(message)); },
-    async next(type: string) {
-      await waitUntil(() => messages.some((message) => message.type === type));
-      return messages.splice(messages.findIndex((message) => message.type === type), 1)[0];
+  async function next(type: string) {
+    await waitUntil(() => messages.some((message) => message.type === type));
+    return messages.splice(messages.findIndex((message) => message.type === type), 1)[0];
+  }
+  return { socket, messages, next, send(message: object) { socket.send(JSON.stringify(message)); },
+    // 台帳の seq を進める patch を待つ。間に届く再評価の patch は、今の状態の patch であることを確かめてから読み飛ばす。
+    async nextLedgerPatch() {
+      for (;;) {
+        const patch = await next("patch");
+        if (patch.from_seq < patch.seq) return patch;
+        assertCurrentStatePatch(patch, patch.seq);
+      }
     } };
 }
 async function snapshot(api: ApiServer) {
@@ -120,9 +156,12 @@ testSocket("patch replay, subscription, evt delta and 500ms ledger tracking with
   t.after(() => api.close());
   await waitUntil(() => api.runner.available);
   const client = await connect(api);
+  assertCurrentStatePatch(await client.next("patch"), 0);
   service.ledger.append(facts[0]);
-  const patch = await client.next("patch");
+  const patch = await client.nextLedgerPatch();
+  assert.equal(patch.from_seq, 0);
   assert.equal(patch.seq, 1);
+  // 実行の判定が変わらない patch は state_decisions を載せない。
   assert.deepEqual(Object.keys(patch.changes), ["delegations"]);
   assert.equal(patch.changes.delegations.upsert[0].id, "s17");
   client.socket.terminate();
@@ -131,12 +170,19 @@ testSocket("patch replay, subscription, evt delta and 500ms ledger tracking with
   // snapshot の位置を境界にし、切断中の差分が保持されたことを確かめる。
   assert.equal((await snapshot(api)).seq, 2);
   const resumed = await connect(api, 1);
-  assert.equal((await resumed.next("patch")).seq, 2);
+  const replayed = await resumed.next("patch");
+  assert.equal(replayed.from_seq, 1);
+  assert.equal(replayed.seq, 2);
+  assertCurrentStatePatch(await resumed.next("patch"), 2);
   const scoped = await connect(api, 2, { scope: { tables: ["runs"] } });
+  assertCurrentStatePatch(await scoped.next("patch"), 2);
   service.ledger.append(facts[2]);
   runner.publish({ type: "evt", seq: 3 });
-  const scopedPatch = await scoped.next("patch");
-  assert.deepEqual(Object.keys(scopedPatch.changes), ["runs"]);
+  const scopedPatch = await scoped.nextLedgerPatch();
+  // runs の行は decision_id だけを持ち、判定の本体は同じ patch の state_decisions で届く。
+  // state-decisions.md「API と画面への接続」: state_decisions とその decision_id を配る。runs の購読は判定も含む。
+  assert.deepEqual(Object.keys(scopedPatch.changes), ["runs", "state_decisions"]);
+  assert.deepEqual(scopedPatch.changes.state_decisions.upsert.map((row: any) => row.id), [scopedPatch.changes.runs.upsert[0].decision_id]);
   resumed.send({ type: "hello", seq: 3, scope: { conversations: [scopedPatch.changes.runs.upsert[0].conversation_id] } });
   await new Promise<void>(resolve => { resumed.socket.once("pong", resolve); resumed.socket.ping(); });
   runner.publish({ type: "evt", delta: { runId: "child", text: "hello" } });
@@ -151,10 +197,14 @@ testSocket("resync after retention exhaustion and projection rebuild", async (t)
   const api = await startWebSocketServer(service, { port: 0, runnerPath, patchRetention: 1 });
   t.after(() => api.close());
   const client = await connect(api);
+  assertCurrentStatePatch(await client.next("patch"), 0);
+  // 保持数 1 を使い切るには、seq 1 と seq 2 を別々の patch にする。
   service.ledger.append(facts[0]);
-  await client.next("patch");
+  assert.equal((await client.nextLedgerPatch()).seq, 1);
   service.ledger.append(facts[1]);
-  await client.next("patch");
+  const second = await client.nextLedgerPatch();
+  assert.equal(second.from_seq, 1);
+  assert.equal(second.seq, 2);
   const old = await connect(api, 0);
   assert.equal((await old.next("resync")).type, "resync");
   const current = await snapshot(api);
@@ -249,8 +299,10 @@ testSocket("S17: api restart keeps delegation running, starts once and rebuilds 
   assert.equal(runner.starts, expectedLedger.starts);
   const expected = JSON.parse(readFileSync(new URL("./samples/S17/expected-projection.json", import.meta.url), "utf8"));
   for (const [key, value] of Object.entries(expected.delegation)) assert.deepEqual(result.projection.delegations[0][key], value);
-  for (const [key, value] of Object.entries(expected.run)) assert.deepEqual(result.projection.runs[0][key], value);
-  const detail = await (await fetch(`${api.url}/conversation?id=${encodeURIComponent(result.projection.runs[0].conversation_id)}`, { headers: { "x-agent-graph-token": api.token } })).json() as any;
+  // 成功した走査に child の登録がないので、所持は期限付きの not_hosted になる（R06、R10）。
+  // 代表表示は Not hosted が Unknown より先に当たる（R32）。走査のない評価の unknown とは別の期待である。
+  assertS17Run(result.projection, durableProjection, expected.run, expected.current_run.succeeded_scan_without_session, ["s17-current-scan"]);
+  const detail = await (await fetch(`${api.url}/conversation?id=${encodeURIComponent(String(result.projection.runs[0].conversation_id))}`, { headers: { "x-agent-graph-token": api.token } })).json() as any;
   assert.equal(result.projection.messages, undefined);
   assert.deepEqual(detail.projection.messages, []);
   restarted.rebuild();
@@ -321,7 +373,8 @@ test("S17 durable recovery, replay and rebuild are verifiable without sockets", 
   const durableProjection = readDurableProjection(dbPath);
   const expected = JSON.parse(readFileSync(new URL("./samples/S17/expected-projection.json", import.meta.url), "utf8"));
   for (const [key, value] of Object.entries(expected.delegation)) assert.deepEqual(result.delegations[0][key], value);
-  for (const [key, value] of Object.entries(expected.run)) assert.deepEqual(result.runs[0][key], value);
+  // 走査がなければ所持は判定できず、turn の証拠もないので Unknown になる（R06、R32）。
+  assertS17Run(result, durableProjection, expected.run, expected.current_run.without_scan, []);
   const detail = feed.conversation(String(result.runs[0].conversation_id));
   assert.equal(result.messages, undefined);
   assert.deepEqual(detail.projection.messages, []);

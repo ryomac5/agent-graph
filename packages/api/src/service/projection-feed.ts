@@ -540,7 +540,8 @@ export class ProjectionFeed {
       patch.identities = { conversations: { ...referenced.conversations, ...identities?.conversations },
         runs: { ...referenced.runs, ...identities?.runs } };
     }
-    patch.changes.state_decisions = { upsert: [...this.decisions.values()], remove: [] };
+    // 他の表と同じく、変わった判定がある patch にだけ載せる。空の表を変更として配らない。
+    if (this.decisions.size) patch.changes.state_decisions = { upsert: [...this.decisions.values()], remove: [] };
     return patch;
   }
   replay(seq: number, generation?: number): ProjectionPatch[] | undefined {

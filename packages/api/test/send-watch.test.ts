@@ -18,6 +18,7 @@ import { openObservationService } from '../src/service/index.ts';
 import { ProjectionFeed } from '../src/service/projection-feed.ts';
 import { SendWatch, SEND_WATCH_TIMEOUT_MS, SEND_WATCH_FAILED_RETENTION_MS, SEND_WATCH_CLOSED_RETENTION_MS, SEND_WATCH_PENDING_MAX_AGE_MS, SEND_WATCH_CLEANUP_INTERVAL_MS, normalizeSentBody } from '../src/service/send-watch.ts';
 import { observeClaudeFile } from '../src/observe/claude/index.ts';
+import { createHookFacts } from '../src/hook/index.ts';
 
 const NOW = Date.parse('2026-10-13T10:00:00.000Z');
 const CONVERSATION = JSON.stringify(['claude', 'fixture']);
@@ -43,6 +44,42 @@ function createFixture(t: TestContext, busy = false) {
 function record(f: ReturnType<typeof createFixture>, body = 'Next step') {
   f.watch.record('send', CONVERSATION, body, f.watch.capture(CONVERSATION, NOW));
 }
+test('SessionEnd 後の新ターンを feed と送信監視が作業中として扱い、旧 Queued を復活させない', t => {
+  const f = createFixture(t);
+  const hook = (name: string, now: number) => {
+    for (const fact of createHookFacts({ version: 1, session_id: 'fixture', generation: 1, run_id: 'root',
+      event_id: name, hook_event_name: name, source_ts: new Date(now).toISOString(), managed: false,
+      input: { session_id: 'fixture', reason: 'other' } })) f.ledger.append(fact);
+    f.feed.refresh();
+  };
+  const enqueue = (body: string, now: number) => f.append('conversation.input_queue_changed', `conversation:${CONVERSATION}`,
+    { input_queue_event: { operation: 'enqueue', body } }, now);
+  enqueue('Old input', NOW + 1);
+  hook('SessionEnd', NOW + 1000);
+  enqueue('Queued after end', NOW + 1500);
+  hook('UserPromptSubmit', NOW + 2000);
+  const snapshot = f.feed.snapshot();
+  assert.equal(snapshot.projection.runs[0].state, 'running');
+  assert.equal(snapshot.projection.roots[0].state, 'running');
+  assert.equal(snapshot.projection.runs[0].turn_started_ts, new Date(NOW + 2000).toISOString());
+  const queued = snapshot.projection.conversations[0].pending_inputs as { body: string }[];
+  assert.deepEqual(queued.map(row => row.body), ['Queued after end']);
+  const captured = f.watch.capture(CONVERSATION, NOW + 3000);
+  assert.ok(captured.busy_run);
+  f.watch.record('send', CONVERSATION, 'Next step', captured);
+  const boundary = NOW + 10 * SEND_WATCH_TIMEOUT_MS;
+  f.watch.check(boundary);
+  assert.equal(f.read().state, 'pending');
+  assert.equal(f.read().deadline_ms, null);
+  // 実際の履歴側のターン完了を通し、送信期限が古い SessionEnd に引かれないことを確かめる。
+  f.append('run.state_changed', 'run:root', { state: 'idle', last_evidence: { kind: 'turn_completed' } }, boundary);
+  f.feed.refresh();
+  f.watch.check(boundary + SEND_WATCH_TIMEOUT_MS - 1);
+  assert.equal(f.read().state, 'pending');
+  t.mock.method(console, 'error', () => {});
+  f.watch.check(boundary + SEND_WATCH_TIMEOUT_MS);
+  assert.equal(f.read().state, 'failed');
+});
 test('送信の時刻列を共通の UTC 形式で保存し、期間境界で失敗する', t => {
   const f = createFixture(t);
   const captured = { ...f.watch.capture(CONVERSATION, NOW), sent_ts: '2026-10-13T19:00:00+0900' };

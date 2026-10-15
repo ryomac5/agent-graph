@@ -2,7 +2,7 @@ import type { Fact, JsonValue } from "../facts.ts";
 import { getMessageText } from "./messages.ts";
 import { compareText, projectConversationIds } from "./relations.ts";
 import { normalizeClaudeContent } from "./claude-content.ts";
-import { projectRuns } from "./runs.ts";
+import { projectRunHistory } from "./runs.ts";
 import { normalizeStoredTimestamp } from "../timestamps.ts";
 
 export interface PendingInput {
@@ -20,7 +20,7 @@ export function projectInputQueues(facts: readonly Fact[]): Map<string, PendingI
     .map(fact => [fact.fact_id, fact])).values()].sort((a, b) => compareText(a.source_event_id, b.source_event_id));
   if (!events.length) return queues;
   const ids = projectConversationIds(facts);
-  const runs = projectRuns(facts);
+  const { runs, ends } = projectRunHistory(facts);
   const boundaries = new Map<string, number>();
   const recordBoundary = (conversationId: string, timestamp: string) => {
     const id = ids.get(conversationId) ?? conversationId;
@@ -35,6 +35,7 @@ export function projectInputQueues(facts: readonly Fact[]): Map<string, PendingI
     if (run.started_ts) recordBoundary(run.conversation_id, run.started_ts);
     if (run.ended_ts) recordBoundary(run.conversation_id, run.ended_ts);
   }
+  for (const end of ends) recordBoundary(end.conversation_id, end.ended_ts);
   for (const fact of events) {
     if (fact.kind !== "conversation.input_queue_changed") continue;
     const event = fact.payload?.input_queue_event;

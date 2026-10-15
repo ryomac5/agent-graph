@@ -264,6 +264,20 @@ for (const failure of ['busy', 'exception']) test(`送出前の永続化 ${failu
   } finally { if (failure === 'busy') writer.exec('ROLLBACK'); writer.close(); await a.api.close(); }
 });
 
+test('送出前の永続化は他の書き手の短い書き込みを待ってから runner を呼ぶ', async t => {
+  const f = createFixture(t); const a = await createApiFixture(t, f); const writer = new DatabaseSync(f.path);
+  let sent = 0;
+  t.mock.method(a.api.runner, 'request', async (request: RunnerRequest) => { sent++; return { type: 'res' as const, cmd_id: request.cmd_id, ok: true, result: {} }; });
+  try {
+    // 観測の worker や runner が書き込み中の瞬間に送信しても、利用者の送信を拒否しない。
+    writer.exec('BEGIN IMMEDIATE');
+    const release = setTimeout(() => writer.exec('ROLLBACK'), 100);
+    const ack = await a.command('send-after-lock', 'send', { runId: 'root', input: { text: 'Next step' } });
+    clearTimeout(release);
+    assert.equal(ack.ok, true, JSON.stringify(ack)); assert.equal(sent, 1);
+  } finally { if (writer.isTransaction) writer.exec('ROLLBACK'); writer.close(); await a.api.close(); }
+});
+
 test('本文の保持期限後も cmd_id の墓標を残し、再送せず異なる内容を衝突にする', t => {
   const f = createFixture(t); record(f);
   const captured = f.watch.capture(CONVERSATION, NOW);

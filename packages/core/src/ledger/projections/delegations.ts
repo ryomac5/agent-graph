@@ -88,15 +88,19 @@ export function prepareProjectionFacts(facts: readonly Fact[]): Fact[] {
     }
     return current.kind;
   }
-  return [...byId.values()].filter((fact) => !superseded.has(fact.fact_id))
-    .map((fact) => ({ ...fact, kind: resolveKind(fact), payload: resolvePayload(fact) } as Fact))
-    .sort(compareProjectionFacts);
+  const prepared = [...byId.values()].filter((fact) => !superseded.has(fact.fact_id))
+    .map((fact) => ({ ...fact, kind: resolveKind(fact), payload: resolvePayload(fact) } as Fact));
+  // compareProjectionFacts と同じ順を、時刻の解釈を一件一回にして求める。
+  const times = new Map(prepared.map((fact) => [fact, Date.parse(fact.source_ts)]));
+  return prepared.sort((left, right) => times.get(left)! - times.get(right)! || compareProjectionTies(left, right));
 }
-export function compareProjectionFacts(left: Fact, right: Fact): number {
-  return Date.parse(left.source_ts) - Date.parse(right.source_ts)
-    || left.source_event_id.localeCompare(right.source_event_id)
+function compareProjectionTies(left: Fact, right: Fact): number {
+  return left.source_event_id.localeCompare(right.source_event_id)
     || left.source.localeCompare(right.source)
     || left.fact_id.localeCompare(right.fact_id);
+}
+export function compareProjectionFacts(left: Fact, right: Fact): number {
+  return Date.parse(left.source_ts) - Date.parse(right.source_ts) || compareProjectionTies(left, right);
 }
 export function projectEntityRecords<P extends object>(facts: readonly Fact[], entity: string): (Partial<P> & { id: string })[] {
   const records = new Map<string, Partial<P> & { id: string }>();

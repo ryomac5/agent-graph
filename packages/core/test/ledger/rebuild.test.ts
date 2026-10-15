@@ -708,3 +708,66 @@ test("画面が読む発言の時刻と出所、実行の起動設定と作業�
   assert.equal(message.confidence, "confirmed");
   assert.equal(incremental.approvals[0].requested_ts, "2026-01-01T00:00:04.000Z");
 });
+
+test("証拠だけの実行の事実は表を書き換えず、実体の記録と検索の文書を全件再構築と一致させる", (t) => {
+  const at = (second: number) => `2026-01-01T00:00:${String(second).padStart(2, "0")}.000Z`;
+  const evidence = (id: string, second: number, conversation = "c"): FactInput => ({ source: "transcript-claude", source_event_id: id,
+    source_ts: at(second), confidence: "confirmed", kind: "run.updated", subject: "run:r",
+    payload: { conversation_id: conversation, generation: 1, last_evidence: { native_source: "claude", native_record: { type: "assistant", uuid: id } },
+      last_evidence_ts: at(second) } } as FactInput);
+  const restated = (id: string, second: number): FactInput => ({ source: "ui", source_event_id: id, source_ts: at(second),
+    confidence: "confirmed", kind: "run.updated", subject: "run:r", payload: { conversation_id: "c", generation: 1 } } as FactInput);
+  const base = ALL_ENTITIES.map((input) => ({ ...input, source_ts: at(0) }));
+  const readRecords = (database: DatabaseSync) => ({
+    records: database.prepare("SELECT entity, id, data, last_seq FROM entity_records ORDER BY entity, id").all().map((row) => ({ ...row })),
+    documents: database.prepare("SELECT * FROM search_documents ORDER BY id").all().map((row) => ({ ...row })),
+  });
+  const compare = (database: DatabaseSync, message: string) => {
+    const tables = readTables(database), records = readRecords(database);
+    rebuild(database);
+    assert.deepEqual(readTables(database), tables, message);
+    assert.deepEqual(readRecords(database), records, message);
+  };
+
+  // 投影済みの実行に後の時刻の証拠と対応の繰り返しを足しても、実行・委譲・承認の行は書かない。
+  const fast = openTestLedger(t);
+  for (const input of base) fast.writer.append(input);
+  let cursor = rebuild(fast.database).last_seq;
+  for (const table of ["runs", "delegations", "approvals", "conversations"]) for (const operation of ["INSERT", "UPDATE", "DELETE"]) {
+    fast.database.exec(`CREATE TRIGGER keep_${table}_${operation} BEFORE ${operation} ON ${table} BEGIN SELECT RAISE(ABORT, 'unchanged row'); END`);
+  }
+  fast.writer.append(evidence("e1", 5));
+  fast.writer.append(restated("probe", 6));
+  fast.writer.append(evidence("e2", 7));
+  cursor = applyIncremental(fast.database, cursor).last_seq;
+  const record = JSON.parse(String(fast.database.prepare("SELECT data FROM entity_records WHERE entity = 'run' AND id = 'r'").get()!.data));
+  assert.equal(record.last_evidence.native_record.uuid, "e2");
+  assert.equal(record.last_evidence_ts, at(7));
+  for (const table of ["runs", "delegations", "approvals", "conversations"]) for (const operation of ["INSERT", "UPDATE", "DELETE"]) {
+    fast.database.exec(`DROP TRIGGER keep_${table}_${operation}`);
+  }
+  compare(fast.database, "fast path");
+
+  // 時刻が前後する証拠、別の会話への付け替えと、その後の証拠も、任意の区切りで全件再構築と一致する。
+  const inputs: FactInput[] = [
+    evidence("late", 9), evidence("early", 3), restated("restated", 4),
+    { ...BASE, source_ts: at(8), source_event_id: "relink", kind: "run.updated", subject: "run:r", payload: { conversation_id: "c2", generation: 1 } },
+    evidence("after-relink", 10, "c2"), evidence("old-link", 11),
+    { ...BASE, source_ts: at(12), source_event_id: "state", kind: "run.state_changed", subject: "run:r", payload: { generation: 1, state: "idle" } },
+    evidence("tie", 12),
+  ];
+  for (let seed = 1; seed <= SHUFFLE_REPETITIONS; seed += 1) {
+    const { writer, database } = openTestLedger(t);
+    for (const input of base) writer.append(input);
+    let position = 0, random = seed, last = applyIncremental(database, 0).last_seq;
+    const reordered = shuffleInputs(inputs, seed);
+    while (position < reordered.length) {
+      random = (Math.imul(random, 1664525) + 1013904223) >>> 0;
+      const end = Math.min(position + 1 + random % 3, reordered.length);
+      for (const input of reordered.slice(position, end)) writer.append(input);
+      last = applyIncremental(database, last).last_seq;
+      compare(database, `seed=${seed}, end=${end}`);
+      position = end;
+    }
+  }
+});

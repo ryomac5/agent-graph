@@ -494,13 +494,78 @@ test('Idle の親は進行中の子を Waiting for agents として配り、子�
   f.decision('parent', NOW + 300_003); assert.equal(parent().state, 'idle');
 });
 
-test('直近7日の turn 鍵欠落率は提供元別に集計し、古い実行と未来は分母に入れない', t => {
+test('直近7日の turn 鍵欠落率は提供元別に集計し、古い実行と未来とセッションの開始と終了だけの実行は分母に入れない', t => {
   const f = fixture(t); f.run('keyed'); f.native('keyed', start()); f.run('missing');
   f.run('old', NOW - 8 * 86400_000); f.run('future', NOW + 1);
+  // 依頼のないセッションは開始と終了の hook だけを持つ。turn がないので欠落に数えない。
+  f.run('session-only');
+  for (const [hook, at] of [['SessionStart', NOW], ['SessionEnd', NOW + 1]] as const) f.append('run.updated', 'run:session-only', { conversation_id: f.id('session-only'), generation: 1,
+    last_evidence: { hook_event_name: hook, input: { session_id: 'session-only' } } }, at - 2, 'hook');
   f.append('conversation.created', 'conversation:codex', { provider: 'codex', native_id: 'codex', type: 'interactive' });
   f.append('run.created', 'run:codex', { conversation_id: 'codex', generation: 1, started_ts: new Date(NOW).toISOString() });
   f.decision('keyed', NOW);
   assert.deepEqual(f.feed.current.readTurnCoverage(NOW - 7 * 86400_000), {
     claude: { runs: 2, missing: 1, ratio: 0.5 }, codex: { runs: 1, missing: 1, ratio: 1 },
   });
+});
+
+for (const withStart of [true, false]) test(`事実の多い実行への追記は前回の読み取りの続きから読み、全事実を読み直した結果と一致する（開始時刻${withStart ? 'あり' : 'を事実から補う'}）`, async t => {
+  const { CurrentState } = await import('../src/service/current-state.ts');
+  const f = fixture(t);
+  if (withStart) f.run('big');
+  else {
+    // Codex の観測と同じく、開始時刻のない run.created から実行を始める。
+    f.append('conversation.created', `conversation:${f.id('big')}`, { provider: 'claude', native_id: 'big', type: 'interactive', origin: 'observed' }, NOW);
+    f.append('run.created', 'run:big', { conversation_id: f.id('big'), generation: 1, state: 'unknown', reason: 'missing_state_evidence' }, NOW);
+  }
+  const runId = `${f.id('big')}:1`;
+  let random = 7;
+  const next = (limit: number) => { random = (Math.imul(random, 1664525) + 1013904223) >>> 0; return random % limit; };
+  let clock = NOW, serial = 0;
+  // 一つの turn は依頼・道具の呼び出し・結果・時刻の前後する PostToolUse・完了の原記録からなる。
+  const turn = (name: string) => {
+    const at = (clock += 1000);
+    f.native('big', { type: 'user', uuid: `${name}:user`, promptId: name, message: { content: 'work' } }, at);
+    f.native('big', { type: 'assistant', uuid: `${name}:call`, parentUuid: `${name}:user`, message: { content: [{ type: 'tool_use', id: `${name}:tool`, name: 'Bash' }] } }, at + 10);
+    f.native('big', { type: 'attachment', uuid: `${name}:post`, parentUuid: `${name}:result`, attachment: { type: 'hook_success', hookEvent: 'PostToolUse', toolUseID: `${name}:tool` } }, at + 15);
+    f.native('big', { type: 'user', uuid: `${name}:result`, parentUuid: `${name}:call`, message: { content: [{ type: 'tool_result', tool_use_id: `${name}:tool` }] } }, at + 20);
+    f.native('big', { type: 'system', subtype: 'turn_duration', uuid: `${name}:done`, parentUuid: `${name}:result` }, at + 30);
+  };
+  for (let index = 0; index < 110; index++) turn(`t${index}`);
+  const db = new DatabaseSync(f.path);
+  t.after(() => db.close());
+  const seq = () => Number(db.prepare('SELECT max(seq) AS seq FROM facts').get()!.seq);
+  f.service.catchUp();
+  const incremental = new CurrentState(db, id => id, false);
+  incremental.refresh(seq(), clock);
+  const states = (incremental as unknown as { evidenceStates: Map<string, unknown> }).evidenceStates;
+  assert.ok(states.has(runId), 'large runs keep the reading state');
+  const read = (state: InstanceType<typeof CurrentState>) => {
+    const context = (state as unknown as { contexts: Map<string, { input?: unknown; records?: unknown; files?: unknown; started_ts?: unknown }> }).contexts.get(runId)!;
+    return { input: context.input, records: context.records, files: context.files, started: context.started_ts, decision: state.conversations.get(f.id('big'))?.decision };
+  };
+  let continuedCount = 0, earlier = 0;
+  for (let round = 0; round < 40; round++) {
+    const kind = next(6);
+    const before = states.get(runId);
+    // 0〜1 は後の時刻の追記、2 は証拠のない前の時刻の事実、3 は前の時刻、4 は後から届く親、5 は既知の uuid を別の親で読み直す。
+    if (kind <= 1) turn(`n${round}`);
+    else if (kind === 2) f.append(++earlier % 2 ? 'run.updated' : 'run.created', 'run:big', { conversation_id: f.id('big'), generation: 1, model: `m${round}` },
+      earlier % 2 ? NOW - 1000 * round : NOW - round);
+    else if (kind === 3) f.native('big', { type: 'assistant', uuid: `late${round}`, parentUuid: 't3:user', message: { content: [{ type: 'text', text: 'late' }] } }, NOW + 500);
+    else if (kind === 4) {
+      f.native('big', { type: 'assistant', uuid: `orphan${round}`, parentUuid: `missing${round}`, message: { content: [{ type: 'text', text: 'x' }] } }, (clock += 1000));
+      f.service.catchUp(); incremental.refresh(seq(), clock);
+      f.native('big', { type: 'user', uuid: `missing${round}`, promptId: `p${round}`, message: { content: 'work' } }, (clock += 1000));
+    } else f.native('big', { type: 'user', uuid: 't5:result', parentUuid: 't9:call', message: { content: [{ type: 'tool_result', tool_use_id: 't9:tool' }] } }, (clock += 1000));
+    serial++;
+    f.service.catchUp();
+    incremental.refresh(seq(), clock + 1);
+    if (states.get(runId) === before) continuedCount++;
+    const fresh = new CurrentState(db, id => id, false);
+    fresh.refresh(seq(), clock + 1);
+    assert.deepEqual(read(incremental), read(fresh), `round=${round}, kind=${kind}`);
+  }
+  assert.ok(continuedCount >= 8, `continued ${continuedCount} of ${serial}`);
+  assert.ok(continuedCount < serial, 'out-of-order, late parents and re-read uuids fall back to a full read');
 });

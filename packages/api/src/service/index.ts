@@ -323,12 +323,19 @@ export function openObservationService(options: ObservationOptions = {}) {
   type HistoryConflict = Extract<Fact, { kind: 'observation.unsupported' }>;
   let historyConflicts = new Map<string, HistoryConflict[]>();
   let pendingConflicts = new Set<string>();
+  // snapshot は追記だけなので、競合の記録と置き換えの id は前回の続きから読む。毎周期の全件走査で一時の割り当てを作らない。
+  const historyConflictFacts: HistoryConflict[] = [];
+  const supersededFacts = new Set<string>();
+  let conflictsThrough = 0;
   function readHistoryConflicts(): Map<string, HistoryConflict[]> {
-    const superseded = new Set<string>();
-    for (const fact of snapshot) if (fact.supersedes) superseded.add(fact.supersedes);
+    for (; conflictsThrough < snapshot.length; conflictsThrough += 1) {
+      const fact = snapshot[conflictsThrough];
+      if (fact.supersedes) supersededFacts.add(fact.supersedes);
+      if (fact.kind === 'observation.unsupported' && (String(fact.payload?.reason).startsWith('Conflicting history')
+        || fact.payload?.reason === 'History conflict resolved by full reread')) historyConflictFacts.push(fact);
+    }
     const byPath = new Map<string, HistoryConflict[]>();
-    for (const fact of snapshot) if (fact.kind === 'observation.unsupported' && !superseded.has(fact.fact_id)
-      && (String(fact.payload?.reason).startsWith('Conflicting history') || fact.payload?.reason === 'History conflict resolved by full reread')) {
+    for (const fact of historyConflictFacts) if (!supersededFacts.has(fact.fact_id)) {
       const path = String(fact.payload?.file_path), group = byPath.get(path) ?? [];
       group.push(fact); byPath.set(path, group);
     }

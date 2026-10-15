@@ -13,7 +13,8 @@ import { scanSessions } from '../../packages/api/src/service/session-scan.ts';
 import { evaluateState, readNativeEvidence } from '../../packages/core/src/state/index.ts';
 import { openLedger } from '../../packages/core/src/ledger/index.ts';
 
-// node --expose-gc scripts/e2e/prod-replay.mjs [--db /path/agent-graph.db] [--claude-home /path/.claude] [--codex-home /path/.codex] [--keep]
+// node --expose-gc scripts/e2e/prod-replay.mjs [--db /path/agent-graph.db] [--claude-home /path/.claude] [--codex-home /path/.codex] [--keep] [--inspect <Claude の会話 ID>]
+// --inspect は判定に加えず、取り込み直後の走査でその会話の表示と、競合の印が付いた turn の数を報告する。
 // 終了値: 0=全判定成功、1=不一致、2=読み取りや走査を完了できず未確認。CLI・サーバーは起動しない。
 // 反映 1 秒の予算から poll 500 ms と配信・描画 200 ms を除き、同期 refresh は 300 ms に限る。
 export const MAX_APPEND_REFRESH_MS = 300;
@@ -64,6 +65,26 @@ export function measureAppendRefresh(path, feed, now) {
     return { elapsedMs: performance.now() - start, subject: target.subject, facts: target.facts };
   } finally { ledger.close(); db.close(); }
 }
+// 会話の代表表示、生存、現在の turn の競合の印と、競合の印が付いた turn の数を、全 turn の数と並べて返す。
+export function inspectConversation(feed, scan, nativeId) {
+  const id = JSON.stringify(['claude', nativeId]);
+  const row = feed.current.conversations.get(id);
+  if (!row) return { id, present: false };
+  const decision = row.decision;
+  const session = scan.sessions.find(entry => entry.sessionId === nativeId);
+  const runs = [...feed.current.contexts.values()].filter(context => context.conversation_id === id).map(context => {
+    const evidence = context.input?.evidence ?? [];
+    return { id: context.id, current: context.id === row.id,
+      turns: new Set(evidence.filter(e => e.kind === 'signal' && e.turnId).map(e => e.turnId)).size,
+      conflictTurns: new Set(evidence.filter(e => e.kind === 'conflict').map(e => e.turnId)).size };
+  });
+  const children = [...feed.current.contexts.values()].filter(context => context.parent === id && feed.current.conversations.get(context.conversation_id)?.id === context.id)
+    .map(context => context.decision?.display.label).filter(label => label === 'Working' || label === 'Needs approval').length;
+  return { id, present: true, label: decision.display.label, state: row.state, process: decision.process.value, hosting: decision.hosting.value,
+    turn: decision.turn.value, details: decision.display.details, conflicts: decision.conflicts.length, workingChildren: children,
+    session: session ? { status: session.status, statusUpdatedAt: session.statusUpdatedAt } : null, runs };
+}
+
 export function copyProductionDatabase(sourcePath, destination) {
   const source = new DatabaseSync(sourcePath, { readOnly: true });
   try { source.prepare('VACUUM INTO ?').run(destination); }
@@ -202,11 +223,12 @@ export async function replayProduction(options = {}) {
     const recheckStart = performance.now(); watch.check(scan.at);
     const unrelatedCommitCheckMs = performance.now() - recheckStart;
     const coverage = feed.current.readTurnCoverage(scan.at - RECENT_WINDOW_MS);
+    const inspected = options.inspect ? inspectConversation(feed, scan, options.inspect) : undefined;
     const appendRefresh = measureAppendRefresh(path, feed, scan.at);
     global.gc?.();
     const heapBytes = global.gc ? process.memoryUsage().heapUsed : undefined;
     results.push(...assessReplayMetrics({ appendRefreshMs: appendRefresh?.elapsedMs, heapBytes, coverage }));
-    return { exitCode: replayExitCode(results), results, ingestion, coverage, heapBytes,
+    return { exitCode: replayExitCode(results), results, ingestion, coverage, heapBytes, ...(inspected ? { inspected } : {}),
       timings: { refreshMs, deliveryMs, unrelatedCommitCheckMs, appendRefresh }, ...(options.keep ? { copy: directory } : {}) };
   } catch (error) {
     return { exitCode: 2, results, error: error.message, ...(options.keep ? { copy: directory } : {}) };
@@ -225,6 +247,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   for (let index = 2; index < process.argv.length; index++) {
     const flag = process.argv[index];
     if (flag === '--keep') options.keep = true;
+    else if (flag === '--inspect' && process.argv[index + 1]) options.inspect = process.argv[++index];
     else if (names[flag] && process.argv[index + 1]) options[names[flag]] = process.argv[++index];
     else throw new Error(`Unknown or incomplete argument: ${flag}`);
   }

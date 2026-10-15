@@ -301,8 +301,9 @@ function observeFile(ledger: Ledger, path: string, options: CodexObservationOpti
     const params = readObject(row.params);
     const id = readText(params.threadId) ?? readText(row.threadId) ?? readText(payload.thread_id) ?? readText(payload.threadId) ?? nativeId;
     const timestamp = readTime(row.timestamp, createdTs);
-    if (!supported) { reportUnsupported(line, "Unsupported history mode"); continue; }
+    if (!supported) { if (!line.evidenceOnly) reportUnsupported(line, "Unsupported history mode"); continue; }
     if (line === metaLine || row.type === "session_meta") {
+      if (line.evidenceOnly) continue;
       if (!nativeId) reportUnsupported(line, "Missing thread identifier");
       else if (!readText(meta.timestamp) || !Number.isFinite(Date.parse(String(meta.timestamp)))) reportUnsupported(line, "Invalid session metadata");
       continue;
@@ -318,6 +319,7 @@ function observeFile(ledger: Ledger, path: string, options: CodexObservationOpti
         payload: { conversation_id: identifyConversation(id), generation,
           last_evidence: { native_source: "codex", native_record: native, file_id: fileId }, last_evidence_ts: timestamp } });
     }
+    if (line.evidenceOnly) continue;
     const classification = classifyHistoryRow("codex", row);
     const unclassified = findUnclassifiedKinds("codex", row);
     if (unclassified.length) reportUnsupported(line, `Unclassified history kinds: ${unclassified.map(identifyHistoryKind).join(", ")}`);

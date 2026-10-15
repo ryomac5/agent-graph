@@ -30,6 +30,21 @@ const MAX_OPEN_CONVERSATIONS = 10;
 const PROJECTION_DELIVERY_MS = 25;
 const MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
 const MAX_SESSION_COMMANDS = 256;
+// 送出前の受付の保存は、観測の worker や runner の書き込み、checkpoint と重なると SQLITE_BUSY になる。
+// 主スレッドを止めずに短い間隔で読み直し、この時間内に保存できなければ runner を呼ばずに拒否する。
+const SEND_PERSIST_RETRY_MS = 2_000;
+const SEND_PERSIST_RETRY_DELAY_MS = 20;
+async function persistBeforeSend<T>(operation: () => T): Promise<T> {
+  const deadline = performance.now() + SEND_PERSIST_RETRY_MS;
+  for (;;) {
+    try { return operation(); }
+    catch (error) {
+      const busy = error instanceof Error && "errcode" in error && (Number(error.errcode) & 0xff) === 5;
+      if (!busy || performance.now() >= deadline) throw error;
+      await new Promise(resolve => setTimeout(resolve, SEND_PERSIST_RETRY_DELAY_MS));
+    }
+  }
+}
 export interface WebSocketOptions {
   now?: () => number;
   usage?: UsageOptions;
@@ -225,8 +240,8 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
             const watched = message.command === 'session.send' && typeof message.payload?.conversationId === 'string' && typeof message.payload?.text === 'string';
             if (watched) pollObservation(refresh);
             const terminal = watched ? await sessionHosts.target(message.payload.conversationId) : undefined;
-            const captured = watched ? sendWatch.capture(message.payload.conversationId, now(), terminal) : undefined;
-            if (captured && !sendWatch.begin(message.cmd_id, message.payload.conversationId, message.payload.text, captured, message.payload.attachments)) {
+            const captured = watched ? await persistBeforeSend(() => sendWatch.capture(message.payload.conversationId, now(), terminal)) : undefined;
+            if (captured && !await persistBeforeSend(() => sendWatch.begin(message.cmd_id, message.payload.conversationId, message.payload.text, captured, message.payload.attachments))) {
               sendWatch.check(now());
               const delivery = sendWatch.decision(message.cmd_id);
               const prior = sessionCommands.get(message.cmd_id);
@@ -295,8 +310,8 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
         const watchedInput = ['send', 'start', 'adopt', 'fork'].includes(message.command) && typeof input?.text === 'string';
         if (watchedInput) pollObservation(refresh);
         const destination = message.payload?.conversationId ?? (message.payload?.runId ? feed.runConversation(message.payload.runId) : undefined);
-        const captured = watchedInput && destination ? sendWatch.capture(destination, now(), 'runner', message.payload?.runId) : undefined;
-        if (captured && !sendWatch.begin(message.cmd_id, destination, input.text, captured)) {
+        const captured = watchedInput && destination ? await persistBeforeSend(() => sendWatch.capture(destination, now(), 'runner', message.payload?.runId)) : undefined;
+        if (captured && !await persistBeforeSend(() => sendWatch.begin(message.cmd_id, destination, input.text, captured))) {
           sendWatch.check(now());
           const delivery = sendWatch.decision(message.cmd_id);
           send(socket, { type: 'ack', cmd_id: message.cmd_id, ok: delivery?.reason !== 'cmd_id_conflict', ...(delivery?.reason === 'cmd_id_conflict' ? { error: 'cmd_id_conflict' } : { result: { delivery } }) });

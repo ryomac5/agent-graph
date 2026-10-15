@@ -567,8 +567,9 @@ export class ProjectionFeed {
       conversations.push(row);
     }
     // 名前を持つ subject の履歴だけを読む。解除の null と部分訂正の継承も残す。
+    // seq の範囲から SQLite が全事実の rowid 走査を選ばないよう、起動時に作った名前の部分索引を指定する。
     const facts = decodeFacts(this.prepare(`SELECT * FROM facts WHERE subject IN (
-      SELECT subject FROM facts WHERE kind GLOB 'conversation.*'
+      SELECT subject FROM facts INDEXED BY api_root_name_subject_seq WHERE kind GLOB 'conversation.*'
         AND json_type(payload, '$.user_name') IS NOT NULL AND seq <= ?)
       AND seq <= ? AND kind GLOB 'conversation.*' AND kind != 'conversation.input_queue_changed'`)
       .all(this.state.last_seq, this.state.last_seq));

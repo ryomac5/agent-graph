@@ -96,6 +96,8 @@ export async function runStateJourneys({ check, seed, script, send, reply, idle,
   await check('state-same-text', async () => {
     const session = await seed(); const text = session.marker + ' two terminals';
     await script(session, 'drop-next'); await send(text);
+    // 別端末の入力は、この送信の送出が始まった後に起こす。送出開始より前の同文は R38 で候補にならない。
+    await waitFor(async () => (await watches(session.original)).some(row => row.body === text && row.state !== 'accepted'), 'send emitting before the other terminal types');
     await script(session, 'external-input', { text });
     await waitFor(async () => (await watches(session.original)).some(row => row.body === text && row.decision.display === 'Likely delivered'), 'uncorrelated receipt remains a candidate');
     await script(session, 'external-input', { text });

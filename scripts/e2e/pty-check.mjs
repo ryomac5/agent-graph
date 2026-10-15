@@ -1,0 +1,34 @@
+import assert from 'node:assert/strict';
+import { join } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { assertIsolation, verifyPtyHelper, readActors, waitFor } from './isolation.mjs';
+import { scriptActor } from './journeys.mjs';
+await assertIsolation(); await verifyPtyHelper();
+const { createSessionHosts } = await import('../../packages/api/src/terminal/hosts.ts');
+// TCP を開けない環境での補助試験。製品の PTY・貼り付け・画面解釈は実物を使う。
+// ps の sandbox 拒否だけを避け、既知の直系 PID の session file で発見する。
+const hosts = createSessionHosts(async () => process.env.E2E_PROJECT, { listProcesses: async () => [], warmupMs: 0, quietMs: 0, submitDelayMs: 20 });
+const notices = [];
+const notify = notice => notices.push(notice);
+try {
+  const launch = await hosts.handle('session.launch', { projectId: 'fixture', provider: 'claude' }, notify);
+  const actor = await waitFor(async () => (await readActors(process.env.E2E_CONTROL)).find(row => row.id), 'PTY actor');
+  const id = JSON.stringify(['claude', actor.id]);
+  await waitFor(async () => (await hosts.handle('session.hosts', {}, notify)).hosts.some(host => host.conversationId === id), 'PTY discovery');
+  await hosts.handle('terminal.attach', { terminalId: launch.terminalId }, notify);
+  await hosts.handle('session.send', { conversationId: id, text: 'PTY first' }, notify);
+  await waitFor(async () => (await readFile(actor.path, 'utf8')).includes('E2E reply: PTY first'), 'PTY reply');
+  await scriptActor(process.env.E2E_CONTROL, actor.pid, 'hold-next');
+  await hosts.handle('session.send', { conversationId: id, text: 'PTY working' }, notify);
+  await hosts.handle('session.send', { conversationId: id, text: 'PTY queued' }, notify);
+  await waitFor(async () => (await readFile(actor.path, 'utf8')).includes('"operation":"enqueue"'), 'PTY queue');
+  await scriptActor(process.env.E2E_CONTROL, actor.pid, 'release');
+  const result = await hosts.handle('session.send', { conversationId: id, text: '/model haiku' }, notify);
+  assert.equal(result.command.status, 'interactive');
+  assert.ok(result.command.output.includes('Select model'));
+  await assert.rejects(hosts.handle('session.send', { conversationId: id, text: 'must be blocked' }, notify), /not ready/);
+  await hosts.handle('terminal.input', { terminalId: launch.terminalId, data: 's' }, notify);
+  await waitFor(async () => (await readFile(actor.path, 'utf8')).includes('Set model to'), 'PTY confirmation');
+  assert.ok(!notices.some(notice => notice.data?.includes('must be blocked')));
+  console.log('Real PTY, queue, model panel, double-send rejection: PASS');
+} finally { hosts.close(); }

@@ -1,0 +1,221 @@
+{
+  "extractedAt": "2026-10-15T08:45:10.223Z",
+  "maxSeq": 308440,
+  "provenance": "原記録は読み取り専用。本文・入力・出力・パスを除去し、IDを仮名化。turn対応は結果行のpromptIdと呼び出しID・parentUuidを照合。生存の走査は原記録にないためテスト側の仮定として別に与える。",
+  "bash": {
+    "sessionPrefix": "fea1ff97",
+    "durationMs": 1892567,
+    "turn": {
+      "promptId": "long-1",
+      "resultParentMatchesCall": true,
+      "resultToolMatchesCall": true
+    },
+    "rows": [
+      {
+        "line": 580,
+        "row": {
+          "type": "assistant",
+          "timestamp": "2026-10-11T07:52:29.628Z",
+          "version": "2.1.296",
+          "uuid": "long-2",
+          "parentUuid": "long-3",
+          "message": {
+            "role": "assistant",
+            "stop_reason": "tool_use",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "long-4",
+                "name": "Bash",
+                "input": {}
+              }
+            ]
+          }
+        }
+      },
+      {
+        "line": 588,
+        "row": {
+          "type": "user",
+          "timestamp": "2026-10-11T08:24:02.195Z",
+          "version": "2.1.296",
+          "uuid": "long-5",
+          "parentUuid": "long-2",
+          "promptId": "long-1",
+          "message": {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "long-4",
+                "content": "<redacted>",
+                "is_error": true
+              }
+            ]
+          },
+          "toolUseResult": {}
+        }
+      }
+    ]
+  },
+  "synchronous": {
+    "sessionPrefix": "92d75d6f",
+    "durationMs": 877084,
+    "turn": {
+      "promptId": "long-6",
+      "resultParentMatchesCall": true,
+      "resultToolMatchesCall": true
+    },
+    "rows": [
+      {
+        "line": 33,
+        "row": {
+          "type": "assistant",
+          "timestamp": "2026-10-06T20:32:13.875Z",
+          "version": "2.1.292",
+          "uuid": "long-7",
+          "parentUuid": "long-8",
+          "message": {
+            "role": "assistant",
+            "stop_reason": "tool_use",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "long-9",
+                "name": "Agent",
+                "input": {
+                  "run_in_background": false
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "line": 38,
+        "row": {
+          "type": "attachment",
+          "timestamp": "2026-10-06T20:32:13.890Z",
+          "version": "2.1.292",
+          "uuid": "long-10",
+          "parentUuid": "long-7",
+          "attachment": {
+            "type": "hook_success",
+            "hookEvent": "PreToolUse",
+            "toolUseID": "long-9"
+          }
+        }
+      },
+      {
+        "line": 39,
+        "row": {
+          "type": "user",
+          "timestamp": "2026-10-06T20:46:50.959Z",
+          "version": "2.1.292",
+          "uuid": "long-11",
+          "parentUuid": "long-7",
+          "promptId": "long-6",
+          "message": {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "long-9",
+                "content": "<redacted>"
+              }
+            ]
+          },
+          "toolUseResult": {
+            "status": "completed",
+            "agentId": "long-12",
+            "content": [
+              {
+                "type": "text",
+                "text": "<redacted>"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "line": 40,
+        "row": {
+          "type": "attachment",
+          "timestamp": "2026-10-06T20:46:50.901Z",
+          "version": "2.1.292",
+          "uuid": "long-13",
+          "parentUuid": "long-11",
+          "attachment": {
+            "type": "hook_success",
+            "hookEvent": "PostToolUse",
+            "toolUseID": "long-9"
+          }
+        }
+      }
+    ],
+    "childRows": [
+      {
+        "line": 1,
+        "row": {
+          "type": "user",
+          "timestamp": "2026-10-06T20:32:14.084Z",
+          "version": "2.1.292",
+          "uuid": "long-14",
+          "parentUuid": null,
+          "promptId": "long-6",
+          "message": {
+            "role": "user",
+            "content": "<redacted>"
+          }
+        }
+      },
+      {
+        "line": 327,
+        "row": {
+          "type": "user",
+          "timestamp": "2026-10-06T20:46:10.268Z",
+          "version": "2.1.292",
+          "uuid": "long-15",
+          "parentUuid": "long-16",
+          "promptId": "long-6",
+          "message": {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "long-17",
+                "content": "<redacted>",
+                "is_error": false
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "childPromptMatches": true
+  },
+  "hooks": [
+    {
+      "seq": 305231,
+      "source_ts": "2026-10-15T02:41:06.707Z",
+      "observed_ts": "2026-10-15T02:41:07.088Z",
+      "row": {
+        "hook_event_name": "PreToolUse",
+        "prompt_id": "long-18",
+        "tool_use_id": "long-19",
+        "tool_name": "Agent"
+      }
+    },
+    {
+      "seq": 303631,
+      "source_ts": "2026-10-14T10:17:19.947Z",
+      "observed_ts": "2026-10-14T10:17:19.991Z",
+      "row": {
+        "hook_event_name": "PostToolUse",
+        "prompt_id": "long-20",
+        "tool_use_id": "long-21",
+        "tool_name": "Agent"
+      }
+    }
+  ]
+}

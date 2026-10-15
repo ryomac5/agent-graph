@@ -1,5 +1,5 @@
 import { scanCodexSessions } from '../observe/codex/sessions.ts';
-import { scanSessions, SESSION_SCAN_INTERVAL_MS } from '../service/session-scan.ts';
+import { scanSessions, SESSION_SCAN_INTERVAL_MS, type SessionScan } from '../service/session-scan.ts';
 import { SendWatch } from '../service/send-watch.ts';
 import { addProject, listDirectories } from './projects.ts';
 import { renameSession } from './session-rename.ts';
@@ -74,6 +74,9 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
     const text = JSON.stringify(message);
     feed.recordPatchBytes(patch, text);
     send(socket, message, text);
+  }
+  function readScans(): Promise<SessionScan[]> {
+    return Promise.all([scanSessions(service.sessionDirectory, undefined, now), scanCodexSessions(service.codexHome, undefined, now)]);
   }
   function refresh(): void {
     if (!feed) return;
@@ -319,8 +322,14 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
       server.once("error", reject);
       server.listen(port, "127.0.0.1", () => { server.off("error", reject); resolve(); });
     });
-    feed = new ProjectionFeed(service.dbPath, service.catchUp, options.patchRetention);
+    // 起動時の走査は最初の評価の前に入れる。走査なしで全実行を評価し、直後に全件を評価し直して配らない。
+    const initialScans = await readScans().catch(error => {
+      console.error('Session scan persistence failed:', error instanceof Error ? error.message : 'Unknown failure');
+      return [];
+    });
+    feed = new ProjectionFeed(service.dbPath, service.catchUp, options.patchRetention, initialScans);
     sendWatch = new SendWatch(service.dbPath, options.readRedactionRules);
+    for (const result of initialScans) sendWatch.recordScan(result);
   } catch (error) { sessionHosts.close(); runner.close(); sendWatch?.close(); feed?.close(); files.close(); searchDb.close(); wss.close(); server.close(); throw error; }
   port = (server.address() as { port: number }).port;
   searchOptions.port = port;
@@ -333,11 +342,11 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
   async function scan() {
     if (scanning || stopped) return;
     scanning = true;
-    try { const results = await Promise.all([scanSessions(service.sessionDirectory, undefined, now), scanCodexSessions(service.codexHome, undefined, now)]); if (!stopped) { for (const result of results) { feed.recordScan(result); sendWatch.recordScan(result); } pollObservation(refresh); } }
+    try { const results = await readScans(); if (!stopped) { for (const result of results) { feed.recordScan(result); sendWatch.recordScan(result); } pollObservation(refresh); } }
     catch (error) { console.error('Session scan persistence failed:', error instanceof Error ? error.message : 'Unknown failure'); }
     finally { scanning = false; }
   }
-  await scan();
+  pollObservation(refresh);
   const scanTimer = setInterval(() => { void scan(); }, SESSION_SCAN_INTERVAL_MS);
   const timer = setInterval(() => pollObservation(refresh), PROJECTION_POLL_MS);
   return {

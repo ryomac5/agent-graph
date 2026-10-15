@@ -108,7 +108,7 @@ export class ProjectionFeed {
     if (!statement) { statement = this.db.prepare(sql); this.statements.set(sql, statement); }
     return statement;
   }
-  constructor(path: string, catchUp: () => ProjectionState, limit = PATCH_RETENTION) {
+  constructor(path: string, catchUp: () => ProjectionState, limit = PATCH_RETENTION, scans: readonly SessionScan[] = []) {
     if (!Number.isSafeInteger(limit) || limit < 1) throw new RangeError("Invalid patch retention");
     this.state = catchUp();
     this.observation = (this.state as ProjectionState & { observation?: ObservationProgress }).observation;
@@ -155,6 +155,7 @@ export class ProjectionFeed {
       this.prepare("DELETE FROM api_projection_changes WHERE cursor <= ?").run(this.cursor);
       this.updateInputQueues();
       this.current = new CurrentState(this.db, id => this.conversationId(id));
+      for (const scan of scans) this.current.recordScan(scan);
       this.current.refresh(this.state.last_seq);
       this.roots = this.readRoots();
       this.db.exec("COMMIT");
@@ -341,9 +342,9 @@ export class ProjectionFeed {
     const state = this.catchUp();
     this.observation = (state as ProjectionState & { observation?: ObservationProgress }).observation;
     if (state.generation === this.state.generation && state.last_seq === this.state.last_seq) {
-      if (!this.current.refresh(state.last_seq, now).length) return;
-      this.roots = this.readRoots();
-      return this.currentPatch();
+      const changed = this.current.refresh(state.last_seq, now);
+      if (!changed.length) return;
+      return this.statePatch(changed);
     }
     const previous = this.state;
     const cursor = this.cursor;
@@ -612,12 +613,13 @@ export class ProjectionFeed {
     const current = this.current.runs.get(this.identities.runs[String(row.id)] ?? String(row.id));
     if (!current) return { ...row, state: 'unknown' };
     const decision = current.decision as Record<string, unknown>;
-    let proof = this.decisionRows.get(current);
-    if (!proof) {
+    // 判定は実行の間で共有され、同じ行にも新しい判定が入る。写しは判定ごとに作る。
+    let proof = this.decisionRows.get(decision);
+    if (!proof || proof.id !== String(current.decision_id)) {
       // 評価・走査の時刻は配信に残し、識別には走査結果の中身を使う。
       const { evaluatedAt, ...content } = decision;
       proof = { id: String(current.decision_id), ...content };
-      this.decisionRows.set(current, proof);
+      this.decisionRows.set(decision, proof);
     }
     this.decisions.set(proof.id, proof);
     // 識別の別名は元の行に残し、同じ判定の全体は一度だけ配る。
@@ -637,6 +639,29 @@ export class ProjectionFeed {
         conversations: { upsert: this.readList('conversations', [...this.current.conversations.keys()]), remove: [] },
         roots: { upsert: this.roots as unknown as Record<string, unknown>[], remove: [] },
       } };
+  }
+  /** 時刻と走査だけで変わった実行と、その会話と root だけを配る。変わらない行は作り直さない。 */
+  private statePatch(changedRuns: string[]): ProjectionPatch {
+    this.decisions.clear();
+    const changed = new Set(changedRuns);
+    const runIds = new Set(changed);
+    for (const [alias, id] of Object.entries(this.identities.runs)) if (changed.has(id)) runIds.add(alias);
+    const runs = this.readList('runs', [...runIds]).filter(row => changed.has(this.identities.runs[String(row.id)] ?? String(row.id)));
+    const conversationIds = new Set<string>();
+    for (const id of changed) { const row = this.current.runs.get(id); if (row) conversationIds.add(String(row.conversation_id)); }
+    const previousRoots = new Map(this.roots.map(row => [row.id, JSON.stringify(row)]));
+    this.roots = this.readRoots();
+    const current = new Set(this.roots.map(row => row.id));
+    const roots = { upsert: this.roots.filter(row => JSON.stringify(row) !== previousRoots.get(row.id)) as unknown as Record<string, unknown>[],
+      remove: [...previousRoots.keys()].filter(id => !current.has(id)) };
+    const changes: ProjectionPatch['changes'] = {
+      runs: { upsert: runs, remove: [] },
+      state_decisions: { upsert: [...this.decisions.values()], remove: [] },
+      conversations: { upsert: conversationIds.size ? this.readList('conversations', [...conversationIds]) : [], remove: [] },
+    };
+    if (roots.upsert.length || roots.remove.length) changes.roots = roots;
+    return { type: 'patch', from_seq: this.state.last_seq, seq: this.state.last_seq, generation: this.state.generation,
+      evaluated_at: this.current.evaluatedAt, changes };
   }
   hasRoot(id: string): boolean { return this.roots.some(root => root.id === id); }
   snapshot() {

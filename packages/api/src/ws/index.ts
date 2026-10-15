@@ -1,3 +1,5 @@
+import { scanCodexSessions } from '../observe/codex/sessions.ts';
+import { scanSessions, SESSION_SCAN_INTERVAL_MS } from '../service/session-scan.ts';
 import { SendWatch } from '../service/send-watch.ts';
 import { addProject, listDirectories } from './projects.ts';
 import { renameSession } from './session-rename.ts';
@@ -29,6 +31,7 @@ const PROJECTION_DELIVERY_MS = 25;
 const MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
 const MAX_SESSION_COMMANDS = 256;
 export interface WebSocketOptions {
+  now?: () => number;
   usage?: UsageOptions;
   port?: number;
   runnerPath?: string;
@@ -40,22 +43,12 @@ export interface WebSocketOptions {
 
 export async function startWebSocketServer(service: ReturnType<typeof openObservationService>, options: WebSocketOptions = {}) {
   let feed!: ProjectionFeed;
+  const now = options.now ?? Date.now;
   let sendWatch!: SendWatch;
   let stopped = false;
   function readWatches<T>(read: () => T, fallback: T): T {
     try { return read(); }
     catch (error) { console.error('Send watch failed:', error); return fallback; }
-  }
-  function captureWatch(conversation: string) {
-    return readWatches(() => sendWatch.capture(conversation), undefined);
-  }
-  async function recordWatch(...args: Parameters<SendWatch['recordAccepted']>) {
-    try {
-      await sendWatch.recordAccepted(...args);
-      if (stopped) return;
-      pollObservation(refresh);
-      publishWatches();
-    } catch (error) { console.error('Send watch recording failed:', error); }
   }
   function publishWatches() {
     const rows = sendWatch.list();
@@ -84,7 +77,7 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
   }
   function refresh(): void {
     if (!feed) return;
-    const update = feed.refresh();
+    const update = feed.refresh(now());
     if (update) {
       // 接続がない間も、再接続用の履歴の保持量を制限する。
       if (update !== "resync" && !clients.size) feed.serializePatch(update);
@@ -96,7 +89,7 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
       }
     }
     // 台帳の差分を配り終えてから、補助の見張りを更新する。
-    try { if (sendWatch?.check()) publishWatches(); }
+    try { if (sendWatch?.check(now())) publishWatches(); }
     catch (error) { console.error('Send watch check failed:', error); }
   }
   const runner = new RunnerClient(options.runnerPath ?? runnerSocketPath(), (event) => {
@@ -175,7 +168,7 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
         if (!Number.isSafeInteger(message.seq) || message.seq < 0
           || message.generation !== undefined && (!Number.isSafeInteger(message.generation) || message.generation < 0)
           || tables !== undefined && (!Array.isArray(tables) || tables.some((table: unknown) =>
-            typeof table !== "string" || table !== "projects" && table !== "roots" && !(PROJECTION_TABLES as readonly string[]).includes(table)))
+            typeof table !== "string" || table !== "projects" && table !== "roots" && table !== "state_decisions" && !(PROJECTION_TABLES as readonly string[]).includes(table)))
           || conversations !== undefined && (!Array.isArray(conversations) || conversations.length > MAX_OPEN_CONVERSATIONS || conversations.some((id: unknown) => typeof id !== "string" || !id))) {
           socket.close(1008, "Invalid hello"); return;
         }
@@ -186,11 +179,13 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
           send(socket, { type: "resync", reason: "Patch retention exhausted or projection rebuilt" });
           return;
         }
-        clients.set(socket, { tables: tables === undefined ? undefined : new Set<string>(tables), conversations: new Set<string>(conversations ?? []) });
+        clients.set(socket, { tables: tables === undefined ? undefined : new Set<string>([...tables, ...(tables.includes('runs') ? ['state_decisions'] : [])]), conversations: new Set<string>(conversations ?? []) });
         for (const patch of patches) sendPatch(socket, patch);
+        sendPatch(socket, feed.currentPatch());
         readWatches(() => send(socket, { type: "send_watches", rows: sendWatch.list() }), undefined);
       } else if (message.type === "cmd" && clients.has(socket) && typeof message.cmd_id === "string"
         && message.cmd_id.length > 0 && typeof message.command === "string" && message.command.length > 0) {
+        try {
         if (message.command === 'project.add' || message.command === 'fs.directories') {
           try {
             const result = message.command === 'project.add' ? await addProject(service.appendUi, message) : listDirectories(message.payload);
@@ -222,15 +217,35 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
         if ((TERMINAL_COMMANDS as readonly string[]).includes(message.command)) {
           const hosted = message.command === 'attachment.put' || ['ssh.read', 'ssh.write', 'ssh.test', 'worktree.create', 'git.branches'].includes(message.command) || message.command.startsWith('session.') || message.command === 'terminal.attach' || sessionHosts.hasTerminal(message.payload?.terminalId);
           const retained = ['attachment.put', 'session.launch', 'session.send', 'session.interrupt', 'worktree.create', 'ssh.write'].includes(message.command);
-          let result = retained ? sessionCommands.get(message.cmd_id) : undefined;
+          let result = retained && message.command !== 'session.send' ? sessionCommands.get(message.cmd_id) : undefined;
           if (!result) {
             const watched = message.command === 'session.send' && typeof message.payload?.conversationId === 'string' && typeof message.payload?.text === 'string';
             if (watched) pollObservation(refresh);
-            const captured = watched ? captureWatch(message.payload.conversationId) : undefined;
-            result = hosted ? sessionHosts.handle(message.command, message.payload, notify) : terminals.handle(message.command, message.payload);
+            const terminal = watched ? await sessionHosts.target(message.payload.conversationId) : undefined;
+            const captured = watched ? sendWatch.capture(message.payload.conversationId, now(), terminal) : undefined;
+            if (captured && !sendWatch.begin(message.cmd_id, message.payload.conversationId, message.payload.text, captured, message.payload.attachments)) {
+              sendWatch.check(now());
+              const delivery = sendWatch.decision(message.cmd_id);
+              const prior = sessionCommands.get(message.cmd_id);
+              if (prior && delivery?.reason !== 'cmd_id_conflict') {
+                void prior.then(result => send(socket, { type: 'ack', cmd_id: message.cmd_id, ok: true, result }), () => send(socket, { type: 'ack', cmd_id: message.cmd_id, ok: false, error: 'Terminal request failed' }));
+                return;
+              }
+              send(socket, { type: 'ack', cmd_id: message.cmd_id, ok: delivery?.reason !== 'cmd_id_conflict', ...(delivery?.reason === 'cmd_id_conflict' ? { error: 'cmd_id_conflict' } : { result: { delivery } }) });
+              publishWatches(); return;
+            }
+            let emitting = false;
+            result = hosted ? sessionHosts.handle(message.command, message.payload, notify, captured ? {
+              emitting: target => {
+                if (target !== terminal) throw new Error('no_host');
+                sendWatch.phase(message.cmd_id, 'emitting', now()); emitting = true;
+              }, emitted: () => sendWatch.phase(message.cmd_id, 'emitted', now()),
+            } : undefined) : terminals.handle(message.command, message.payload);
             if (captured) result = result.then(value => {
-              if ((value as SessionSendResult).delivery !== 'terminal') void recordWatch(message.cmd_id, (value as SessionSendResult).conversationId ?? message.payload.conversationId, message.payload.text, captured, message.payload.attachments, message.payload.retryOf);
-              return value;
+              if ((value as SessionSendResult).delivery === 'terminal') sendWatch.handled(message.cmd_id, now());
+              readWatches(() => { sendWatch.check(now()); publishWatches(); }, undefined); return value;
+            }, error => {
+              sendWatch.phase(message.cmd_id, emitting ? 'aborted' : 'rejected', now()); sendWatch.check(now()); publishWatches(); throw error;
             });
             if (hosted) result = result.then(value => {
               const response = value as SessionSendResult;
@@ -277,18 +292,25 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
         const watchedInput = ['send', 'start', 'adopt', 'fork'].includes(message.command) && typeof input?.text === 'string';
         if (watchedInput) pollObservation(refresh);
         const destination = message.payload?.conversationId ?? (message.payload?.runId ? feed.runConversation(message.payload.runId) : undefined);
-        const captured = watchedInput ? captureWatch(destination ?? '') : undefined;
-        if (captured && message.command !== 'send') captured.busy_run = null;
+        const captured = watchedInput && destination ? sendWatch.capture(destination, now(), 'runner', message.payload?.runId) : undefined;
+        if (captured && !sendWatch.begin(message.cmd_id, destination, input.text, captured)) {
+          sendWatch.check(now());
+          const delivery = sendWatch.decision(message.cmd_id);
+          send(socket, { type: 'ack', cmd_id: message.cmd_id, ok: delivery?.reason !== 'cmd_id_conflict', ...(delivery?.reason === 'cmd_id_conflict' ? { error: 'cmd_id_conflict' } : { result: { delivery } }) });
+          publishWatches(); return;
+        }
+        if (captured) sendWatch.phase(message.cmd_id, 'emitting', now());
         void runner.request(forwardScreenCommand(message)).then((result) => {
           const { type, ...ack } = result;
+          if (captured) readWatches(() => { sendWatch.phase(message.cmd_id, result.ok ? 'emitted' : 'aborted', now()); sendWatch.check(now()); publishWatches(); }, undefined);
           send(socket, { type: "ack", ...ack });
-          if (captured && result.ok) {
-            const conversation = (result.result as { conversationId?: string } | undefined)?.conversationId ?? destination;
-            if (conversation) {
-              void recordWatch(message.cmd_id, conversation, input.text, captured, [], message.payload.retryOf);
-            }
-          }
+        }, () => {
+          if (captured) readWatches(() => { sendWatch.phase(message.cmd_id, "aborted", now()); sendWatch.check(now()); publishWatches(); }, undefined);
+          send(socket, { type: "ack", cmd_id: message.cmd_id, ok: false, error: "Runner unavailable" });
         });
+        } catch {
+          send(socket, { type: 'ack', cmd_id: message.cmd_id, ok: false, error: 'Unable to persist send operation' });
+        }
       } else socket.close(1008, "Expected hello or cmd");
     });
   });
@@ -307,6 +329,16 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
     if (deliveryTimer) return;
     deliveryTimer = setTimeout(() => { deliveryTimer = undefined; pollObservation(refresh); }, PROJECTION_DELIVERY_MS);
   });
+  let scanning = false;
+  async function scan() {
+    if (scanning || stopped) return;
+    scanning = true;
+    try { const results = await Promise.all([scanSessions(service.sessionDirectory, undefined, now), scanCodexSessions(service.codexHome, undefined, now)]); if (!stopped) { for (const result of results) { feed.recordScan(result); sendWatch.recordScan(result); } pollObservation(refresh); } }
+    catch (error) { console.error('Session scan persistence failed:', error instanceof Error ? error.message : 'Unknown failure'); }
+    finally { scanning = false; }
+  }
+  await scan();
+  const scanTimer = setInterval(() => { void scan(); }, SESSION_SCAN_INTERVAL_MS);
   const timer = setInterval(() => pollObservation(refresh), PROJECTION_POLL_MS);
   return {
     url: `http://127.0.0.1:${port}`, wsUrl: `ws://127.0.0.1:${port}/ws`, token, runner, feed, previews: files,
@@ -326,6 +358,7 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
       for (const socket of wss.clients) socket.terminate();
       await new Promise<void>((resolve) => wss.close(() => resolve()));
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      clearInterval(scanTimer);
       sendWatch.close();
       feed.close();
       searchDb.close();

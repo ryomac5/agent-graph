@@ -57,8 +57,7 @@ for (const available of [true, false]) test(`worker ingestion backfills a unique
   const f = createFixture(t);
   if (available) writeFileSync(f.promptPath, f.prompt);
   assert.equal(readRolloutRequest(f.childPath)?.prompt, f.prompt);
-  const service = openObservationService({ home: f.home, env: { HOME: f.home }, dbPath: join(f.home, 'ledger.db'), writerOnly: true,
-    codexProcessReader: { listProcesses: () => '', readOpenFiles: () => '' } });
+  const service = openObservationService({ home: f.home, env: { HOME: f.home }, dbPath: join(f.home, 'ledger.db'), writerOnly: true });
   t.after(() => service.close());
   service.ingestOnce();
   const relations = () => service.ledger.readSince(0, Number.MAX_SAFE_INTEGER).filter(fact => fact.kind === 'relation.created');
@@ -73,8 +72,7 @@ for (const available of [true, false]) test(`worker ingestion backfills a unique
 });
 test('ambiguous rollouts and competing launches do not create relations', t => {
   const f = createFixture(t);
-  const service = openObservationService({ home: f.home, env: { HOME: f.home }, dbPath: join(f.home, 'ledger.db'), writerOnly: true,
-    codexProcessReader: { listProcesses: () => '', readOpenFiles: () => '' } });
+  const service = openObservationService({ home: f.home, env: { HOME: f.home }, dbPath: join(f.home, 'ledger.db'), writerOnly: true });
   t.after(() => service.close());
   service.ingestOnce();
   const facts = service.ledger.readSince(0, Number.MAX_SAFE_INTEGER).filter(fact => fact.kind !== 'relation.created');
@@ -109,8 +107,7 @@ test('ambiguous rollouts and competing launches do not create relations', t => {
 
 test('reopening observation backfills previously ingested Claude history when the rollout arrives later', t => {
   const f = createFixture(t);
-  const options = { home: f.home, env: { HOME: f.home }, dbPath: join(f.home, 'ledger.db'), writerOnly: true,
-    codexProcessReader: { listProcesses: () => '', readOpenFiles: () => '' } };
+  const options = { home: f.home, env: { HOME: f.home }, dbPath: join(f.home, 'ledger.db'), writerOnly: true };
   // 最初の周期では時刻の合わない記録だけがある。
   const original = readFileSync(f.childPath, 'utf8');
   writeFileSync(f.childPath, original.replaceAll(rollout.timestamp, '2026-10-11T02:00:00.000Z'));
@@ -129,8 +126,7 @@ test('reopening observation backfills previously ingested Claude history when th
 
 function createPendingObserver(t: TestContext, cacheLimit = 16_384) {
   const f = createFixture(t);
-  const service = openObservationService({ home: f.home, env: { HOME: f.home }, dbPath: join(f.home, 'ledger.db'), writerOnly: true,
-    codexProcessReader: { listProcesses: () => '', readOpenFiles: () => '' } });
+  const service = openObservationService({ home: f.home, env: { HOME: f.home }, dbPath: join(f.home, 'ledger.db'), writerOnly: true });
   t.after(() => service.close());
   // 取り込み時は子の開始を一致させず、未結合の手がかりを用意する。
   const original = readFileSync(f.childPath, 'utf8');

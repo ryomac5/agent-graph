@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { MemoryRouter } from 'react-router';
 import { ConversationPage } from '../pages/conversation/ConversationPage.tsx';
 import { OpenWorkspaceTerminal } from '../lib/workspace-context.ts';
-import { createStore } from '../lib/store.ts';
+import { createStore } from "./current-fixture.ts";
 import type { Ack } from '../lib/client.ts';
 
 const id = '["claude","session"]';

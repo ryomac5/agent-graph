@@ -97,8 +97,8 @@ test("実際の圧縮行の形を読み、人の引用は残し、要約・メ�
   observeClaudeContext(ledger, f.path, { lines: observation.lines, fromStart: true });
   const projection = assertMessages(ledger);
   assert.equal(projection.relations.filter(row => row.type === "compacted").length, 1);
-  assert.equal(projection.runs[0].state, "idle");
-  assert.equal(projection.runs[0].last_evidence_ts, "2026-10-13T04:07:51.000Z");
+  assert.equal(projection.runs[0].state, "unknown");
+  assert.ok(ledger.readSince(0, 1000).some(fact => fact.source_event_id.startsWith("native-record:") && fact.source_ts === "2026-10-13T04:07:51.000Z"));
   assert.deepEqual(projection.conversations[0].pending_inputs ?? [], []);
   applyIncremental(readLedgerDatabase(ledger), 0);
   assertSearch(readLedgerDatabase(ledger));
@@ -286,7 +286,7 @@ for (const flag of CLAUDE_INTERNAL_MESSAGE_FLAGS) {
     feed.refresh();
     const roots = feed.snapshot().projection.roots;
     const runs = project(service.ledger.readSince(0, Number.MAX_SAFE_INTEGER)).runs;
-    const now = Date.parse("2026-10-13T04:08:00.000Z");
+    const now = Date.now();
     const body = "Delivery candidate";
     watch.record("delivery", CONVERSATION, body, watch.capture(CONVERSATION, now));
     const append = (uuid: string, flags: Record<string, boolean>) => {
@@ -297,7 +297,7 @@ for (const flag of CLAUDE_INTERNAL_MESSAGE_FLAGS) {
     };
     append("internal-delivery", { [flag]: true });
     watch.check(now + 1000);
-    assert.equal(watch.list()[0].state, "pending");
+    assert.equal(watch.list()[0].state, "emitted");
     // 未読は根の状態遷移と活動時刻、作業中は run、Queued は pending_inputs を使う。
     assert.deepEqual(feed.snapshot().projection.roots, roots);
     const projection = project(service.ledger.readSince(0, Number.MAX_SAFE_INTEGER));
@@ -305,7 +305,7 @@ for (const flag of CLAUDE_INTERNAL_MESSAGE_FLAGS) {
     assert.deepEqual(projection.conversations[0].pending_inputs ?? [], []);
     append("real-delivery", {});
     watch.check(now + 2000);
-    assert.equal(watch.history(CONVERSATION)[0].state, "closed");
+    assert.equal(watch.history(CONVERSATION)[0].state, "received_candidate");
     assert.equal(watch.history(CONVERSATION)[0].message_id, createNativeId("claude", "real-delivery"));
   });
 }

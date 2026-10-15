@@ -51,11 +51,11 @@ export function createIncrementalRolloutReader(ledger: Ledger, cache = new Map<s
       const previous = cache.get(path);
       const persisted = saved.get(basename(path));
       const checkpoint = previous?.cursor ?? persisted?.fileCursor;
-      const backfill = checkpoint && checkpoint.codexHistoryDetailsVersion !== CODEX_HISTORY_DETAILS_VERSION;
+      const backfill = checkpoint && (!checkpoint.nativeStateEvidence || checkpoint.codexHistoryDetailsVersion !== CODEX_HISTORY_DETAILS_VERSION);
       const reset = checkpoint && (backfill || !previous)
         ? readAppendOnlyFile(path, checkpoint).reset : false;
       const file = readAppendOnlyFile(path, backfill ? undefined : previous?.cursor);
-      file.cursor = { ...file.cursor, codexHistoryDetailsVersion: CODEX_HISTORY_DETAILS_VERSION };
+      file.cursor = { ...file.cursor, nativeStateEvidence: true, codexHistoryDetailsVersion: CODEX_HISTORY_DETAILS_VERSION };
       current = file.cursor;
       cursors = new Map();
       let offset = !backfill && !file.reset && previous ? previous.cursor.offset : 0;

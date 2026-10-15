@@ -81,7 +81,7 @@ export function collectNotifications(previous: ScreenState | undefined, next: Sc
     if (hasHistory && row.state === 'ended') add('completed', row);
   }
   for (const row of next.projection.send_watches ?? []) {
-    if (row.state !== 'failed' || previous?.projection.send_watches?.some(before => before.id === row.id && before.state === 'failed')) continue;
+    if ((row.decision as { display?: string } | undefined)?.display !== 'Not delivered' || previous?.projection.send_watches?.some(before => before.id === row.id && (before.decision as { display?: string } | undefined)?.display === 'Not delivered')) continue;
     notices.push({ id: 'delivery:' + row.id, deliveryId: String(row.id), kind: 'delivery_failed', title: translate(language, 'deliveryFailed'),
       detail: readText(row.body).slice(0, 120), conversationId: readText(row.conversation_id), time: readText(row.failed_ts) });
   }

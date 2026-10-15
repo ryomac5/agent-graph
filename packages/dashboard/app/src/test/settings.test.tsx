@@ -8,7 +8,7 @@ import { loadAppearance, type SettingsSnapshot, type SettingsStatus } from '../l
 import { PREFERENCES_KEY } from '../components/notifications/model.ts';
 import { MemoryRouter } from 'react-router';
 import { App } from '../App.tsx';
-import { createStore } from '../lib/store.ts';
+import { createStore } from "./current-fixture.ts";
 import { readFileSync } from 'node:fs';
 
 beforeEach(() => {

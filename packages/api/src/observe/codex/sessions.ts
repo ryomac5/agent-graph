@@ -1,11 +1,7 @@
 import { spawn } from "node:child_process";
 import { basename, relative, resolve } from "node:path";
-import { createSessionQuery } from "../session-query.ts";
-import type { Ledger } from "../../../../core/src/ledger/index.ts";
+import { readProcessStarts, type SessionScan } from "../../service/session-scan.ts";
 
-const MINUTE_MS = 60_000;
-const PROCESS_POLL_MS = 30_000;
-const STARTUP_GRACE_MS = 2 * MINUTE_MS;
 const COMMAND_TIMEOUT_MS = 5_000;
 const COMMAND_MAX_BYTES = 16 * 1024 * 1024;
 const ROLLOUT_NAME = /^rollout-.*-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
@@ -42,7 +38,7 @@ const processReader: CodexProcessReader = {
 };
 
 async function readLiveConversations(reader: CodexProcessReader, codexHome: string,
-  signal: AbortSignal): Promise<Set<string>> {
+  signal: AbortSignal): Promise<Map<string, number>> {
   const pids = new Set<number>();
   for (const line of (await reader.listProcesses(signal)).split("\n")) {
     if (!line.trim()) continue;
@@ -53,7 +49,7 @@ async function readLiveConversations(reader: CodexProcessReader, codexHome: stri
     if (basename(match[2].trim()) === "codex") pids.add(Number(match[1]));
   }
   signal.throwIfAborted();
-  const live = new Set<string>();
+  const live = new Map<string, number>();
   if (!pids.size) return live;
   const seen = new Set<number>();
   let pid: number | undefined;
@@ -69,7 +65,7 @@ async function readLiveConversations(reader: CodexProcessReader, codexHome: stri
       const match = ROLLOUT_NAME.exec(basename(path));
       const location = relative(sessions, path);
       if (match && path.startsWith("/") && location && !location.startsWith("../") && location !== "..") {
-        live.add(match[1]);
+        live.set(match[1], pid);
       }
     } else if (!line.startsWith("f")) {
       throw new Error("Invalid lsof observation");
@@ -80,58 +76,21 @@ async function readLiveConversations(reader: CodexProcessReader, codexHome: stri
   return live;
 }
 
-/** 実機で確認した、Codex が開いている rollout と会話 ID の対応を使う。 */
-export function createCodexSessionObserver(ledger: Ledger, codexHome: string,
-  reader: CodexProcessReader = processReader, query = createSessionQuery(ledger)) {
-  let lastSignature: string | undefined;
-  let lastScanMs = Number.NEGATIVE_INFINITY;
-  let lastPollMs = Number.NEGATIVE_INFINITY;
-  let pending = false;
-  let completed: { live?: Set<string>; checkedTs: string } | undefined;
-  const controller = new AbortController();
-  function observeCodexSessions(timestamp = new Date().toISOString()): number {
-    const pollMs = Date.parse(timestamp);
-    if (!Number.isFinite(pollMs) || controller.signal.aborted) return 0;
-    const result = completed;
-    completed = undefined;
-    // 完了を受け取ってからも間隔を空け、遅い ps による lsof の連続起動を防ぐ。
-    if (result) lastPollMs = pollMs;
-    if (!pending && pollMs - lastPollMs >= PROCESS_POLL_MS) {
-      lastPollMs = pollMs;
-      pending = true;
-      // 非同期の取得は結果の保管だけを行い、台帳は次の周期で扱う。
-      void readLiveConversations(reader, codexHome, controller.signal).then(live => {
-        if (!controller.signal.aborted) completed = { live, checkedTs: timestamp };
-      }, () => {
-        if (!controller.signal.aborted) completed = { checkedTs: timestamp };
-      }).finally(() => { pending = false; });
+/** 所持の観測を返す。台帳へ idle や終了を書き込まない。 */
+export async function scanCodexSessions(codexHome: string, reader: CodexProcessReader = processReader,
+  now = Date.now, readStarts = readProcessStarts): Promise<SessionScan> {
+  let status: SessionScan['status'] = 'succeeded';
+  let sessions: SessionScan['sessions'] = [], processes: SessionScan['processes'] = [];
+  try {
+    const live = await readLiveConversations(reader, codexHome, new AbortController().signal);
+    const starts = await readStarts();
+    processes = [...starts].map(([pid, procStart]) => ({ pid, procStart }));
+    for (const [sessionId, pid] of live) {
+      const procStart = starts.get(pid);
+      if (!procStart) { status = 'partial'; continue; }
+      sessions.push({ sessionId, pid, procStart, startedAt: Date.parse(procStart) });
     }
-    if (!result?.live) return 0;
-    const { live, checkedTs } = result;
-    const now = Date.parse(checkedTs);
-    const signature = JSON.stringify([...live].sort());
-    if (signature === lastSignature && now - lastScanMs < MINUTE_MS) return 0;
-    lastSignature = signature;
-    lastScanMs = now;
-
-    const minute = Math.floor(now / MINUTE_MS);
-    let appended = 0;
-    for (const run of query.read("codex")) {
-      const { id, subject } = run;
-      if (live.has(run.nativeId)) continue;
-      const lastRecord = Math.max(run.lastRecord, Date.parse(run.last_evidence_ts ?? ""));
-      if (!Number.isFinite(lastRecord) || now - lastRecord <= STARTUP_GRACE_MS) continue;
-      const eventId = `process_absent:${id}:${minute}`;
-      if (query.hasEvent("rollout-codex", eventId)) continue;
-      const result = ledger.append({ source: "rollout-codex", source_event_id: eventId,
-        kind: "run.state_changed", subject, confidence: "confirmed", source_ts: checkedTs, observed_ts: checkedTs,
-        payload: { conversation_id: run.conversation_id, generation: run.generation, state: "idle",
-          last_evidence: { kind: "process_absent", checked_ts: checkedTs }, last_evidence_ts: checkedTs } });
-      if (result.status === "conflict") throw new Error(`Conflicting Codex process observation: ${id}`);
-      if (result.status === "appended") appended += 1;
-    }
-    return appended;
-  }
-  observeCodexSessions.close = () => { controller.abort(); completed = undefined; };
-  return observeCodexSessions;
+  } catch { status = 'failed'; }
+  const at = now();
+  return { id: `codex:${at}`, provider: 'codex', at, status, sessions, processes };
 }

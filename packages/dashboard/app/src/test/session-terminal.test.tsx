@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { MemoryRouter } from 'react-router';
 import { ConversationPage, type ConversationClient } from '../pages/conversation/ConversationPage.tsx';
 import { Workbench } from '../pages/workspace/Workbench.tsx';
-import { createStore } from '../lib/store.ts';
+import { createStore } from "./current-fixture.ts";
 import type { Ack, TerminalNotice } from '../lib/client.ts';
 import { Markdown } from '../components/conversation/Markdown.tsx';
 import { readFileSync } from 'node:fs';
@@ -58,7 +58,7 @@ async function send(text = '続けてください') {
 }
 it.each([
   { hosted: true, state: 'running', evidence: undefined, warning: false },
-  { hosted: false, state: 'idle', evidence: { kind: 'process_absent' }, warning: false },
+  { hosted: false, state: 'not_hosted', evidence: { kind: 'process_absent' }, warning: false },
   { hosted: false, state: 'running', evidence: { kind: 'message' }, warning: true },
   { hosted: false, state: 'idle', evidence: { kind: 'turn_completed' }, warning: true },
 ])('sends the observed Claude conversation through its terminal: %j', async ({ warning, ...options }) => {
@@ -66,7 +66,7 @@ it.each([
   await vi.waitFor(() => expect((screen.getByRole('button', { name: 'ターミナル' }) as HTMLButtonElement).disabled).toBe(!options.hosted));
   expect(Boolean(screen.queryByText('この会話は別の場所で動いています。ここで送ると、別の続きになります。'))).toBe(warning);
   await send();
-  expect(f.command).toHaveBeenCalledWith('session.send', { conversationId, text: '続けてください' });
+  expect(f.command).toHaveBeenCalledWith('session.send', { conversationId, text: '続けてください' }, expect.any(String));
   const launches = f.command.mock.calls.filter(([name]) => name === 'session.launch');
   expect(launches).toHaveLength(options.hosted ? 0 : 1);
   if (!options.hosted) expect(f.command).toHaveBeenCalledWith('session.launch', { projectId: 'p', provider: 'claude', resume: SESSION, model: 'opus' });
@@ -105,7 +105,7 @@ it('waits for the new conversation before sending its first message', async () =
   await screen.findByText('Restored output');
   expect(f.command).toHaveBeenCalledWith('terminal.attach', { terminalId: 'terminal' });
   f.setDiscover(true);
-  await vi.waitFor(() => expect(f.command).toHaveBeenCalledWith('session.send', { conversationId, text: '最初の発言' }));
+  await vi.waitFor(() => expect(f.command).toHaveBeenCalledWith('session.send', { conversationId, text: '最初の発言' }, expect.any(String)));
   await vi.waitFor(() => expect(screen.getByRole('textbox', { name: '入力' })).toHaveProperty('value', ''));
 });
 it('keeps the selected Haiku launch model after sending a new Workbench conversation', async () => {
@@ -130,7 +130,7 @@ it('keeps the selected Haiku launch model after sending a new Workbench conversa
   fireEvent.change(screen.getByRole('textbox', { name: '入力' }), { target: { value: '最初の発言' } });
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: '送信' })); });
   expect(f.command).toHaveBeenCalledWith('session.launch', { projectId: 'p', provider: 'claude', model: 'haiku' });
-  await waitFor(() => expect(f.command).toHaveBeenCalledWith('session.send', { conversationId, text: '最初の発言' }));
+  await waitFor(() => expect(f.command).toHaveBeenCalledWith('session.send', { conversationId, text: '最初の発言' }, expect.any(String)));
   await waitFor(() => expect(screen.getByRole('textbox', { name: '入力' })).toHaveProperty('value', ''));
   expect(screen.getByRole('textbox', { name: '入力' }).getAttribute('data-conversation-draft')).toBe(conversationId);
   const modelButton = screen.getByRole('button', { name: /^(Model|モデル) · / });
@@ -163,7 +163,7 @@ it('can send to a hosted Claude terminal while the runner is unavailable', async
   f.target.setConnection('runner_unavailable');
   render(<f.Wrapper/>);
   await send('端末への発言');
-  expect(f.command).toHaveBeenCalledWith('session.send', { conversationId, text: '端末への発言' });
+  expect(f.command).toHaveBeenCalledWith('session.send', { conversationId, text: '端末への発言' }, expect.any(String));
 });
 it('reuses a resumed terminal before its session file is discovered', async () => {
   const f = fixture(); f.setDiscover(false); render(<f.Wrapper/>);

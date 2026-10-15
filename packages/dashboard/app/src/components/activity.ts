@@ -6,7 +6,7 @@ import type { ExecutionState } from './StateBadge.tsx';
 import { readBody } from '../lib/message-body.ts';
 export { readBody } from '../lib/message-body.ts';
 
-export const executionStates: ExecutionState[] = ['starting', 'running', 'waiting_approval', 'waiting_input', 'idle', 'ended', 'failed', 'unknown'];
+export const executionStates: ExecutionState[] = ['starting', 'running', 'waiting_approval', 'waiting_input', 'idle', 'ended', 'failed', 'unknown', 'stopped', 'closed', 'not_hosted', 'unresolved'];
 export type ActivitySection = 'managed' | 'external' | 'unattended' | 'unsupported';
 export interface Activity {
   id: string; parentConversationId?: string; taskId?: string; conversationId?: string; project: string; name: string;
@@ -82,7 +82,7 @@ export function selectActivities(state: ScreenState, parallel = false): Activity
       return message ? [message] : [];
     }).sort(compareMessages);
     const orderedRuns = [...conversationRuns].sort((a, b) => Number(b.generation ?? 0) - Number(a.generation ?? 0) || readText(b.started_ts).localeCompare(readText(a.started_ts)));
-    const displayedRuns = parallel ? orderedRuns.filter(run => Number(run.generation ?? 0) === Number(orderedRuns[0]?.generation ?? 0)) : orderedRuns.slice(0, 1);
+    const displayedRuns = conversationRuns.filter(run => run.id === conversation.current_run_id);
     // 名前は core の投影の値をそのまま出す。名前がなければ provider と始まりの時刻で呼ぶ。
     const name = conversationTitle(conversation, orderedRuns.map(run => readText(run.started_ts)).filter(Boolean).sort()[0]
       || readText(conversation.last_message_ts));
@@ -90,7 +90,7 @@ export function selectActivities(state: ScreenState, parallel = false): Activity
     for (const run of displayedRuns.length ? displayedRuns : [undefined]) {
       const assignment = assigned.get(readText(run?.id));
       const launch = readObject(run?.launch);
-      const rawState = readText(run?.state ?? task?.state);
+      const rawState = readText(conversation.state);
       const format = readText(conversation.history_format);
       const location = readText(project?.root_path) || readText(launch.cwd ?? run?.cwd ?? run?.worktree_path ?? conversation.cwd ?? conversation.root_path) || (projectId.startsWith('/') ? projectId : '');
       const unsupported = Boolean(format && !['jsonl', 'legacy', 'paginated'].includes(format))
@@ -100,7 +100,7 @@ export function selectActivities(state: ScreenState, parallel = false): Activity
       result.push({ id: readText(run?.id) || conversationId, taskId, conversationId,
         project: placed,
         temporary: project?.reason === 'temporary' || conversation.project_reason === 'temporary' || isTemporaryPath(location),
-        lastActivity: [conversation.last_message_ts, run?.last_evidence_ts, run?.ended_ts, run?.started_ts, conversation.created_ts].map(readText).filter(Boolean).sort().at(-1),
+        lastActivity: readText(conversation.last_activity_ts),
         excerpt: readText(conversation.last_message_excerpt),
         name, provisional, firstRequest: readText(conversation.first_request_excerpt),
         provider: readText(conversation.provider),

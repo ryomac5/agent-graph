@@ -1,3 +1,4 @@
+import { stateNow } from './clock.mjs';
 import { join } from 'node:path';
 import { assertIsolation, writeJson } from './isolation.mjs';
 
@@ -34,7 +35,7 @@ try {
     const observation = await startObservationWorker(service, { observe: true });
     cleanup.push(() => observation.close());
     let configured;
-    const ws = await startWebSocketServer(service, { port: 0, runnerPath: socket,
+    const ws = await startWebSocketServer(service, { port: 0, runnerPath: socket, now: stateNow,
       readRedactionRules: () => configured?.settings.read('config').storage.redaction ?? service.ledger.getRedactionRules() });
     cleanup.push(() => ws.close());
     configured = createServeSettings(service, { repository: process.env.E2E_PROJECT, runner: ws.runner, resync: ws.resync });

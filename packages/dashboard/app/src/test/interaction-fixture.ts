@@ -1,4 +1,4 @@
-import { createStore } from '../lib/store.ts';
+import { createStore } from "./current-fixture.ts";
 import { workspaceKey } from '../lib/panes.ts';
 export const interactionKey = workspaceKey('p', 'a');
 export function createInteractionFixture(count = 3) {

@@ -9,7 +9,7 @@ import type { Fact } from '../../../../core/src/ledger/facts.ts';
 import { WorkspacePage } from '../pages/workspace/WorkspacePage.tsx';
 import { RootList } from '../components/RootViews.tsx';
 import { Workbench } from '../pages/workspace/Workbench.tsx';
-import { createStore, type Row, type ScreenState } from '../lib/store.ts';
+import { createStore, type Row, type ScreenState } from "./current-fixture.ts";
 import { currentRootConversation, selectRoots } from '../lib/roots.ts';
 import { isWorkingTurn, publishTurns, resolveWorkingTurn, workingElapsed } from '../lib/turns.ts';
 import * as conversationModel from '../components/conversation/model.ts';
@@ -39,7 +39,7 @@ it('reopens the projected SessionEnd run in the row, tab and Working indicator; 
     payload: { provider: 'claude', native_id: SESSION, origin: 'observed', type: 'interactive', user_name: 'Resumed session', repository_id: 'repo' } };
   function update(count: number) {
     const projection = JSON.parse(JSON.stringify(project([conversation, ...facts.slice(0, count)])));
-    target.setSnapshot({ seq: count, generation: 1, projection: { ...projection,
+    target.setSnapshot({ seq: count, generation: 1, projection: { ...projection, runs: projection.runs.map((row: Row) => ({ ...row, turn_started_ts: count === 3 ? RESUME : undefined })),
       projects: [{ id: 'repo', display_name: 'Repo', root_path: '/repo', state: 'registered' }] } });
   }
   update(2);
@@ -156,7 +156,7 @@ it.each([START, undefined])('omits tools from an earlier turn with start evidenc
   await act(async () => {});
   expect(screen.getByRole('status', { name: 'Working' }).querySelector('.working-tool')).toBeNull();
   act(() => appendMessage(target, { id: 'current', role: 'assistant', source_ts: '2026-10-11T00:01:00Z', body: [{ type: 'tool_use', name: 'Current tool', input: {} }] }));
-  expect(screen.getByRole('status', { name: 'Working' }).querySelector('.working-tool')?.textContent).toBe('Current tool');
+  expect(screen.getByRole('status', { name: 'Working' }).querySelector('.working-tool')?.textContent).toBe(start ? 'Current tool' : undefined);
   act(() => {
     const state = target.getSnapshot();
     target.setSnapshot({ ...state, projection: { ...state.projection, runs: [run()] } });
@@ -239,24 +239,25 @@ it.each(['idle', 'running', 'waiting_approval'])('gives waiting activity the sam
     <Workbench project="p" session="root" conversationId="c" client={client} language="en"
       renderConversation={id => <ConversationPage conversationId={id} target={target} client={client} embedded/>}/></MemoryRouter>);
   await act(async () => {});
-  const expected = state === 'waiting_approval' ? 'waiting_approval' : 'waiting_input';
+  const expected = state;
+  const group = state === 'idle' ? 'Recent' : state === 'running' ? 'Working' : 'Waiting';
   const row = screen.getByRole('link', { name: 'Main agent' });
-  expect(row.closest('section')?.getAttribute('aria-label')).toBe('Waiting');
-  expect(document.querySelectorAll('.session-group')[0]?.getAttribute('aria-label')).toBe('Waiting');
+  expect(row.closest('section')?.getAttribute('aria-label')).toBe(group);
+  expect(document.querySelectorAll('.session-group')[0]?.getAttribute('aria-label')).toBe(state === 'idle' ? 'Working' : group);
   expect(row.querySelector('.activity-mark')?.getAttribute('data-state')).toBe(expected);
-  expect(row.querySelector('.root-elapsed')).toBeNull();
+  expect(!!row.querySelector('.root-elapsed')).toBe(state === 'running');
   expect(screen.getByRole('tab', { name: 'Main agent' }).querySelector('.activity-mark')?.getAttribute('data-state')).toBe(expected);
-  expect(screen.queryByRole('status', { name: 'Working' })).toBeNull();
+  expect(!!screen.queryByRole('status', { name: 'Working' })).toBe(state === 'running');
   render(<MemoryRouter><ConversationPage conversationId="c" target={target} client={client}/></MemoryRouter>);
   await act(async () => {});
   expect(document.querySelector('.conversation-page .state-badge')?.classList.contains(`status-${expected}`)).toBe(true);
 });
 
 it('places input and approval waits before running in an ungrouped list', () => {
-  const snapshot = setup('idle').getSnapshot();
+  const snapshot = setup('waiting_input').getSnapshot();
   const roots = [
-    { id: 'busy', name: 'Busy', state: 'running', conversation_ids: ['busy'] },
-    { id: 'approval', name: 'Approval', state: 'waiting_approval', conversation_ids: ['approval'] },
+    { id: 'busy', name: 'Busy', state: 'running', activity_rank: 4, conversation_ids: ['busy'] },
+    { id: 'approval', name: 'Approval', state: 'waiting_approval', activity_rank: 2, conversation_ids: ['approval'] },
     ...snapshot.projection.roots,
   ];
   const state = { ...snapshot, projection: { ...snapshot.projection, roots,
@@ -279,7 +280,7 @@ it('opens the production root body and shows its work in both list and conversat
     fact_id: String(index), payload_hash: '', observed_ts: input.source_ts, schema_version: 1, cursor: null, supersedes: null })) as Fact[];
   const projection = JSON.parse(JSON.stringify(project(facts))) as Record<string, Row[]>;
   target.setSnapshot({ seq: facts.length, generation: 1, projection: {
-    ...projection,
+    ...projection, runs: projection.runs.map(row => ({ ...row, turn_started_ts: row.conversation_id === ROOT ? START_ROOT : row.started_ts })),
     projects: [{ id: 'repo', display_name: 'Repo', root_path: '/repo', state: 'registered' }],
   } });
   vi.setSystemTime(Date.parse(START_ROOT) + 40_000);
@@ -403,12 +404,12 @@ it.each(['running', 'idle'])('suppresses reply cues for pending input and preser
   } });
   render(<MemoryRouter><ConversationPage conversationId="c" target={target} client={client}/></MemoryRouter>);
   await act(async () => {});
-  if (stateName === 'running') expect(screen.getByText('Queued — Claude will read this after the current step')).toBeTruthy();
+  expect(screen.queryByText('Queued')).toBeNull();
   expect(screen.queryByText('Needs your answer')).toBeNull();
   expect(screen.queryByText('Waiting for your reply')).toBeNull();
 });
 
-it.each([undefined, 'invalid'])('uses the latest user timestamp when start is %s, without showing a previous turn tool', async start => {
+it.each([undefined, 'invalid'])('does not invent a clock from messages when the API start is %s', async start => {
   const target = setup('running');
   const snapshot = target.getSnapshot();
   target.setSnapshot({ ...snapshot, projection: { ...snapshot.projection, runs: [run('running', { turn_started_ts: start })] } });
@@ -420,11 +421,11 @@ it.each([undefined, 'invalid'])('uses the latest user timestamp when start is %s
   await act(async () => {});
   const indicator = screen.getByRole('status', { name: 'Working' });
   expect(indicator.closest('.composer')).toBeTruthy();
-  expect(indicator.textContent).toContain('3m 12s');
+  expect(indicator.querySelector('[role=timer]')).toBeNull();
   expect(indicator.querySelector('.working-tool')).toBeNull();
-  expect(screen.getByLabelText('Elapsed time').textContent).toBe('3m 12s');
+  expect(screen.getByLabelText('Elapsed time').textContent).toBe('—');
 });
-it('uses UserPromptSubmit evidence for a missing clock even before messages arrive', () => {
+it('does not recompute a missing clock from UserPromptSubmit evidence', () => {
   const turn = resolveWorkingTurn(run('running', { turn_started_ts: undefined, last_evidence: { hook_event_name: 'UserPromptSubmit' } }));
-  expect(workingElapsed(turn, NOW)).toBe('3m 12s');
+  expect(workingElapsed(turn, NOW)).toBe('');
 });

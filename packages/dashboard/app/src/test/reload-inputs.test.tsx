@@ -11,7 +11,7 @@ import { getFileDocument } from '../lib/file-documents.ts';
 import { holdDashboardReload } from '../lib/reload-safety.ts';
 import { MemoryRouter, useLocation } from 'react-router';
 import { FileTreePanel, useFileExplorer } from '../pages/files/FilesPage.tsx';
-import { createStore } from '../lib/store.ts';
+import { createStore } from "./current-fixture.ts";
 import { installPreloadRecovery } from '../lib/preload-recovery.ts';
 
 let dispose = () => {};

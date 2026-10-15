@@ -1,5 +1,6 @@
+import { captureNativeRecord } from '../../../../core/src/state/capture.ts';
 import { basename, resolve } from "node:path";
-import { classifyClaudeRecord, createNativeId, projectConversations, TURN_RULE_VERSION } from "../../../../core/src/ledger/index.ts";
+import { createNativeId, projectConversations } from "../../../../core/src/ledger/index.ts";
 import type { AppendResult, Fact, FactInput, Ledger, RunPayload } from "../../../../core/src/ledger/index.ts";
 import { readAppendOnlyFile, type FileLine } from "../files.ts";
 import { defaultLocationResolver, type LocationResolver, type ObservedLocation } from "../location.ts";
@@ -26,7 +27,7 @@ export interface ClaudeContextResult { appended: number; duplicates: number; con
 type TurnTarget = { subject: string; generation: number; started: number };
 
 /**
- * 会話の記録から、会話の場所とターンの根拠を追記する。状態の決め方は core の規則に従い、状態が変わる行だけを事実にする。
+ * 会話の記録から、会話の場所とターンの根拠を追記する。状態の判定は保存せず、native の根拠を事実にする。
  * 根拠は hook の実行のうち行より前に始まったものに結び、なければ会話の記録の実行を作る。
  * 場所の事実がまだない会話は、以前に読んだ範囲も含めて一度だけ先頭から読む。
  * 管理する実行の状態はホストが正本なので、管理する会話からは場所だけを読む。
@@ -54,7 +55,7 @@ export function observeClaudeContext(ledger: Ledger, path: string, options: Clau
   const turns = conversation?.origin !== "managed";
   const locationId = claudeLocationEventId(id);
   let located = existing.some((fact) => fact.source === "transcript-claude" && fact.source_event_id === locationId);
-  const states = new Map<string, string>();
+
   const models = new Map<string, string>();
   let own: TurnTarget | undefined;
   const hooks: TurnTarget[] = [];
@@ -65,7 +66,6 @@ export function observeClaudeContext(ledger: Ledger, path: string, options: Clau
     if (fact.source === "transcript-claude" && fact.kind === "run.created" && typeof payload.generation === "number") {
       own = { subject: fact.subject, generation: payload.generation, started: payload.generation };
     }
-    if (fact.source === "transcript-claude" && fact.kind === "run.state_changed" && payload.state) states.set(fact.subject, payload.state);
     if (fact.source === "hook" && fact.kind === "run.created" && typeof payload.generation === "number") {
       const started = Date.parse(payload.started_ts ?? fact.source_ts);
       if (Number.isFinite(started)) hooks.push({ subject: fact.subject, generation: payload.generation, started });
@@ -73,8 +73,8 @@ export function observeClaudeContext(ledger: Ledger, path: string, options: Clau
   }
   // 以前に読んだ範囲の根拠がまだ無い会話は、一度だけ先頭から読み直す。発言は重ねて追記しない。
   let lines: FileLine[];
-  if (located && options.lines) lines = options.lines;
-  else if (!located && options.lines && options.fromStart) lines = options.lines;
+  const hasNative = existing.some(fact => belongs(fact) && fact.source_event_id.startsWith("native-record:"));
+  if (options.lines && (options.fromStart || located && hasNative)) lines = options.lines;
   else {
     try { lines = readAppendOnlyFile(absolutePath).lines; }
     catch (error) {
@@ -86,7 +86,7 @@ export function observeClaudeContext(ledger: Ledger, path: string, options: Clau
   // 場所なしの印の時刻は最初の発言の時刻にし、読む側によらず同じ事実にする。
   let firstMessageTs: string | undefined;
   const locate = options.locate ?? defaultLocationResolver;
-  const handbacks = new Set<string>();
+
   for (const { line, modelsOnly } of [
     ...(options.modelBackfillLines ?? []).map(line => ({ line, modelsOnly: true })),
     ...lines.map(line => ({ line, modelsOnly: false })),
@@ -102,15 +102,11 @@ export function observeClaudeContext(ledger: Ledger, path: string, options: Clau
       append({ ...base, kind: "conversation.updated", subject: `conversation:${id}`, source_event_id: locationId, payload: { ...location } });
       located = true;
     }
-    let evidence = turns ? classifyClaudeRecord(row) : undefined;
-    if (!evidence) continue;
-    // 子が手を戻す呼び出しと、その呼び出しへの結果は、どちらもターンの終わりである。
-    const blocks = Array.isArray((row.message as { content?: unknown } | undefined)?.content)
-      ? (row.message as { content: { type?: string; name?: string; id?: string; tool_use_id?: string }[] }).content : [];
-    for (const block of blocks) if (block.type === "tool_use" && block.name === "SubagentHandback" && block.id) handbacks.add(block.id);
-    if (evidence.kind === "tool_result" && blocks.some((block) => block.type === "tool_result" && block.tool_use_id && handbacks.has(block.tool_use_id))) {
-      evidence = { ...evidence, state: "idle", kind: "turn_completed" };
-    }
+    if (!turns) continue;
+    const native = captureNativeRecord("claude", row);
+    const message = row.message as { model?: string } | undefined;
+    const model = message?.model && message.model !== '<synthetic>' ? message.model : undefined;
+    if (!native && !model) continue;
     const time = Date.parse(timestamp);
     // 行より前に始まった実行のうち、最も新しいものに結ぶ。
     let target = [...hooks, ...(own ? [own] : [])].filter((run) => run.started <= time)
@@ -124,20 +120,17 @@ export function observeClaudeContext(ledger: Ledger, path: string, options: Clau
       target = own;
     }
     // 状態が同じ行でもモデルの変更は独立に残す。過去分は状態の事実を作り直さない。
-    if (evidence.model && models.get(target.subject) !== evidence.model) {
+    if (model && models.get(target.subject) !== model) {
       append({ ...base, kind: "run.updated", subject: target.subject as `run:${string}`,
         source_event_id: `model:${id}:${target.generation}:${String(row.uuid ?? line.cursor.offset)}`,
-        payload: { conversation_id: id, generation: target.generation, model: evidence.model } });
-      models.set(target.subject, evidence.model);
+        payload: { conversation_id: id, generation: target.generation, model: model } });
+      models.set(target.subject, model);
     }
-    if (modelsOnly) continue;
-    if (states.get(target.subject) === evidence.state) continue;
-    states.set(target.subject, evidence.state);
-    append({ ...base, kind: "run.state_changed", subject: target.subject as `run:${string}`,
-      source_event_id: `turn:v${TURN_RULE_VERSION}:${id}:${String(row.uuid ?? line.cursor.offset)}`,
-      payload: { conversation_id: id, generation: target.generation, state: evidence.state,
-        last_evidence: { kind: evidence.kind, turn_id: evidence.turn_id ?? null }, last_evidence_ts: timestamp,
-        ...(evidence.model ? { model: evidence.model } : {}) } });
+    if (modelsOnly || !native) continue;
+    append({ ...base, kind: "run.updated", subject: target.subject as `run:${string}`,
+      source_event_id: `native-record:${id}:${line.cursor.offset}:${line.cursor.hash}`,
+      payload: { conversation_id: id, generation: target.generation,
+        last_evidence: { native_source: "claude", native_record: native, file_id: basename(absolutePath) }, last_evidence_ts: timestamp } });
   }
   // 発言があるのに場所の記録がない会話は、旧い形式として場所なしで読み終えたことを残す。
   if (!located && firstMessageTs) {

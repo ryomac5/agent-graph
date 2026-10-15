@@ -265,10 +265,11 @@ function testSocket(name: string, action: (t: TestContext) => Promise<void>): vo
 }
 
 test("S17 durable recovery, replay and rebuild are verifiable without sockets", (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 2_000_000_000_000 });
   const { service, dbPath, directory, closeService } = createFixture(t);
   let feed = new ProjectionFeed(dbPath, service.catchUp, 1);
   for (const fact of facts.slice(0, 4)) service.ledger.append(fact);
-  const patch = feed.refresh();
+  const patch = feed.refresh(2_000_000_000_000);
   assert.ok(patch && patch !== "resync");
   assert.equal(patch.seq, 4);
   assert.equal(patch.changes.delegations.upsert[0].state, "running");
@@ -289,6 +290,7 @@ test("S17 durable recovery, replay and rebuild are verifiable without sockets", 
   t.after(() => feed.close());
   assert.equal(feed.snapshot().seq, 7);
   assert.equal(feed.replay(4), undefined);
+  feed.refresh(2_000_000_000_000);
   const result = feed.snapshot().projection;
   const expected = JSON.parse(readFileSync(new URL("./samples/S17/expected-projection.json", import.meta.url), "utf8"));
   for (const [key, value] of Object.entries(expected.delegation)) assert.deepEqual(result.delegations[0][key], value);
@@ -297,7 +299,7 @@ test("S17 durable recovery, replay and rebuild are verifiable without sockets", 
   assert.equal(result.messages, undefined);
   assert.deepEqual(detail.projection.messages, []);
   restarted.rebuild();
-  assert.equal(feed.refresh(), "resync");
+  assert.equal(feed.refresh(2_000_000_000_000), "resync");
   assert.equal(feed.replay(7), undefined);
   assert.deepEqual(feed.replay(7, feed.snapshot().generation), []);
   assert.deepEqual(feed.snapshot().projection, result);
@@ -305,11 +307,11 @@ test("S17 durable recovery, replay and rebuild are verifiable without sockets", 
   const reverseFeed = new ProjectionFeed(reversed.dbPath, reversed.catchUp, 1);
   try {
     for (const fact of [...facts].reverse()) reversed.ledger.append(fact);
-    reverseFeed.refresh();
+    reverseFeed.refresh(2_000_000_000_000);
     assert.deepEqual(reverseFeed.snapshot().projection, result);
     reversed.ledger.append({ ...facts[0], kind: "delegation.created", source_event_id: "s17-extra", subject: "delegation:other",
       payload: { request_id: "other", role: "implementer", title: "[redacted]", attempt: 1, state: "received" } });
-    reverseFeed.refresh();
+    reverseFeed.refresh(2_000_000_000_000);
     assert.equal(reverseFeed.replay(0), undefined);
     const replay = reverseFeed.replay(7)!;
     assert.equal(replay.length, 1);

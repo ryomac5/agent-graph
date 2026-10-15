@@ -101,8 +101,8 @@ test("Codex の中断導出は観測時刻・再送・既存の旧規則によ�
   const reference = openLedger(":memory:");
   t.after(() => { ledger.close(); reference.close(); rmSync(home, { recursive: true, force: true }); });
   observeCodexFile(reference, path, { codexHome: home, observedTs: "2026-10-07T00:00:00Z" });
-  const state = reference.readSince(0, Number.MAX_SAFE_INTEGER).find(f => f.kind === "run.state_changed")!;
-  const legacy = { ...state, source_event_id: state.source_event_id.replace(/:v\d+$/, ""),
+  const state = reference.readSince(0, Number.MAX_SAFE_INTEGER).find(f => f.source_event_id.startsWith("native-record:") && JSON.stringify(f.payload).includes("turn_aborted"))!;
+  const legacy = { ...state, source_event_id: "legacy-interrupted",
     payload: { ...state.payload, last_evidence: { kind: "turn_completed", turn_id: "turn-1" } } };
   ledger.append(legacy as never);
   assert.ok(observeCodexFile(ledger, path, { codexHome: home, observedTs: "2026-10-12T00:00:00Z" }).every(r => r.status !== "conflict"));
@@ -133,7 +133,7 @@ test("大きなファイルの衝突でも準備上限前後の正しい発言�
   assert.equal(facts.filter(f => f.kind === "message.created" && f.payload?.native_id?.startsWith("discard-")).length, 2100);
   assert.ok(facts.some(f => f.kind === "message.created" && f.payload?.native_id === "retained"));
   assert.equal(facts.filter(f => f.kind === "run.created").length, 1);
-  assert.equal(facts.filter(f => f.kind === "run.state_changed").length, 1);
+  assert.equal(facts.filter(f => f.source_event_id.startsWith("native-record:") && JSON.stringify(f.payload).includes("task_started")).length, 1);
   assert.equal(facts.filter(f => f.kind === "conversation.updated").length, 1);
   assert.equal(facts.filter(f => f.kind === "observation.unsupported" && f.payload?.file_path === bad).length, 1);
   assert.equal(service.ingestOnce().appended, 0);
@@ -169,7 +169,7 @@ test("Codex の入力時刻が欠けても、状態の根拠に観測時刻を�
   t.after(() => { for (const ledger of ledgers) ledger.close(); rmSync(home, { recursive: true, force: true }); });
   const readState = (index: number, observedTs: string) => {
     observeCodexFile(ledgers[index], path, { codexHome: home, observedTs });
-    const fact = ledgers[index].readSince(0, Number.MAX_SAFE_INTEGER).find(f => f.kind === "run.state_changed")!;
+    const fact = ledgers[index].readSince(0, Number.MAX_SAFE_INTEGER).find(f => f.source_event_id.startsWith("native-record:") && JSON.stringify(f.payload).includes("turn_aborted"))!;
     return { id: fact.source_event_id, source_ts: fact.source_ts, payload: fact.payload };
   };
   assert.deepEqual(readState(0, "2026-10-07T00:00:00Z"), readState(1, "2030-01-01T00:00:00Z"));

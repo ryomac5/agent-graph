@@ -4,7 +4,7 @@ import { MemoryRouter } from 'react-router';
 import { RootList } from '../components/RootViews.tsx';
 import { conversationName, conversationTitle, formatStartedAt } from '../lib/format.ts';
 import { selectRoots } from '../lib/roots.ts';
-import { createStore } from '../lib/store.ts';
+import { createStore } from "./current-fixture.ts";
 
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 function createFixture() {

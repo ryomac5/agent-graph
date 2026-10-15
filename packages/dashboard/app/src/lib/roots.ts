@@ -1,5 +1,4 @@
 import { memoizeProjection } from './projection-cache.ts';
-import { resolveActivity } from './activity.ts';
 import type { Row, ScreenState } from './store.ts';
 import { readObject, readText } from '../components/conversation/model.ts';
 import { getRegisteredProjects, OTHER_PROJECT } from './projects.ts';
@@ -12,6 +11,7 @@ export interface Root {
   conversation_ids: string[]; running_children: number; total_children: number;
   /** キットが付けた番号の名前。識別子として補足に残す。 */
   kit_name?: string;
+  activity_rank?: number;
   user_name?: string | null;
   auto_name?: string;
 }
@@ -115,23 +115,20 @@ function calculateRoots(state: ScreenState, project?: string): Root[] {
   return renameKitRoots(state, (state.projection.roots ?? []).filter(row => project === undefined || row.project === project
       || project === OTHER_PROJECT && rootProject(row as unknown as Root, registered) === OTHER_PROJECT)
     .filter(row => !((row.conversation_ids as string[] | undefined) ?? []).some(id => reviews.has(id)))
-    .map(row => { const root = { ...(row as unknown as Root) }; root.conversation_ids ??= []; root.name = root.auto_name ?? root.name; root.name = rootName(state, root); const activity = resolveActivity(state, root.conversation_ids, root.state); root.state = activity.state;
-      root.current_conversation_id ??= readText(activity.run?.conversation_id) || undefined;
-      const spoken = root.conversation_ids.map(id => times.get(id)?.last).filter((value): value is string => Boolean(value));
-      if (spoken.length) root.last_activity_ts = spoken.sort().at(-1)!;
+    .map(row => { const root = { ...(row as unknown as Root) }; root.conversation_ids ??= []; root.name = root.auto_name ?? root.name; root.name = rootName(state, root);
       return root; }), times)
     .map(root => ({ ...root, auto_name: root.name, name: root.user_name || root.name }))
-    .toSorted((a, b) => Number(isRunning(b.state) || ['waiting_approval', 'waiting_input'].includes(b.state)) - Number(isRunning(a.state) || ['waiting_approval', 'waiting_input'].includes(a.state))
+    .toSorted((a, b) => (a.activity_rank ?? 8) - (b.activity_rank ?? 8)
       || (b.last_activity_ts ?? '').localeCompare(a.last_activity_ts ?? '') || a.id.localeCompare(b.id));
 }
 const readRootIndex = memoizeProjection(['conversations', 'runs', 'relations', 'delegations'], state => {
   const conversations = new Map((state.projection.conversations ?? []).map(row => [readText(row.id), row]));
   const runs = new Map<string, Row>();
-  for (const run of state.projection.runs ?? []) {
-    const id = readText(run.conversation_id);
-    if (!runs.has(id) || Number(run.generation ?? 0) >= Number(runs.get(id)?.generation ?? 0)) runs.set(id, run);
-  }
   const runsById = new Map((state.projection.runs ?? []).map(row => [readText(row.id), row]));
+  for (const conversation of conversations.values()) {
+    const run = runsById.get(String(conversation.current_run_id));
+    if (run) runs.set(String(conversation.id), run);
+  }
   const children = new Map<string, Row[]>();
   for (const relation of state.projection.relations ?? []) {
     if (relation.type !== 'delegated' || relation.active === 0 || relation.active === false) continue;
@@ -156,22 +153,14 @@ export function resolveConversationRoot(roots: Root[], index: RootIndex, convers
   return roots.find(root => root.conversation_ids.includes(conversationId)
     || buildRootTree(root, index).nodes.some(node => node.conversationId === conversationId));
 }
-/** 継続元も再開できるため、末尾でなく投影が選んだ操作先を使う。旧い配信では最新世代の状態と時刻で補う。 */
+/** 継続元も再開できるため、末尾でなく投影が選んだ操作先を使う。 */
 export function currentRootConversation(root: Root, index?: RootIndex): string | undefined {
   if (root.current_conversation_id && root.conversation_ids.includes(root.current_conversation_id)) return root.current_conversation_id;
-  const rank = (id: string) => ['waiting_approval', 'waiting_input'].includes(readText(index?.runs.get(id)?.state)) ? 2
-    : ['starting', 'running'].includes(readText(index?.runs.get(id)?.state)) ? 1 : 0;
-  return [...root.conversation_ids].sort((a, b) => rank(b) - rank(a)
-    || readText(index?.runs.get(b)?.last_evidence_ts ?? index?.conversations.get(b)?.last_message_ts ?? index?.conversations.get(b)?.created_ts)
-      .localeCompare(readText(index?.runs.get(a)?.last_evidence_ts ?? index?.conversations.get(a)?.last_message_ts ?? index?.conversations.get(a)?.created_ts))
-    || a.localeCompare(b))[0];
+  return root.conversation_ids[0];
 }
-/** 会話の最後の動きの時刻。core の根の投影と同じく、最後の発言と最新の実行の時刻の遅い方を使う。 */
+/** API が渡した最後の動きの時刻を読む。 */
 export function conversationActivity(state: ScreenState, id: string): string {
-  const conversation = state.projection.conversations?.find(row => row.id === id);
-  const run = (state.projection.runs ?? []).filter(row => row.conversation_id === id).toSorted((a, b) => Number(b.generation ?? 0) - Number(a.generation ?? 0))[0];
-  return [conversation?.last_message_ts, run?.last_evidence_ts ?? run?.ended_ts ?? run?.started_ts]
-    .filter((value): value is string => typeof value === 'string' && value !== '').sort().at(-1) ?? '';
+  return readText(state.projection.conversations?.find(row => row.id === id)?.last_activity_ts);
 }
 /** 系列の会話を古い順に並べ、最新の会話を末尾に置く。時刻の分からない会話は元の順で先に置く。 */
 export function orderSeries(state: ScreenState, ids: readonly string[]): string[] {
@@ -246,8 +235,6 @@ export function buildRootTree(root: Root, index: RootIndex): DelegationTree {
         provider: readText(conversation?.provider) || readText(delegation?.provider) || readText(assignment.executor) || readText(assignment.provider),
         model: readText(run?.model) || readModel(run).model || readText(conversation?.model) || readText(delegation?.model) || readText(assignment.model) || readText(evidence.model),
         role: resolveChildRole(evidence, delegation), state: readText(run?.state ?? conversation?.state ?? delegation?.state) || 'unknown' };
-      // Claude の子は、結果を返して止まると待機に戻る。頼まれた仕事は終えているので、完了として見せる。
-      if (node.provider === 'claude' && evidence.agentType !== undefined && node.state === 'idle') node.state = 'ended';
       node.label = nodeLine(node);
       nodes.push(node); parent.children.push(id);
       // 頼んだ内容は、子のエージェントの説明か、runner の委譲の題から取る。

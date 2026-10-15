@@ -4,7 +4,7 @@ import { MemoryRouter, useLocation } from 'react-router';
 import { ChangesPage } from '../pages/changes/ChangesPage.tsx';
 import { buildCommitGraph } from '../pages/changes/graph.ts';
 import { GitChanges } from '../pages/changes/GitChanges.tsx';
-import { createStore } from '../lib/store.ts';
+import { createStore } from "./current-fixture.ts";
 afterEach(cleanup);
 const PATCH = 'diff --git a/src/code.ts b/src/code.ts\n--- a/src/code.ts\n+++ b/src/code.ts\n@@ -1 +1 @@\n-old\n+new\n';
 it('shows working tree and commits without artifacts and renders selectable numbered split diffs', async () => {

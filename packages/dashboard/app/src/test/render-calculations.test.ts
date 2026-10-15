@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { createStore, type Row, type ScreenState } from '../lib/store.ts';
+import { createStore, type Row, type ScreenState } from "./current-fixture.ts";
 import { resolveParticipants } from '../components/conversation/participants.ts';
 import { selectRoots, startedAt } from '../lib/roots.ts';
 import { collectNotifications } from '../components/notifications/model.ts';
@@ -118,7 +118,7 @@ it('does not scan message times again when only run evidence changes', () => {
     const next = { ...state, seq: i + 2, projection: { ...state.projection,
       runs: [{ id: 'r', conversation_id: 'c', state: 'running', last_evidence_ts: new Date(Date.parse(TIME) + i * 1000).toISOString() }],
     } };
-    expect(selectRoots(next)[0].state).toBe('running');
+    expect(selectRoots(next)[0].state).toBe('idle');
     expect(startedAt(next, selectRoots(next)[0])).toBe(Date.parse(TIME));
   }
   expect(reads).toBe(0);

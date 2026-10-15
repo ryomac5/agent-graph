@@ -42,10 +42,10 @@ test("hook を受理し、再送と受け口の再起動でも事実が増えな
     const response = await post(first, first.token);
     assert.equal(response.status, 200);
     assert.equal((await response.json()).accepted, true);
-    assert.equal(projectRuns(ledger.readSince(0, 100))[0].state, "idle");
+    assert.equal(projectRuns(ledger.readSince(0, 100))[0].state, "unknown");
     assert.equal((await post(first, first.token)).status, 200);
     assert.equal(ledger.readSince(0, 100).length, 2);
-    assert.equal(projectRuns(ledger.readSince(0, 100))[0].state, "idle");
+    assert.equal(projectRuns(ledger.readSince(0, 100))[0].state, "unknown");
   } finally { await first.close(); }
   const second = createReceiver(ledger);
   t.after(() => second.close());
@@ -53,7 +53,7 @@ test("hook を受理し、再送と受け口の再起動でも事実が増えな
   assert.equal((await post(second, first.token)).status, 403);
   assert.equal((await post(second, second.token)).status, 200);
   assert.equal(ledger.readSince(0, 100).length, 2);
-  assert.equal(projectRuns(ledger.readSince(0, 100))[0].state, "idle");
+  assert.equal(projectRuns(ledger.readSince(0, 100))[0].state, "unknown");
   const ended = { ...EVENT, event_id: "end", hook_event_name: "SessionEnd", source_ts: "2026-01-01T00:01:00.000Z" };
   assert.equal((await post(second, second.token, ended)).status, 200);
   assert.equal(projectRuns(ledger.readSince(0, 100))[0].state, "ended");
@@ -107,7 +107,7 @@ test("agent_id 付きの hook でも親は interactive のままで、会話の�
   }
 });
 
-test("Stop の後の UserPromptSubmit で running に戻り、逆順の到着や再送でも崩れない", async (t) => {
+test("Stop と次の UserPromptSubmit の生の証拠を、逆順の到着や再送でも残す", async (t) => {
   const stopped: HookEvent = { ...EVENT, event_id: "stop", hook_event_name: "Stop",
     source_ts: "2026-01-01T00:01:00.000Z" };
   const prompted: HookEvent = { ...EVENT, event_id: "prompt", hook_event_name: "UserPromptSubmit",
@@ -122,12 +122,12 @@ test("Stop の後の UserPromptSubmit で running に戻り、逆順の到着や
         body: JSON.stringify(event) });
       assert.equal(response.status, 200);
       if (event === stopped && events[0] === EVENT && ledger.readSince(0, 100).length === 3) {
-        assert.equal(projectRuns(ledger.readSince(0, 100))[0].state, "idle");
+        assert.equal(projectRuns(ledger.readSince(0, 100))[0].state, "unknown");
       }
     }
     const facts = ledger.readSince(0, 100);
     assert.equal(facts.length, 4);
-    assert.equal(projectRuns(facts)[0].state, "running");
+    assert.equal(projectRuns(facts)[0].state, "unknown");
     assert.equal(projectRuns(facts)[0].last_evidence_ts, prompted.source_ts);
   }
 });
@@ -209,7 +209,7 @@ test("実 HTTP の受け口は 127.0.0.1 に限定する", async (t) => {
   assert.equal(response.status, 200);
 });
 
-test("根は子の終了を待つ間も hook のターンを保ち、Stop でだけ待機へ戻る", async (t) => {
+test("hook と履歴の申告値を保持し、投影では現在のターンを判定しない", async (t) => {
   const ledger = openLedger(":memory:");
   t.after(() => ledger.close());
   const receiver = createReceiver(ledger);
@@ -224,18 +224,18 @@ test("根は子の終了を待つ間も hook のターンを保ち、Stop でだ
     payload: { conversation_id: "claude:session", generation: 1, state: "idle", last_evidence: { kind: "turn_completed" } } });
   await post({ ...EVENT, event_id: "tool", hook_event_name: "PostToolUse", source_ts: "2026-01-01T00:11:42.000Z" });
   let runs = projectRuns(ledger.readSince(0, 100));
-  assert.equal(runs[0].state, "running");
-  assert.equal(runs[0].turn_started_ts, start);
+  assert.equal(runs[0].state, "idle");
+  assert.equal(runs[0].turn_started_ts, undefined);
   assert.deepEqual(projectRuns(ledger.readSince(0, 100).reverse()), runs);
   await post({ ...EVENT, event_id: "stop", hook_event_name: "Stop", source_ts: "2026-01-01T00:12:00.000Z" });
   runs = projectRuns(ledger.readSince(0, 100));
   assert.equal(runs[0].state, "idle");
   assert.equal(runs[0].turn_started_ts, undefined);
   await post({ ...EVENT, event_id: "next", hook_event_name: "UserPromptSubmit", source_ts: "2026-01-01T00:13:00.000Z" });
-  assert.equal(projectRuns(ledger.readSince(0, 100))[0].turn_started_ts, "2026-01-01T00:13:00.000Z");
+  assert.equal(projectRuns(ledger.readSince(0, 100))[0].turn_started_ts, undefined);
 });
 
-test('SessionStart のない UserPromptSubmit でも開始時刻が入り、受け口の再起動で消えない', async (t) => {
+test('SessionStart のない UserPromptSubmit の証拠も受け口の再起動で消えない', async (t) => {
   const ledger = openLedger(':memory:');
   t.after(() => ledger.close());
   const event: HookEvent = { ...EVENT, event_id: 'prompt-only', hook_event_name: 'UserPromptSubmit' };
@@ -245,12 +245,12 @@ test('SessionStart のない UserPromptSubmit でも開始時刻が入り、受�
   });
   assert.equal((await post(createReceiver(ledger), event)).status, 200);
   const before = ledger.readSince(0, 100);
-  assert.equal(projectRuns(before)[0].turn_started_ts, event.source_ts);
+  assert.equal(projectRuns(before)[0].turn_started_ts, undefined);
   const restarted = createReceiver(ledger);
   assert.equal((await post(restarted, event)).status, 200);
   assert.deepEqual(ledger.readSince(0, 100), before);
   assert.equal((await post(restarted, { ...event, event_id: 'additional', source_ts: '2026-01-01T00:01:00.000Z' })).status, 200);
-  assert.equal(projectRuns(ledger.readSince(0, 100))[0].turn_started_ts, event.source_ts);
+  assert.equal(projectRuns(ledger.readSince(0, 100))[0].turn_started_ts, undefined);
 });
 
 test('real conversation hooks remain recorded at the exact probe path', async t => {
@@ -265,5 +265,5 @@ test('real conversation hooks remain recorded at the exact probe path', async t 
   }
   const facts = ledger.readSince(0, Number.MAX_SAFE_INTEGER);
   assert.equal(facts.filter(fact => fact.kind.startsWith('run.')).length, 4);
-  assert.equal(projectRuns(facts)[0].state, 'ended');
+  assert.ok(facts.some(fact => fact.kind === 'run.updated' && JSON.stringify(fact.payload).includes('SessionEnd')));
 });

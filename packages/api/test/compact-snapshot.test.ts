@@ -14,7 +14,7 @@ test('snapshot・頁・patch は関係の重複欄だけ省き、独自 run 別�
   assert.equal(before.identities.runs['custom-host-run'], `${CHILD}:1`);
   assert.equal(before.identities.conversations[LEGACY], ROOT);
   assert.equal(before.projection.roots[0].state, 'running');
-  assert.equal(before.projection.send_watches[0].state, 'pending');
+  assert.equal(before.projection.send_watches[0].state, 'received_candidate');
   assert.equal((before.projection.conversations.find(row => row.id === ROOT)?.pending_inputs as unknown[]).length, 1);
   assert.deepEqual(f.feed.conversation(LEGACY), f.feed.conversation(ROOT));
   assert.deepEqual(f.feed.list('relations').rows, before.projection.relations);

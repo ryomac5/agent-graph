@@ -2,7 +2,7 @@ import { projectRoots } from './root-fixture.ts';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
-import { createStore, type Row } from '../lib/store.ts';
+import { createStore, type Row } from "./current-fixture.ts";
 import { buildDelegationTree } from '../pages/tree/model.ts';
 import { WorkspacePage } from '../pages/workspace/WorkspacePage.tsx';
 

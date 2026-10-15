@@ -143,3 +143,14 @@ test("N2 success, failure and interruption sets have one result in all orders", 
   assert.equal(output.result.value, "unknown"); assert.equal(output.result.reason, "evidence_conflict");
   checkOrders(evidence, evidence => evaluateState({ ...input, evidence }, 40));
 });
+
+for (const [name, source, row] of [
+  ['Claude Esc', 'claude', { type: 'user', message: { content: '[Request interrupted by user]' } }],
+  ['Claude tool Esc', 'claude', { type: 'user', message: { content: '[Request interrupted by user for tool use]' } }],
+  ['Codex aborted', 'codex', { type: 'event_msg', payload: { type: 'turn_aborted' } }],
+  ['Codex interrupted', 'codex', { method: 'turn/completed', params: { turn: { status: 'interrupted' } } }],
+] as const) test(`${name} は子の停止通知と区別し Idle へ戻す`, () => {
+  const result = evaluateState(stateInput([start, ...native(source, row, 10)]), 20);
+  assert.equal(result.display.label, 'Idle');
+  assert.equal(result.turn.reason, 'turn_finished');
+});

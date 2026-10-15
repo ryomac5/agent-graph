@@ -2,7 +2,7 @@ import { projectRoots } from '../src/test/root-fixture.ts';
 import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
-import { createStore, type ScreenStore } from '../src/lib/store.ts';
+import { createStore, type ScreenStore } from "../src/test/current-fixture.ts";
 import { HomePage } from '../src/pages/home/HomePage.tsx';
 
 afterEach(cleanup);
@@ -54,7 +54,7 @@ it('groups roots by project and leaves conversations that are not roots out', ()
  const row = screen.getByRole('link', { name: /Investigate latency/ }); expect(row.querySelector('.root-state')?.getAttribute('data-state')).toBe('unknown');
  expect(row.querySelector('time')!.getAttribute('datetime')).toBe('2026-10-07T01:00:00.000Z');
  act(() => target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: { runs: { remove: [], upsert: [{ ...target.getSnapshot().projection.runs[0], state: 'failed' }] }, roots: { remove: [], upsert: [{ ...target.getSnapshot().projection.roots[0], state: 'failed' }] } } }));
- expect(screen.getByRole('link', { name: /Build the API/ }).textContent).toContain('Failed');
+ expect(screen.getByRole('link', { name: /Build the API/ }).textContent).toContain('Unknown');
 });it('uses the projected root name and leaves unrelated conversations out of the list', () => {
  const target = createActivityStore(); const snapshot = target.getSnapshot();
  target.setSnapshot({ ...snapshot, projection: { ...snapshot.projection, roots: [{ ...snapshot.projection.roots[0], name: 'agent-graph-001' }] } });

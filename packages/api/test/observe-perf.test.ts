@@ -162,7 +162,7 @@ test("2000 Claude・500 Codex: 無更新は 50 ms 以下で開かず、追記は
   const tail = createMessage("appended");
   const bytesBefore = fileReadMetrics.contentBytes;
   appendFileSync(join(f.claude, "claude-100.jsonl"), tail);
-  assert.equal(service.ingestOnce().appended, 2);
+  assert.equal(service.ingestOnce().appended, 3);
   assert.equal(opens, 1);
   assert.equal(visits, 0);
   assert.equal(fileReadMetrics.contentBytes - bytesBefore, Buffer.byteLength(tail));
@@ -176,7 +176,7 @@ test("2000 Claude・500 Codex: 無更新は 50 ms 以下で開かず、追記は
   const codexTail = JSON.stringify({ type: "response_item", timestamp: TS,
     payload: { type: "message", id: "codex-added", role: "assistant", content: "Additional reply" } }) + "\n";
   appendFileSync(join(f.codex, "rollout-100.jsonl"), codexTail);
-  assert.equal(service.ingestOnce().appended, 2);
+  assert.equal(service.ingestOnce().appended, 3);
   assert.equal(opens, 1);
   assert.equal(fileReadMetrics.contentBytes - resumedBytes, Buffer.byteLength(codexTail));
 });
@@ -234,7 +234,7 @@ test("Codex の旧形式メタでも追記だけを読み、新しいディレ�
     payload: { type: "message", id: "legacy-added", role: "assistant", content: "Reply" } }) + "\n";
   const bytes = fileReadMetrics.contentBytes;
   appendFileSync(path, tail);
-  assert.equal(service.ingestOnce().appended, 2);
+  assert.equal(service.ingestOnce().appended, 3);
   assert.equal(fileReadMetrics.contentBytes - bytes, Buffer.byteLength(tail));
   assert.equal(reads, 0);
   const newDirectory = join(home, ".claude", "projects", "new-project", "nested");
@@ -282,7 +282,7 @@ for (const provider of ["claude", "codex"]) {
       }
       syncBuiltinESMExports();
       t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
-      assert.equal(service.ingestOnce().appended, 2);
+      assert.equal(service.ingestOnce().appended, 3);
       assert.equal(deleted, true);
       assert.equal(service.ingestOnce().appended, 0);
     });

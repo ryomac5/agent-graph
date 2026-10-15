@@ -3,8 +3,8 @@ import type { ReactNode } from 'react';
 import { dictionaries, type Language } from '../lib/i18n.ts';
 import { reasonText } from '../lib/reasons.ts';
 
-export type ExecutionState = 'starting' | 'running' | 'waiting_approval' | 'waiting_input' | 'idle' | 'ended' | 'failed' | 'unknown';
-const KNOWN = new Set<ExecutionState>(['starting', 'running', 'waiting_approval', 'waiting_input', 'idle', 'ended', 'failed', 'unknown']);
+export type ExecutionState = 'starting' | 'running' | 'waiting_approval' | 'waiting_input' | 'idle' | 'ended' | 'failed' | 'unknown' | 'stopped' | 'closed' | 'not_hosted' | 'unresolved';
+const KNOWN = new Set<ExecutionState>(['starting', 'running', 'waiting_approval', 'waiting_input', 'idle', 'ended', 'failed', 'unknown', 'stopped', 'closed', 'not_hosted', 'unresolved']);
 /** 実行中、承認待ち、返答待ち、失敗、完了を別の色で示す。 */
 export function stateTone(state: string): 'running' | 'waiting' | 'input' | 'completed' | 'idle' | 'failed' {
   if (state === 'running' || state === 'starting') return 'running';
@@ -22,7 +22,12 @@ export function toDisplayState(state: string): ExecutionState {
   if (state === 'denied') return 'failed';
   return 'unknown';
 }
-export function stateLabel(state: string, language: Language = 'en'): string { return dictionaries[language][toDisplayState(state)]; }
+const LABELS: Record<string, string> = { running: 'Working', starting: 'Working', waiting_approval: 'Needs approval', waiting_input: 'Waiting',
+  idle: 'Idle', unknown: 'Unknown', stopped: 'Stopped', closed: 'Closed', not_hosted: 'Not hosted', unresolved: 'Unresolved', ended: 'Stopped' };
+export function stateLabel(state: string, language: Language = 'en'): string {
+  const shown = toDisplayState(state);
+  return language === 'en' ? LABELS[shown] ?? 'Unknown' : (dictionaries[language] as Record<string, string>)[shown] ?? LABELS[shown] ?? 'Unknown';
+}
 /** 小さな色の点と短い語で状態を出す。 */
 export function StatusDot({ state, language = 'en', className = '', dotOnly = false, dotLabel, activity = false }: { state: string; language?: Language; className?: string; dotOnly?: boolean; dotLabel?: string; activity?: boolean }) {
   const shown = toDisplayState(state);
@@ -44,7 +49,7 @@ export function StateBadge({ state, language = 'en', evidenceUrl, reason, elapse
   const t = dictionaries[language];
   reason = reasonText(reason) || undefined;
   reason = reason === 'Unknown' || reason === t.unknown ? undefined : reason;
-  const label = t[state];
+  const label = stateLabel(state, language);
   const title = [label, ['starting', 'running', 'waiting_approval', 'waiting_input'].includes(state) ? elapsed : undefined,
     ['unknown', 'failed'].includes(state) ? reason : undefined].filter(Boolean).join(' · ');
   return <AppLink className={`state-badge status status-${stateTone(state)} status-${state}`} to={evidenceUrl} aria-label={`${label} · ${t.evidence}`} title={title}>

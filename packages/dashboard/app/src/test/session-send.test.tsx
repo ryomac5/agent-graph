@@ -4,7 +4,7 @@ import { MemoryRouter } from 'react-router';
 import { App } from '../App.tsx';
 import { ConversationPage, type ConversationClient } from '../pages/conversation/ConversationPage.tsx';
 import { Workbench } from '../pages/workspace/Workbench.tsx';
-import { createStore } from '../lib/store.ts';
+import { createStore } from "./current-fixture.ts";
 import { listPanes, restoreWorkspace, workspaceKey } from '../lib/panes.ts';
 import type { Ack } from '../lib/client.ts';
 
@@ -28,7 +28,7 @@ function fixture(origin = 'managed', state = 'idle', evidence?: unknown, provide
   } });
   target.setConnection('connected');
   let finish!: (value: Ack) => void;
-  const command = vi.fn((name: string): Promise<Ack> => name === 'list_models'
+  const command = vi.fn((name: string, _payload?: unknown, _cmdId?: string): Promise<Ack> => name === 'list_models'
     ? Promise.resolve(ack([{ model: 'model-a', displayName: 'Model A' }])) : name === 'session.hosts' ? Promise.resolve(ack({ hosts: [] })) : name === 'session.launch' ? Promise.resolve(ack({ terminalId: 'terminal' })) : new Promise(resolve => { finish = resolve; }));
   const client: ConversationClient = { command };
   function Wrapper() { return <MemoryRouter><Workbench project="p" session="root" conversationId={conversationId} client={client} language="ja" resolveRenameRoot={id => id === conversationId ? 'root' : undefined}
@@ -50,7 +50,7 @@ it.each([
   fireEvent.click(screen.getByRole('button', { name: '送信' }));
   const observed = origin === 'observed';
   const conversationId = observed ? '["codex","native-id"]' : 'c';
-  await waitFor(() => expect(f.command).toHaveBeenCalledWith(observed ? 'session.send' : 'send', observed ? { conversationId, text: '続けてください' } : { runId: 'r', input: { text: '続けてください' } }));
+  await waitFor(() => expect(f.command).toHaveBeenCalledWith(observed ? 'session.send' : 'send', observed ? { conversationId, text: '続けてください' } : { runId: 'r', input: { text: '続けてください' } }, expect.any(String)));
   if (observed) expect(f.command).toHaveBeenCalledWith('session.launch', { projectId: 'p', provider: 'codex', resume: 'native-id', model: 'model-a' });
   const messages = document.querySelectorAll('.message');
   expect(messages[messages.length - 1].textContent).toContain('続けてください');
@@ -60,7 +60,7 @@ it.each([
   if (observed) {
     fireEvent.change(screen.getByRole('textbox', { name: '入力' }), { target: { value: '次の発言' } });
     fireEvent.click(screen.getByRole('button', { name: '送信' }));
-    await waitFor(() => expect(f.command).toHaveBeenLastCalledWith('session.send', { conversationId, text: '次の発言' }));
+    await waitFor(() => expect(f.command).toHaveBeenLastCalledWith('session.send', { conversationId, text: '次の発言' }, expect.any(String)));
     expect(f.command.mock.calls.filter(([name]) => name === 'session.launch')).toHaveLength(1);
     expect(f.command.mock.calls.some(([name]) => ['fork', 'adopt'].includes(name))).toBe(false);
     await act(async () => f.finish(ack()));
@@ -94,6 +94,7 @@ it('replaces optimistic input with the recorded message without duplicating it',
       messages: { upsert: [{ id: 'recorded', role: 'user', body: 'Recorded input' }], remove: [] },
       message_memberships: { upsert: [{ id: 'recorded-link', message_id: 'recorded', conversation_id: 'c', active: 1 }], remove: [] },
     } });
+    f.target.setSendWatches([{ id: f.command.mock.calls.find(([name]) => name === 'send')![2], conversation_id: 'c', body: 'Recorded input', message_id: 'recorded', decision: { display: 'Likely delivered' } }]);
     f.finish(ack());
   });
   expect(screen.getAllByText('Recorded input')).toHaveLength(1);
@@ -132,7 +133,7 @@ it.each(['claude', 'codex'])('creates a %s session from the project plus, opens 
   await waitFor(() => expect(screen.getByRole('button', { name: /^(Model|モデル) · / }).textContent).toContain('Model A'));
   fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'First message' } });
   fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-  await vi.waitFor(() => expect(f.command).toHaveBeenCalledWith('session.send', { conversationId, text: 'First message' }));
+  await vi.waitFor(() => expect(f.command).toHaveBeenCalledWith('session.send', { conversationId, text: 'First message' }, expect.any(String)));
   expect(f.command.mock.calls.filter(([name]) => name === 'session.launch')).toHaveLength(1);
 });
 
@@ -191,7 +192,7 @@ it('opens exactly one empty tab for a project without sessions and keeps it when
   await waitFor(() => expect(screen.getByRole('button', { name: /^(Model|モデル) · / }).textContent).toContain('Model A'));
   fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Begin' } });
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Send' })); });
-  await waitFor(() => expect(f.command).toHaveBeenCalledWith('session.send', { conversationId, text: 'Begin' }));
+  await waitFor(() => expect(f.command).toHaveBeenCalledWith('session.send', { conversationId, text: 'Begin' }, expect.any(String)));
   act(() => f.target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: {
     roots: { upsert: [{ id: 'new-root', project: 'p', conversation_ids: [conversationId], state: 'idle' }], remove: [] },
     conversations: { upsert: [{ id: conversationId, project: 'p', provider: 'codex', origin: 'observed' }], remove: [] },
@@ -200,7 +201,7 @@ it('opens exactly one empty tab for a project without sessions and keeps it when
   expect(document.querySelectorAll('.workbench [role=tab]')).toHaveLength(1);
   fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Continue' } });
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Send' })); });
-  expect(f.command).toHaveBeenCalledWith('session.send', { conversationId, text: 'Continue' });
+  expect(f.command).toHaveBeenCalledWith('session.send', { conversationId, text: 'Continue' }, expect.any(String));
   expect(f.command.mock.calls.filter(([name]) => name === 'session.launch')).toHaveLength(1);
 });
 
@@ -232,7 +233,7 @@ it.each(['explicit', 'derived'])('keeps the conversation and run reachable with 
   expect(listPanes(saved)[0].tabs[0]).toMatchObject({ conversationId: 'claude:native' });
   fireEvent.change(screen.getByRole('textbox', { name: '入力' }), { target: { value: 'Next message' } });
   fireEvent.click(screen.getByRole('button', { name: '送信' }));
-  expect(f.command).toHaveBeenLastCalledWith('send', { runId: 'claude:native:1', input: { text: 'Next message' } });
+  expect(f.command).toHaveBeenLastCalledWith('send', { runId: 'claude:native:1', input: { text: 'Next message' } }, expect.any(String));
   await act(async () => f.finish(ack()));
 });
 
@@ -245,7 +246,7 @@ it.each(['claude', 'codex'])('resumes observed %s using the ID provider before i
   fireEvent.change(screen.getByRole('textbox', { name: '入力' }), { target: { value: 'Resume from ID' } });
   fireEvent.click(screen.getByRole('button', { name: '送信' }));
   await waitFor(() => expect(f.command).toHaveBeenCalledWith('session.launch', { projectId: 'p', provider, resume: 'native-id', model: 'model-a' }));
-  await waitFor(() => expect(f.command).toHaveBeenCalledWith('session.send', { conversationId: JSON.stringify([provider, 'native-id']), text: 'Resume from ID' }));
+  await waitFor(() => expect(f.command).toHaveBeenCalledWith('session.send', { conversationId: JSON.stringify([provider, 'native-id']), text: 'Resume from ID' }, expect.any(String)));
   expect(f.command.mock.calls.some(([name]) => ['fork', 'adopt'].includes(name))).toBe(false);
   await act(async () => f.finish(ack()));
 });
@@ -258,28 +259,28 @@ it.each(['claude', 'codex'])('sends observed %s to an existing terminal host wit
   await waitFor(() => expect(screen.getByRole('button', { name: /^(Model|モデル) · / }).textContent).toContain('Model A'));
   fireEvent.change(screen.getByRole('textbox', { name: '入力' }), { target: { value: 'Existing host' } });
   fireEvent.click(screen.getByRole('button', { name: '送信' }));
-  await waitFor(() => expect(f.command).toHaveBeenCalledWith('session.send', { conversationId, text: 'Existing host' }));
+  await waitFor(() => expect(f.command).toHaveBeenCalledWith('session.send', { conversationId, text: 'Existing host' }, expect.any(String)));
   expect(f.command.mock.calls.some(([name]) => ['session.launch', 'fork', 'adopt'].includes(name))).toBe(false);
 });
 
 it('restores a failed bubble after reload and resends its text through the existing send route', async () => {
   const f = fixture('observed', 'idle', { kind: 'turn_completed' }, 'claude');
   const conversationId = '["claude","native-id"]';
-  f.target.setSendWatches([{ id: 'delivery', conversation_id: conversationId, body: 'Missing message', attachments: [], state: 'failed', sent_ts: '2026-10-13T10:00:00Z' }]);
+  f.target.setSendWatches([{ id: 'delivery', conversation_id: conversationId, body: 'Missing message', attachments: [], state: 'rejected', decision: { display: 'Not delivered' }, sent_ts: '2026-10-13T10:00:00Z' }]);
   render(<f.Wrapper/>);
-  expect(await screen.findByText('未配達')).toBeTruthy();
+  expect(await screen.findByText('Not delivered')).toBeTruthy();
   expect(screen.getByText('Missing message')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: '再送' }));
-  await waitFor(() => expect(f.command).toHaveBeenCalledWith('session.send', { conversationId, text: 'Missing message', attachments: [], retryOf: 'delivery' }));
+  await waitFor(() => expect(f.command).toHaveBeenCalledWith('session.send', { conversationId, text: 'Missing message', attachments: [], retryOf: 'delivery' }, expect.any(String)));
   await act(async () => f.finish(ack()));
 });
 
 it('removes the failed bubble and retry action when the watch closes or expires', async () => {
   const f = fixture('observed', 'idle', { kind: 'turn_completed' }, 'claude');
-  f.target.setSendWatches([{ id: 'delivery', conversation_id: '["claude","native-id"]', body: 'Late message', attachments: [], state: 'failed' }]);
+  f.target.setSendWatches([{ id: 'delivery', conversation_id: '["claude","native-id"]', body: 'Late message', attachments: [], state: 'rejected', decision: { display: 'Not delivered' } }]);
   render(<f.Wrapper/>);
-  expect(await screen.findByText('未配達')).toBeTruthy();
+  expect(await screen.findByText('Not delivered')).toBeTruthy();
   act(() => f.target.setSendWatches([]));
-  expect(screen.queryByText('未配達')).toBeNull();
+  expect(screen.queryByText('Not delivered')).toBeNull();
   expect(screen.queryByRole('button', { name: '再送' })).toBeNull();
 });

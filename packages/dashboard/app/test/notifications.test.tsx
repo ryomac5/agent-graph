@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Notifications } from '../src/components/notifications/Notifications.tsx';
 import { collectNotifications, loadPreferences, NOTIFICATION_KINDS, PREFERENCES_KEY } from '../src/components/notifications/model.ts';
-import { createStore, type ScreenState } from '../src/lib/store.ts';
+import { createStore, type ScreenState } from "../src/test/current-fixture.ts";
 
 beforeEach(() => localStorage.clear());
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -20,7 +20,7 @@ const pending = { id: 'approval', state: 'pending', run_id: 'run', conversation_
   request: { command: 'echo full approval command' }, available_decisions: ['allow', 'deny'] };
 it('classifies every notification type and distinguishes unknown from completed', () => {
   const before = snapshot({ runs: [{ id: 'r', state: 'running' }] });
-  const next = snapshot({ send_watches: [{ id: 'delivery', state: 'failed', body: 'missing text', conversation_id: 'conversation', failed_ts: new Date().toISOString() }], approvals: [pending, { id: 'review', state: 'stale', reason: 'patch changed' }],
+  const next = snapshot({ send_watches: [{ id: 'delivery', state: 'rejected', decision: { display: 'Not delivered' }, body: 'missing text', conversation_id: 'conversation', failed_ts: new Date().toISOString() }], approvals: [pending, { id: 'review', state: 'stale', reason: 'patch changed' }],
     runs: [{ id: 'r', state: 'unknown', conversation_id: 'c', reason: 'Disconnected', last_evidence: { fact_id: 'fact' }, last_evidence_ts: '2026-10-07' },
       { id: 'input', state: 'waiting_input', last_evidence_ts: new Date().toISOString() }, { id: 'failed', state: 'failed', cause: 'error', last_evidence_ts: new Date().toISOString() },
       { id: 'end', state: 'ended', end_evidence: { kind: 'host_exit', exit_code: 0 }, last_evidence_ts: new Date().toISOString() }] }, 2);
@@ -125,18 +125,18 @@ it('keeps connection faults out of notifications during snapshot resync', () => 
 it('shows a delivery failure in the bell at the same ledger seq, with excerpt and conversation link', async () => {
   const { target } = setup();
   const seq = target.getSnapshot().seq;
-  act(() => target.setSendWatches([{ id: 'sent', state: 'failed', body: 'Please check the delivery', conversation_id: 'c', failed_ts: '2026-10-13T10:00:00Z' }]));
+  act(() => target.setSendWatches([{ id: 'sent', state: 'rejected', decision: { display: 'Not delivered' }, body: 'Please check the delivery', conversation_id: 'c', failed_ts: '2026-10-13T10:00:00Z' }]));
   expect(await screen.findByRole('heading', { name: 'A message you sent did not reach the conversation' })).toBeTruthy();
   expect(screen.getByText('Please check the delivery')).toBeTruthy();
   expect(screen.getByRole('link', { name: 'Conversation' }).getAttribute('href')).toBe('/c/c');
   expect(target.getSnapshot().seq).toBe(seq);
-  act(() => target.setSendWatches([{ id: 'sent', state: 'failed', body: 'Please check the delivery', conversation_id: 'c' }]));
+  act(() => target.setSendWatches([{ id: 'sent', state: 'rejected', decision: { display: 'Not delivered' }, body: 'Please check the delivery', conversation_id: 'c' }]));
   expect(screen.getAllByRole('heading', { name: 'A message you sent did not reach the conversation' })).toHaveLength(1);
 });
 
 it('removes delivery failures from the bell when a late message arrives or retention expires', async () => {
   const { target } = setup();
-  act(() => target.setSendWatches([{ id: 'sent', state: 'failed', body: 'Late delivery', conversation_id: 'c' }]));
+  act(() => target.setSendWatches([{ id: 'sent', state: 'rejected', decision: { display: 'Not delivered' }, body: 'Late delivery', conversation_id: 'c' }]));
   expect(await screen.findByText('Late delivery')).toBeTruthy();
   act(() => target.setSendWatches([]));
   expect(screen.queryByText('Late delivery')).toBeNull();

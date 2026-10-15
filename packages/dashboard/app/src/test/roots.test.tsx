@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
-import { createStore } from '../lib/store.ts';
+import { createStore } from "./current-fixture.ts";
 import { WorkspacePage } from '../pages/workspace/WorkspacePage.tsx';
 import { HomePage } from '../pages/home/HomePage.tsx';
 import { RootList } from '../components/RootViews.tsx';
@@ -77,7 +77,7 @@ it('lists only roots with running children and leaves orphan unattended runs out
   render(<MemoryRouter><HomePage target={fixture()}/></MemoryRouter>);
   expect(screen.getAllByRole('link', { name: /Repo-20261008|agent-graph-002/ })).toHaveLength(2);
   expect(screen.getByRole('heading', { name: /Screen graph/ })).toBeTruthy();
-  expect(screen.getByRole('button', { name: 'Build the screen · GPT-6.1 Sol · Implementation · Running' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Build the screen · GPT-6.1 Sol · Implementation · Working' })).toBeTruthy();
   expect(screen.queryByText('Check the screen')).toBeNull();
   // 根でない会話は一覧に出さない。
   expect(screen.queryByText('Orphan run')).toBeNull();

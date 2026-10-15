@@ -46,7 +46,7 @@ export const Notifications = memo(function Notifications({ client, target = stor
     }
     setNotices(items => {
       const retained = items.filter(notice => notice.kind !== 'delivery_failed'
-        || state.projection.send_watches?.some(row => row.id === notice.deliveryId && row.state === 'failed'));
+        || state.projection.send_watches?.some(row => row.id === notice.deliveryId && (row.decision as { display?: string } | undefined)?.display === 'Not delivered'));
       return visible.length ? [...visible.reverse(), ...retained].slice(0, NOTICE_LIMIT)
         : retained.length === items.length ? items : retained;
     });

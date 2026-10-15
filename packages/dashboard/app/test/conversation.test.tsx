@@ -2,7 +2,7 @@ import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { ConversationPage, type ConversationClient } from '../src/pages/conversation/ConversationPage.tsx';
-import { createStore, type Row } from '../src/lib/store.ts';
+import { createStore, type Row } from "../src/test/current-fixture.ts";
 import type { Ack } from '../src/lib/client.ts';
 
 beforeEach(() => { vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ generation: 0, projection: { messages: [], message_memberships: [] }, next: null }) }))); });
@@ -153,7 +153,7 @@ it('sends only on Cmd+Enter, preserves newlines on Enter and rejects composing i
   fireEvent.keyDown(input, { key: 'Enter', metaKey: true, isComposing: true });
   expect(command.mock.calls.some(call => call[0] === 'send')).toBe(false);
   fireEvent.keyDown(input, { key: 'Enter', metaKey: true });
-  await waitFor(() => expect(command).toHaveBeenCalledWith('send', { runId: 'r', input: { text: 'Read this\nthen respond' } }));
+  await waitFor(() => expect(command).toHaveBeenCalledWith('send', { runId: 'r', input: { text: 'Read this\nthen respond' } }, expect.any(String)));
   await waitFor(() => expect((input as HTMLTextAreaElement).value).toBe(''));
 });
 
@@ -164,7 +164,7 @@ it('uses one send button and immediately continues an external conversation with
   await waitModels();
   fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Continue please' } });
   fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-  await waitFor(() => expect(command).toHaveBeenCalledWith('session.send', { conversationId: '["codex","native-id"]', text: 'Continue please' }));
+  await waitFor(() => expect(command).toHaveBeenCalledWith('session.send', { conversationId: '["codex","native-id"]', text: 'Continue please' }, expect.any(String)));
   expect(screen.queryByRole('dialog')).toBeNull();
   expect(command).toHaveBeenCalledWith('session.launch', { projectId: '', provider: 'codex', resume: 'native-id', model: 'model-a' });
   expect(command.mock.calls.some(call => ['fork', 'adopt'].includes(call[0]))).toBe(false);
@@ -172,14 +172,14 @@ it('uses one send button and immediately continues an external conversation with
 });
 
 it('shows unknown reason, last evidence, timestamp and a dashed state with evidence access', async () => {
-  setup({ projection: { runs: [{ id: 'r', conversation_id: 'c', generation: 1, state: 'unknown', reason: 'Process check denied',
-    last_evidence: { kind: 'disconnect' }, last_evidence_ts: '2026-10-07T01:23:00Z' }] } });
+  setup({ projection: { runs: [{ id: 'r', conversation_id: 'c', generation: 1, state: 'unknown', reason: 'liveness unverified',
+    decision_id: 'proof', last_evidence_ts: '2026-10-07T01:23:00Z' }], state_decisions: [{ id: 'proof', evaluatedAt: Date.parse('2026-10-07T01:23:00Z'), turn: { reason: 'scan_failed', evidenceIds: ['scan-1'] }, display: { details: ['liveness unverified'] } }] } });
   await waitModels();
   const status = screen.getByRole('link', { name: 'Unknown · Details' });
   expect(status.className).toContain('status-unknown');
   // 見出しの印には理由を出さず、title と Details に置く。
-  expect(status.textContent).not.toContain('Process check denied');
-  expect(status.title).toContain('Process check denied');
+  expect(status.textContent).not.toContain('liveness unverified');
+  expect(status.title).toContain('Scan failed');
   expect(status.getAttribute('href')).toBe('#conversation-details');
   expect(screen.queryByRole('region', { name: 'Details' })).toBeNull();
   // 状態の印を押すと Details が開き、根拠と時刻を見せる。
@@ -187,7 +187,7 @@ it('shows unknown reason, last evidence, timestamp and a dashed state with evide
   const details = screen.getByRole('region', { name: 'Details' });
   // 根拠の種類は内部の語なので Details にも出さない。
   expect(details.textContent).not.toContain('disconnect');
-  expect(details.textContent).toContain('Process check denied');
+  expect(details.textContent).toContain('liveness unverified');
   expect(details.querySelector('time')?.getAttribute('datetime')).toBe('2026-10-07T01:23:00Z');
 });
 
@@ -219,7 +219,7 @@ it('resumes observed Codex through the terminal even with an unsupported observe
   expect(screen.queryByRole('article', { name: 'Codex message' })).toBeNull();
   fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Hello' } });
   fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-  await waitFor(() => expect(command).toHaveBeenCalledWith('session.send', { conversationId: '["codex","native-id"]', text: 'Hello' }));
+  await waitFor(() => expect(command).toHaveBeenCalledWith('session.send', { conversationId: '["codex","native-id"]', text: 'Hello' }, expect.any(String)));
   expect(command).toHaveBeenCalledWith('session.launch', { projectId: '', provider: 'codex', resume: 'native-id', model: 'model-a' });
   expect(command.mock.calls.some(call => ['fork', 'adopt'].includes(call[0]))).toBe(false);
 });
@@ -249,7 +249,7 @@ it('resumes observed Codex through the terminal without a dialog when runner has
   await waitModels();
   fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'Next step' } });
   fireEvent.keyDown(screen.getByRole('textbox', { name: 'Message' }), { key: 'Enter', metaKey: true });
-  await waitFor(() => expect(command).toHaveBeenCalledWith('session.send', { conversationId: '["codex","native-id"]', text: 'Next step' }));
+  await waitFor(() => expect(command).toHaveBeenCalledWith('session.send', { conversationId: '["codex","native-id"]', text: 'Next step' }, expect.any(String)));
   expect(command).toHaveBeenCalledWith('session.launch', { projectId: '', provider: 'codex', resume: 'native-id', model: 'model-a' });
   expect(command.mock.calls.some(call => ['fork', 'adopt'].includes(call[0]))).toBe(false);
   expect(screen.queryByRole('dialog')).toBeNull();
@@ -380,7 +380,7 @@ it('keeps the header to the name, state, provider with model and elapsed time, a
     const header = document.querySelector<HTMLElement>('.conv-header')!;
     const row = header.querySelector<HTMLElement>('.conv-title-row')!;
     expect(within(row).getByRole('heading', { name: 'Build console' })).toBeTruthy();
-    expect(within(row).getByRole('link', { name: 'Running · Details' }).textContent).toContain('Elapsed 1m 5s');
+    expect(within(row).getByRole('link', { name: 'Working · Details' }).textContent).toContain('Elapsed 1m 5s');
     expect(within(row).getByText('Codex model-a')).toBeTruthy();
     for (const noise of ['Effort', 'Worktree', 'Observation', 'Read-only', 'Unsupported', 'Handoff']) expect(header.textContent).not.toContain(noise);
     expect(screen.queryByText('Unable to continue from this conversation history.')).toBeNull();

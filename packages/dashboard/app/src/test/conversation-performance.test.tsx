@@ -11,7 +11,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { ConversationPage } from '../pages/conversation/ConversationPage.tsx';
-import { createStore, useScreenStore } from '../lib/store.ts';
+import { createStore, useScreenStore } from "./current-fixture.ts";
 import { OpenWorkspaceConversation } from '../lib/workspace-context.ts';
 import { compareMessages } from '../lib/projection-client.ts';
 import { selectTimeline } from '../components/conversation/model.ts';
@@ -151,14 +151,14 @@ it('reuses decoded rows and compares a 200-message window without serializing un
 });
 
 it('updates sending and queued indicators when only delivery_state changes', () => {
-  const row = { id: 'pending', role: 'user', body: 'Request', delivery_state: 'sending' };
+  const row = { id: 'pending', role: 'user', body: 'Request', delivery_decision: { display: 'Sending' } };
   const sender = { key: 'user', name: 'You', side: 'end' as const };
   const view = render(<Message row={row} sender={sender}/>);
-  expect(screen.getByText('Sending…')).toBeTruthy();
-  view.rerender(<Message row={{ ...row, delivery_state: 'queued' }} sender={sender}/>);
-  expect(screen.queryByText('Sending…')).toBeNull();
-  expect(screen.getByText('Queued — Claude will read this after the current step')).toBeTruthy();
-  view.rerender(<Message row={{ ...row, delivery_state: 'delivered' }} sender={sender}/>);
+  expect(screen.getByText('Sending')).toBeTruthy();
+  view.rerender(<Message row={{ ...row, delivery_decision: { display: 'Likely queued' } }} sender={sender}/>);
+  expect(screen.queryByText('Sending')).toBeNull();
+  expect(screen.getByText('Likely queued')).toBeTruthy();
+  view.rerender(<Message row={{ ...row, delivery_decision: undefined }} sender={sender}/>);
   expect(screen.queryByRole('status')).toBeNull();
 });
 
@@ -183,7 +183,7 @@ it('keeps delegation messages unchanged when rebuilt nodes have the same display
 
 it('shows Not delivered and resend even when the failed message contained only an image', () => {
   const retry = vi.fn();
-  const row = { id: 'image-send', role: 'user', body: '', attachments: ['image-id'], delivery_state: 'failed' };
+  const row = { id: 'image-send', role: 'user', body: '', attachments: ['image-id'], delivery_decision: { display: 'Not delivered' } };
   render(<Message row={row} sender={{ key: 'user', side: 'end', name: 'You' }} onRetry={retry}/>);
   expect(screen.getByText('Not delivered')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Resend' }));
@@ -377,12 +377,12 @@ it('refreshes delivery status, retry availability and the retry handler through 
   const row = { id: 'delivery', role: 'user', body: 'Retry this message' };
   const firstRetry = vi.fn();
   const nextRetry = vi.fn();
-  const view = render(<Message row={{ ...row, delivery_state: 'sending' }} sender={sender} onRetry={firstRetry}/>);
-  expect(screen.getByText('Sending…')).toBeTruthy();
-  const failed = { ...row, delivery_state: 'failed' };
+  const view = render(<Message row={{ ...row, delivery_decision: { display: 'Sending' } }} sender={sender} onRetry={firstRetry}/>);
+  expect(screen.getByText('Sending')).toBeTruthy();
+  const failed = { ...row, delivery_decision: { display: 'Not delivered' } };
   view.rerender(<Message row={failed} sender={sender} onRetry={firstRetry}/>);
   expect(screen.getByText('Not delivered')).toBeTruthy();
-  expect(screen.queryByText('Sending…')).toBeNull();
+  expect(screen.queryByText('Sending')).toBeNull();
   view.rerender(<Message row={{ ...failed, retry_pending: true }} sender={sender} onRetry={firstRetry}/>);
   expect((screen.getByRole('button', { name: 'Resend' }) as HTMLButtonElement).disabled).toBe(true);
   view.rerender(<Message row={failed} sender={sender} onRetry={firstRetry}/>);
@@ -414,22 +414,22 @@ it('updates failed delivery and notifications without advancing seq, and resends
   render(<MemoryRouter><ConversationPage target={target} client={client} conversationId="c"/>
     <Notifications target={target} client={client}/></MemoryRouter>);
   await act(async () => {});
-  const watch = { id: 'delivery', conversation_id: 'c', body: 'Lost message', state: 'pending', attachments: [] };
+  const watch = { id: 'delivery', conversation_id: 'c', body: 'Lost message', state: 'emitted', decision: { display: 'Sending' }, attachments: [] };
   act(() => target.setSendWatches([watch]));
   renderMarkdown.mockClear();
-  act(() => target.setSendWatches([{ ...watch, state: 'failed' }]));
+  act(() => target.setSendWatches([{ ...watch, state: 'not_emitted', decision: { display: 'Not delivered' } }]));
   expect(target.getSnapshot().seq).toBe(1);
   expect(screen.getByText('Not delivered')).toBeTruthy();
   expect(screen.getByRole('heading', { name: 'A message you sent did not reach the conversation' })).toBeTruthy();
   expect(renderMarkdown.mock.calls.map(([text]) => text)).not.toContain('Keep this rendered');
   const collect = vi.spyOn(noticeModel, 'collectNotifications');
-  act(() => target.setSendWatches([{ ...watch, state: 'failed' }]));
+  act(() => target.setSendWatches([{ ...watch, state: 'not_emitted', decision: { display: 'Not delivered' } }]));
   expect(collect).not.toHaveBeenCalled();
   act(() => { target.applyPatch({ type: 'patch', generation: 1, from_seq: 1, seq: 2, changes: {
     runs: { upsert: [{ id: 'new-run', conversation_id: 'c', state: 'idle', generation: 2 }], remove: ['run'] },
   } }); });
   fireEvent.click(screen.getByRole('button', { name: 'Resend' }));
-  expect(client.command).toHaveBeenCalledWith('send', { runId: 'new-run', input: { text: 'Lost message' }, retryOf: 'delivery' });
+  expect(client.command).toHaveBeenCalledWith('send', { runId: 'new-run', input: { text: 'Lost message' }, retryOf: 'delivery' }, expect.any(String));
   expect((screen.getByRole('button', { name: 'Resend' }) as HTMLButtonElement).disabled).toBe(true);
   await act(async () => finish({ type: 'ack', cmd_id: 'cmd', ok: true }));
   expect((screen.getByRole('button', { name: 'Resend' }) as HTMLButtonElement).disabled).toBe(false);

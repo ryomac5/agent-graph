@@ -1,3 +1,5 @@
+import { spawn } from 'node:child_process';
+import { stateNow } from './clock.mjs';
 import { randomUUID } from 'node:crypto';
 import { appendFileSync } from 'node:fs';
 import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
@@ -61,7 +63,7 @@ export async function main(provider) {
   await mkdir(join(directory, 'requests'), { recursive: true });
   await mkdir(join(directory, 'responses'), { recursive: true });
   const audit = (event, data = {}) => appendFileSync(join(control, 'events.jsonl'), JSON.stringify({ at: new Date().toISOString(), pid: process.pid, provider, event, ...data }) + '\n');
-  const parent = process.ppid;
+  const parent = Number(process.env.E2E_PARENT_PID ?? process.ppid);
   const watchdog = setInterval(() => {
     try { process.kill(parent, 0); } catch (error) { if (error.code === 'ESRCH') process.exit(0); else throw error; }
   }, PARENT_CHECK_MS);
@@ -79,11 +81,12 @@ export async function main(provider) {
   await rm(join(control, 'next-session.json'), { force: true });
   const argValue = flag => args.includes(flag) ? args[args.indexOf(flag) + 1] : undefined;
   const transcript = new Transcript(provider, process.env, { ...options, id: argValue('--resume') ?? argValue('resume'), model: argValue('--model') });
+  let dropStop = false, dropSessionEnd = false, statusUpdatedAt = stateNow(), child;
   let working = false, holdNext = false, dropNext = false, panel = false, panelModel = '', panelArgs = '', stopped = false;
   let queued = [], pending = [], output = '', timer, poll;
   let operation = Promise.resolve();
   const serialize = fn => { operation = operation.then(fn); operation.catch(error => { audit('fatal', { error: error.stack }); console.error(error); void shutdown(1); }); return operation; };
-  const state = () => ({ pid: process.pid, provider, id: transcript.id, path: transcript.path, model: transcript.model, working, panel, queued: queued.map(item => item.text), stopped });
+  const state = () => ({ pid: process.pid, provider, id: transcript.id, path: transcript.path, model: transcript.model, working, panel, child: child ? { id: child.id, path: child.path, turn: child.turn } : undefined, queued: queued.map(item => item.text), stopped });
   async function saveState() {
     const temporary = join(directory, 'state.tmp');
     await writeJson(temporary, state()); await rename(temporary, join(directory, 'state.json'));
@@ -91,14 +94,15 @@ export async function main(provider) {
       const destination = join(process.env.CLAUDE_CONFIG_DIR, 'sessions', `${process.pid}.json`);
       await writeJson(destination + '.tmp', { pid: process.pid, sessionId: transcript.id, cwd: transcript.cwd,
         startedAt: Date.parse(transcript.createdAt), version: CLAUDE_VERSION, kind: 'interactive', entrypoint: 'cli',
-        status: working ? 'working' : 'idle', updatedAt: Date.now() });
+        status: working ? 'busy' : 'idle', statusUpdatedAt, updatedAt: stateNow() });
       await rename(destination + '.tmp', destination);
     }
   }
   async function hook(name, fields = {}) {
     if (provider !== 'claude') return;
+    if (name === 'Stop' && dropStop || name === 'SessionEnd' && dropSessionEnd) { audit('dropped-hook', { name }); return; }
     const input = { session_id: transcript.id, transcript_path: transcript.path, cwd: transcript.cwd,
-      permission_mode: 'default', hook_event_name: name, ...fields };
+      permission_mode: 'default', hook_event_name: name, source_ts: new Date(stateNow()).toISOString(), prompt_id: transcript.turn, ...fields };
     // 実際の hook の model は完全なモデル ID。
     if (input.model) input.model = CLAUDE_MODEL_IDS[input.model] ?? input.model;
     audit('hook-input', { input });
@@ -113,8 +117,9 @@ export async function main(provider) {
     for (const item of queued) { transcript.absorb(item); pending.push(item.text); }
     queued = [];
     for (const text of pending) { output = REPLY_PREFIX + text; transcript.assistant(output); audit('reply', { text, id: transcript.id }); }
-    pending = []; working = false;
+    pending = []; working = false; statusUpdatedAt = stateNow();
     await hook('Stop', { stop_hook_active: false, last_assistant_message: output });
+    transcript.complete();
     await saveState(); draw();
   }
   async function submit(text) {
@@ -127,12 +132,13 @@ export async function main(provider) {
     if (text.startsWith('!')) { transcript.bash(text); output = 'E2E shell output'; await saveState(); draw(); return; }
     if (working && provider === 'claude') { queued.push(transcript.enqueue(text)); await saveState(); draw(); return; }
     if (stopped) stopped = false;
-    transcript.user(text); pending.push(text); working = true;
-    await hook('UserPromptSubmit', { prompt: text, prompt_id: randomUUID() });
+    transcript.user(text); pending.push(text); working = true; statusUpdatedAt = stateNow();
+    await hook('UserPromptSubmit', { prompt: text, prompt_id: transcript.turn });
     await saveState(); draw();
     if (holdNext) holdNext = false;
     else timer = setTimeout(() => serialize(finish), REPLY_DELAY_MS);
   }
+  async function interrupt() { clearTimeout(timer); transcript.interrupt(); working = false; pending = []; queued = []; statusUpdatedAt = stateNow(); await saveState(); draw(); }
   async function choose(char) {
     if (char === '\x1b') { panel = false; await saveState(); draw(); return; }
     if (!['s', '\r', '\n'].includes(char)) return;
@@ -156,12 +162,37 @@ export async function main(provider) {
     if (decoder.buffer === '\x1b') escapeTimer = setTimeout(() => {
       decoder.buffer = '';
       if (panel) serialize(() => choose('\x1b'));
+      else if (working) serialize(interrupt);
     }, 30);
   }); process.stdin.resume();
   await hook('SessionStart', { source: args.includes('--resume') ? 'resume' : 'startup', model: transcript.model });
   await saveState(); draw();
   async function controlCommand(request) {
     switch (request.action) {
+      case 'drop-stop': dropStop = true; break;
+      case 'drop-session-end': dropSessionEnd = true; break;
+      case 'interrupt': await interrupt(); break;
+      case 'long-tool': clearTimeout(timer); working = true; statusUpdatedAt = stateNow(); transcript.user('E2E long tool'); transcript.tool(); break;
+      case 'approval-wait': clearTimeout(timer); working = false; transcript.user('E2E approval request'); await hook('UserPromptSubmit', { prompt: 'E2E approval request' }); await hook('Notification', { notification_type: 'permission_prompt' }); break;
+      case 'child-tool': {
+        child?.close(); child = new Transcript('claude', process.env, { id: 'agent-' + randomUUID(), parentSessionId: transcript.id });
+        child.user('E2E child tool'); child.tool(); break;
+      }
+      case 'child-stop-tool':
+        if (!child) throw new Error('No child');
+        child.append({ ...child.base('attachment'), promptId: child.turn, attachment: { type: 'hook_success', hookEvent: 'SubagentStop' } }); break;
+      case 'child-stopped-notification':
+        if (!child) throw new Error('No child');
+        transcript.append({ type: 'queue-operation', operation: 'enqueue', timestamp: new Date(stateNow()).toISOString(), sessionId: transcript.id,
+          content: '<task-notification><task-id>' + child.id.slice(6) + '</task-id><status>stopped</status></task-notification>' }); break;
+      case 'external-input': transcript.user(request.text); break;
+      case 'scan-failure': await writeJson(join(process.env.CLAUDE_CONFIG_DIR, 'sessions', 'invalid.json'), { broken: true }); break;
+      case 'restore-scan': await rm(join(process.env.CLAUDE_CONFIG_DIR, 'sessions', 'invalid.json'), { force: true }); break;
+      case 'advance-clock': await writeJson(join(control, 'clock.json'), { offset: stateNow() - Date.now() + request.ms }); break;
+      case 'parent-restart': {
+        const next = spawn(process.execPath, [process.argv[1], '--resume', transcript.id], { env: { ...process.env, E2E_PARENT_PID: String(parent), E2E_KEEP_ALIVE: '1' }, stdio: 'ignore' });
+        next.unref(); dropSessionEnd = true; setTimeout(() => void shutdown(), 100); break;
+      }
       case 'hold-next': holdNext = true; break;
       case 'drop-next': dropNext = true; break;
       case 'release': await finish(); break;
@@ -173,7 +204,7 @@ export async function main(provider) {
       case 'compact': transcript.compact(); break;
       case 'end': await hook('SessionEnd', { reason: 'other' }); stopped = true; break;
       case 'resume': await hook('SessionStart', { source: 'resume', model: transcript.model }); stopped = false; break;
-      case 'exit': await shutdown(); return;
+      case 'exit': setTimeout(() => void shutdown(), 100); break;
       default: throw new Error(`Unknown script action: ${request.action}`);
     }
     await saveState(); draw();
@@ -199,10 +230,10 @@ export async function main(provider) {
     if (closing) return; closing = true;
     clearInterval(poll); clearInterval(watchdog); clearTimeout(timer); clearTimeout(escapeTimer);
     await hook('SessionEnd', { reason: 'prompt_input_exit' });
-    stopped = true; await saveState(); transcript.close();
+    stopped = true; await saveState(); child?.close(); transcript.close();
     if (provider === 'claude') await rm(join(process.env.CLAUDE_CONFIG_DIR, 'sessions', `${process.pid}.json`), { force: true });
     audit('exited'); process.exit(code);
   }
   process.once('SIGTERM', () => void shutdown()); process.once('SIGHUP', () => void shutdown());
-  process.stdin.once('end', () => void shutdown());
+  if (process.env.E2E_KEEP_ALIVE !== '1') process.stdin.once('end', () => void shutdown());
 }

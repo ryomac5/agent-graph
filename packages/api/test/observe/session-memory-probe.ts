@@ -1,7 +1,7 @@
 import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
-import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { ProjectionFeed } from "../../src/service/projection-feed.ts";
 import { openObservationService } from "../../src/service/index.ts";
 
 // realdata.test.ts の build モードで作った台帳を、通信なしの作業スレッドで比較する。
@@ -15,10 +15,9 @@ if (isMainThread) {
 } else {
   const { path, disabled } = workerData;
   const home = join(dirname(path), disabled ? "sessions-disabled" : "sessions-enabled");
-  if (!disabled) mkdirSync(join(home, ".claude", "sessions"), { recursive: true });
-  const service = openObservationService({ dbPath: path, home, env: { HOME: home }, writerOnly: true,
-    codexProcessReader: { listProcesses() { if (disabled) throw new Error("Observation disabled for comparison"); return ""; }, readOpenFiles: () => "" } });
+  const service = openObservationService({ dbPath: path, home, env: { HOME: home }, writerOnly: true });
   service.ingestOnce();
+  const feed = new ProjectionFeed(path, service.catchUp);
   const loaded = process.memoryUsage();
   let heapTotal = 0;
   let heapUsed = 0;
@@ -26,10 +25,13 @@ if (isMainThread) {
   while (Date.now() < until) {
     await delay(1000);
     service.ingestOnce();
+    const at = Date.now();
+    if (!disabled) feed.recordScan({ provider: 'codex', id: 'probe:' + at, at, status: 'succeeded', sessions: [], processes: [] });
+    feed.refresh(at);
     const usage = process.memoryUsage();
     heapTotal = Math.max(heapTotal, usage.heapTotal);
     heapUsed = Math.max(heapUsed, usage.heapUsed);
   }
   parentPort!.postMessage({ disabled, loaded, idlePeak: { heapTotal, heapUsed } });
-  service.close();
+  feed.close(); service.close();
 }

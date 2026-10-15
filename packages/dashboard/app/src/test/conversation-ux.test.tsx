@@ -7,7 +7,7 @@ import { resolve } from 'node:path';
 import { ConversationPage } from '../pages/conversation/ConversationPage.tsx';
 import { WorkspacePage } from '../pages/workspace/WorkspacePage.tsx';
 import { ChangedFiles } from '../pages/conversation/ChangedFiles.tsx';
-import { createStore, type Row } from '../lib/store.ts';
+import { createStore, type Row } from "./current-fixture.ts";
 import { collectConversationChanges } from '../lib/conversation-changes.ts';
 import { groupToolRuns } from '../components/conversation/timeline.ts';
 import { selectTimeline, type TimelineEntry } from '../components/conversation/model.ts';
@@ -19,7 +19,7 @@ import { isDashboardReloadBlocked } from '../lib/reload-safety.ts';
 
 beforeEach(() => { localStorage.clear(); sessionStorage.clear(); vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ generation: 0, projection: { messages: [], message_memberships: [] }, next: null }) }))); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
-const client = { command: vi.fn(async (name: string) => ({ type: 'ack' as const, cmd_id: 'cmd', ok: true, result: name === 'settings.read' ? { config: { agents: { claude: { model: 'opus' }, codex: { model: 'opus' } } } } : [{ model: 'default', displayName: 'Default (recommended)' }, { model: 'opus', displayName: 'Opus 5.5' }] })) };
+const client = { command: vi.fn(async (name: string, _payload?: unknown, _cmdId?: string) => ({ type: 'ack' as const, cmd_id: 'cmd', ok: true, result: name === 'settings.read' ? { config: { agents: { claude: { model: 'opus' }, codex: { model: 'opus' } } } } : [{ model: 'default', displayName: 'Default (recommended)' }, { model: 'opus', displayName: 'Opus 5.5' }] })) };
 function setup(messages: Row[] = [], extra: Record<string, Row[]> = {}) {
   const target = createStore();
   target.setSnapshot({ seq: 1, generation: 0, projection: {
@@ -42,7 +42,7 @@ it.each(['running', 'idle'])('shows observed queued inputs in their bubbles whil
   render(<MemoryRouter><ConversationPage conversationId="c" target={target} client={client} language="en"/></MemoryRouter>);
   await act(async () => {});
   expect(screen.queryByText('Next step') !== null).toBe(state === 'running');
-  expect(screen.queryByText('Queued — Claude will read this after the current step') !== null).toBe(state === 'running');
+  expect(screen.queryByText('Queued')).toBeNull();
   await act(async () => { target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: {
     conversations: { upsert: [{ id: 'c', provider: 'claude', origin: 'managed', pending_inputs: [] }], remove: [] },
     messages: { upsert: [{ id: 'read', role: 'user', body: 'Next step' }], remove: [] },
@@ -51,7 +51,7 @@ it.each(['running', 'idle'])('shows observed queued inputs in their bubbles whil
   expect(screen.getAllByText('Next step')).toHaveLength(1);
 });
 
-it('ends Sending at ack before enqueue or the recorded message arrives', async () => {
+it('keeps Sending after ack until the API links the queued input', async () => {
   const target = setup();
   render(<MemoryRouter><ConversationPage conversationId="c" target={target} client={client} language="en"/></MemoryRouter>);
   await act(async () => {});
@@ -60,15 +60,17 @@ it('ends Sending at ack before enqueue or the recorded message arrives', async (
   await act(async () => {});
   expect(screen.queryByText('Sending…')).toBeNull();
   expect(screen.getAllByText('Next step')).toHaveLength(1);
+  expect(screen.getByText('Sending')).toBeTruthy();
+  const cmdId = client.command.mock.calls.findLast(([name]) => name === 'send')![2];
   await act(async () => { target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: {
     runs: { upsert: [{ id: 'r', conversation_id: 'c', state: 'running', generation: 1 }], remove: [] },
     conversations: { upsert: [{ id: 'c', provider: 'claude', origin: 'managed', pending_inputs: [
       { id: 'queue', body: 'Next step', state: 'queued' },
     ] }], remove: [] },
-  } }); });
-  expect(screen.queryByText('Sending…')).toBeNull();
+  } }); target.setSendWatches([{ id: cmdId, conversation_id: 'c', body: 'Next step', queue_id: 'queue', decision: { display: 'Likely queued' } }]); });
+  expect(screen.queryByText('Sending')).toBeNull();
   expect(screen.getAllByText('Next step')).toHaveLength(1);
-  expect(screen.getByText('Queued — Claude will read this after the current step')).toBeTruthy();
+  expect(screen.getByText('Likely queued')).toBeTruthy();
 });
 
 it('reconciles two midturn inputs with enqueue and keeps the recorded input after a new generation and remount', async () => {
@@ -83,20 +85,22 @@ it('reconciles two midturn inputs with enqueue and keeps the recorded input afte
     await act(async () => {});
   }
   expect(screen.queryByText('Sending…')).toBeNull();
+  const commands = client.command.mock.calls.filter(([name]) => name === 'send').slice(-2);
+  const watches = [first, second].map((body, index) => ({ id: commands[index][2], conversation_id: 'c', body, queue_id: `q${index + 1}`, decision: { display: 'Likely queued' } }));
   const conversation = { id: 'c', provider: 'claude', origin: 'managed', pending_inputs: [
     { id: 'q1', body: first, state: 'queued' }, { id: 'q2', body: second, state: 'queued' },
   ] };
   await act(async () => { target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: {
     conversations: { upsert: [conversation], remove: [] },
-  } }); });
+  } }); target.setSendWatches(watches); });
   expect(screen.queryByText('Sending…')).toBeNull();
-  expect(screen.getAllByText('Queued — Claude will read this after the current step')).toHaveLength(2);
+  expect(screen.getAllByText('Likely queued')).toHaveLength(2);
   const snapshot = target.getSnapshot();
   const recorded = [{ id: 'a1', role: 'user', body: first }, { id: 'a2', role: 'user', body: second }];
   await act(async () => { target.setSnapshot({ seq: 3, generation: 1, projection: { ...snapshot.projection,
     conversations: [{ ...conversation, pending_inputs: [] }], messages: recorded,
     message_memberships: recorded.map(row => ({ id: row.id, message_id: row.id, conversation_id: 'c', active: 1 })),
-  } }); });
+  } }); target.setSendWatches(watches.map((watch, index) => ({ ...watch, queue_id: undefined, message_id: `a${index + 1}`, decision: { display: 'Likely delivered' } }))); });
   view.unmount();
   render(<MemoryRouter><ConversationPage conversationId="c" target={target} client={client} language="en"/></MemoryRouter>);
   await act(async () => {});
@@ -113,7 +117,7 @@ it.each(['Agent', 'Task', 'mcp__agent-graph__delegate', 'runner.delegate', 'plan
     { type: 'tool_use', id: 'unmatched', name, input: { description: 'Unlinked request', provider: 'codex' } },
   ] }], { relations: [{ id: 'edge', type: 'delegated', from_id: 'c', to_id: 'child', active: 1, evidence: { toolUseId: 'call', description: 'Build parser', agentType: 'implement' } }] });
   render(<MemoryRouter initialEntries={['/p/p?root=root']}><WorkspacePage project="p" target={target} client={client} language="ja"/><Location/></MemoryRouter>);
-  const card = await screen.findByRole('button', { name: /Build parser.*完了/ });
+  const card = await screen.findByRole('button', { name: /Build parser.*待機中/ });
   expect(card.closest('.tool-run')).toBeNull();
   expect(card.closest('.message-bubble')).toBeNull();
   expect(card.querySelector('[title="Claude"]')).toBeTruthy();

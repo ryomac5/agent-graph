@@ -35,7 +35,7 @@
 - R15: Stop／SubagentStopのhook・attachment、終端の `stop_reason` は停止の試みとし、turn終了を確認できないため Unknown／boundary_unavailable にする。
 - R16: 本文・tool・PreToolUse／PostToolUse（hookとattachment）は進行とし、toolの開始と結果を呼び出しIDで対応させる；AskUserQuestionのtool_useとPreToolUse hookはinput、Notification hookのpermission_promptはapproval、idle_promptはstop_attempt（Unknown／boundary_unavailable）へ写す。対応結果／PostToolUse・Stop・待ち・idle_prompt・turn終端・プロセス終了で未完了toolの保持を解き、後の通常進行・生存確認では古いtoolを復活させない。SubagentHandbackやidle_promptをturn完了にしない。
 - R17: turn_duration、対応済みの同期Agent completed、SDK result／idle、Codexのturn終端は完了の証拠とし、過去の完了は失効させない；run_in_backgroundのfalse／"false"は同期、true／"true"は非同期として読む。
-- R17a: 親のtask-notificationはqueue-operation/enqueueのcontentまたはuserの本文から読む。task-idがchildIdと完全一致するstoppedはcomplete＋interrupted、completedはcompleteへ写す。親のpromptIdを子へ流用せず、responded・Done・物理終了は作らない。completeと同時刻のinterruptedがあるturnはUnknown／boundary_unavailableとし、未完了toolの保持を解く。
+- R17a: 親のtask-notificationはqueue-operation/enqueueのcontentまたはuserの本文から読む。task-idがchildIdと完全一致するstoppedはchild_stopped、completedはcompleteへ写す。親のpromptIdを子へ流用せず、responded・Done・物理終了は作らない。child_stoppedはUnknown／boundary_unavailableとし、未完了toolの保持を解く。確かな利用者のEsc中断（ClaudeのRequest interrupted、Codexのturn_aborted／status=interrupted）はcomplete＋interruptedのままIdleへ戻す。
 - R18: 確認済みの完了後に同じturnの進行がある場合は証拠競合として Unknown にし、別turnへの対応を推測して補わない。
 - R19: 旧turnの終端や鍵のない終端は選択した別turnを閉じず、run自体が未解決なら代表表示を Unresolved にする。
 - R20: 子の生存は起動時の親のPID・procStartと現在の親の組が両方一致するときだけOS走査から確認する。同じsession_idでもどちらかが変わればunverified／owner_restarted、起動時の組が未記録ならunverified／missing_evidenceとし、新しい親の生存を引き継がない。一致する起動回の長いtoolは保持するが、子のturnと結果は子に対応する証拠だけで決める。親のtask-notificationも、task-idがchildIdと完全一致し、呼び出し側が子のturnに対応付けた場合に限り採る。
@@ -116,7 +116,7 @@ NotificationとAskUserQuestionは、既存のapproval／input／stop_attemptへ�
 
 ## f64f276のレビューからの修正
 
-E1の親12153行目をreadFileSyncだけで読み、queue-operation/enqueueのtimestamp・task-id・statusをfixtureへ追加した。IDは既存のnative-7に合わせ、本文・パスは保存していない。stoppedの原文は前の会話で完了記録が見つからず、停止または親終了時に実行中だった可能性を述べているため、物理終了やIdleを断定しない。complete＋interruptedの区別を既存の完了判定に加えたのは、turnの型に中断状態がなく、通常完了のIdleを避けるためである。
+E1の親12153行目をreadFileSyncだけで読み、queue-operation/enqueueのtimestamp・task-id・statusをfixtureへ追加した。IDは既存のnative-7に合わせ、本文・パスは保存していない。stoppedの原文は前の会話で完了記録が見つからず、停止または親終了時に実行中だった可能性を述べているため、物理終了やIdleを断定しない。子の停止通知はchild_stoppedとして、会話を再利用できる確かな利用者の中断（Idle）と区別する。
 
 起動時の組の省略による生存の借用を廃止した。独立した実行は明示値independentへ移し、子の組の欠落・不一致は同じ安全側の判定へ集めた。試験の共通ヘルパーも独立実行を明示する。停止・完了、ID不一致・欠落、子turn未対応、queueとuserの両形式、停止通知なしの継続、起動時の組の省略を回帰試験で検査する。隔離コピーでrecords.tsだけをf64f276へ戻すと2件、execution.tsだけを戻すと3件が失敗することを確認した。
 
@@ -162,3 +162,13 @@ E1の親12153行目をreadFileSyncだけで読み、queue-operation/enqueueのti
 - 回帰の正解は旧い投影値ではなく固定した表に置く。今回のexecution・records・evidence・deliveryをそれぞれHEAD f9e61dfの実装に置き換えた隔離コピーで、対応する回帰試験が落ちることを確認した。作業ツリーの実装は戻していない。
 
 受け入れは `builtin cd packages/core && node --test test/state/ && node --run test`。Node 24.6では明示的なディレクトリ指定が探索されないため、`test/state/index.js` が同じ試験ファイルを読み込む。通常のcore試験でもすべての新規 `.test.ts` を実行する。
+
+## API と画面への接続
+
+純粋関数の導入時に範囲外とした走査・永続化・配信を API に接続した。台帳の投影は原記録のメタデータだけを持ち、API の `CurrentState` が構造化した原記録と sessions の走査から `evaluateState` を呼ぶ。評価時刻・証拠 ID・期限を判定と一緒に配り、事実の seq が進まなくても期限で再評価する。schema 版と投影版は変えない。
+
+子の起動より前に得た有効な親の PID・OS 開始値を API に固定して永続化する。起動時の組がない既存の子は `null` のまま扱い、後から見つけた親で補完しない。親の通知は task-id と子の turn に対応付け、親の入力にはしない。走査は成功・部分失敗・全体失敗と完了時刻を保存し、現在の判定に必要な走査だけをメモリに読む。物理終了の最初の証拠は後の成功走査や API 再起動でも保持する。
+
+配達は送出前の受付と送出開始を永続化して `evaluateDelivery` に渡す。同文だけの受信は候補にとどめ、API が返す `message_id`／`queue_id` で画面の行を結ぶ。画面は状態・配達・時計を再判定せず、英語の表示と API の優先順を使う。
+
+`state-journeys.mjs` に Stop 欠落、SessionEnd 欠落、子の tool 中の停止、子停止通知、親再起動、承認待ち、長い tool、別端末の同文、走査失敗、Esc 後の再開を置く。本番サービスや本物の CLI を使わず、隔離した偽 CLI から原記録を生成する。

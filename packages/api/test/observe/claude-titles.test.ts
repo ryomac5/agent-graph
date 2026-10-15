@@ -109,7 +109,7 @@ test("場所の補完済みでファイルに変更がない会話も、サー�
   let service = openObservationService(options);
   t.after(() => { service.close(); rmSync(directory, { recursive: true, force: true }); });
   const bytes = fileReadMetrics.contentBytes;
-  assert.equal(service.ingestOnce().appended, 1);
+  assert.equal(service.ingestOnce().appended, 3);
   assert.equal(fileReadMetrics.contentBytes - bytes, Buffer.byteLength([createTitle("Old"), createTitle("Last"), createMessage("last")].join("\n") + "\n"));
   const facts = service.ledger.readSince(0, Number.MAX_SAFE_INTEGER);
   assert.deepEqual(facts.slice(0, before.length), before);

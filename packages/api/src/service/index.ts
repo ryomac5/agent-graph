@@ -1,3 +1,4 @@
+import { CurrentState } from './current-state.ts';
 import { observeCodexTitles } from "../observe/codex/titles.ts";
 import { readRemoteMetadata, observeRemoteStatus } from '../remote/observation.ts';
 import { cacheRoot } from '../remote/index.ts';
@@ -17,10 +18,6 @@ import { claudeTitleBackfillEventId } from "../observe/claude/titles.ts";
 import { CLAUDE_HISTORY_DETAILS_VERSION, CLAUDE_MESSAGE_FLAGS_VERSION, CLAUDE_QUEUED_COMMANDS_VERSION } from "../observe/claude/index.ts";
 import { CODEX_HISTORY_DETAILS_VERSION } from "../observe/codex/index.ts";
 import { registerLedgerDatabase } from "../../../core/src/ledger/repository.ts";
-import { createSessionQuery } from "../observe/session-query.ts";
-import { createClaudeSessionObserver } from "../observe/claude/sessions.ts";
-import { createCodexSessionObserver } from "../observe/codex/sessions.ts";
-import type { CodexProcessReader } from "../observe/codex/sessions.ts";
 import { createLocationResolver } from "../observe/location.ts";
 import { createKitObserver } from "../observe/kit/index.ts";
 import { hookOutboxPath, ledgerDbPath } from "../paths.ts";
@@ -35,7 +32,7 @@ import { openReadLedger } from "./read-ledger.ts";
 import { rebuildInitialProjection } from "./initial-projection.ts";
 
 const PROJECTION_CACHE_KIB = 64 * 1024;
-const OBSERVATION_CONTEXT_CACHE_KIB = 8 * 1024;
+const OBSERVATION_CONTEXT_CACHE_KIB = 4 * 1024;
 const PROJECTION_BATCH_FACTS = 8;
 const SNAPSHOT_READ_FACTS = 1024;
 const INITIAL_PROJECTION_FACTS = 4096;
@@ -53,7 +50,6 @@ export interface ObservationOptions {
   writerOnly?: boolean;
   readerOnly?: boolean;
   projectInWorker?: boolean;
-  codexProcessReader?: CodexProcessReader;
   onProgress?: (progress: { processed: number; total: number }) => void;
 }
 export interface IngestionReport {
@@ -269,21 +265,12 @@ export function openObservationService(options: ObservationOptions = {}) {
   let changedHistoryPaths: ReadonlySet<string> | undefined;
   const readDirectFacts = prepareDirectFacts(projectionDb);
   const readDirectLocations = projectionDb.prepare("SELECT 1 FROM facts WHERE seq > ? AND seq <= ? AND kind GLOB 'conversation.*' AND json_type(payload, '$.cwd') = 'text' LIMIT 1");
-  const readWatchConversations = projectionDb.prepare(`SELECT c.provider, c.native_id FROM runs r
-    JOIN conversations c ON r.conversation_id IN (c.id, c.provider || ':' || c.native_id)
-    WHERE r.state IN ('running', 'waiting_approval', 'waiting_input') AND NOT EXISTS (
-      SELECT 1 FROM runs newer WHERE newer.conversation_id IN (c.id, c.provider || ':' || c.native_id)
-        AND newer.generation > r.generation)`);
+  let watchState: CurrentState | undefined;
   const list = createDirectoryReader();
   const listOutbox = createDirectoryReader(false);
   const kit = createKitObserver(scanLedger, checkpoints, refreshSnapshot);
   const claudeSessionsDirectory = join(env.CLAUDE_CONFIG_DIR ?? join(home, ".claude"), "sessions");
-  const sessionQuery = createSessionQuery(scanLedger, projectionDb, !options.readerOnly);
-  let remoteConversations = new Set<string>();
-  const localQuery = { ...sessionQuery, read: (provider: 'claude' | 'codex') => sessionQuery.read(provider).filter(run => !remoteConversations.has(run.conversation_id)) };
-  const observeClaudeSessions = createClaudeSessionObserver(scanLedger, claudeSessionsDirectory, localQuery);
-  const observeCodexSessions = createCodexSessionObserver(scanLedger, env.CODEX_HOME ?? join(home, ".codex"),
-    options.codexProcessReader, localQuery);
+
   let rollout: ReturnType<typeof createIncrementalRolloutReader> | undefined;
   function hasChanged(path: string): boolean {
     let stat;
@@ -350,6 +337,8 @@ export function openObservationService(options: ObservationOptions = {}) {
   let ingesting = false;
   let appendUi: UiAppender = (input) => projectedLedger.append(input);
   return {
+    sessionDirectory: claudeSessionsDirectory,
+    codexHome: env.CODEX_HOME ?? join(home, ".codex"),
     ledger: projectedLedger, dbPath, outbox: hookOutboxPath(env, home), catchUp, batch: buffered.batch,
     async appendUi(input: UiFactInput): Promise<AppendResult> {
       if (input.source !== "ui") throw new Error("Only ui facts may be appended from the main thread");
@@ -358,12 +347,23 @@ export function openObservationService(options: ObservationOptions = {}) {
     setUiAppender(append: UiAppender) { appendUi = append; },
     checkpoint: buffered.checkpoint,
     watchPaths() {
+      if (!historyFiles.size) return [];
       const seq = Number(readProjectionState.get()?.last_seq ?? 0);
       if (!watchPathsDirty && seq === watchProjectionSeq && Date.now() < watchExpires) return selectedWatchPaths;
       watchPathsDirty = false;
       watchProjectionSeq = seq;
       watchExpires = Infinity;
-      const active = new Set(readWatchConversations.all().map(row => `${row.provider}:${row.native_id}`));
+      watchState ??= new CurrentState(projectionDb, id => {
+        const row = projectionDb.prepare("SELECT id FROM conversations WHERE id = ? OR provider || ':' || native_id = ?").get(id, id);
+        return String(row?.id ?? id);
+      });
+      watchState.refresh(seq);
+      watchExpires = watchState.reevaluateAt;
+      const active = new Set([...watchState.conversations.values()].filter(row => ['running', 'waiting_approval', 'waiting_input'].includes(String(row.state)))
+        .flatMap(row => {
+          const c = projectionDb.prepare('SELECT provider, native_id FROM conversations WHERE id = ?').get(String(row.conversation_id));
+          return c ? [`${c.provider}:${c.native_id}`] : [];
+        }));
       const activePaths = new Set<string>();
       if (active.size) for (const path of historyFiles) {
         const meta = rollouts.get(path)?.context[0]?.value as { type?: string; id?: string; payload?: { id?: string } } | undefined;
@@ -414,16 +414,18 @@ export function openObservationService(options: ObservationOptions = {}) {
       const previousCheckpoints = new Map(checkpoints);
       try {
         const changes = changedHistoryPaths;
+        const start = Number(readLastSeq.get()!.seq ?? 0);
+        if (!changes) ingestOutbox(scanLedger, listOutbox(hookOutboxPath(env, home),
+          name => !name.startsWith(".") && name.endsWith(".json")), buffered.batch);
         refreshSnapshot();
         const codex = rollout ??= createIncrementalRolloutReader(scanLedger, rollouts);
         decorate = codex.decorate;
-        const start = Number(readLastSeq.get()!.seq ?? 0);
         const claudeProjects = join(env.CLAUDE_CONFIG_DIR ?? join(home, ".claude"), "projects");
         const remoteProjects = join(cacheRoot(env, home), "remote");
         const remoteFiles = changes ? cachedRemoteFiles : list(remoteProjects, name => name.endsWith(".jsonl"));
         const claudeFiles = changes ? cachedClaudeFiles : [...remoteFiles.filter(path => !path.includes("/codex/")), ...list(claudeProjects, (name) => name.endsWith(".jsonl"))];
         const claudePaths = claudeFiles.filter((path) => changes
-          ? changes.has(path) && hasChanged(path) : hasChanged(path) || needsClaudeContext(path)
+          ? changes.has(path) && hasChanged(path) : hasChanged(path) || !checkpoints.get(path)?.nativeStateEvidence || needsClaudeContext(path)
             || checkpoints.get(path)?.claudeQueuedCommandsVersion !== CLAUDE_QUEUED_COMMANDS_VERSION
             || checkpoints.get(path)?.claudeHistoryDetailsVersion !== CLAUDE_HISTORY_DETAILS_VERSION
             || checkpoints.get(path)?.claudeMessageFlagsVersion !== CLAUDE_MESSAGE_FLAGS_VERSION);
@@ -435,7 +437,7 @@ export function openObservationService(options: ObservationOptions = {}) {
           historyFiles = nextFiles;
           cachedClaudeFiles = claudeFiles; cachedCodexFiles = codexFiles; cachedRemoteFiles = remoteFiles;
         }
-        const codexPaths = new Set(codexFiles.filter(path => (!changes || changes.has(path)) && (hasChanged(path)
+        const codexPaths = new Set(codexFiles.filter(path => (!changes || changes.has(path)) && (hasChanged(path) || !checkpoints.get(path)?.nativeStateEvidence
           || !changes && checkpoints.get(path)?.codexHistoryDetailsVersion !== CODEX_HISTORY_DETAILS_VERSION)));
         const codexLocations = codexFiles.filter((path) => codexPaths.has(path) || !changes && needsCodexLocation(path));
         let processed = 0;
@@ -498,15 +500,12 @@ export function openObservationService(options: ObservationOptions = {}) {
         }
         let aliases = { pending: 0, deferred: 0 };
         if (!changes) {
-          ingestOutbox(scanLedger, listOutbox(hookOutboxPath(env, home),
-            (name) => !name.startsWith(".") && name.endsWith(".json")), buffered.batch);
-          refreshSnapshot();
           aliases = kit.observe();
           refreshSnapshot();
-          remoteConversations = buffered.batch(() => observeRemoteStatus(scanLedger, remoteFiles, snapshot));
-          if (existsSync(claudeSessionsDirectory)) buffered.batch(() => observeClaudeSessions());
+          buffered.batch(() => observeRemoteStatus(scanLedger, remoteFiles, snapshot));
+
           refreshSnapshot();
-          buffered.batch(() => observeCodexSessions());
+
         }
         const changedCheckpoints = [...checkpoints].filter(([path, cursor]) => previousCheckpoints.get(path) !== cursor);
         if (changedCheckpoints.some(([path]) => historyFiles.has(path))) watchPathsDirty = true;
@@ -531,6 +530,6 @@ export function openObservationService(options: ObservationOptions = {}) {
         if (!options.writerOnly) catchUp();
       }
     },
-    close() { observeCodexSessions.close(); clearImmediate(projectionTimer); projectionDb.close(); ledger.close(); },
+    close() { clearImmediate(projectionTimer); projectionDb.close(); ledger.close(); },
   };
 }

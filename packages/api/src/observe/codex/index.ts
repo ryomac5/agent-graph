@@ -1,10 +1,11 @@
+import { captureNativeRecord } from '../../../../core/src/state/capture.ts';
 import { classifyHistoryRow, findUnclassifiedKinds, identifyHistoryKind } from "../history-kinds.ts";
 import { observeCodexTitles } from "./titles.ts";
 import { homedir } from "node:os";
 import { basename, join, normalize, sep } from "node:path";
 import { createNativeId } from "../../../../core/src/ledger/projections/relations.ts";
-import { classifyCodexRecord, readCodexTurnModel, TURN_RULE_VERSION } from "../../../../core/src/ledger/turns.ts";
-import type { AppendResult, Fact, FactInput, JsonValue, Ledger, RunState } from "../../../../core/src/ledger/index.ts";
+import { readCodexTurnModel } from "../../../../core/src/ledger/turns.ts";
+import type { AppendResult, Fact, FactInput, JsonValue, Ledger } from "../../../../core/src/ledger/index.ts";
 import { readSessionMeta, rolloutReader } from "./files.ts";
 import { defaultLocationResolver, type LocationResolver } from "../location.ts";
 import type { RolloutLine, RolloutReader } from "./files.ts";
@@ -80,7 +81,7 @@ function indexFact(index: ObservationIndex, fact: Fact | FactInput, factId: stri
   if (fact.kind === "conversation.created" && fact.source === "rollout-codex" && fact.confidence === "unknown") {
     index.placeholders.set(fact.subject, factId);
   }
-  if (fact.kind === "run.state_changed" && fact.source === "rollout-codex" && fact.payload?.generation !== undefined) {
+  if ((fact.kind === "run.created" || fact.kind === "run.updated" || fact.kind === "run.state_changed") && fact.source === "rollout-codex" && fact.payload?.generation !== undefined) {
     index.stateGenerations.set(fact.source_event_id, fact.payload.generation);
   }
   if (fact.kind === "run.created" && fact.payload?.conversation_id) {
@@ -247,19 +248,19 @@ function observeFile(ledger: Ledger, path: string, options: CodexObservationOpti
     }
     boundaries.set(id, index.runs.get(conversation)!);
   }
-  function changeState(id: string, state: RunState, timestamp: string, line: RolloutLine, evidence: ObjectValue, eventId?: string): void {
+  function recordChild(id: string, timestamp: string, line: RolloutLine, evidence: ObjectValue, eventId?: string): void {
     ensureConversation(id, timestamp);
     ensureRun(id, timestamp);
     const starts = boundaries.get(id)!;
     // 別のファイルの byte offset は比較せず、現在の世代へ結ぶ。
     const legacyKey = eventId ?? `${fileId}:${line.offset}:${line.hash}:${id}:state`;
     // 規則の変更は別の事実として追記し、古い根拠と世代を保持する。
-    const key = `${legacyKey}:v${TURN_RULE_VERSION}`;
+    const key = `${legacyKey}:native`;
     // 再読した過去の通知は、最初に結んだ世代を保持する。
     const generation = index.stateGenerations.get(key) ?? index.stateGenerations.get(legacyKey)
       ?? starts.findLast((start) => start.fileId !== fileId || start.offset <= line.offset)!.generation;
-    append({ ...createBase(key, timestamp, line), kind: "run.state_changed",
-      subject: `run:${identifyConversation(id)}:${generation}`, payload: { generation, state,
+    append({ ...createBase(key, timestamp, line), kind: "run.updated",
+      subject: `run:${identifyConversation(id)}:${generation}`, payload: { generation,
         last_evidence: evidence, last_evidence_ts: timestamp } });
   }
   function createMessage(id: string, item: ObjectValue, timestamp: string, line: RolloutLine, unavailable = false): void {
@@ -306,6 +307,17 @@ function observeFile(ledger: Ledger, path: string, options: CodexObservationOpti
       else if (!readText(meta.timestamp) || !Number.isFinite(Date.parse(String(meta.timestamp)))) reportUnsupported(line, "Invalid session metadata");
       continue;
     }
+    const native = captureNativeRecord("codex", row);
+    if (id && native) {
+      ensureConversation(id, timestamp);
+      ensureRun(id, timestamp);
+      const eventId = `native-record:${fileId}:${line.offset}:${line.hash}`;
+      const generation = index.stateGenerations.get(eventId) ?? boundaries.get(id)!.findLast(start => start.fileId !== fileId || start.offset <= line.offset)!.generation;
+      append({ ...createBase(eventId, timestamp, line),
+        kind: "run.updated", subject: `run:${identifyConversation(id)}:${generation}`,
+        payload: { conversation_id: identifyConversation(id), generation,
+          last_evidence: { native_source: "codex", native_record: native, file_id: fileId }, last_evidence_ts: timestamp } });
+    }
     const classification = classifyHistoryRow("codex", row);
     const unclassified = findUnclassifiedKinds("codex", row);
     if (unclassified.length) reportUnsupported(line, `Unclassified history kinds: ${unclassified.map(identifyHistoryKind).join(", ")}`);
@@ -328,6 +340,7 @@ function observeFile(ledger: Ledger, path: string, options: CodexObservationOpti
       }
       continue;
     }
+    if (classification?.handler === "turn") { if (!id) reportUnsupported(line, "Missing thread identifier"); continue; }
     const item = method === "item/completed" ? readObject(params.item) : row.type === "response_item" ? payload : row;
     if (classification?.handler === "ignore" || row.record_type === "state") continue;
     if (!id) { reportUnsupported(line, "Missing thread identifier"); continue; }
@@ -359,8 +372,8 @@ function observeFile(ledger: Ledger, path: string, options: CodexObservationOpti
             last_evidence: evidence, last_evidence_ts: timestamp } });
       } else {
         if (child === id) { reportUnsupported(line, "Self-referencing subagent activity"); continue; }
-        changeState(child, kind === "started" ? "running" : "idle", timestamp, line,
-          { ...evidence, kind: kind === "started" ? "turn_started" : "turn_completed" },
+        recordChild(child, timestamp, line,
+          { native_source: "codex_child", native_record: captureNativeRecord("codex", row) ?? {}, ...evidence },
           // 同時刻の run.created より後に並べ、最初の活動を unknown で上書きさせない。
           `run:${child}:activity:${fileId}:${line.offset}:${line.hash}`);
         if (kind === "started") {
@@ -376,15 +389,7 @@ function observeFile(ledger: Ledger, path: string, options: CodexObservationOpti
       }
       continue;
     }
-    // ターンの開始と終わりの読み替えは core の状態の規則に従う。
-    const turn = classification?.handler === "turn" || !classification
-      ? classifyCodexRecord(row as { [key: string]: JsonValue }) : undefined;
-    if (turn) {
-      const evidence: ObjectValue = turn.kind === "thread_status" ? { kind: turn.kind, status: readObject(params.status) }
-        : turn.kind === "request_approval" ? { kind: turn.kind, request_id: turn.turn_id ?? null }
-          : { kind: turn.kind, turn_id: turn.turn_id ?? null };
-      changeState(id, turn.state, timestamp, line, evidence);
-    } else if (row.type === "response_item" || method === "item/completed" || row.type === "message") {
+    if (row.type === "response_item" || method === "item/completed" || row.type === "message") {
       if (classification?.handler === "message") {
         createMessage(id, { ...item, role: item.role ?? (item.type === "userMessage" ? "user" : "assistant") }, timestamp, line);
       } else if (classification?.handler === "delegation") {

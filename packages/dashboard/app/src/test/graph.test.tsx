@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import { GraphPage, AssignedGraphPage } from '../pages/graph/GraphPage.tsx';
-import { createStore } from '../lib/store.ts';
+import { createStore } from "./current-fixture.ts";
 const now = Date.parse('2026-10-11T12:00:00Z');
 export function fixture() {
   const target = createStore();
@@ -57,7 +57,7 @@ it('uses each role once in unnamed child labels and does not turn an unknown pro
   } });
   render(<MemoryRouter initialEntries={['/p/repo?root=root&child=other']}><GraphPage project="repo" target={target} client={{ command: vi.fn() }} embedded/></MemoryRouter>);
   const work = document.querySelector('[data-node-id="work"] [role="treeitem"]')!;
-  expect(work.getAttribute('aria-label')).toMatch(/^Codex · .+ · Implementation · Codex · Running$/);
+  expect(work.getAttribute('aria-label')).toMatch(/^Codex · .+ · Implementation · Codex · Working$/);
   expect(work.getAttribute('aria-label')?.match(/Implementation/g)).toHaveLength(1);
   const unknown = document.querySelector('[data-node-id="other"] [role="treeitem"]')!;
   expect(unknown.getAttribute('aria-label')).toContain('Agent · Implementation · Agent');

@@ -110,7 +110,7 @@ test("Codex の起動・完了・親への連絡を分け、増分と再起動�
   appendFileSync(path, lines.slice(3, 4).join("\n") + "\n");
   observe();
   const child = createNativeId("codex", "child");
-  assert.equal(project(readFacts(ledger)).runs.find(run => run.conversation_id === child)?.state, "running");
+  assert.equal(project(readFacts(ledger)).runs.find(run => run.conversation_id === child)?.state, "unknown");
   appendFileSync(path, lines.slice(4).join("\n") + "\n");
   observe();
   const facts = readFacts(ledger);
@@ -120,7 +120,7 @@ test("Codex の起動・完了・親への連絡を分け、増分と再起動�
   assert.equal(projection.relations[0].to_id, child);
   assert.equal(projection.relations[0].confidence, "confirmed");
   assert.equal(projection.conversations.find(c => c.id === child)?.type, "subagent");
-  assert.equal(projection.runs.find(run => run.conversation_id === child)?.state, "idle");
+  assert.equal(projection.runs.find(run => run.conversation_id === child)?.state, "unknown");
   assert.equal(projection.runs.find(run => run.conversation_id === createNativeId("codex", "parent"))?.model, "gpt-6-sol");
   assert.ok(facts.some(f => f.kind === "run.updated" && (f.payload?.last_evidence as { activity_kind?: string })?.activity_kind === "interacted"));
   assert.deepEqual(projection.messages[0].body, [{ type: "tool_use", id: "spawn-call", name: "spawn_agent",

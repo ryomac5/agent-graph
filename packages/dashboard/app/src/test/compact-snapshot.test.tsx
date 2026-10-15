@@ -70,7 +70,7 @@ it('keeps roots, conversation, Working, unread, Queued and send watches through 
     const roots = selectRoots(state);
     expect(roots).toHaveLength(1);
     expect(roots[0]).toMatchObject({ id: ROOT, state: 'running', total_children: 1 });
-    expect(workingElapsed(resolveWorkingTurn(state.projection.runs.find(row => row.conversation_id === ROOT)), Date.parse(START) + 192_000)).toBe('3m 12s');
+    expect(workingElapsed(resolveWorkingTurn(state.projection.runs.find(row => row.conversation_id === ROOT)), Date.parse(START) + 192_000)).toBe('3m 9s');
     expect(state.projection.send_watches).toEqual(snapshot.projection.send_watches);
     const delegated = { ...state, projection: { ...state.projection, relations: [], delegations: [{ id: 'request',
       parent_run_id: `${LEGACY}:1`, parent: { confidence: 'confirmed' },
@@ -93,12 +93,12 @@ it('keeps roots, conversation, Working, unread, Queued and send watches through 
     await act(async () => {});
     expect(screen.getByText('Existing reply')).toBeTruthy();
     expect(screen.getByText('Next step')).toBeTruthy();
-    expect(screen.getByText('Queued — Claude will read this after the current step')).toBeTruthy();
+    expect(screen.getByText('Likely queued')).toBeTruthy();
     expect(screen.getByRole('status', { name: 'Working' })).toBeTruthy();
     expect(screen.getByText('Compaction')).toBeTruthy();
     f.append('relation.updated', 'relation:delegated', { evidence: { description: 'Corrected review' } });
-    f.append('run.state_changed', `run:${LEGACY}:1`, { state: 'idle', last_evidence: { kind: 'turn_completed' }, last_evidence_ts: '2026-10-13T00:04:00.000Z' });
-    const patch = f.feed.refresh();
+    f.append('run.state_changed', `run:${LEGACY}:1`, { state: 'idle', last_evidence: { native_source: 'claude_sdk', native_record: { type: 'system', subtype: 'session_state_changed', state: 'idle' }, turn_id: 'turn-start' }, last_evidence_ts: '2026-10-13T00:04:00.000Z' });
+    const patch = f.feed.refresh(Date.parse(START) + 240_000);
     if (!patch || patch === 'resync') throw new Error('Expected patch');
     act(() => { expect(target.applyPatch(wire(patch))).toBe(true); });
     expect(target.getSnapshot().projection.relations.toSorted((a, b) => String(a.id).localeCompare(String(b.id))))
@@ -106,7 +106,7 @@ it('keeps roots, conversation, Working, unread, Queued and send watches through 
     const history = recordTransitions(roots, selectRoots(target.getSnapshot()), { read: {}, ready: {}, recent: [] });
     expect(selectTurns(target.getSnapshot(), history).map(turn => turn.conversationId)).toContain(ROOT);
     expect(selectTurns(target.getSnapshot(), { ...history, read: { [ROOT]: history.ready[ROOT] } })).toEqual([]);
-    expect(screen.queryByText('Queued — Claude will read this after the current step')).toBeNull();
+    expect(screen.getByText('Likely queued')).toBeTruthy();
     act(() => target.setSnapshot(wire(f.snapshot()) as Snapshot));
     expect(target.getSnapshot().projection.relations).toEqual(wire(f.db.prepare('SELECT * FROM relations ORDER BY id').all()));
     expect(target.getSnapshot().projection.send_watches).toEqual(snapshot.projection.send_watches);

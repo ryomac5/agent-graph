@@ -8,7 +8,7 @@ import { CodeTab } from '../pages/workspace/CodeTab.tsx';
 import { Workbench } from '../pages/workspace/Workbench.tsx';
 import { FileViewerPanel, useFileExplorer } from '../pages/files/FilesPage.tsx';
 import { getFileDocument } from '../lib/file-documents.ts';
-import { createStore } from '../lib/store.ts';
+import { createStore } from "./current-fixture.ts";
 import { createMarkdownExtensions } from '../lib/markdown-editor.ts';
 import { MarkdownDocument } from '../components/files/MarkdownDocument.tsx';
 import { HtmlDocument, PREVIEW_DEBOUNCE_MS } from '../components/files/HtmlDocument.tsx';

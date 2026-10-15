@@ -1,224 +1,186 @@
-import { normalizeTimestamp } from '../../../core/src/ledger/timestamps.ts';
-import { setTimeout as delay } from 'node:timers/promises';
-import { DatabaseSync, type SQLOutputValue } from 'node:sqlite';
+import { createHash } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
+import { evaluateDelivery } from '../../../core/src/state/index.ts';
+import { SESSION_SCAN_VALID_MS, type SessionScan } from './session-scan.ts';
+import type { DeliveryDecision, DeliveryEvidence, Operation, Receipt } from '../../../core/src/state/index.ts';
 import { getMessageText } from '../../../core/src/ledger/projections/messages.ts';
 import type { JsonValue } from '../../../core/src/ledger/facts.ts';
 import { redact, type RedactionRules } from '../../../core/src/ledger/redact.ts';
 
 export const SEND_WATCH_TIMEOUT_MS = 60_000;
-export const SEND_WATCH_FAILED_RETENTION_MS = 24 * 60 * 60_000;
-export const SEND_WATCH_CLOSED_RETENTION_MS = 7 * SEND_WATCH_FAILED_RETENTION_MS;
-export const SEND_WATCH_PENDING_MAX_AGE_MS = 24 * 60 * 60_000;
-export const SEND_WATCH_CLEANUP_INTERVAL_MS = 60_000;
-const WRITE_RETRY_MS = 10;
-const WRITE_RETRY_LIMIT = 500;
-const WAITING_QUEUE = -1;
+const BODY_RETENTION_MS = 7 * 24 * 60 * 60_000;
 const HISTORY_LIMIT = 100;
-const EXCERPT_LENGTH = 120;
-const BUSY_STATES = new Set(['starting', 'running', 'waiting_approval', 'waiting_input']);
-// jsonl の command-name に記録されることを確認済みのコマンドだけを照合する。
-const WATCHED_SLASH_COMMANDS = new Set(['/compact']);
-type WatchRow = Record<string, SQLOutputValue>;
-
-function isBusy(error: unknown): boolean {
-  return error instanceof Error && 'errcode' in error && (Number(error.errcode) & 0xff) === 5;
-}
-
-function readAttachments(value: SQLOutputValue | undefined): string[] {
-  try {
-    const parsed: unknown = JSON.parse(String(value));
-    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [];
-  } catch { return []; }
-}
-
+type Row = Record<string, unknown>;
 export function normalizeSentBody(body: unknown): string {
   const text = getMessageText(body as JsonValue);
   const command = /<command-name>([^<]+)<\/command-name>/u.exec(text)?.[1];
   if (command) return `${command} ${/<command-args>([\s\S]*?)<\/command-args>/u.exec(text)?.[1] ?? ''}`.trim();
+  const shell = /<bash-input>([\s\S]*?)<\/bash-input>/u.exec(text)?.[1];
+  if (shell !== undefined) return `!${shell}`;
   return text.replace(/<\/?pasted_content\b[^>]*>/gu, '').replace(/\[Image #\d+\]/gu, '').trim();
 }
+const bodyKey = (body: unknown) => createHash('sha256').update(normalizeSentBody(body)).digest('hex');
 
-/** 台帳の事実と投影から独立した、api の配達確認。 */
+/** 送出の事実を保持し、配達の意味は evaluateDelivery に委ねる。 */
 export class SendWatch {
   private db: DatabaseSync;
-  private dirty = false;
-  private stopped = false;
-  private queued = new Map<string, Parameters<SendWatch['recordAccepted']>>();
-  private lastCleanup: number | undefined;
-  constructor(path: string, privateRules: () => RedactionRules = () => ({})) {
-    this.rules = privateRules;
-    this.db = new DatabaseSync(path);
-    this.db.exec(`PRAGMA busy_timeout = 5000;
-      CREATE TABLE IF NOT EXISTS api_send_watches (
-        id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, body TEXT NOT NULL, sent_ts TEXT NOT NULL,
-        baseline_seq INTEGER NOT NULL, busy_run TEXT, deadline_ms INTEGER,
-        state TEXT NOT NULL, message_id TEXT, closed_ts TEXT, failed_ts TEXT, attachments TEXT NOT NULL);
-      CREATE INDEX IF NOT EXISTS api_send_watch_pending ON api_send_watches(state);
-      CREATE UNIQUE INDEX IF NOT EXISTS api_send_watch_message ON api_send_watches(message_id) WHERE message_id IS NOT NULL;`);
-    this.db.exec("PRAGMA busy_timeout = 0");
-  }
+  private decisions = new Map<string, DeliveryDecision>();
+  private dirty = true;
+  private seq = -1;
+  private dataVersion = -1;
+  private evaluatedAt = 0;
+  private reevaluateAt = 0;
+  private messages = new Map<string, string>();
+  private queues = new Map<string, string>();
   private rules: () => RedactionRules;
+  constructor(path: string, rules: () => RedactionRules = () => ({})) {
+    this.rules = rules;
+    this.db = new DatabaseSync(path);
+    this.db.exec(`PRAGMA busy_timeout = 0;
+      CREATE TABLE IF NOT EXISTS api_delivery_operations (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, data TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS api_delivery_evidence (id TEXT PRIMARY KEY, data TEXT NOT NULL)`);
+    const legacy = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'api_send_watches'").get();
+    if (legacy) for (const row of this.db.prepare('SELECT * FROM api_send_watches').all()) {
+      const id = String(row.id);
+      if (this.has(id)) continue;
+      const captured = this.capture(String(row.conversation_id), Date.parse(String(row.sent_ts)));
+      this.begin(id, String(row.conversation_id), String(row.body), captured, JSON.parse(String(row.attachments ?? '[]')));
+      this.phase(id, row.state === 'closed' ? 'legacy_closed' : 'legacy_failed', Date.parse(String(row.sent_ts)));
+    }
+    // 再起動で残った送出は再実行しない。候補や相関は引き続き再評価する。
+    for (const row of this.rows().filter(row => !row.archived)) this.phase(String(row.id), 'owner_lost');
+    this.check();
+  }
   private canonical(id: string): string {
     return String(this.db.prepare('SELECT canonical_id FROM api_conversation_ids WHERE id = ?').get(id)?.canonical_id ?? id);
   }
-  capture(conversation: string, now = Date.now()) {
+  capture(conversation: string, now = Date.now(), terminal = 'unresolved', requestedRun?: string) {
     const id = this.canonical(conversation);
-    const run = this.db.prepare(`SELECT id, state FROM runs WHERE conversation_id = ? OR conversation_id IN
-      (SELECT id FROM api_conversation_ids WHERE canonical_id = ?) ORDER BY generation DESC LIMIT 1`).get(id, id);
+    const run = requestedRun === undefined ? this.db.prepare(`SELECT id FROM runs WHERE conversation_id = ? OR conversation_id IN
+      (SELECT id FROM api_conversation_ids WHERE canonical_id = ?) ORDER BY started_ts DESC, generation DESC LIMIT 1`).get(id, id)
+      : this.db.prepare(`SELECT r.id FROM runs r LEFT JOIN run_subjects s ON s.conversation_id = r.conversation_id AND s.generation = r.generation
+        WHERE r.id = ? OR s.subject_id = ? ORDER BY r.started_ts DESC, r.generation DESC LIMIT 1`).get(requestedRun, requestedRun);
     return { sent_ts: new Date(now).toISOString(), baseline_seq: Number(this.db.prepare('SELECT coalesce(max(seq), 0) AS seq FROM facts').get()!.seq),
-      busy_run: run && BUSY_STATES.has(String(run.state)) ? String(run.id) : null };
+      target: JSON.stringify([id, run?.id ?? requestedRun ?? null, terminal]) };
   }
-  record(id: string, conversation: string, body: string, captured: ReturnType<SendWatch['capture']>, attachments: string[] = []) {
-    const command = body.trimStart().split(/\s/u, 1)[0];
-    if (command.startsWith('/')) {
-      if (!WATCHED_SLASH_COMMANDS.has(command)) return;
-      const provider = this.db.prepare('SELECT provider FROM conversations WHERE id = ?').get(this.canonical(conversation))?.provider;
-      if (provider !== 'claude') return;
-    }
-    this.db.prepare('INSERT OR IGNORE INTO api_send_watches VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)')
-      .run(id, conversation, redact(body, this.rules()).text, normalizeTimestamp(captured.sent_ts), captured.baseline_seq, captured.busy_run,
-        captured.busy_run ? null : Date.parse(captured.sent_ts) + SEND_WATCH_TIMEOUT_MS, 'pending', JSON.stringify(attachments));
-  }
-  async recordAccepted(id: string, conversation: string, body: string, captured: ReturnType<SendWatch['capture']>, attachments: string[] = [], retryOf?: string) {
-    // 貼り付けが終わった時刻を起点にし、照合の seq は送信前の値を保つ。
-    const accepted = { ...captured, sent_ts: new Date(Date.now()).toISOString() };
-    for (let attempt = 0; ; attempt++) {
-      if (this.stopped) return;
-      try {
-        this.record(id, conversation, body, accepted, attachments);
-        if (retryOf) this.retry(retryOf, conversation);
-        return;
-      } catch (error) {
-        if (!isBusy(error) || attempt >= WRITE_RETRY_LIMIT) {
-          this.queued.set(id, [id, conversation, body, accepted, attachments, retryOf]);
-          console.error('Send watch recording failed:', { id, conversation_id: conversation, retry: 'next check; memory queue is lost on API restart' }, error);
-          return;
-        }
-        // runner の書き込み待ちは主スレッドを塞がずに再試行する。
-        await delay(WRITE_RETRY_MS);
+  decision(id: string): DeliveryDecision | undefined { return this.decisions.get(id); }
+  has(id: string): boolean { return !!this.db.prepare('SELECT 1 FROM api_delivery_operations WHERE id = ?').get(id); }
+  begin(id: string, conversation: string, body: string, captured: ReturnType<SendWatch['capture']>, attachments: string[] = []): boolean {
+    const data = { ...captured, sent_ts: new Date(captured.sent_ts).toISOString(), body: redact(body, this.rules()).text, body_hash: bodyKey(redact(body, this.rules()).text), attachments, attachments_hash: bodyKey(JSON.stringify(attachments)) };
+    const existing = this.db.prepare('SELECT conversation_id, data FROM api_delivery_operations WHERE id = ?').get(id);
+    if (existing) {
+      const previous = JSON.parse(String(existing.data));
+      if (existing.conversation_id !== this.canonical(conversation) || previous.target !== data.target || (previous.body_hash ?? bodyKey(previous.body)) !== data.body_hash || (previous.attachments_hash ?? bodyKey(JSON.stringify(previous.attachments))) !== data.attachments_hash) {
+        this.add({ kind: 'operation', id: id + ':conflict:' + bodyKey(JSON.stringify([data.body, attachments])), cmdId: id,
+          target: captured.target, bodyKey: bodyKey(JSON.stringify([data.body, attachments])), phase: 'accepted', at: Date.parse(data.sent_ts), observedAt: Date.parse(data.sent_ts) });
       }
+      return false;
     }
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db.prepare('INSERT INTO api_delivery_operations VALUES (?, ?, ?)').run(id, this.canonical(conversation), JSON.stringify(data));
+      this.add({ kind: 'operation', id: `${id}:accepted`, cmdId: id, target: captured.target, bodyKey: bodyKey(data.body),
+        at: Date.parse(captured.sent_ts), observedAt: Date.parse(captured.sent_ts), phase: 'accepted' });
+      this.db.exec('COMMIT');
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+    return true;
   }
-  history(conversation: string) {
-    return this.db.prepare('SELECT * FROM api_send_watches WHERE conversation_id = ? ORDER BY sent_ts DESC LIMIT ?').all(conversation, HISTORY_LIMIT);
+  phase(id: string, phase: Operation['phase'], now = Date.now()): void {
+    const row = this.db.prepare('SELECT data FROM api_delivery_operations WHERE id = ?').get(id);
+    if (!row) return;
+    const data = JSON.parse(String(row.data));
+    this.add({ kind: 'operation', id: `${id}:${phase}`, cmdId: id, target: data.target, bodyKey: data.body_hash ?? bodyKey(data.body), phase, at: now, observedAt: now });
   }
-  retry(id: string, conversation: string, now = Date.now()) {
-    const result = this.db.prepare("UPDATE api_send_watches SET state = 'retried', closed_ts = ? WHERE id = ? AND conversation_id = ? AND state = 'failed'")
-      .run(new Date(now).toISOString(), id, conversation);
-    if (result.changes) this.dirty = true;
+  handled(id: string, now = Date.now()): void {
+    const row = this.rows().find(row => row.id === id);
+    if (row) this.add({ kind: 'terminal', id: `${id}:terminal`, cmdId: id, target: String(row.target), at: now, observedAt: now });
   }
-  list(): Record<string, unknown>[] {
-    return this.db.prepare("SELECT * FROM api_send_watches WHERE state IN ('pending', 'failed') ORDER BY sent_ts, id").all()
-      .map(row => ({ ...row, conversation_id: this.canonical(String(row.conversation_id)), attachments: readAttachments(row.attachments) }));
+  add(evidence: DeliveryEvidence): void {
+    this.db.prepare('INSERT OR IGNORE INTO api_delivery_evidence VALUES (?, ?)').run(evidence.id, JSON.stringify(evidence));
+    this.dirty = true;
+  }
+  record(id: string, conversation: string, body: string, captured: ReturnType<SendWatch['capture']>, attachments: string[] = []): void {
+    if (!this.begin(id, conversation, body, captured, attachments)) return;
+    this.phase(id, 'emitting', Date.parse(captured.sent_ts));
+    this.phase(id, 'emitted', Date.parse(captured.sent_ts));
+  }
+  private rows(): Row[] {
+    return this.db.prepare('SELECT * FROM api_delivery_operations ORDER BY rowid').all().map(row => ({ id: row.id, conversation_id: row.conversation_id, ...JSON.parse(String(row.data)) }));
+  }
+  history(conversation: string): Row[] { return this.list().filter(row => row.conversation_id === this.canonical(conversation)).slice(-HISTORY_LIMIT).reverse(); }
+  list(): Row[] {
+    return this.rows().filter(row => !row.archived).map(row => ({ ...row, message_id: this.messages.get(String(row.id)), queue_id: this.queues.get(String(row.id)), decision: this.decisions.get(String(row.id)), state: this.decisions.get(String(row.id))?.value ?? 'accepted' }));
   }
   check(now = Date.now()): boolean {
-    try { return this.checkRows(now); }
-    catch (error) {
-      // 観測ワーカーの書き込み中は、未配信の変更も含めて次の周期へ回す。
-      if (isBusy(error)) return false;
-      throw error;
+    const seq = Number(this.db.prepare('SELECT coalesce(max(seq), 0) AS seq FROM facts').get()!.seq);
+    const dataVersion = Number(this.db.prepare('PRAGMA data_version').get()!.data_version);
+    if (!this.dirty && seq === this.seq && dataVersion === this.dataVersion && now >= this.evaluatedAt && now < this.reevaluateAt) return false;
+    this.seq = seq; this.dataVersion = dataVersion; this.evaluatedAt = now; this.reevaluateAt = Infinity;
+    const rows = this.rows();
+    const evidence = this.db.prepare('SELECT data FROM api_delivery_evidence').all().map(row => JSON.parse(String(row.data)) as DeliveryEvidence);
+    for (const item of evidence) if (item.kind === 'scan' && item.at + item.validForMs > now) this.reevaluateAt = Math.min(this.reevaluateAt, item.at + item.validForMs);
+    const receipts = new Map<string, Receipt>();
+    const receiptMessages = new Map<string, string>();
+    const queuedMessages = new Map<string, string>();
+    for (const row of this.db.prepare(`SELECT payload FROM facts WHERE kind = 'run.updated' AND json_extract(payload, '$.last_evidence.native_record.attachment.type') = 'queued_command'`).all()) {
+      const native = JSON.parse(String(row.payload)).last_evidence.native_record;
+      if (native.attachment.delivery_id && native.uuid) queuedMessages.set(JSON.stringify(['claude', native.uuid]), native.attachment.delivery_id);
     }
-  }
-  private checkRows(now: number): boolean {
-    for (const [id, args] of this.queued) {
-      try {
-        const [watchId, conversation, body, captured, attachments, retryOf] = args;
-        this.record(watchId, conversation, body, captured, attachments);
-        if (retryOf) this.retry(retryOf, conversation, now);
-        this.queued.delete(id);
-        this.dirty = true;
-      } catch (error) {
-        if (!isBusy(error)) console.error('Send watch recording retry failed:', { id }, error);
+    for (const watch of rows.filter(row => !row.archived)) {
+      const conversation = this.canonical(String(watch.conversation_id));
+      for (const row of this.db.prepare(`SELECT m.id, m.body, m.source_ts, f.observed_ts, f.seq FROM messages m
+        JOIN message_memberships mm ON mm.message_id = m.id AND mm.conversation_id = ? AND mm.active = 1
+        JOIN facts f ON f.kind = 'message.created' AND (f.subject = 'message:' || m.id OR
+          json_array(json_extract(f.payload, '$.provider'), json_extract(f.payload, '$.native_id')) = m.id)
+        WHERE m.role = 'user' AND f.seq > ?`).iterate(conversation, Number(watch.baseline_seq))) {
+        const id = `receipt:${watch.target}:${row.id}`;
+        receipts.set(id, { kind: 'receipt', id, target: String(watch.target), inputId: queuedMessages.get(String(row.id)) ?? String(row.id), bodyKey: bodyKey(JSON.parse(String(row.body ?? 'null'))),
+          phase: 'consumed', at: Date.parse(String(row.source_ts)), observedAt: Date.parse(String(row.observed_ts)) });
+        receiptMessages.set(id, String(row.id));
+      }
+      for (const row of this.db.prepare(`SELECT fact_id, source_event_id, source_ts, observed_ts, payload FROM facts WHERE kind = 'conversation.input_queue_changed'
+        AND subject IN ('conversation:' || ?, 'conversation:' || ?) AND seq > ?`).iterate(conversation, String(watch.conversation_id), Number(watch.baseline_seq))) {
+        const input = JSON.parse(String(row.payload)).input_queue_event;
+        if (input?.operation !== 'enqueue') continue;
+        const id = `queue:${watch.target}:${row.fact_id}`;
+        receipts.set(id, { kind: 'receipt', id, target: String(watch.target), inputId: input.delivery_id ?? String(row.source_event_id), bodyKey: bodyKey(input.body),
+          phase: 'queued', at: Date.parse(String(row.source_ts)), observedAt: Date.parse(String(row.observed_ts)) });
+        receiptMessages.set(id, String(row.source_event_id));
       }
     }
-    const rows = this.db.prepare("SELECT * FROM api_send_watches WHERE state IN ('pending', 'failed') ORDER BY sent_ts, rowid").all();
-    for (const watch of rows) {
-      try { this.checkRow(watch, now); }
-      catch (error) {
-        if (isBusy(error)) continue;
-        // 壊れた行の失敗保存も、後続の見張りを止めない。
-        try { this.fail(watch, now, 'watch evaluation failed'); }
-        catch (failure) { console.error('Send watch failure recording failed:', { id: watch.id }, failure); }
+    // 端末が異なる同文操作も一つの照合集合に入れる。対象の版を失わないため受信には候補の対象を列挙する。
+    evidence.push(...receipts.values());
+    this.messages.clear(); this.queues.clear();
+    let changed = this.dirty;
+    for (const row of rows) {
+      const decision = evaluateDelivery({ cmdId: String(row.id), evidence }, now);
+      if (decision.validUntil !== null && decision.validUntil > now) this.reevaluateAt = Math.min(this.reevaluateAt, decision.validUntil);
+      const previous = this.decisions.get(String(row.id));
+      if (JSON.stringify({ ...previous, evaluatedAt: 0 }) !== JSON.stringify({ ...decision, evaluatedAt: 0 })) changed = true;
+      this.decisions.set(String(row.id), decision);
+      if (['received', 'received_candidate'].includes(decision.value)) {
+        const ids = new Set([...receipts.values()].filter(r => r.phase === 'consumed' && decision.evidenceIds.includes(r.id)).map(r => receiptMessages.get(r.id) ?? r.inputId));
+        const queued = [...receipts.values()].filter(r => r.phase === 'queued' && decision.evidenceIds.includes(r.id));
+        if (!ids.size && queued.length === 1) this.queues.set(String(row.id), receiptMessages.get(queued[0].id)!);
+        if (ids.size === 1) this.messages.set(String(row.id), [...ids][0]);
       }
-    }
-    if (this.lastCleanup === undefined || now - this.lastCleanup >= SEND_WATCH_CLEANUP_INTERVAL_MS) {
-      this.lastCleanup = now;
-      try {
-        const removed = this.db.prepare(`DELETE FROM api_send_watches WHERE
-          (state = 'failed' AND failed_ts <= ?) OR
-          (state IN ('closed', 'retried') AND coalesce(closed_ts, failed_ts, sent_ts) <= ?)`).run(new Date(now - SEND_WATCH_FAILED_RETENTION_MS).toISOString(),
-            new Date(now - SEND_WATCH_CLOSED_RETENTION_MS).toISOString());
-        if (removed.changes) this.dirty = true;
-      } catch (error) {
-        if (!isBusy(error)) console.error('Send watch cleanup failed:', error);
+      if (!row.archived && now >= Date.parse(String(row.sent_ts)) + BODY_RETENTION_MS) {
+        const { id, conversation_id, body, attachments, ...metadata } = row;
+        this.db.prepare('UPDATE api_delivery_operations SET data = ? WHERE id = ?').run(JSON.stringify({ ...metadata, archived: true, final_decision: decision }), String(id));
+        changed = true;
       }
+      if (!row.archived && Date.parse(String(row.sent_ts)) + BODY_RETENTION_MS > now) this.reevaluateAt = Math.min(this.reevaluateAt, Date.parse(String(row.sent_ts)) + BODY_RETENTION_MS);
     }
-    const changed = this.dirty;
     this.dirty = false;
     return changed;
   }
-  private fail(watch: WatchRow, now: number, reason: string) {
-    if (watch.state !== 'pending') return;
-    const result = this.db.prepare("UPDATE api_send_watches SET state = 'failed', failed_ts = ? WHERE id = ? AND state = 'pending'")
-      .run(new Date(now).toISOString(), watch.id!);
-    if (!result.changes) return;
-    this.dirty = true;
-    console.error(`Message delivery failed: ${JSON.stringify({ id: watch.id, conversation_id: watch.conversation_id, reason, excerpt: String(watch.body).slice(0, EXCERPT_LENGTH) })}`);
+  recordScan(scan: SessionScan): void {
+    const targets = this.rows().filter(row => {
+      const conversation = this.db.prepare('SELECT provider FROM conversations WHERE id = ?').get(String(row.conversation_id));
+      return !row.archived && conversation?.provider === (scan.provider ?? 'claude');
+    }).map(row => String(row.target));
+    if (targets.length) this.add({ kind: 'scan', id: scan.id + ':delivery', at: scan.at, observedAt: scan.at,
+      source: (scan.provider ?? 'claude') + '_sessions', scope: 'local', subjects: targets, status: scan.status, validForMs: SESSION_SCAN_VALID_MS });
   }
-  private checkRow(watch: WatchRow, now: number) {
-    const conversation = this.canonical(String(watch.conversation_id));
-    const expected = normalizeSentBody(watch.body);
-    // seq で過去の同文を除き、所属と利用者の役割の両方を確かめる。
-    const candidates = this.db.prepare(`WITH recent AS MATERIALIZED (
-      SELECT seq, CASE WHEN json_extract(payload, '$.provider') IS NOT NULL AND json_extract(payload, '$.native_id') IS NOT NULL
-        THEN json_array(json_extract(payload, '$.provider'), json_extract(payload, '$.native_id')) ELSE substr(subject, 9) END AS message_id
-      FROM facts WHERE seq > ? AND kind = 'message.created')
-      SELECT m.id, m.body FROM recent JOIN messages m ON m.id = recent.message_id
-      JOIN message_memberships mm ON mm.message_id = m.id AND mm.conversation_id = ? AND mm.active = 1
-      WHERE m.role = 'user' AND NOT EXISTS (SELECT 1 FROM api_send_watches w WHERE w.message_id = m.id)
-      ORDER BY recent.seq`)
-      .iterate(watch.baseline_seq!, conversation);
-    let matched: string | undefined;
-    for (const candidate of candidates) {
-      const body = JSON.parse(String(candidate.body ?? 'null'));
-      if (!expected && JSON.parse(String(watch.attachments)).length && !(Array.isArray(body) && body.some(block => block?.type === 'image'))) continue;
-      if (normalizeSentBody(body) === expected) { matched = String(candidate.id); break; }
-    }
-    if (matched) {
-      this.db.prepare("UPDATE api_send_watches SET state = 'closed', message_id = ?, closed_ts = ? WHERE id = ?")
-        .run(matched, new Date(now).toISOString(), watch.id!);
-      this.dirty = true;
-      return;
-    }
-    if (watch.state === 'failed') return;
-    if (now - Date.parse(String(watch.sent_ts)) >= SEND_WATCH_PENDING_MAX_AGE_MS) {
-      this.fail(watch, now, 'pending age limit exceeded');
-      return;
-    }
-    const record = this.db.prepare("SELECT data FROM projection_records WHERE projection = 'conversations' AND entity_id = ?").get(conversation);
-    const queue = record ? JSON.parse(String(record.data)).pending_inputs ?? [] : [];
-    if (queue.some((input: { body: unknown; delivery_id?: string }) => input.delivery_id === watch.id || normalizeSentBody(input.body) === expected)) {
-      if (watch.deadline_ms !== WAITING_QUEUE) {
-        this.db.prepare('UPDATE api_send_watches SET deadline_ms = ? WHERE id = ?').run(WAITING_QUEUE, watch.id!);
-      }
-      return;
-    }
-    let deadline = watch.deadline_ms === null || watch.deadline_ms === WAITING_QUEUE ? undefined : Number(watch.deadline_ms);
-    if (deadline === undefined) {
-      if (watch.busy_run) {
-        const boundary = this.db.prepare(`SELECT f.observed_ts FROM facts f WHERE f.seq > ? AND f.kind IN ('run.state_changed', 'run.ended')
-          AND (f.subject = 'run:' || ? OR f.subject IN (SELECT 'run:' || subject_id FROM run_subjects
-            WHERE conversation_id = ? OR conversation_id IN (SELECT id FROM api_conversation_ids WHERE canonical_id = ?)))
-          AND (json_extract(f.payload, '$.state') IN ('idle', 'ended', 'failed') OR f.kind = 'run.ended') ORDER BY f.seq LIMIT 1`)
-          .get(watch.baseline_seq!, watch.busy_run, conversation, conversation);
-        if (!boundary) return;
-        deadline = Math.max(Date.parse(String(boundary.observed_ts)), Date.parse(String(watch.sent_ts))) + SEND_WATCH_TIMEOUT_MS;
-        if (watch.deadline_ms === WAITING_QUEUE) deadline = Math.max(deadline, now + SEND_WATCH_TIMEOUT_MS);
-      } else deadline = now + SEND_WATCH_TIMEOUT_MS;
-      this.db.prepare('UPDATE api_send_watches SET deadline_ms = ? WHERE id = ?').run(deadline, watch.id!);
-    }
-    if (now < deadline) return;
-    this.fail(watch, now, 'delivery timeout');
-  }
-  close() { this.stopped = true; this.queued.clear(); this.db.close(); }
+  close(): void { this.db.close(); }
 }

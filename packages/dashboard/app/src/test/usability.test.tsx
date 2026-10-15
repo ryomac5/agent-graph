@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { App } from '../App.tsx';
-import { createStore, type ScreenState } from '../lib/store.ts';
+import { createStore, type ScreenState } from "./current-fixture.ts";
 import { selectRoots, startedAt, type Root } from '../lib/roots.ts';
 import { formatAgo, formatClock, formatWhen, modelName } from '../lib/format.ts';
 import { RootList, RootTree } from '../components/RootViews.tsx';
@@ -131,11 +131,11 @@ it('4: detail time wrappers retain Japanese timestamps and root dates use compac
   document.documentElement.lang = 'ja';
   expect(formatClock(OLD)).toBe(formatWhen(OLD, 'ja', NOW));
 });
-it('5: names the series after its first statement and lists its last statement instead of observation time', () => {
+it('5: names the series after its first statement and preserves the API activity timestamp', () => {
   const first = new Date(2026, 8, 26, 8, 0).toISOString();
   const snapshot = state({ projects: [{ id: 'repo', display_name: 'Repo', state: 'registered' }], roots: [{ ...root, conversation_ids: ['c', 'continued'], last_activity_ts: new Date(NOW).toISOString() }],
     conversations: [{ id: 'c', created_ts: new Date(NOW).toISOString(), first_message_ts: first, last_message_ts: first }, { id: 'continued', created_ts: RECENT, last_message_ts: RECENT }] });
-  expect(selectRoots(snapshot)[0]).toMatchObject({ name: 'Repo-20260926', last_activity_ts: RECENT });
+  expect(selectRoots(snapshot)[0]).toMatchObject({ name: 'Repo-20260926', last_activity_ts: new Date(NOW).toISOString() });
   delete snapshot.projection.conversations![0].first_message_ts;
   snapshot.projection.runs = [{ conversation_id: 'c', started_ts: first }];
   expect(startedAt(snapshot, { ...root, conversation_ids: ['c', 'continued'] })).toBe(Date.parse(first));

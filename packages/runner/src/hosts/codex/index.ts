@@ -3,6 +3,7 @@ import type { JsonValue, FactKind, FactPayloads, RunState } from "../../../../co
 import { createNativeId } from "../../../../core/src/ledger/projections/relations.ts";
 import type { AgentHost, ApprovalId, Decision, ForkRequest, HostCapabilities, HostEvent, HostFact, HostLaunchOptions, ModelChoice, ModelInfo, ResumeRequest, RunHandle, StartRequest, UserInput } from "../../host/contract.ts";
 import { AppServer, type RpcMessage, type ServerOptions } from "./rpc.ts";
+import { captureNativeRecord } from '../../../../core/src/state/capture.ts';
 
 class EventQueue {
   private values: HostEvent[] = [];
@@ -305,6 +306,10 @@ export class CodexHost implements AgentHost {
       const carrier = [...this.runs.values()].find((run) => !run.closed);
       if (carrier) thread.queue = carrier.queue;
     }
+    const record = captureNativeRecord('codex', message as Record<string, JsonValue>);
+    if (record) this.emitFact(thread, 'run.updated', `run:${thread.runId}`, { last_evidence: {
+      native_source: 'codex', native_record: record, turn_id: turnId ?? thread.turnId ?? null,
+    } });
     if (message.id !== undefined) {
       if (message.method !== "item/commandExecution/requestApproval" && message.method !== "item/fileChange/requestApproval") {
         this.server!.write({ id: message.id, error: { code: -32601, message: "Unsupported server request" } });

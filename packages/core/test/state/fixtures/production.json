@@ -257,6 +257,15 @@
             "agentId": "native-7"
           }
         }
+      },
+      {
+        "line": 12153,
+        "row": {
+          "type": "queue-operation",
+          "operation": "enqueue",
+          "timestamp": "2026-10-14T04:46:33.230Z",
+          "content": "<task-notification>\n<task-id>native-7</task-id>\n<status>stopped</status>\n</task-notification>"
+        }
       }
     ],
     "child": [

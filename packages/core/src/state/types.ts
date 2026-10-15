@@ -72,8 +72,8 @@ export interface StateInput {
   runId: string | null;
   turnId: string | null;
   process: ProcessIdentity | null;
-  // 親に生存を頼る子は起動時の組を固定する。未記録は null、独立した実行は省略。
-  parentProcessAtLaunch?: Readonly<ProcessIdentity> | null;
+  // 親の起動時の組を固定する。省略・null は未確認、独立した実行だけ明示する。
+  parentProcessAtLaunch?: Readonly<ProcessIdentity> | "independent" | null;
   attempt: { id: string | null; requiredStage: Stage | "unknown" } | null;
   evidence: readonly StateEvidence[];
 }

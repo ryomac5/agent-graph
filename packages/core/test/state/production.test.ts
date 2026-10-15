@@ -77,10 +77,61 @@ test("E1: fresh current-parent scan cannot revive a child from a previous proces
   assert.equal(output.result.value, "incomplete"); assert.equal(output.result.stage, "launched");
   checkOrders(evidence, evidence => evaluateState({ ...target, evidence }, now));
 
-  const sameParent = evaluateState({ ...target, parentProcessAtLaunch: { ...PROCESS } }, now);
+});
+
+test("E1: same launch parent without a terminal notification keeps a running child Working", () => {
+  const sameParent = evaluateState({ ...productionCases[0].input, evidence: [...childEvidence, scan(now)],
+    process: PROCESS, parentProcessAtLaunch: { ...PROCESS } }, now);
   assert.equal(sameParent.process.value, "alive_confirmed");
   assert.equal(sameParent.display.label, "Working"); assert.equal(sameParent.turn.reason, "running_tool");
   assert.ok(sameParent.display.details.includes("running tool"));
+});
+
+const childId = String(production.E1.parent[1].row.toolUseResult!.agentId);
+const stoppedNotice = production.E1.parent.find(sample => sample.line === 12153)!;
+
+test("E1: actual stopped notification clears Working even with the same live parent", () => {
+  const terminal = native(stoppedNotice, "claude_child", { childId, turnId: childTurn, attemptId: "child-attempt" });
+  assert.deepEqual(terminal.map(e => e.kind === "signal" ? e.event : e.kind), ["complete", "interrupted"]);
+  const evidence = [...childEvidence, ...terminal, scan(now)];
+  const target = { ...productionCases[0].input, evidence, process: PROCESS, parentProcessAtLaunch: { ...PROCESS } };
+  const output = evaluateState(target, now);
+  assert.equal(output.process.value, "alive_confirmed");
+  assert.equal(output.turn.value, "unknown"); assert.equal(output.turn.reason, "boundary_unavailable");
+  assert.equal(output.display.label, "Unknown"); assert.equal(output.display.details.includes("running tool"), false);
+  assert.equal(output.result.stage, "launched"); assert.equal(output.result.value, "incomplete");
+  assert.ok(output.turn.evidenceIds.includes("line-12153:complete"));
+  checkOrders(evidence, evidence => evaluateState({ ...target, evidence }, now));
+});
+
+test("E1: omitted launch identity cannot borrow a live parent's scan", () => {
+  const { parentProcessAtLaunch, ...target } = { ...productionCases[0].input,
+    evidence: [...childEvidence, scan(now)], process: PROCESS };
+  assert.equal(Object.hasOwn(target, "parentProcessAtLaunch"), false);
+  const output = evaluateState(target, now);
+  assert.equal(output.process.value, "unverified"); assert.equal(output.process.reason, "missing_evidence");
+  assert.equal(output.display.label, "Unknown"); assert.equal(output.turn.reason, "progress_expired");
+  checkOrders(target.evidence, evidence => evaluateState({ ...target, evidence }, now));
+});
+
+test("child notifications require an exact task ID and an explicitly correlated turn", () => {
+  for (const status of ["stopped", "completed"]) for (const format of ["queue", "user"]) {
+    const content = String(stoppedNotice.row.content).replace("<status>stopped</status>", `<status>${status}</status>`);
+    const sample: Sample = { line: 12153, row: { timestamp: stoppedNotice.row.timestamp,
+      ...(format === "queue" ? { type: "queue-operation", operation: "enqueue", content }
+        : { type: "user", promptId: "parent-turn", message: { content: [{ type: "text", text: content }] } }) } };
+    assert.deepEqual(native(sample, "claude_child", { childId: childId + "-other", turnId: childTurn }), []);
+    assert.deepEqual(native(sample, "claude_child", { turnId: childTurn }), []);
+    const proof = native(sample, "claude_child", { childId, turnId: childTurn });
+    assert.deepEqual(proof.map(e => e.kind === "signal" ? e.event : e.kind), status === "stopped" ? ["complete", "interrupted"] : ["complete"]);
+    const output = evaluateState(stateInput([...childEvidence, ...proof], { turnId: childTurn }), now);
+    assert.equal(output.turn.value, status === "stopped" ? "unknown" : "completed");
+    assert.equal(output.result.stage, null); assert.notEqual(output.display.result, "Done");
+    const uncorrelated = native(sample, "claude_child", { childId });
+    assert.ok(uncorrelated.every(e => e.kind === "signal" && e.turnId === null));
+    assert.equal(evaluateState(stateInput([...childEvidence, ...uncorrelated], { turnId: childTurn }), now).turn.reason, "progress_expired");
+    assert.deepEqual(native({ ...sample, row: { ...sample.row, type: "assistant" } }, "claude_child", { childId, turnId: childTurn }), []);
+  }
 });
 
 const deliveries: DeliveryEvidence[] = production.E2.watches.flatMap((w, i): DeliveryEvidence[] => [

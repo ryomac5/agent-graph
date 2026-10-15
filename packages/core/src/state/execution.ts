@@ -10,7 +10,7 @@ function decideProcess(input: StateInput, signals: Signal[], scans: Scan[], now:
   if (!process) return decide("unverified", "missing_evidence", [], null, "unknown");
   const parent = input.parentProcessAtLaunch;
   // 現在の親の生存を、別の起動回の子へ貸さない。
-  if (parent !== undefined && (!parent || parent.pid !== process.pid || parent.procStart !== process.procStart)) {
+  if (parent !== "independent" && (!parent || parent.pid !== process.pid || parent.procStart !== process.procStart)) {
     return decide("unverified", parent ? "owner_restarted" : "missing_evidence", [], null, "unknown");
   }
   const exits = signals.filter(e => e.event === "exit" && e.process?.pid === process.pid && e.process.procStart === process.procStart);
@@ -73,7 +73,11 @@ function decideTurn(input: StateInput, signals: Signal[], process: Decision<Proc
   }
   const event = [...values][0];
   const confidence = latest.some(e => e.confidence === "inferred") ? "inferred" : "confirmed";
-  if (event === "complete") return decide("completed", "turn_finished", latest, null, confidence);
+  if (event === "complete") {
+    const interrupted = signals.filter(e => e.turnId === input.turnId && e.event === "interrupted" && latest.some(end => end.at === e.at));
+    return interrupted.length ? decide("unknown", "boundary_unavailable", [...latest, ...interrupted], null, "unknown")
+      : decide("completed", "turn_finished", latest, null, confidence);
+  }
   if (event === "stop_attempt") return decide("unknown", "boundary_unavailable", latest, null, "unknown");
   if (process.value === "exited_confirmed") return decide("unknown", "process_exited", latest, null, "unknown");
   const waiting = event === "approval" || event === "input";

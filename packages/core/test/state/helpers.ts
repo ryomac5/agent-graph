@@ -9,7 +9,7 @@ export function scan(at = 0, extra: Partial<Scan> = {}): Scan {
   return { kind: "scan", id: `scan-${at}`, source: "sessions", scope: "local", subjects: ["run"], at, observedAt: at, status: "succeeded", validForMs: 120_000, processes: [PROCESS], hosted: ["run"], ...extra };
 }
 export function stateInput(evidence: readonly StateEvidence[], extra: Partial<StateInput> = {}): StateInput {
-  return { runId: "run", turnId: "turn", process: null, attempt: null, evidence, ...extra };
+  return { runId: "run", turnId: "turn", process: null, parentProcessAtLaunch: "independent", attempt: null, evidence, ...extra };
 }
 export function summarizeState(s: StateDecision) {
   return { process: s.process.value, hosting: s.hosting.value, closure: s.closure.value, turn: s.turn.value,

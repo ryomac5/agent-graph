@@ -10,7 +10,7 @@
 - `Signal.tools` は開始／結果と呼び出しIDを保持する。`source=claude_session` はsessionsのsnapshotを読み、`activity=session_busy` とPID・procStartを伴う進行へ写す。
 - 時刻は UTC の epoch milliseconds とし、出来事／照会完了の `at`、取得の `observedAt`、評価の `evaluatedAt` を分ける。
 - `runId`、`turnId`、所有プロセス、依頼・試行、配達対象は呼び出し側が確認済みの対応を渡し、この層は同一性の推定・統合・最新世代選択をしない。
-- 親に生存を頼る子は、起動時に記録したPID・procStartを `parentProcessAtLaunch` に固定し、現在の親を `process` に渡す。起動時の組が未記録なら明示的に `null`、独立した実行だけ省略する。現在の親の組で起動時の組を補完・更新しない。
+- 親に生存を頼る子は、起動時に記録したPID・procStartを `parentProcessAtLaunch` に固定し、現在の親を `process` に渡す。起動時の組が未記録なら省略または `null` とし、生存をunverified／missing_evidenceにする。独立した実行だけ `"independent"` を明示する。現在の親の組で起動時の組を補完・更新しない。
 - 配達の `target` は会話・実行・端末の版を含む解決済みの鍵、`bodyKey` は正規化済みの内容の比較用の鍵とし、本文は判定に渡さなくてよい。
 - 配達の入力には照合範囲内の他の操作・受信も含め、同文の操作を一件ずつ切り離して一意だと判断しない。
 - OS照会、走査、記録の永続化、送出、タイマー、再構築、snapshot配信、画面への接続は今回の範囲外とする。
@@ -35,9 +35,10 @@
 - R15: Stop／SubagentStopのhook・attachment、終端の `stop_reason` は停止の試みとし、turn終了を確認できないため Unknown／boundary_unavailable にする。
 - R16: 本文・tool・PreToolUse／PostToolUse（hookとattachment）は進行とし、toolの開始と結果を呼び出しIDで対応させる；AskUserQuestionのtool_useとPreToolUse hookはinput、Notification hookのpermission_promptはapproval、idle_promptはstop_attempt（Unknown／boundary_unavailable）へ写す。対応結果／PostToolUse・Stop・待ち・idle_prompt・turn終端・プロセス終了で未完了toolの保持を解き、後の通常進行・生存確認では古いtoolを復活させない。SubagentHandbackやidle_promptをturn完了にしない。
 - R17: turn_duration、対応済みの同期Agent completed、SDK result／idle、Codexのturn終端は完了の証拠とし、過去の完了は失効させない；run_in_backgroundのfalse／"false"は同期、true／"true"は非同期として読む。
+- R17a: 親のtask-notificationはqueue-operation/enqueueのcontentまたはuserの本文から読む。task-idがchildIdと完全一致するstoppedはcomplete＋interrupted、completedはcompleteへ写す。親のpromptIdを子へ流用せず、responded・Done・物理終了は作らない。completeと同時刻のinterruptedがあるturnはUnknown／boundary_unavailableとし、未完了toolの保持を解く。
 - R18: 確認済みの完了後に同じturnの進行がある場合は証拠競合として Unknown にし、別turnへの対応を推測して補わない。
 - R19: 旧turnの終端や鍵のない終端は選択した別turnを閉じず、run自体が未解決なら代表表示を Unresolved にする。
-- R20: 子の生存は起動時の親のPID・procStartと現在の親の組が両方一致するときだけOS走査から確認する。同じsession_idでもどちらかが変わればunverified／owner_restarted、起動時の組が未記録ならunverified／missing_evidenceとし、新しい親の生存を引き継がない。一致する起動回の長いtoolは保持するが、子のturnと結果は子自身の証拠だけで決める。
+- R20: 子の生存は起動時の親のPID・procStartと現在の親の組が両方一致するときだけOS走査から確認する。同じsession_idでもどちらかが変わればunverified／owner_restarted、起動時の組が未記録ならunverified／missing_evidenceとし、新しい親の生存を引き継がない。一致する起動回の長いtoolは保持するが、子のturnと結果は子に対応する証拠だけで決める。親のtask-notificationも、task-idがchildIdと完全一致し、呼び出し側が子のturnに対応付けた場合に限り採る。
 - R21: Agent async_launched と Codex spawnAgent の操作完了は launched のみであり、応答・完了・Doneを作らない。
 - R22: Codexのcollabからrespondedを得るには、完了したwait、対象のreceiverThreadIds、対象のagentsStatesのcompletedと応答、解決済みの依頼への対応をすべて要求する。
 - R23: closeAgentや応答のないwaitはrespondedを作らず、子の最終応答と親の操作の完了を区別する。
@@ -107,19 +108,25 @@ ID付きの並行toolは別々に閉じる。IDのない開始は次の結果で
 
 NotificationとAskUserQuestionは、既存のapproval／input／stop_attemptへ写す。toolの名前や通知ごとの保持例外を状態判定に増やさず、既存の待ち・停止境界で未完了toolを解く。AskUserQuestionの直後のPreToolUse hookもinputにすることで、質問中に通常toolへ戻らない。
 
-- E1の子の実物記録に、新しい親の生存走査と別の起動回の組を与えると、開始から31時間後でもUnknownになる。同じ回の組ならWorking／running_toolを保つ。
+- E1の子の実物記録に、新しい親の生存走査と別の起動回の組を与えると、開始から31時間後でもUnknownになる。同じ回の組でも停止通知があればUnknown／boundary_unavailableとなる。停止通知がない入力ではWorking／running_toolを保つ。
 - PIDだけの変更、同じPIDでprocStartの変更、両方の変更、起動時の組の欠落を別々に検査する。旧い親がOS上に残る場合でも、新しい親へ生存を付け替えない。
 - permission_promptはNeeds approval、AskUserQuestionはWaiting、idle_promptはUnknownになる。生存しているまま15,492秒後へ進めてもWorkingにならず、結果や新しいtoolで進行を再開できる。
 - 起動時のPID・procStartとOS走査、待ちの原記録は合成条件である。15,492秒はレビュー報告の長さを使った試験であり、今回の本番再計測ではない。
 - 作業ツリー内の隔離コピーでexecution.tsだけを0c1b908へ戻すと起動回の5試験、records.tsだけを戻すと待ちの5試験が失敗することを確認した。作業中の実装は戻していない。
 
+## f64f276のレビューからの修正
+
+E1の親12153行目をreadFileSyncだけで読み、queue-operation/enqueueのtimestamp・task-id・statusをfixtureへ追加した。IDは既存のnative-7に合わせ、本文・パスは保存していない。stoppedの原文は前の会話で完了記録が見つからず、停止または親終了時に実行中だった可能性を述べているため、物理終了やIdleを断定しない。complete＋interruptedの区別を既存の完了判定に加えたのは、turnの型に中断状態がなく、通常完了のIdleを避けるためである。
+
+起動時の組の省略による生存の借用を廃止した。独立した実行は明示値independentへ移し、子の組の欠落・不一致は同じ安全側の判定へ集めた。試験の共通ヘルパーも独立実行を明示する。停止・完了、ID不一致・欠落、子turn未対応、queueとuserの両形式、停止通知なしの継続、起動時の組の省略を回帰試験で検査する。隔離コピーでrecords.tsだけをf64f276へ戻すと2件、execution.tsだけを戻すと3件が失敗することを確認した。
+
 ## 本番fixtureと正しい出力
 
-本番DBは `DatabaseSync(path, { readOnly: true })` の読取トランザクション、原記録は `readFileSync` で読んだ。採取は2026-10-15 08:03 UTC（補足の同期子の先頭行はその後に追加）、最大seqはfixtureの `maxSeq` に記録した。16件の台帳、25行の原記録、2件のwatchを保存し、会話本文・道具の入力と出力・パス・認証情報は保存しない。IDは整合した仮名に置換し、原記録の時刻・欄・欠落は保つ。テストの実行中は本番を読まない。
+本番DBは `DatabaseSync(path, { readOnly: true })` の読取トランザクション、原記録は `readFileSync` で読んだ。採取は2026-10-15 08:03 UTC（補足の同期子の先頭行はその後に追加）、最大seqはfixtureの `maxSeq` に記録した。16件の台帳、26行の原記録（E1の停止通知12153行目を追加）、2件のwatchを保存し、会話本文・道具の入力と出力・パス・認証情報は保存しない。IDは整合した仮名に置換し、原記録の時刻・欄・欠落は保つ。テストの実行中は本番を読まない。
 
 | 実例 | 入力の所在 | 固定した正しい出力 |
 | --- | --- | --- |
-| E1 | critique E1の親12136/12138、子1/271、seq298560/298573/298574 | 生存unverified、turn unknown/progress_expired、結果launched/incomplete、Unknown（Doneなし） |
+| E1 | critique E1の親12136/12138/12153、子1/271、seq298560/298573/298574 | 停止通知なしの断片はUnknown/progress_expired；12153を子のturnへ対応付けると同じ親の生存中もUnknown/boundary_unavailable、結果launched/incomplete（Doneなし） |
 | E2 | critique E2の137/145、seq301136/301145、watch2件 | 両方received_candidate／Likely delivered；確定Delivered・Not deliveredにはしない |
 | E3 | critique E3の5/31/32、seq301161〜301180の該当7件 | run対応未解決の入力はUnresolved；物理終了と統合を推定しない |
 | E4 | critique E4の136、seq251644/289242 | 要約はturn証拠なし；この断片だけではUnknown；別標本で誤った開始の撤回も検査 |

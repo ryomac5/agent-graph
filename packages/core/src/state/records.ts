@@ -62,6 +62,13 @@ function readNativeSignals(record: NativeRecord): Signal[] {
       ? { ...signal, tools: [{ id: toolId, phase: hook === "PreToolUse" ? "started" : "finished" }] } : signal);
   }
   if (source === "claude_child") {
+    const text = row.type === "queue-operation" && row.operation === "enqueue" ? readString(row.content)
+      : row.type === "user" ? blocks.filter(b => b.type === "text").map(b => b.text).join("\n") : undefined;
+    const notification = text?.trim().match(/^<task-notification>\s*<task-id>([^<]+)<\/task-id>([\s\S]*?)<\/task-notification>$/u);
+    if (notification && record.childId && notification[1] === record.childId) {
+      const status = notification[2].match(/<status>(stopped|completed)<\/status>/u)?.[1];
+      return status === "stopped" ? emit("complete", "interrupted") : status === "completed" ? emit("complete") : [];
+    }
     const result = readObject(row.toolUseResult);
     const call = readBlocks(readObject(record.parentCall?.message).content).find(b => b.name === "Agent" && blocks.some(r => r.type === "tool_result" && r.tool_use_id === b.id));
     if (!call || !record.childId || result.agentId !== record.childId) return [];

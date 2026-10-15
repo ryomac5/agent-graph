@@ -41,7 +41,8 @@ test('native 履歴と hook から根と会話と run に同じ判定を配り�
   assert.equal(snapshot.projection.roots[0].state, 'idle');
   const run = snapshot.projection.runs.find(row => row.decision_id)!;
   const decision = snapshot.projection.state_decisions.find(row => row.id === run.decision_id)!;
-  assert.equal((decision.display as { label: string }).label, 'Idle'); assert.equal(decision.evaluatedAt, NOW + 1000);
+  assert.equal((decision.display as { label: string }).label, 'Idle'); assert.equal(snapshot.evaluated_at, NOW + 1000);
+  assert.equal(decision.evaluatedAt, undefined);
   const before = snapshot.projection;
   const db = readLedgerDatabase(f.service.ledger); const version = db.prepare('SELECT version FROM runner_projection_version').get()!.version;
   rebuild(db); assert.equal(f.feed.refresh(NOW + 1000), 'resync');

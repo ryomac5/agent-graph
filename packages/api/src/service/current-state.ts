@@ -42,7 +42,9 @@ export class CurrentState {
       CREATE TABLE IF NOT EXISTS api_run_owners (run_id TEXT PRIMARY KEY, data TEXT NOT NULL)`);
     db.exec(`CREATE INDEX IF NOT EXISTS api_scan_time ON api_state_scans(json_extract(data, '$.at'));
       CREATE INDEX IF NOT EXISTS api_scan_provider_time ON api_state_scans(coalesce(json_extract(data, '$.provider'), 'claude'), json_extract(data, '$.at'));
-      CREATE INDEX IF NOT EXISTS api_scan_provider_status_time ON api_state_scans(coalesce(json_extract(data, '$.provider'), 'claude'), json_extract(data, '$.status'), json_extract(data, '$.at'))`);
+      CREATE INDEX IF NOT EXISTS api_scan_provider_status_time ON api_state_scans(coalesce(json_extract(data, '$.provider'), 'claude'), json_extract(data, '$.status'), json_extract(data, '$.at'));
+      CREATE INDEX IF NOT EXISTS api_remote_conversation_subject ON facts(subject)
+        WHERE kind GLOB 'conversation.*' AND json_type(payload, '$.connection_id') = 'text'`);
     this.hasScans = !!db.prepare('SELECT 1 FROM api_state_scans LIMIT 1').get();
     for (const row of db.prepare('SELECT * FROM api_run_owners').all()) this.owners.set(String(row.run_id), JSON.parse(String(row.data)));
   }
@@ -111,6 +113,8 @@ export class CurrentState {
     const incremental = delta && !this.hasConflicts && !delta.some(row => row.supersedes || String(row.kind).startsWith('relation.') || row.kind === 'observation.unsupported'
       || String(row.kind).startsWith('connection.'));
     const changedSubjects = incremental ? new Set(delta.filter(row => String(row.kind).startsWith('run.')).map(row => String(row.subject))) : undefined;
+    const changedConversations = new Set(delta?.filter(row => String(row.kind).startsWith('conversation.'))
+      .map(row => this.canonical(String(row.subject).slice('conversation:'.length))));
     const previous = this.contexts;
     this.contexts = new Map();
     const subjects = new Map<string, RunContext[]>();
@@ -130,7 +134,8 @@ export class CurrentState {
     }
     if (changedSubjects) {
       for (const [subject, contexts] of subjects) {
-        if (contexts.some(context => this.nativeById.get(String(context.row.conversation_id))?.type === 'subagent')) changedSubjects.add(subject);
+        if (contexts.some(context => changedConversations.has(String(context.row.conversation_id))
+          || this.nativeById.get(String(context.row.conversation_id))?.type === 'subagent')) changedSubjects.add(subject);
         for (const context of contexts) if (changedSubjects.has(subject) || !previous.has(String(context.row.id))) affected.add(context);
       }
       for (const [id, context] of this.contexts) if (!affected.has(context) && previous.has(id)) this.contexts.set(id, previous.get(id)!);

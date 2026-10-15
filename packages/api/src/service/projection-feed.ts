@@ -614,7 +614,9 @@ export class ProjectionFeed {
     const decision = current.decision as Record<string, unknown>;
     let proof = this.decisionRows.get(decision);
     if (!proof) {
-      proof = { id: createHash('sha256').update(JSON.stringify(decision)).digest('hex').slice(0, 32), ...decision };
+      // 評価時刻は配信の evaluated_at に置き、証拠と判定だけを識別・比較する。
+      const { evaluatedAt, ...content } = decision;
+      proof = { id: createHash('sha256').update(JSON.stringify(content)).digest('hex').slice(0, 32), ...content };
       this.decisionRows.set(decision, proof);
     }
     this.decisions.set(proof.id, proof);

@@ -319,6 +319,51 @@ test("S17 durable recovery, replay and rebuild are verifiable without sockets", 
   } finally { reverseFeed.close(); reversed.close(); }
 });
 
+test("S17 decision identity survives clock changes, incremental ingestion, restart and reordered replay", t => {
+  const now = 2_000_000_000_000;
+  t.mock.timers.enable({ apis: ["Date"], now });
+  const { service, dbPath, directory, closeService } = createFixture(t);
+  const feed = new ProjectionFeed(dbPath, service.catchUp);
+  let feedClosed = false;
+  const closeFeed = () => { if (!feedClosed) { feedClosed = true; feed.close(); } };
+  t.after(closeFeed);
+  for (const [index, fact] of facts.entries()) {
+    service.ledger.append(fact);
+    feed.refresh(now + index);
+  }
+  const expected = feed.snapshot().projection;
+  const decisionId = expected.runs[0].decision_id;
+  assert.ok(expected.state_decisions.some(row => row.id === decisionId));
+  const compare = (target: ProjectionFeed, at: number) => {
+    t.mock.timers.setTime(at);
+    target.refresh(at);
+    const snapshot = target.snapshot();
+    assert.equal(typeof snapshot.evaluated_at, 'number');
+    assert.deepEqual(snapshot.projection, expected);
+  };
+  t.mock.timers.setTime(now + 1000);
+  service.rebuild();
+  compare(feed, now + 1000);
+  closeFeed(); closeService();
+  const restarted = openObservationService({ dbPath });
+  t.after(() => restarted.close());
+  const restartedFeed = new ProjectionFeed(dbPath, restarted.catchUp);
+  t.after(() => restartedFeed.close());
+  compare(restartedFeed, now + 2000);
+  for (const [index, order] of [[...facts].reverse(), [...facts.slice(3), ...facts.slice(0, 3)]].entries()) {
+    const replay = openObservationService({ dbPath: join(directory, `replay-${index}.db`) });
+    const replayFeed = new ProjectionFeed(replay.dbPath, replay.catchUp);
+    try {
+      for (const fact of order) {
+        replay.ledger.append(fact);
+        replayFeed.refresh(now + 3000 + index);
+      }
+      compare(replayFeed, now + 4000 + index);
+    } finally { replayFeed.close(); replay.close(); }
+  }
+  assert.equal(expected.state_decisions[0].evaluatedAt, undefined);
+});
+
 test("security rules reject invalid token, cross Origin, DNS Host and non-loopback peers without sockets", async () => {
   const { authorize, createToken } = await import("../src/ws/security.ts");
   const token = createToken();

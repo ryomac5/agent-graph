@@ -47,12 +47,16 @@ test('古い申告 running/idle を採らず、api が期限と理由を配り s
   assert.equal(f.decision('parent', NOW).display.label, 'Unknown');
   f.native('parent', start());
   assert.equal(f.decision('parent', NOW).display.label, 'Working');
+  const workingId = f.feed.snapshot().projection.runs[0].decision_id;
   const seq = f.feed.snapshot().seq;
   const patch = f.feed.refresh(NOW + 300_000);
   assert.ok(patch && patch !== 'resync'); assert.equal(patch.seq, seq); assert.equal(patch.evaluated_at, NOW + 300_000);
   const d = f.decision('parent', NOW + 300_000);
   assert.equal(d.display.label, 'Unknown'); assert.equal(d.turn.reason, 'progress_expired');
   assert.ok(d.turn.evidenceIds.length); assert.equal(d.evaluatedAt, NOW + 300_000);
+  const expired = f.feed.snapshot().projection;
+  assert.notEqual(expired.runs[0].decision_id, workingId);
+  assert.ok(expired.state_decisions.some(row => row.id === expired.runs[0].decision_id));
 });
 
 for (const [name, row, source] of [

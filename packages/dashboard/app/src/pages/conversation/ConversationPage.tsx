@@ -793,7 +793,7 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
             {worktree ? <><span className="truncate mono">{worktree.place}</span>{worktree.branch && <span className="branch-name mono">{worktree.branch}</span>}</>
               : <span className="muted-text">{t('noWorktree')}</span>}</dd></div>
           {decision && <div><dt>{t('reason')}</dt><dd>{readText(readObject(decision?.turn).reason)}{Array.isArray(display.details) && display.details.length ? ' · ' + display.details.join(' · ') : ''}</dd></div>}
-          {decision?.evaluatedAt !== undefined && <div><dt>Evaluated</dt><dd>{new Date(Number(decision.evaluatedAt)).toISOString()}</dd></div>}
+          {decision && state.evaluated_at !== undefined && <div><dt>Evaluated</dt><dd>{new Date(state.evaluated_at).toISOString()}</dd></div>}
           {Array.isArray(evidence) && evidence.length > 0 && <div><dt>Evidence</dt><dd>{evidence.join(', ')}</dd></div>}
           {Boolean(display.result) && <div><dt>Result</dt><dd>{String(display.result)}</dd></div>}
           {readText(run?.last_evidence_ts) && <div><dt>{t('lastEvidence')}</dt><dd><LiveRelativeTime value={readText(run?.last_evidence_ts)} language={language}/></dd></div>}

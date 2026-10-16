@@ -658,3 +658,28 @@ test('WebSocket returns panel output once and rejects subsequent sends into a mo
     assert.equal(f.read('blocked'), undefined);
   } finally { await a.api.close(); }
 });
+
+for (const body of ['! echo delivered', '!echo delivered', '!  echo delivered  ']) {
+  test(`bash-input を送信と同じ形で照合する: ${body}`, t => {
+    const f = createFixture(t);
+    record(f, body);
+    addMessage(f, 'wrong', '<bash-input> echo other</bash-input>');
+    addMessage(f, 'output', '<bash-stdout>echo delivered</bash-stdout>');
+    f.watch.check(NOW + 1000);
+    assert.equal(f.read().state, 'pending');
+    addMessage(f, 'delivered', '<bash-input> echo delivered</bash-input>');
+    f.watch.check(NOW + SEND_WATCH_TIMEOUT_MS);
+    assert.equal(f.read().state, 'closed');
+    assert.equal(f.read().message_id, 'delivered');
+  });
+}
+
+test('bash-input がない ! の送信は期限後に未配達として残る', t => {
+  t.mock.method(console, 'error', () => {});
+  const f = createFixture(t);
+  record(f, '! echo missing');
+  addMessage(f, 'output-only', '<bash-stdout>echo missing</bash-stdout>');
+  f.watch.check(NOW + SEND_WATCH_TIMEOUT_MS);
+  assert.equal(f.read().state, 'failed');
+  assert.equal(f.read().message_id, null);
+});

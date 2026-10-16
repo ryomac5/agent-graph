@@ -103,12 +103,13 @@ function RenderRootList({ roots, selected, onSelect, project, language = 'en', g
   const row = (root: Root) => {
     const start = state ? startedAt(state, root) : undefined;
     const startIso = start === undefined ? undefined : new Date(start).toISOString();
+    const lastActive = Date.parse(root.last_activity_ts ?? '');
     const shownState = activity(root);
     const content = <><StatusDot className="root-state" dotOnly activity dotLabel={stateLabel(shownState, language)} state={shownState} language={language}/>
       <span className="root-row-line"><span className="root-name" title={root.name}>{root.name}</span></span>
       <span className="root-row-meta"><StatusDot state={shownState} language={language} activity/>
         {isRunning(shownState) && <RootElapsed state={state} root={root} language={language}/>}
-        {!isRunning(shownState) && start !== undefined && <RootStarted start={start} language={language}/>}</span></>;
+        {!isRunning(shownState) && Number.isFinite(lastActive) && <RootStarted start={lastActive} language={language}/>}</span></>;
     if (editing === root.id && client) return <div key={root.id} className="root-row"><SessionName key={root.id} root={root} client={client} language={language} editing onFinish={() => setEditing(undefined)}/></div>;
     return <div key={root.id} className="root-list-item" onKeyDown={event => { if (event.key === 'Escape') setMenu(undefined); }}><Link
       onDoubleClick={client ? event => { event.preventDefault(); setEditing(root.id); setMenu(undefined); } : undefined}

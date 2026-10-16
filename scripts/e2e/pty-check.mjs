@@ -25,9 +25,9 @@ try {
   await scriptActor(process.env.E2E_CONTROL, actor.pid, 'release');
   const result = await hosts.handle('session.send', { conversationId: id, text: '/model haiku' }, notify);
   assert.equal(result.command.status, 'interactive');
-  assert.ok(result.command.output.includes('Select model'));
+  assert.ok(result.command.output.includes('Switch model?'));
   await assert.rejects(hosts.handle('session.send', { conversationId: id, text: 'must be blocked' }, notify), /not ready/);
-  await hosts.handle('terminal.input', { terminalId: launch.terminalId, data: 's' }, notify);
+  await hosts.handle('terminal.input', { terminalId: launch.terminalId, data: '\r' }, notify);
   await waitFor(async () => (await readFile(actor.path, 'utf8')).includes('Set model to'), 'PTY confirmation');
   assert.ok(!notices.some(notice => notice.data?.includes('must be blocked')));
   console.log('Real PTY, queue, model panel, double-send rejection: PASS');

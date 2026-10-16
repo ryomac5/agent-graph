@@ -111,7 +111,15 @@ test('偽 CLI は実 stdin と adapter を通じて台本・hook・履歴を生�
   const fork = await command('fork'); assert.notEqual(fork.id, actor.id);
   send('/rename Synthetic'); await waitFor(async () => (await readFile((await state()).path, 'utf8')).includes('custom-title'), 'rename');
   send('/model haiku'); await waitFor(async () => (await state()).panel, 'model panel');
-  child.stdin.write('s'); await waitFor(async () => (await state()).model === 'haiku' && !(await state()).panel, 'model confirmed');
+  await waitFor(() => output.includes('Switch model?'), 'model confirmation screen');
+  assert.ok(output.includes('❯ 1. Yes, switch to Haiku 5.5'));
+  assert.ok(output.includes('2. No, go back'));
+  child.stdin.write('2');
+  await waitFor(async () => !(await state()).panel, 'model cancelled');
+  assert.equal((await state()).model, 'sonnet');
+  assert.ok(!(await readFile((await state()).path, 'utf8')).includes('Set model to'));
+  send('/model haiku'); await waitFor(async () => (await state()).panel, 'model panel reopened');
+  child.stdin.write('\r'); await waitFor(async () => (await state()).model === 'haiku' && !(await state()).panel, 'model confirmed');
   await command('end'); await command('hold-next'); send('after end');
   await waitFor(async () => (await state()).working && !(await state()).stopped, 'after end working');
   await command('release'); await command('compact');

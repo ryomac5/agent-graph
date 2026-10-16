@@ -224,3 +224,11 @@ it.each([false, true])('子の報告の札は Markdown 見出しの記号を除�
   expect(shown.container.querySelector('.message-report-lead')?.textContent).toBe('再レビューの結果');
   expect(shown.container.querySelector('.message-bubble')?.textContent).toContain('再レビューの結果');
 });
+
+it('removes command tags from previously normalized projection text', () => {
+  const command = '<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>haiku</command-args>';
+  expect(visibleText(command, true)).toBe('/model haiku');
+  expect(visibleText(command)).toBe('/model haiku');
+  const example = '```xml\n' + command + '\n```';
+  expect(visibleText(example, true)).toBe(example);
+});

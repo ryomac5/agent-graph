@@ -271,10 +271,11 @@ export async function runJourneys({ browser, isolation, url, report, signal }) {
       const audit = (await readFile(join(isolation.control, 'events.jsonl'), 'utf8')).split('\n').filter(Boolean).map(JSON.parse);
       assert.equal(audit.filter(row => row.pid === session.pid && row.event === 'input' && row.text === blocked).length, 0);
       await shot('blocked-send');
-      await terminal(); await page.locator('.workbench-body:not([hidden]) .xterm-helper-textarea').focus(); await page.keyboard.press('s');
+      await terminal(); await page.locator('.workbench-body:not([hidden]) .xterm-helper-textarea').focus(); await page.keyboard.press('Enter');
       await waitFor(async () => { const state = await actorState(session); return !state.panel && state.model === 'haiku'; }, 'confirmed model');
       await page.locator(`[id=${JSON.stringify(conversationTab)}]`).click();
       await composer().getByRole('button', { name: /Model · Haiku/ }).waitFor();
+      await page.getByRole('complementary', { name: 'Panel' }).locator('.graph-row-who').filter({ hasText: 'Haiku 5.5' }).waitFor();
       await send(session.marker + ' switched'); await reply(session.marker + ' switched');
     });
     await check('7', async () => {

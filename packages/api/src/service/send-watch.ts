@@ -33,6 +33,9 @@ function readAttachments(value: SQLOutputValue | undefined): string[] {
 
 export function normalizeSentBody(body: unknown): string {
   const text = getMessageText(body as JsonValue);
+  const bash = /^\s*<bash-input>([\s\S]*?)<\/bash-input>\s*$/u.exec(text);
+  if (bash) return `! ${bash[1].trim()}`;
+  if (text.trimStart().startsWith('!')) return `! ${text.trimStart().slice(1).trim()}`;
   const command = /<command-name>([^<]+)<\/command-name>/u.exec(text)?.[1];
   if (command) return `${command} ${/<command-args>([\s\S]*?)<\/command-args>/u.exec(text)?.[1] ?? ''}`.trim();
   return text.replace(/<\/?pasted_content\b[^>]*>/gu, '').replace(/\[Image #\d+\]/gu, '').trim();

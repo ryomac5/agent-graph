@@ -82,3 +82,23 @@ it('lists only roots with running children and leaves orphan unattended runs out
   // 根でない会話は一覧に出さない。
   expect(screen.queryByText('Orphan run')).toBeNull();
 });
+
+it('shows and orders root rows by latest interaction after new messages arrive', async () => {
+  const { selectRoots } = await import('../lib/roots.ts');
+  const target = createStore();
+  const old = '2026-10-13T00:00:00.000Z', middle = '2026-10-14T00:00:00.000Z', latest = '2026-10-15T00:00:00.000Z';
+  target.setSnapshot({ seq: 1, generation: 0, projection: {
+    roots: ['a', 'b'].map(id => ({ id, name: 'Root ' + id, state: 'idle', project: null, last_activity_ts: id === 'a' ? old : middle, conversation_ids: [id], running_children: 0, total_children: 0 })),
+    conversations: [{ id: 'a', first_message_ts: old, last_message_ts: old }, { id: 'b', first_message_ts: middle, last_message_ts: middle }],
+  } });
+  expect(selectRoots(target.getSnapshot()).map(root => root.id)).toEqual(['b', 'a']);
+  target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: {
+    conversations: { upsert: [{ id: 'a', first_message_ts: old, last_message_ts: latest }], remove: [] },
+  } });
+  const state = target.getSnapshot();
+  const roots = selectRoots(state);
+  expect(roots.map(root => root.id)).toEqual(['a', 'b']);
+  render(<MemoryRouter><RootList roots={roots} state={state}/></MemoryRouter>);
+  expect(screen.getByRole('link', { name: 'Root a' }).querySelector('time')?.dateTime).toBe(latest);
+  expect(screen.getByRole('link', { name: 'Root a' }).title).toContain('Started: ' + old);
+});

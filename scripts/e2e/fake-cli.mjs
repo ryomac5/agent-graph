@@ -134,8 +134,8 @@ export async function main(provider) {
     else timer = setTimeout(() => serialize(finish), REPLY_DELAY_MS);
   }
   async function choose(char) {
-    if (char === '\x1b') { panel = false; await saveState(); draw(); return; }
-    if (!['s', '\r', '\n'].includes(char)) return;
+    if (char === '\x1b' || char === '2') { panel = false; await saveState(); draw(); return; }
+    if (!['1', '\r', '\n'].includes(char)) return;
     transcript.model = panelModel; panel = false;
     output = `⎿ Set model to ${panelModel}`;
     const display = CLAUDE_MODELS.find(model => model.value === panelModel)?.displayName ?? panelModel;

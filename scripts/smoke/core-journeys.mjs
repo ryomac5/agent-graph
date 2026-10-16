@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { SMOKE_DIRECTORY, SMOKE_PROJECT_ID } from '../../packages/api/src/verification.ts';
 import { readSmokeSession } from './session.mjs';
+import { selectCodexRoot } from './select-codex-root.mjs';
 import { verifyRename } from './rename-fixture.mjs';
 import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -389,7 +390,7 @@ async function main() {
       return `image in ${transcript.replace(homedir(), '~')}`;
     });
 
-    // 子の多い根を開く。グラフと Codex の子の確かめで使う。
+    // 段 4・5 は従来どおり子の多い根を開く。
     const parent = initial.projection.roots.filter(root => root.project === project.id && root.id !== smoke.id)
       .toSorted((a, b) => (b.total_children ?? 0) - (a.total_children ?? 0))[0];
     const tree = () => panel().getByRole('tree', { name: 'Request graph' });
@@ -403,9 +404,9 @@ async function main() {
         return stable;
       }, 'graph rows settled');
     }
-    async function openParent() {
-      if (!parent || !parent.total_children) throw new Error('no root with children in the project');
-      await page.goto(`${BASE}/p/${encodeURIComponent(project.id)}?root=${encodeURIComponent(parent.id)}`);
+    async function openParent(root = parent) {
+      if (!root || !root.total_children) throw new Error('no root with children in the project');
+      await page.goto(`${BASE}/p/${encodeURIComponent(project.id)}?root=${encodeURIComponent(root.id)}`);
       await panel().getByRole('tab', { name: 'Graph', exact: true }).click();
       await tree().waitFor({ timeout: UI_TIMEOUT_MS });
       await waitForGraphRows();
@@ -437,7 +438,7 @@ async function main() {
     }
 
     await step('3 codex send path', async () => {
-      await openParent();
+      await openParent(selectCodexRoot(initial, project.id, smoke.id));
       const row = await childRow('Codex');
       const title = (await row.getAttribute('aria-label') ?? await row.innerText()).split(' · ')[0];
       const beforeTab = await page.getByRole('tablist', { name: 'Workspace tabs' }).getByRole('tab', { selected: true }).textContent() ?? '';

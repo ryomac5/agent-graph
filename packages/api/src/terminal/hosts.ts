@@ -452,6 +452,10 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
       } else if (command === 'terminal.close') {
         if (!host.listeners.has(notify)) throw new Error('Unknown terminal');
         host.terminal.kill();
+        // runner の kill は非同期で、端末を一覧から外すため終了イベントを待てない。
+        if (!host.terminal.exited) {
+          for (const listener of host.listeners) listener({ type: 'terminal', event: 'exit', terminalId: host.terminalId, exitCode: 0 });
+        }
         detachHost(host);
         hosts.delete(host.terminalId);
       } else throw new Error('Unknown terminal command');

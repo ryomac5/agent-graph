@@ -222,12 +222,42 @@ test('close detaches even while spawn awaits its reply; only terminal.close kill
   f.runner.beforeRequest = undefined;
   const restored = f.start();
   await restored.rehydrate();
-  const notify = () => {};
+  const events: unknown[] = [];
+  const otherEvents: unknown[] = [];
+  const notify = (event: unknown) => events.push(event);
   await restored.handle('terminal.attach', { terminalId: 'runner-0' }, notify);
+  await restored.handle('terminal.attach', { terminalId: 'runner-0' }, event => otherEvents.push(event));
   await restored.handle('terminal.close', { terminalId: 'runner-0' }, notify);
   await tick();
   assert.equal(f.runner.requests.filter(request => request.command === 'terminal.kill').length, 1);
   assert.equal(restored.hasTerminal('runner-0'), false);
+  const exit = { type: 'terminal', event: 'exit', terminalId: 'runner-0', exitCode: 0 };
+  assert.deepEqual(events, [exit]);
+  assert.deepEqual(otherEvents, [exit]);
+  f.runner.onEvent({ type: 'evt', terminal: { terminalId: 'runner-0', exit: { exitCode: 0 } } });
+  await tick();
+  assert.deepEqual(events, [exit]);
+  assert.deepEqual(otherEvents, [exit]);
+});
+
+test('terminal.close preserves an exit delivered during kill without notifying twice', async t => {
+  const f = await createFixture(t);
+  f.runner.infos = [createInfo()];
+  const service = f.start();
+  await service.rehydrate();
+  const events: unknown[] = [];
+  const notify = (event: unknown) => events.push(event);
+  await service.handle('terminal.attach', { terminalId: 'runner-terminal' }, notify);
+  f.runner.beforeRequest = async request => {
+    if (request.command === 'terminal.kill') {
+      f.runner.onEvent({ type: 'evt', terminal: { terminalId: 'runner-terminal', exit: { exitCode: 7 } } });
+    }
+  };
+  await service.handle('terminal.close', { terminalId: 'runner-terminal' }, notify);
+  await tick();
+  assert.deepEqual(events, [{ type: 'terminal', event: 'exit', terminalId: 'runner-terminal', exitCode: 7 }]);
+  assert.equal(f.runner.requests.filter(request => request.command === 'terminal.kill').length, 1);
+  assert.equal(service.hasTerminal('runner-terminal'), false);
 });
 
 test('simultaneous resume requests reserve identity before asynchronous spawn', async t => {

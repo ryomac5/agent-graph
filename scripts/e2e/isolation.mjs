@@ -5,10 +5,11 @@ import { createRequire } from 'node:module';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
 
 export const DIRECTORY = dirname(fileURLToPath(import.meta.url));
-export const REPOSITORY = resolve(DIRECTORY, '../..');
+export const REPOSITORY = process.env.E2E_CODE_ROOT ? resolve(process.env.E2E_CODE_ROOT) : resolve(DIRECTORY, '../..');
 export const PLAYWRIGHT = '/Users/r/.npm/_npx/d71ea5ed3eabc9b3/node_modules/playwright/index.mjs';
 export const TIMEOUT_MS = 20_000;
 export const START_TIMEOUT_MS = 45_000;
@@ -37,19 +38,29 @@ export async function readJson(path) {
   catch (error) { if (error.code === 'ENOENT') return undefined; throw error; }
 }
 
-export async function createIsolation(parentRoot) {
+async function ownedRuns() {
+  const runs = join(DIRECTORY, '.runs');
+  await mkdir(runs, { recursive: true });
+  assert.equal(await realpath(runs), runs, '.runs の symlink は使えません');
+  return runs;
+}
+
+export async function createIsolation(parentRoot, { temporary = false } = {}) {
+  assert.ok(!temporary || !parentRoot);
   if (parentRoot) {
     assert.ok(inside(join(DIRECTORY, '.runs'), parentRoot));
     assert.equal((await readJson(join(parentRoot, 'owner.json')))?.root, parentRoot);
     assert.equal(await realpath(parentRoot), parentRoot);
   }
-  const parent = parentRoot ? join(parentRoot, 'checks') : join(DIRECTORY, '.runs');
+  const parent = temporary ? await realpath(tmpdir()) : parentRoot ? join(parentRoot, 'checks') : join(DIRECTORY, '.runs');
   await mkdir(parent, { recursive: true });
   assert.equal(await realpath(parent), parent, '隔離先の symlink は使えません');
-  const root = await mkdtemp(join(parent, 'run-'));
+  const root = await mkdtemp(join(parent, temporary ? 'agent-graph-prod-gate-' : 'run-'));
+  // 製品は一時領域配下の場所を「一時の場所」として登録を拒む。本番写しの通し実行では会話の cwd だけ一時領域の外に置く。
+  const projectParent = temporary ? await mkdtemp(join(await ownedRuns(), 'prod-gate-project-')) : undefined;
   const paths = {
     root, home: join(root, 'home'), state: join(root, 'state', 'agent-graph'),
-    project: join(root, 'journey-project'), bin: join(root, 'bin'), tmp: join(root, 'tmp'),
+    project: join(projectParent ?? root, 'journey-project'), bin: join(root, 'bin'), tmp: join(root, 'tmp'),
     control: join(root, 'control'), dist: join(root, 'dist'),
     config: join(root, 'config'), cache: join(root, 'cache'),
   };
@@ -74,6 +85,8 @@ export async function createIsolation(parentRoot) {
     GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_TERMINAL_PROMPT: '0',
     E2E_ROOT: root, E2E_PROJECT: paths.project, E2E_CONTROL: paths.control,
     E2E_HOOK_DESTINATION: join(root, 'hook-destination.json'),
+    ...(process.env.E2E_CODE_ROOT ? { E2E_CODE_ROOT: REPOSITORY } : {}),
+    ...(temporary ? { E2E_TEMP_PARENT: parent, E2E_PROJECT_PARENT: projectParent } : {}),
   };
   for (const key of ['XDG_DATA_HOME', 'XDG_RUNTIME_DIR']) await mkdir(env[key], { recursive: true });
   // ロゴだけは合成のキャッシュを用意し、静的配信から外部 CDN を呼ばせない。
@@ -87,12 +100,17 @@ export async function createIsolation(parentRoot) {
 
 export async function assertIsolation(env = process.env) {
   const root = env.E2E_ROOT;
-  assert.ok(root && inside(join(DIRECTORY, '.runs'), root), 'E2E_ROOT must be an owned workspace directory');
+  const temporary = env.E2E_TEMP_PARENT;
+  assert.ok(root && (inside(join(DIRECTORY, '.runs'), root) ||
+    temporary && dirname(root) === temporary && root.startsWith(join(temporary, 'agent-graph-prod-gate-'))),
+  'E2E_ROOT must be an owned workspace or temporary directory');
   assert.equal(await realpath(root), root);
   const owner = await readJson(join(root, 'owner.json'));
   assert.equal(owner?.root, root);
   for (const key of ['HOME', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'XDG_STATE_HOME', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'TMPDIR', 'E2E_PROJECT', 'E2E_CONTROL', 'E2E_HOOK_DESTINATION']) {
-    assert.ok(env[key] && inside(root, env[key]), `${key} escapes isolation`);
+    const outside = key === 'E2E_PROJECT' && temporary && env.E2E_PROJECT_PARENT
+      && dirname(env.E2E_PROJECT_PARENT) === join(DIRECTORY, '.runs') && inside(env.E2E_PROJECT_PARENT, env.E2E_PROJECT);
+    assert.ok(env[key] && (inside(root, env[key]) || outside), `${key} escapes isolation`);
   }
   return root;
 }
@@ -132,7 +150,8 @@ export async function removeIsolation(isolation) {
   await assertIsolation(isolation.env);
   assert.equal((await readJson(join(isolation.root, 'owner.json'))).pid, process.pid);
   await rm(isolation.root, { recursive: true, force: true });
-  await rmdir(dirname(isolation.root)).catch(error => { if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(error.code)) throw error; });
+  if (isolation.env.E2E_PROJECT_PARENT) await rm(isolation.env.E2E_PROJECT_PARENT, { recursive: true, force: true });
+  if (!isolation.env.E2E_TEMP_PARENT) await rmdir(dirname(isolation.root)).catch(error => { if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(error.code)) throw error; });
 }
 export async function readActors(control) {
   const actors = [];

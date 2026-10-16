@@ -289,6 +289,7 @@ api と MCP 中継と CLI が、同じソケットへ接続する。
 | `dashboard` | `codemirror` と `@codemirror/lang-*` | 真ん中の作業場でのコードの表示と編集。段 8 で足す |
 | `dashboard` | `@xterm/xterm`、`@xterm/addon-fit` | 真ん中の作業場のターミナルの描画。段 8 で足す |
 | `api` | `node-pty` | ターミナルの擬似端末。段 8 で足す |
+| `runner` | `node-pty` | 端末の持ち主を runner に移し、api の再起動で端末が切れないようにする。T6 で足す |
 | `api` | `@xterm/headless` | ホスト端末の現在画面を保持し、送信前の入力可否とスラッシュコマンドの画面を読む。MIT。端末入力の修正で足す |
 | `dashboard` | `@tiptap/react`、`@tiptap/starter-kit`、`@tiptap/markdown`、`@tiptap/pm`、`@tiptap/extension-table`、`@tiptap/extension-list` | 真ん中の作業場での Markdown のプレビューの中の編集。段 8 で足す |
 

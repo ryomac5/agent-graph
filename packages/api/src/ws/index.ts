@@ -2,6 +2,7 @@ import { SendWatch } from '../service/send-watch.ts';
 import { addProject, listDirectories } from './projects.ts';
 import { renameSession } from './session-rename.ts';
 import { createServer } from "node:http";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { DatabaseSync } from "node:sqlite";
 import { WebSocket, WebSocketServer } from "ws";
 import { sendJson, WEBSOCKET_COMPRESSION } from './compression.ts';
@@ -11,7 +12,7 @@ import type { openObservationService } from "../service/index.ts";
 import { pollObservation } from "../service/poll.ts";
 import { PROJECTION_POLL_MS } from "../service/index.ts";
 import { ProjectionFeed, type ProjectionPatch } from "../service/projection-feed.ts";
-import { RunnerClient, runnerSocketPath } from "../runner-client.ts";
+import { RunnerClient, runnerSocketPath, type RunnerEvent } from "../runner-client.ts";
 import { authorize, createToken, readRequestUrl } from "./security.ts";
 import { createSearchHandler } from "../search/index.ts";
 import { createFilesApi, handleFilesCommand, FilesWriteError, FilesPreviewError } from "../files/index.ts";
@@ -99,7 +100,13 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
     try { if (sendWatch?.check()) publishWatches(); }
     catch (error) { console.error('Send watch check failed:', error); }
   }
-  const runner = new RunnerClient(options.runnerPath ?? runnerSocketPath(), (event) => {
+  const terminalListeners = new Set<(event: RunnerEvent) => void>();
+  const launchCommand = new AsyncLocalStorage<string>();
+  const runner = new RunnerClient<RunnerEvent>(options.runnerPath ?? runnerSocketPath(), (event) => {
+    if ("terminal" in event) {
+      for (const listener of terminalListeners) listener(event);
+      return;
+    }
     if ("seq" in event) pollObservation(refresh);
     else for (const [socket, subscription] of clients) {
       const conversation = feed.runConversation(event.delta.runId);
@@ -118,7 +125,25 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
       UNION SELECT cwd AS path FROM runs WHERE cwd IS NOT NULL`).all().map(row => String(row.path)),
     ...options.usage,
   });
-  const sessionHosts = createSessionHosts(files.selectRoot, options.sessionHosts);
+  const sessionHosts = createSessionHosts(files.selectRoot, {
+    ...options.sessionHosts,
+    createRunnerClient(onEvent) {
+      const custom = options.sessionHosts?.createRunnerClient?.(onEvent);
+      const client = custom ?? runner;
+      if (!custom) terminalListeners.add(onEvent);
+      return {
+        get available() { return client.available; },
+        get connectionGeneration() { return client.connectionGeneration; },
+        request(request) {
+          const cmd_id = launchCommand.getStore();
+          // 起動だけをブラウザの ID に結び、再起動後も runner の保存済み応答を使う。
+          return client.request(request.command === 'terminal.spawn' && cmd_id
+            ? { ...request, cmd_id: `session.launch:${cmd_id}` } : request);
+        },
+        close() { terminalListeners.delete(onEvent); custom?.close(); },
+      };
+    },
+  });
   const sessionCommands = new Map<string, Promise<unknown>>();
   const completedSessionCommands: string[] = [];
   const server = createServer((request, response) => {
@@ -227,7 +252,8 @@ export async function startWebSocketServer(service: ReturnType<typeof openObserv
             const watched = message.command === 'session.send' && typeof message.payload?.conversationId === 'string' && typeof message.payload?.text === 'string';
             if (watched) pollObservation(refresh);
             const captured = watched ? captureWatch(message.payload.conversationId) : undefined;
-            result = hosted ? sessionHosts.handle(message.command, message.payload, notify) : terminals.handle(message.command, message.payload);
+            result = hosted ? launchCommand.run(message.command === 'session.launch' ? message.cmd_id : '',
+              () => sessionHosts.handle(message.command, message.payload, notify)) : terminals.handle(message.command, message.payload);
             if (captured) result = result.then(value => {
               if ((value as SessionSendResult).delivery !== 'terminal') void recordWatch(message.cmd_id, (value as SessionSendResult).conversationId ?? message.payload.conversationId, message.payload.text, captured, message.payload.attachments, message.payload.retryOf);
               return value;

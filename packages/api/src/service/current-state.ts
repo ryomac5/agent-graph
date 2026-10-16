@@ -300,7 +300,12 @@ export class CurrentState {
     this.removedRuns = [];
     // 走査を記録した後の評価は全実行を通るので、ここで新しい会話の印を消してよい。
     this.recordedSessions.clear();
-    if (this.scanWriter) this.pruneScans(now);
+    if (this.scanWriter) {
+      // 掃除は次の周期でもよい。書き込みの競合で api ごと落とさない。
+      try { this.pruneScans(now); } catch (error) {
+        if ((error as { errcode?: number }).errcode !== 5) throw error;
+      }
+    }
     return [...changed];
   }
   private pruneScans(now: number): void {
@@ -790,7 +795,10 @@ export class CurrentState {
       const session = scan && this.indexScan(scan).sessions.get(String(native.native_id));
       if (session) owner = { pid: session.pid, procStart: session.procStart };
       if (owner || context.parent) {
-        this.db.prepare('INSERT OR IGNORE INTO api_run_owners VALUES (?, ?)').run(input.runId!, JSON.stringify(owner));
+        // 保存できなくても今回の判定は進める。起動し直した後は所持者が不明になり、安全な側に倒れる。
+        try { this.db.prepare('INSERT OR IGNORE INTO api_run_owners VALUES (?, ?)').run(input.runId!, JSON.stringify(owner)); } catch (error) {
+          if ((error as { errcode?: number }).errcode !== 5) throw error;
+        }
         this.owners.set(input.runId!, owner);
         context.missNative = context.missStarted = context.missUntil = undefined;
       } else { context.missNative = native.native_id; context.missStarted = started; context.missUntil = this.futureScanAt; }

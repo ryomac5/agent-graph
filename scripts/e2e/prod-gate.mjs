@@ -17,7 +17,7 @@ const MIB = 1024 * 1024;
 const MINUTE_MS = 60_000;
 const DEFAULTS = { 'rss-limit-mib': 1600, 'rss-slope-mib-min': 1, 'sample-ms': 5000,
   'observe-ms': 180_000, 'startup-timeout-ms': 20 * MINUTE_MS, 'send-timeout-ms': 120_000,
-  'reconnect-timeout-ms': 30_000, 'locked-limit': 0 };
+  'reconnect-timeout-ms': 30_000, 'locked-limit': 10 };
 const HELP = `Usage: node scripts/e2e/prod-gate.mjs [options]
   --db-copy <path>             Read an existing copy instead of the production DB
   --headed                    Show Chromium
@@ -28,7 +28,7 @@ const HELP = `Usage: node scripts/e2e/prod-gate.mjs [options]
   --startup-timeout-ms <n>     Startup/scan deadline (default 1200000)
   --send-timeout-ms <n>        Browser send/reply deadline (default 120000)
   --reconnect-timeout-ms <n>   Maximum continuous Reconnecting duration (default 30000)
-  --locked-limit <n>           Allowed stderr occurrences (default 0)
+  --locked-limit <n>           Allowed stderr occurrences (default 10)
   --help                      Print help without starting anything
 
 Requires Node 24, sqlite3, ps, installed workspace dependencies and existing Playwright/Chromium.

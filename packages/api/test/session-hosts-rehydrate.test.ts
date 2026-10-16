@@ -139,6 +139,34 @@ test('discovery in progress fails explicitly, then newly discovered sessions can
   await handle(service, 'session.send', { conversationId, text: 'ready' });
 });
 
+test('reconnect rejects sends while cleared hosts are being rediscovered, then sends to the same runner terminal', async t => {
+  let pending: Promise<void> | undefined;
+  let entered!: () => void;
+  const f = await createFixture(t, { listProcesses: async () => {
+    if (pending) { entered(); await pending; }
+    return [];
+  } });
+  f.runner.infos = [createInfo()];
+  await writeFile(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: SESSION }));
+  const service = f.start();
+  await service.rehydrate();
+  let release!: () => void;
+  pending = new Promise<void>(resolve => { release = resolve; });
+  const discovering = new Promise<void>(resolve => { entered = resolve; });
+  f.runner.connectionGeneration++;
+  const restoring = service.rehydrate();
+  try {
+    await discovering;
+    assert.equal(service.hasTerminal('runner-terminal'), true);
+    await assert.rejects(handle(service, 'session.send', { conversationId, text: 'during reconnect' }), /^Error: Host discovery pending; retry session.send$/);
+    assert.equal(f.runner.requests.some(request => request.command === 'terminal.write'), false);
+  } finally { release(); await restoring; }
+  await handle(service, 'session.send', { conversationId, text: 'after reconnect' });
+  assert.deepEqual(f.runner.requests.filter(request => request.command === 'terminal.write').map(request => request.payload),
+    ['\x15', '\x1b[200~after reconnect\x1b[201~', '\r'].map(data => ({ terminalId: 'runner-terminal', data })));
+  assert.equal(f.runner.requests.some(request => request.command === 'terminal.spawn' || request.command === 'terminal.kill'), false);
+});
+
 for (const unavailable of ['connection', 'capability'] as const) test(`${unavailable}: launch fails with Runner unavailable and never falls back to local spawn`, async t => {
   const f = await createFixture(t);
   if (unavailable === 'connection') f.runner.available = false;

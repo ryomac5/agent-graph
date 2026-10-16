@@ -18,6 +18,7 @@ import { CLAUDE_HISTORY_DETAILS_VERSION, CLAUDE_MESSAGE_FLAGS_VERSION, CLAUDE_QU
 import { CODEX_HISTORY_DETAILS_VERSION } from "../observe/codex/index.ts";
 import { registerLedgerDatabase } from "../../../core/src/ledger/repository.ts";
 import { createSessionQuery } from "../observe/session-query.ts";
+import { createClaudeChildObserver } from "../observe/claude/children.ts";
 import { createClaudeSessionObserver } from "../observe/claude/sessions.ts";
 import { createCodexSessionObserver } from "../observe/codex/sessions.ts";
 import type { CodexProcessReader } from "../observe/codex/sessions.ts";
@@ -54,6 +55,7 @@ export interface ObservationOptions {
   readerOnly?: boolean;
   projectInWorker?: boolean;
   codexProcessReader?: CodexProcessReader;
+  claudeProcessReader?: () => Map<number, string>;
   onProgress?: (progress: { processed: number; total: number }) => void;
 }
 export interface IngestionReport {
@@ -280,8 +282,9 @@ export function openObservationService(options: ObservationOptions = {}) {
   const claudeSessionsDirectory = join(env.CLAUDE_CONFIG_DIR ?? join(home, ".claude"), "sessions");
   const sessionQuery = createSessionQuery(scanLedger, projectionDb, !options.readerOnly);
   let remoteConversations = new Set<string>();
-  const localQuery = { ...sessionQuery, read: (provider: 'claude' | 'codex') => sessionQuery.read(provider).filter(run => !remoteConversations.has(run.conversation_id)) };
+  const localQuery = { ...sessionQuery, read: (provider: 'claude' | 'codex', subagents = false) => sessionQuery.read(provider, subagents).filter(run => !remoteConversations.has(run.conversation_id)) };
   const observeClaudeSessions = createClaudeSessionObserver(scanLedger, claudeSessionsDirectory, localQuery);
+  const claudeChildren = createClaudeChildObserver(scanLedger, claudeSessionsDirectory, localQuery, options.claudeProcessReader);
   const observeCodexSessions = createCodexSessionObserver(scanLedger, env.CODEX_HOME ?? join(home, ".codex"),
     options.codexProcessReader, localQuery);
   let rollout: ReturnType<typeof createIncrementalRolloutReader> | undefined;
@@ -450,7 +453,7 @@ export function openObservationService(options: ObservationOptions = {}) {
           if (total) buffered.batch(() => {
             if (claudePaths.length) {
               observeClaudeHistories(scanLedger, claudeProjects, snapshot, trackBatch, claudePaths, checkpoints, locate,
-                (path, operation) => observeFileBatch(path, "transcript-claude", () => trackBatch(operation), result => result.conflicts));
+                (path, operation) => observeFileBatch(path, "transcript-claude", () => trackBatch(operation), result => result.conflicts), claudeChildren.parentAtLaunch);
             }
             if (codexPaths.size) observeCodex(scanLedger,
               { codexHome, reader: codex.reader, paths: codexPaths, titleCursors: checkpoints, observeTitles: !changes,
@@ -505,6 +508,7 @@ export function openObservationService(options: ObservationOptions = {}) {
           refreshSnapshot();
           remoteConversations = buffered.batch(() => observeRemoteStatus(scanLedger, remoteFiles, snapshot));
           if (existsSync(claudeSessionsDirectory)) buffered.batch(() => observeClaudeSessions());
+          buffered.batch(() => claudeChildren.observe(claudeFiles));
           refreshSnapshot();
           buffered.batch(() => observeCodexSessions());
         }

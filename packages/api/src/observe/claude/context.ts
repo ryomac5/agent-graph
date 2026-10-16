@@ -1,4 +1,4 @@
-import { basename, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { classifyClaudeRecord, createNativeId, projectConversations, TURN_RULE_VERSION } from "../../../../core/src/ledger/index.ts";
 import type { AppendResult, Fact, FactInput, JsonValue, Ledger, RunPayload } from "../../../../core/src/ledger/index.ts";
 import { readAppendOnlyFile, type FileLine } from "../files.ts";
@@ -22,6 +22,7 @@ export interface ClaudeContextOptions {
   fromStart?: boolean;
   observedTs?: string;
   locate?: LocationResolver;
+  parentAtLaunch?: (parent: string, started: number) => import("../../../../core/src/state/index.ts").ProcessIdentity | null;
 }
 export interface ClaudeContextResult { appended: number; duplicates: number; conflicts: AppendResult[] }
 type TurnTarget = { subject: string; generation: number; started: number };
@@ -126,6 +127,8 @@ export function observeClaudeContext(ledger: Ledger, path: string, options: Clau
       own = { subject: `run:${id}:${generation}`, generation, started: generation };
       append({ ...base, kind: "run.created", subject: own.subject as `run:${string}`, source_event_id: `run:${id}`,
         payload: { conversation_id: id, generation, state: "unknown", reason: "missing_state_evidence", started_ts: timestamp,
+          ...(basename(dirname(absolutePath)) === "subagents" ? { launch: { parentProcessAtLaunch:
+            options.parentAtLaunch?.(basename(dirname(dirname(absolutePath))), time) ?? null } } : {}),
           ...(location ? { cwd: location.cwd, ...(location.repository_id ? { repository_id: location.repository_id } : {}) } : {}) } });
       target = own;
     }

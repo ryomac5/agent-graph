@@ -508,7 +508,6 @@ export function openObservationService(options: ObservationOptions = {}) {
           refreshSnapshot();
           remoteConversations = buffered.batch(() => observeRemoteStatus(scanLedger, remoteFiles, snapshot));
           if (existsSync(claudeSessionsDirectory)) buffered.batch(() => observeClaudeSessions());
-          buffered.batch(() => claudeChildren.observe(claudeFiles));
           refreshSnapshot();
           buffered.batch(() => observeCodexSessions());
         }

@@ -121,23 +121,31 @@ test("古い turn の停止通知は新しい turn を止めない", t => {
   assert.equal(f.run().state, "running");
 });
 
-test("取り込みサービスは変更のない子にも後着した親の停止通知を反映する", async t => {
+test("取り込みサービスは子の観測を呼ばず、後着した親の停止通知で子を変更しない", async t => {
   const { openObservationService } = await import("../../src/service/index.ts");
   const home = mkdtempSync(join(tmpdir(), "ag-child-service-"));
   const projects = join(home, ".claude", "projects", "fixture");
   const child = join(projects, "parent", "subagents", "agent-child.jsonl");
   mkdirSync(join(projects, "parent", "subagents"), { recursive: true });
+  mkdirSync(join(home, ".claude", "sessions"), { recursive: true });
   const now = new Date().toISOString();
   writeFileSync(child, JSON.stringify({ type: "assistant", uuid: "tool", timestamp: now, promptId: "child-turn",
     message: { role: "assistant", content: [{ type: "tool_use", id: "tool", name: "Bash", input: {} }] } }) + "\n");
+  const readProcesses = t.mock.fn(() => new Map<number, string>());
   const service = openObservationService({ home, env: {}, dbPath: join(home, "ledger.db"),
-    claudeProcessReader: () => new Map(), codexProcessReader: { listProcesses: () => "", readOpenFiles: () => "" } });
+    claudeProcessReader: readProcesses, codexProcessReader: { listProcesses: () => "", readOpenFiles: () => "" } });
   t.after(() => { service.close(); rmSync(home, { recursive: true, force: true }); });
   service.ingestOnce();
   const read = () => projectRuns(service.ledger.readSince(0, Number.MAX_SAFE_INTEGER)).find(run => run.conversation_id.includes("agent-child"))!;
   assert.equal(read().state, "running");
+  const before = read();
   writeFileSync(join(projects, "parent.jsonl"), JSON.stringify({ type: "queue-operation", operation: "enqueue", timestamp: now,
     content: "<task-notification><task-id>child</task-id><status>stopped</status></task-notification>" }) + "\n");
   service.ingestOnce();
-  assert.equal(read().state, "unknown");
+  assert.deepEqual(read(), before);
+  service.ingestOnce();
+  assert.deepEqual(read(), before);
+  assert.equal(readProcesses.mock.callCount(), 0);
+  assert.equal(service.ledger.readSince(0, Number.MAX_SAFE_INTEGER)
+    .some(fact => fact.source_event_id.startsWith("child-unverified:")), false);
 });

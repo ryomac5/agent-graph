@@ -22,11 +22,10 @@ function createFixture(t: TestContext) {
   const dbPath = join(directory, "ledger.db");
   const fixture = { directory, dbPath, ledger: openLedger(dbPath) };
   let index = 0;
-  const epoch = Date.now() - 1000;
   function append(input: Omit<FactInput, "source_event_id" | "source_ts" | "confidence">) {
     index += 1;
     return fixture.ledger.append({ ...input, source_event_id: `watch-${index}`,
-      source_ts: new Date(epoch + index).toISOString(), confidence: "confirmed" } as FactInput);
+      source_ts: new Date(Date.UTC(2026, 0, 1) + index * 1000).toISOString(), confidence: "confirmed" } as FactInput);
   }
   function create(requestId: string, state: DelegationState = "accepted", attempt = 1) {
     return append({ source: "intake", kind: "delegation.created", subject: `delegation:${requestId}`,
@@ -166,21 +165,21 @@ test("graph waits for every task and reports a mixed failure", { timeout: 10000 
   ]);
 });
 
-test("conversation waits through unknown and approval until a confirmed logical closure", { timeout: 10000 }, async (t) => {
+test("conversation waits through unknown and approval until confirmed end evidence", { timeout: 10000 }, async (t) => {
   const fixture = createFixture(t);
   fixture.append({ source: "host-codex", kind: "conversation.created", subject: "conversation:conversation",
     payload: { provider: "codex", native_id: "native", origin: "managed", type: "interactive", history_format: "jsonl" } });
   fixture.append({ source: "host-codex", kind: "run.created", subject: "run:run",
-    payload: { conversation_id: "conversation", generation: 1, state: "running", last_evidence: { turn_id: "turn" } } });
+    payload: { conversation_id: "conversation", generation: 1, state: "running" } });
   const watcher = startWatch(t, fixture.dbPath, ["--conversation", '["codex","native"]']);
   await watcher.waitForLines(1);
-  fixture.append({ source: "host-codex", kind: "run.state_changed", subject: "run:run", payload: { state: "ended", last_evidence: { native_source: "hook", native_record: { hook_event_name: "Stop", prompt_id: "turn" } } } });
-  fixture.append({ source: "host-codex", kind: "run.state_changed", subject: "run:run", payload: { state: "waiting_approval", last_evidence: { turn_id: "turn" } } });
+  fixture.append({ source: "host-codex", kind: "run.state_changed", subject: "run:run", payload: { state: "ended" } });
+  fixture.append({ source: "host-codex", kind: "run.state_changed", subject: "run:run", payload: { state: "waiting_approval" } });
   await watcher.waitForLines(3);
   fixture.append({ source: "host-codex", kind: "run.state_changed", subject: "run:run",
-    payload: { state: "ended", last_evidence: { native_source: "codex", native_record: { method: "thread/closed", params: { turnId: "turn" } } } } });
+    payload: { state: "ended", end_evidence: { kind: "host_exit", exit_code: 0 } } });
   assert.equal(await watcher.finished, 0);
-  assert.deepEqual(watcher.rows().map((row) => row.state), ["running", "unknown", "waiting_approval", "closed"]);
+  assert.deepEqual(watcher.rows().map((row) => row.state), ["running", "unknown", "waiting_approval", "done"]);
 });
 
 test("default text has ordered columns and keeps embedded newlines on one line", { timeout: 10000 }, async (t) => {

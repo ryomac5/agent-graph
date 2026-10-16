@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { MemoryRouter } from 'react-router';
 import { App } from '../App.tsx';
 import { dictionaries } from '../lib/i18n.ts';
-import { createStore } from "./current-fixture.ts";
+import { createStore } from '../lib/store.ts';
 let dark = false;
 let change: (() => void) | undefined;
 beforeEach(() => {
@@ -76,14 +76,14 @@ it('publishes paginated graph tables together after the last response and retain
   } });
   let finishRuns!: (response: Response) => void;
   const runsResponse = new Promise<Response>(resolve => { finishRuns = resolve; });
-  const fetch = vi.fn(async (url: URL) => url.searchParams.get('table') === 'runs' ? runsResponse : new Response(JSON.stringify({ generation: 1, rows: children.map(id => ({ id, provider: 'codex', current_run_id: `run-${id}`, state: 'closed', activity_rank: 5 })), next: null })));
+  const fetch = vi.fn(async (url: URL) => url.searchParams.get('table') === 'runs' ? runsResponse : new Response(JSON.stringify({ generation: 1, rows: children.map(id => ({ id, provider: 'codex' })), next: null })));
   vi.stubGlobal('fetch', fetch);
   render(<MemoryRouter initialEntries={['/p/repo/graph?root=root']}><App target={target}/></MemoryRouter>);
   await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
   expect(target.getSnapshot().projection.conversations).toHaveLength(1);
   expect(screen.queryByRole('tree')).toBeNull();
   expect(document.querySelector('.graph-page')?.getAttribute('aria-busy')).toBe('true');
-  act(() => target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 1, changes: { conversations: { upsert: [{ id: 'child-0', provider: 'codex', name: 'Live name', current_run_id: 'run-child-0', state: 'closed', activity_rank: 5 }], remove: [] } } }));
+  act(() => target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 1, changes: { conversations: { upsert: [{ id: 'child-0', provider: 'codex', name: 'Live name' }], remove: [] } } }));
   await act(async () => finishRuns(new Response(JSON.stringify({ generation: 1, rows: children.map(id => ({ id: `run-${id}`, conversation_id: id, state: 'ended', started_ts: '2026-09-01T10:00:00Z', ended_ts: '2026-09-01T11:00:00Z' })), next: null }))));
   await waitFor(() => expect(screen.getByRole('treeitem', { name: /^Earlier 50/ })).toBeTruthy());
   expect(target.getSnapshot().projection.conversations).toHaveLength(51);

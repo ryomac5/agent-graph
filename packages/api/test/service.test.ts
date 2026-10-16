@@ -1,6 +1,5 @@
 import { USAGE_PROBE_PATH } from '../src/usage/probe-path.ts';
 import assert from "node:assert/strict";
-import { expandNativeEvidence } from '../../core/src/ledger/native-evidence.ts';
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
@@ -249,12 +248,9 @@ test("4500 発言と 301 ファイルをまとめて投影し、空の送信待�
   const initialMs = performance.now() - started;
   t.diagnostic(`initial ingest: ${initialMs.toFixed(1)} ms`);
   assert.ok(initialMs < INITIAL_INGEST_LIMIT_MS, `initial ingest exceeded ${INITIAL_INGEST_LIMIT_MS} ms`);
-  // 各会話は場所・題名・UUID 連鎖の補完の印と会話の記録の実行を持つ。
-  const compressedEvidence = Math.ceil(BULK_MESSAGE_COUNT / 128) + BULK_FILE_COUNT * Math.ceil(MESSAGES_PER_FILE / 128);
-  assert.equal(report.appended, messages * 2 + (BULK_FILE_COUNT + 1) * 5 + compressedEvidence);
+  // 各会話は作成に加え、場所と題名の補完の印と会話の記録の実行と最初のターンの根拠を 1 件ずつ持つ。
+  assert.equal(report.appended, messages * 2 + (BULK_FILE_COUNT + 1) * 5);
   const before = f.read();
-  assert.equal(before.flatMap(expandNativeEvidence).length, messages * 3 + (BULK_FILE_COUNT + 1) * 5);
-  assert.equal(before.filter(fact => fact.source_event_id.endsWith(':uuid-chain-backfill')).length, BULK_FILE_COUNT + 1);
   const projection = readProjection(f.dbPath);
   assert.equal(projection.messages.length, messages);
   assert.equal(projection.memberships.length, messages);
@@ -276,7 +272,7 @@ test("4500 発言と 301 ファイルをまとめて投影し、空の送信待�
   }
   assert.deepEqual(readProjection(f.dbPath), projection);
   appendFileSync(join(directory, "large.jsonl"), createClaudeMessage("bulk-added"));
-  assert.equal(service.ingestOnce().appended, 3);
+  assert.equal(service.ingestOnce().appended, 2);
   assert.equal(readProjection(f.dbPath).messages.length, messages + 1);
   assert.equal(service.ingestOnce().appended, 0);
 });
@@ -302,7 +298,7 @@ test("一時 HOME の標本を CLI で二度取り込んでも増えず、停止
   appendFileSync(join(codexDirectory, "rollout-exec.jsonl"), createCodexMessage("service-codex-added"));
   const next = f.run("ingest", "--once");
   // 新しい会話は、場所と題名の補完の印と会話の記録の実行と最初のターンの根拠も持つ。
-  assert.equal(next.appended, 14);
+  assert.equal(next.appended, 11);
   assert.equal(next.unsupported, 0);
   assert.equal(f.run("ingest", "--once").appended, 0);
   const facts = f.read();
@@ -338,7 +334,7 @@ test("再起動は台帳の cursor を使い、未完行を保留し、Codex の
   const append = service.ledger.append;
   const seen: string[] = [];
   service.ledger.append = (input) => { seen.push(input.source_event_id); return append(input); };
-  assert.equal(service.ingestOnce().appended, 3);
+  assert.equal(service.ingestOnce().appended, 2);
   assert.ok(!seen.includes("message:middle:1"));
   assert.equal(service.ingestOnce().appended, 0);
   assert.deepEqual(service.ledger.readSince(0, before.length), before);
@@ -522,14 +518,11 @@ test("Codex の所属の追記前に停止しても cursor の再読で補い、
     return append(input);
   };
   try { assert.throws(() => service.ingestOnce(), /Interrupted membership/); } finally { service.close(); }
-  const beforeRecovery = f.read().length;
-  assert.equal(f.run("ingest", "--once").appended, 2);
-  assert.deepEqual(f.read().slice(beforeRecovery).flatMap(expandNativeEvidence).map(fact => fact.kind).sort(),
-    ['message_membership.created', 'run.updated']);
+  assert.equal(f.run("ingest", "--once").appended, 1);
   assert.equal(project(f.read()).message_memberships.length, 4);
   // 同じ inode の同じ長さの変更も、位置だけでなくハッシュで検出する。
   writeFileSync(path, meta + ["first", "change", "last", "interrupted"].map(createCodexMessage).join(""));
-  assert.equal(f.run("ingest", "--once").appended, 3);
+  assert.equal(f.run("ingest", "--once").appended, 2);
   assert.ok(project(f.read()).messages.some((message) => message.native_id === "change"));
   assert.equal(f.run("ingest", "--once").appended, 0);
 });
@@ -548,7 +541,7 @@ test("不正な送信待ちは未対応として一度だけ記録し、後続�
   assert.deepEqual(f.read(), before);
   invalid.forEach((body, index) => assert.equal(readFileSync(join(outbox, `${index}.json`), "utf8"), body));
   writeFileSync(join(outbox, "0.json"), JSON.stringify({ ...HOOK_EVENT, event_id: "repaired", hook_event_name: "Stop" }));
-  assert.equal(f.run("ingest", "--once").appended, 2);
+  assert.equal(f.run("ingest", "--once").appended, 1);
   assert.equal(f.run("ingest", "--once").appended, 0);
 });
 
@@ -738,11 +731,10 @@ for (const live of [false, true]) {
       positions.push(Number(reader.prepare("SELECT last_seq FROM projection_state").get()!.last_seq));
       return result;
     };
-    // 3 件の発言と所属、会話、場所・題名・UUID 連鎖の補完の印、実行とターンの根拠を一度に投影する。
-    assert.equal(service.ingestOnce().appended, 12);
-    assert.equal(service.ledger.readSince(0, 100).flatMap(expandNativeEvidence).length, 14);
-    assert.deepEqual(positions, Array(12).fill(0));
-    assert.equal(reader.prepare("SELECT last_seq FROM projection_state").get()!.last_seq, 12);
+    // 3 件の発言と所属、会話、場所、題名の補完の印、会話の記録の実行、最初のターンの根拠を 1 回の走査で追記する。
+    assert.equal(service.ingestOnce().appended, 11);
+    assert.deepEqual(positions, Array(11).fill(0));
+    assert.equal(reader.prepare("SELECT last_seq FROM projection_state").get()!.last_seq, 11);
     assert.equal(service.ingestOnce().appended, 0);
   });
 }
@@ -929,7 +921,7 @@ test("既存の Claude の子の親を補い、根の snapshot にキットの�
   assert.equal(rows[0].total_children, 1);
   assert.ok(typeof rows[0].current_conversation_id === 'string');
   assert.ok(rows[0].conversation_ids.includes(rows[0].current_conversation_id));
-  assert.deepEqual(Object.keys(rows[0]).sort(), ["activity_rank", "id", "name", "project", "state", "last_activity_ts", "conversation_ids", "current_conversation_id", "running_children", "total_children"].sort());
+  assert.deepEqual(Object.keys(rows[0]).sort(), ["id", "name", "project", "state", "last_activity_ts", "conversation_ids", "current_conversation_id", "running_children", "total_children"].sort());
 });
 
 test("本文が変わらない周期でも Codex の題名を取り込み、投影と配信と再構築に残す", t => {

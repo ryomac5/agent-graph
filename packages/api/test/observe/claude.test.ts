@@ -498,36 +498,3 @@ test('transcripts starting at the probe path are ingested without permanent curs
   observeClaudeFile(ledger, path, { cursor: legacyCursor });
   assert.deepEqual(project(readFacts(ledger)).messages.map(row => row.native_id).sort(), ['first', 'next']);
 });
-
-test('model の確定 stdout だけでモデルを更新し、ターンの状態は変えない', t => {
-  const { ledger, directory } = createFixture(t);
-  const path = join(directory, 'model.jsonl');
-  const row = (uuid: string, content: string, timestamp: string, type = 'user') => JSON.stringify({
-    type, uuid, timestamp, cwd: directory, version: '2.1.299',
-    message: { role: type, content, ...(type === 'assistant' ? { model: 'claude-opus-5-5' } : {}) },
-  }) + '\n';
-  writeFileSync(path, row('initial', 'hello', TS, 'assistant'));
-  observeClaudeFile(ledger, path);
-  observeClaudeContext(ledger, path);
-  const initial = project(readFacts(ledger)).runs[0];
-  assert.equal(initial.model, 'claude-opus-5-5');
-  const confirmedTs = '2026-10-06T10:01:00.000Z';
-  appendFileSync(path,
-    row('caveat', '<local-command-caveat>Caveat</local-command-caveat>', confirmedTs)
-    + row('command', '<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>haiku</command-args>', confirmedTs));
-  observeClaudeContext(ledger, path);
-  assert.equal(project(readFacts(ledger)).runs[0].model, initial.model);
-  appendFileSync(path, row('stdout', '<local-command-stdout>Set model to `Haiku 5.5`</local-command-stdout>', confirmedTs));
-  observeClaudeContext(ledger, path);
-  const facts = readFacts(ledger);
-  const projection = project(facts);
-  assert.equal(projection.runs[0].model, 'Haiku 5.5');
-  assert.equal(projection.runs[0].state, initial.state);
-  assert.equal(facts.filter(fact => fact.source_event_id.startsWith('native-record:')).length, 1);
-  assert.deepEqual(project([...facts].reverse()), projection);
-  observeClaudeContext(ledger, path);
-  assert.deepEqual(readFacts(ledger), facts);
-  const db = readLedgerDatabase(ledger);
-  applyIncremental(db, 0);
-  assert.equal(db.prepare('SELECT model FROM runs').get()!.model, 'Haiku 5.5');
-});

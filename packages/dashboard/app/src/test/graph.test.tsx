@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import { GraphPage, AssignedGraphPage } from '../pages/graph/GraphPage.tsx';
-import { createStore } from "./current-fixture.ts";
+import { createStore } from '../lib/store.ts';
 const now = Date.parse('2026-10-11T12:00:00Z');
 export function fixture() {
   const target = createStore();
@@ -57,7 +57,7 @@ it('uses each role once in unnamed child labels and does not turn an unknown pro
   } });
   render(<MemoryRouter initialEntries={['/p/repo?root=root&child=other']}><GraphPage project="repo" target={target} client={{ command: vi.fn() }} embedded/></MemoryRouter>);
   const work = document.querySelector('[data-node-id="work"] [role="treeitem"]')!;
-  expect(work.getAttribute('aria-label')).toMatch(/^Codex · .+ · Implementation · Codex · Working$/);
+  expect(work.getAttribute('aria-label')).toMatch(/^Codex · .+ · Implementation · Codex · Running$/);
   expect(work.getAttribute('aria-label')?.match(/Implementation/g)).toHaveLength(1);
   const unknown = document.querySelector('[data-node-id="other"] [role="treeitem"]')!;
   expect(unknown.getAttribute('aria-label')).toContain('Agent · Implementation · Agent');
@@ -159,15 +159,4 @@ it('resolves the root assignment display name while keeping model-less children 
   await waitFor(() => expect(document.querySelector('[data-node-id="root"] .graph-row-who')?.textContent).toBe('メインエージェント · Opus 5.5 · サブエージェント 52'));
   expect(document.querySelector('[data-node-id="work"] .graph-row-who')?.textContent).toBe('実装 · Codex');
   expect(document.querySelector('[data-node-id="docs"] .graph-row-who')?.textContent).toBe('ドキュメント · Claude Opus 5.5');
-});
-
-it('does not replace the API state with waiting_approval when an approval row remains', () => {
-  const target = fixture();
-  const snapshot = target.getSnapshot();
-  const run = snapshot.projection.runs.find(row => row.conversation_id === 'work')!;
-  target.setSnapshot({ ...snapshot, projection: { ...snapshot.projection,
-    approvals: [{ id: 'stale-approval', run_id: run.id, conversation_id: 'work', state: 'pending' }],
-  } });
-  render(<MemoryRouter initialEntries={['/p/repo?root=root']}><GraphPage project="repo" target={target} client={{ command: vi.fn() }} embedded/></MemoryRouter>);
-  expect(document.querySelector('[data-node-id="work"] [role="treeitem"]')?.getAttribute('aria-label')).toMatch(/Working$/);
 });

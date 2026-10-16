@@ -16,45 +16,306 @@ import test, { type TestContext } from 'node:test';
 import { openLedger, type FactInput } from '../../core/src/ledger/index.ts';
 import { openObservationService } from '../src/service/index.ts';
 import { ProjectionFeed } from '../src/service/projection-feed.ts';
-import { SendWatch, SEND_WATCH_TIMEOUT_MS, normalizeSentBody } from '../src/service/send-watch.ts';
+import { SendWatch, SEND_WATCH_TIMEOUT_MS, SEND_WATCH_FAILED_RETENTION_MS, SEND_WATCH_CLOSED_RETENTION_MS, SEND_WATCH_PENDING_MAX_AGE_MS, SEND_WATCH_CLEANUP_INTERVAL_MS, normalizeSentBody } from '../src/service/send-watch.ts';
 import { observeClaudeFile } from '../src/observe/claude/index.ts';
 import { createHookFacts } from '../src/hook/index.ts';
 
 const NOW = Date.parse('2026-10-13T10:00:00.000Z');
 const CONVERSATION = JSON.stringify(['claude', 'fixture']);
 function createFixture(t: TestContext, busy = false) {
-  t.mock.timers.enable({ apis: ['Date'], now: NOW });
   const directory = mkdtempSync(join(tmpdir(), 'ag-send-watch-'));
   const path = join(directory, 'ledger.db');
   const ledger = openLedger(path);
   let event = 0;
-  function append(kind: FactInput['kind'], subject: FactInput['subject'], payload: FactInput['payload'], now: number | string = NOW, supersedes?: string) {
+  function append(kind: FactInput['kind'], subject: FactInput['subject'], payload: FactInput['payload'], now: number | string = NOW) {
     ledger.append({ source: 'host-claude', source_event_id: `test-${++event}`, kind, subject, payload,
-      source_ts: typeof now === 'string' ? now : new Date(now).toISOString(), observed_ts: new Date(typeof now === 'string' ? NOW : now).toISOString(), confidence: 'confirmed', supersedes } as FactInput);
+      source_ts: typeof now === 'string' ? now : new Date(now).toISOString(), observed_ts: new Date(typeof now === 'string' ? NOW : now).toISOString(), confidence: 'confirmed' } as FactInput);
   }
   append('conversation.created', `conversation:${CONVERSATION}`, { provider: 'claude', native_id: 'fixture', origin: 'observed', type: 'interactive' });
   append('run.created', 'run:root', { conversation_id: CONVERSATION, generation: 1, state: busy ? 'running' : 'idle', started_ts: new Date(NOW).toISOString() });
-  const service = openObservationService({ dbPath: path, home: directory, env: {} });
+  const service = openObservationService({ dbPath: path });
   const feed = new ProjectionFeed(path, service.catchUp);
   const watch = new SendWatch(path);
   const db = new DatabaseSync(path);
   t.after(() => { db.close(); watch.close(); feed.close(); service.close(); ledger.close(); rmSync(directory, { recursive: true, force: true }); });
-  const read = (id = 'send', now = Date.now()) => { watch.check(now); return watch.list().find(row => row.id === id); };
-  const decide = (id = 'send', now = Date.now()) => read(id, now)?.decision as import('../../core/src/state/index.ts').DeliveryDecision;
-  return { directory, ledger, service, append, feed, watch, read, decide, path, db };
+  const read = (id = 'send') => db.prepare('SELECT * FROM api_send_watches WHERE id = ?').get(id)!;
+  return { directory, ledger, service, append, feed, watch, read };
 }
 function record(f: ReturnType<typeof createFixture>, body = 'Next step') {
   f.watch.record('send', CONVERSATION, body, f.watch.capture(CONVERSATION, NOW));
 }
-
-function addMessage(f: ReturnType<typeof createFixture>, id: string, body: string, at = NOW + 1, role = 'user') {
-  f.append('message.created', `message:${id}`, { role, body, body_state: 'stored', version: 1 }, at);
-  f.append('message_membership.created', `message_membership:${id}`, { message_id: id, conversation_id: CONVERSATION, active: true }, at);
-  f.feed.refresh(at);
+test('SessionEnd 後の新ターンを feed と送信監視が作業中として扱い、旧 Queued を復活させない', t => {
+  const f = createFixture(t);
+  const hook = (name: string, now: number) => {
+    for (const fact of createHookFacts({ version: 1, session_id: 'fixture', generation: 1, run_id: 'root',
+      event_id: name, hook_event_name: name, source_ts: new Date(now).toISOString(), managed: false,
+      input: { session_id: 'fixture', reason: 'other' } })) f.ledger.append(fact);
+    f.feed.refresh();
+  };
+  const enqueue = (body: string, now: number) => f.append('conversation.input_queue_changed', `conversation:${CONVERSATION}`,
+    { input_queue_event: { operation: 'enqueue', body } }, now);
+  enqueue('Old input', NOW + 1);
+  hook('SessionEnd', NOW + 1000);
+  enqueue('Queued after end', NOW + 1500);
+  hook('UserPromptSubmit', NOW + 2000);
+  const snapshot = f.feed.snapshot();
+  assert.equal(snapshot.projection.runs[0].state, 'running');
+  assert.equal(snapshot.projection.roots[0].state, 'running');
+  assert.equal(snapshot.projection.runs[0].turn_started_ts, new Date(NOW + 2000).toISOString());
+  const queued = snapshot.projection.conversations[0].pending_inputs as { body: string }[];
+  assert.deepEqual(queued.map(row => row.body), ['Queued after end']);
+  const captured = f.watch.capture(CONVERSATION, NOW + 3000);
+  assert.ok(captured.busy_run);
+  f.watch.record('send', CONVERSATION, 'Next step', captured);
+  const boundary = NOW + 10 * SEND_WATCH_TIMEOUT_MS;
+  f.watch.check(boundary);
+  assert.equal(f.read().state, 'pending');
+  assert.equal(f.read().deadline_ms, null);
+  // 実際の履歴側のターン完了を通し、送信期限が古い SessionEnd に引かれないことを確かめる。
+  f.append('run.state_changed', 'run:root', { state: 'idle', last_evidence: { kind: 'turn_completed' } }, boundary);
+  f.feed.refresh();
+  f.watch.check(boundary + SEND_WATCH_TIMEOUT_MS - 1);
+  assert.equal(f.read().state, 'pending');
+  t.mock.method(console, 'error', () => {});
+  f.watch.check(boundary + SEND_WATCH_TIMEOUT_MS);
+  assert.equal(f.read().state, 'failed');
+});
+test('送信の時刻列を共通の UTC 形式で保存し、期間境界で失敗する', t => {
+  const f = createFixture(t);
+  const captured = { ...f.watch.capture(CONVERSATION, NOW), sent_ts: '2026-10-13T19:00:00+0900' };
+  f.watch.record('send', CONVERSATION, 'Next step', captured);
+  assert.equal(f.read().sent_ts, '2026-10-13T10:00:00.000Z');
+  f.watch.check(NOW + SEND_WATCH_TIMEOUT_MS - 1);
+  assert.equal(f.read().state, 'pending');
+  f.watch.check(NOW + SEND_WATCH_TIMEOUT_MS);
+  assert.equal(f.read().state, 'failed');
+});
+function addMessage(f: ReturnType<typeof createFixture>, id: string, body: string, role = 'user') {
+  f.append('message.created', `message:${id}`, { role, body, body_state: 'stored', version: 1 });
+  f.append('message_membership.created', `message_membership:${id}`, { message_id: id, conversation_id: CONVERSATION, active: true });
+  f.feed.refresh();
 }
+test('暇な根の発言で閉じ、過去の同文と assistant の発言は採用しない', t => {
+  const f = createFixture(t);
+  addMessage(f, 'old', 'Next step');
+  record(f);
+  addMessage(f, 'assistant', 'Next step', 'assistant');
+  assert.equal(f.watch.check(NOW + 1000), false);
+  addMessage(f, 'user', ' <pasted_content id="1">Next step</pasted_content> [Image #1] ');
+  assert.equal(f.watch.check(NOW + 2000), true);
+  assert.equal(f.read().state, 'closed');
+  assert.equal(f.read().message_id, 'user');
+  assert.equal(f.watch.list().length, 0);
+});
+test('作業中は区切りまで待ち、区切りから60秒で一度だけ失敗を記録する', t => {
+  const f = createFixture(t, true);
+  record(f);
+  const lines: string[] = [];
+  t.mock.method(console, 'error', (line: string) => lines.push(line));
+  assert.equal(f.watch.check(NOW + 10 * SEND_WATCH_TIMEOUT_MS), false);
+  const boundary = NOW + 10 * SEND_WATCH_TIMEOUT_MS;
+  f.append('run.state_changed', 'run:root', { state: 'idle', last_evidence: { kind: 'turn_completed' } }, boundary);
+  f.feed.refresh();
+  assert.equal(f.watch.check(boundary + SEND_WATCH_TIMEOUT_MS - 1), false);
+  assert.equal(f.watch.check(boundary + SEND_WATCH_TIMEOUT_MS), true);
+  assert.equal(f.read().state, 'failed');
+  assert.equal(f.watch.list()[0].state, 'failed');
+  f.watch.check(boundary + 2 * SEND_WATCH_TIMEOUT_MS);
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /Message delivery failed/);
+});
+test('待ち行列にある間は待ち、queued_command の利用者発言で閉じる', t => {
+  const f = createFixture(t, true);
+  record(f);
+  const path = join(f.directory, 'fixture.jsonl');
+  writeFileSync(path, JSON.stringify({ type: 'queue-operation', operation: 'enqueue', content: 'Next step', timestamp: new Date(NOW + 1).toISOString() }) + '\n');
+  observeClaudeFile(f.ledger, path);
+  f.feed.refresh();
+  assert.equal(f.watch.check(NOW + 10 * SEND_WATCH_TIMEOUT_MS), false);
+  writeFileSync(path, [
+    { type: 'queue-operation', operation: 'remove', content: 'Next step', reason: 'absorbed_mid_turn', timestamp: new Date(NOW + 2).toISOString() },
+    { type: 'attachment', uuid: 'queued', attachment: { type: 'queued_command', prompt: 'Next step', commandMode: 'prompt', origin: { kind: 'human' }, timestamp: new Date(NOW + 2).toISOString() } },
+  ].map(row => JSON.stringify(row)).join('\n') + '\n');
+  observeClaudeFile(f.ledger, path);
+  f.feed.refresh();
+  assert.equal(f.watch.check(NOW + 11 * SEND_WATCH_TIMEOUT_MS), true);
+  assert.equal(f.read().state, 'closed');
+});
+test('暇な根では60秒で失敗し、再送で元の未配達を閉じる', t => {
+  const f = createFixture(t);
+  record(f);
+  t.mock.method(console, 'error', () => {});
+  assert.equal(f.watch.check(NOW + SEND_WATCH_TIMEOUT_MS - 1), false);
+  assert.equal(f.watch.check(NOW + SEND_WATCH_TIMEOUT_MS), true);
+  f.watch.retry('send', CONVERSATION);
+  assert.equal(f.read().state, 'retried');
+  assert.equal(f.watch.list().length, 0);
+});
+test('画像のブロックと包みと前後の空白だけを照合から除く', () => {
+  assert.equal(normalizeSentBody([{ type: 'image', source: { data: 'image' } }, { type: 'text', text: ' <pasted_content>body</pasted_content> ' }]), 'body');
+  assert.notEqual(normalizeSentBody('body one'), normalizeSentBody('body  one'));
+});
+
+test('待ち行列が区切りより後に解けても、その直後には失敗にしない', t => {
+  const f = createFixture(t, true);
+  record(f);
+  f.append('conversation.input_queue_changed', `conversation:${CONVERSATION}`, { input_queue_event: { operation: 'enqueue', body: 'Next step' } }, NOW + 1);
+  f.feed.refresh();
+  f.watch.check(NOW + 1000);
+  f.append('run.state_changed', 'run:root', { state: 'idle' }, NOW + 2000);
+  f.append('conversation.input_queue_changed', `conversation:${CONVERSATION}`, { input_queue_event: { operation: 'dequeue' } }, NOW + 3 * SEND_WATCH_TIMEOUT_MS);
+  f.feed.refresh();
+  const released = NOW + 3 * SEND_WATCH_TIMEOUT_MS;
+  assert.equal(f.watch.check(released), false);
+  assert.equal(f.read().deadline_ms, released + SEND_WATCH_TIMEOUT_MS);
+});
+
+test('api が開き直しても未配達と見張りを保持し、同じ cmd_id の再記録は増えない', t => {
+  const f = createFixture(t);
+  record(f);
+  record(f, 'Replacement');
+  const reopened = new SendWatch(join(f.directory, 'ledger.db'));
+  t.after(() => reopened.close());
+  assert.equal(reopened.list().length, 1);
+  assert.equal(reopened.list()[0].body, 'Next step');
+  t.mock.method(console, 'error', () => {});
+  assert.equal(reopened.check(NOW + SEND_WATCH_TIMEOUT_MS), true);
+  assert.equal(f.read().state, 'failed');
+});
+
+test('runner の書き込みロック中も主スレッドを塞がず、配達確認を保存する', async t => {
+  const f = createFixture(t);
+  const captured = f.watch.capture(CONVERSATION, NOW);
+  const writer = new DatabaseSync(join(f.directory, 'ledger.db'));
+  t.after(() => writer.close());
+  writer.exec('BEGIN IMMEDIATE');
+  let yielded = false;
+  const release = setTimeout(() => { yielded = true; writer.exec('ROLLBACK'); }, 20);
+  t.after(() => clearTimeout(release));
+  await f.watch.recordAccepted('send', CONVERSATION, 'Next step', captured);
+  assert.equal(yielded, true);
+  assert.equal(f.read().state, 'pending');
+});
+
+test('照合の SQLITE_BUSY は次の周期に回し、ロック解除後に閉じる', t => {
+  const f = createFixture(t);
+  record(f);
+  addMessage(f, 'delivered', 'Next step');
+  const writer = new DatabaseSync(join(f.directory, 'ledger.db'));
+  try {
+    writer.exec('BEGIN IMMEDIATE');
+    assert.equal(f.watch.check(NOW + SEND_WATCH_TIMEOUT_MS), false);
+    assert.equal(f.read().state, 'pending');
+    writer.exec('ROLLBACK');
+    assert.equal(f.watch.check(NOW + SEND_WATCH_TIMEOUT_MS), true);
+    assert.equal(f.read().state, 'closed');
+  } finally { writer.close(); }
+});
+
+test('遅れて届いた発言で failed を閉じ、同じ台帳 seq の見張り一覧から消す', t => {
+  const f = createFixture(t);
+  record(f);
+  t.mock.method(console, 'error', () => {});
+  f.watch.check(NOW + SEND_WATCH_TIMEOUT_MS);
+  assert.equal(f.read().state, 'failed');
+  addMessage(f, 'late', 'Next step');
+  assert.equal(f.watch.check(NOW + SEND_WATCH_TIMEOUT_MS + 1000), true);
+  assert.equal(f.read().state, 'closed');
+  assert.equal(f.read().message_id, 'late');
+  assert.deepEqual(f.watch.list(), []);
+});
+
+test('failed は24時間、closed と retried は7日で本文ごと削除する', t => {
+  const f = createFixture(t);
+  t.mock.method(console, 'error', () => {});
+  for (const id of ['closed', 'retried', 'failed']) f.watch.record(id, CONVERSATION, id, f.watch.capture(CONVERSATION, NOW));
+  addMessage(f, 'delivered', 'closed');
+  const failedAt = NOW + SEND_WATCH_TIMEOUT_MS;
+  f.watch.check(failedAt);
+  f.watch.retry('retried', CONVERSATION, failedAt);
+  assert.equal(f.read('closed').state, 'closed');
+  assert.equal(f.read('retried').state, 'retried');
+  assert.equal(f.read('failed').state, 'failed');
+  f.watch.check(failedAt + SEND_WATCH_FAILED_RETENTION_MS - SEND_WATCH_CLEANUP_INTERVAL_MS);
+  f.watch.check(failedAt + SEND_WATCH_FAILED_RETENTION_MS - 1);
+  assert.ok(f.read('failed'));
+  assert.equal(f.watch.check(failedAt + SEND_WATCH_FAILED_RETENTION_MS), true);
+  assert.equal(f.read('failed'), undefined);
+  assert.deepEqual(f.watch.list(), []);
+  f.watch.check(failedAt + SEND_WATCH_CLOSED_RETENTION_MS - SEND_WATCH_CLEANUP_INTERVAL_MS);
+  f.watch.check(failedAt + SEND_WATCH_CLOSED_RETENTION_MS - 1);
+  assert.ok(f.read('closed'));
+  assert.ok(f.read('retried'));
+  assert.equal(f.watch.check(failedAt + SEND_WATCH_CLOSED_RETENTION_MS), true);
+  assert.deepEqual(f.watch.history(CONVERSATION), []);
+});
+
+test('jsonl に残ると確認できないスラッシュコマンドは見張らず、配達失敗を作らない', async t => {
+  const f = createFixture(t);
+  const errors = t.mock.method(console, 'error', () => {});
+  t.mock.method(Date, 'now', () => NOW);
+  for (const body of ['/vim', '/plan', ' /help', '\n/model haiku', '/unknown', '/sample:skill target', '/compact-other']) {
+    f.watch.record(body, CONVERSATION, body, f.watch.capture(CONVERSATION, NOW));
+    await f.watch.recordAccepted(body, CONVERSATION, body, f.watch.capture(CONVERSATION, NOW));
+  }
+  assert.equal(f.watch.check(NOW + 2 * SEND_WATCH_TIMEOUT_MS), false);
+  assert.deepEqual(f.watch.history(CONVERSATION), []);
+  assert.deepEqual(f.watch.list(), []);
+  assert.equal(errors.mock.callCount(), 0);
+});
+
+test('compact は履歴の command-name で配達を照合する', async t => {
+  const f = createFixture(t);
+  const errors = t.mock.method(console, 'error', () => {});
+  await f.watch.recordAccepted('compact', CONVERSATION, ' /compact', f.watch.capture(CONVERSATION, NOW));
+  addMessage(f, 'command', '<command-name>/compact</command-name><command-message>compact</command-message><command-args></command-args>');
+  assert.equal(f.watch.check(NOW + 2 * SEND_WATCH_TIMEOUT_MS), true);
+  assert.equal(f.read('compact').state, 'closed');
+  assert.equal(errors.mock.callCount(), 0);
+});
+
+test('接続先の時計の遅れと +0900 の時差は seq による照合を妨げない', t => {
+  const f = createFixture(t);
+  for (const [id, timestamp] of [['skew', '2026-10-13T09:59:00Z'], ['offset', '2026-10-13T18:59:00+0900']]) {
+    f.watch.record(id, CONVERSATION, id, f.watch.capture(CONVERSATION, NOW));
+    f.append('message.created', `message:${id}`, { role: 'user', body: id, body_state: 'stored', version: 1 }, timestamp);
+    f.append('message_membership.created', `message_membership:${id}`, { message_id: id, conversation_id: CONVERSATION, active: true });
+  }
+  f.feed.refresh();
+  assert.equal(f.watch.check(NOW + SEND_WATCH_TIMEOUT_MS), true);
+  assert.equal(f.read('skew').state, 'closed');
+  assert.equal(f.read('offset').state, 'closed');
+});
+
+test('同文を2回送っても seq 順に別の発言へ割り当て、両方を閉じる', t => {
+  const f = createFixture(t);
+  const captured = f.watch.capture(CONVERSATION, NOW);
+  f.watch.record('z-first', CONVERSATION, 'Same', captured);
+  addMessage(f, 'z-first-message', 'Same');
+  f.watch.record('a-second', CONVERSATION, 'Same', f.watch.capture(CONVERSATION, NOW + 1));
+  addMessage(f, 'a-second-message', 'Same');
+  assert.equal(f.watch.check(NOW + 1000), true);
+  assert.equal(f.read('z-first').message_id, 'z-first-message');
+  assert.equal(f.read('a-second').message_id, 'a-second-message');
+  assert.deepEqual(f.watch.list(), []);
+});
+
+test('暇な根の期限は貼り付けの待ちが終わった recordAccepted から60秒にする', async t => {
+  const f = createFixture(t);
+  const captured = f.watch.capture(CONVERSATION, NOW);
+  const acceptedAt = NOW + 2 * SEND_WATCH_TIMEOUT_MS;
+  t.mock.method(Date, 'now', () => acceptedAt);
+  t.mock.method(console, 'error', () => {});
+  await f.watch.recordAccepted('send', CONVERSATION, 'Next step', captured);
+  assert.equal(f.read().baseline_seq, captured.baseline_seq);
+  assert.equal(f.read().deadline_ms, acceptedAt + SEND_WATCH_TIMEOUT_MS);
+  assert.equal(f.watch.check(acceptedAt + SEND_WATCH_TIMEOUT_MS - 1), false);
+  assert.equal(f.watch.check(acceptedAt + SEND_WATCH_TIMEOUT_MS), true);
+});
 
 async function createApiFixture(t: TestContext, f: ReturnType<typeof createFixture>, sessionHosts: WebSocketOptions['sessionHosts'] = {}) {
   // 端末の起動時刻と経過時間を同じ時計で測り、実行日による負の経過時間を防ぐ。
+  t.mock.timers.enable({ apis: ['Date'], now: NOW });
   const errors = t.mock.method(console, 'error', () => {});
   let handleHttp!: http.RequestListener;
   const server = Object.assign(new EventEmitter(), {
@@ -103,6 +364,258 @@ async function createApiFixture(t: TestContext, f: ReturnType<typeof createFixtu
   return { api, frames, socket, receive, command, get, errors };
 }
 
+test('本番 api の送信経路が見張りを作り、台帳が増えなくても失敗をブラウザに配信する', async t => {
+  const f = createFixture(t);
+  const { api, socket, frames } = await createApiFixture(t, f);
+  try {
+    const command = { type: 'cmd', cmd_id: 'send', command: 'send', payload: { runId: 'root', input: { text: 'Next step' } } };
+    socket.emit('message', Buffer.from(JSON.stringify(command)), false);
+    await delay(20);
+    assert.equal(f.read().state, 'pending');
+    assert.ok(frames.some(frame => frame.type === 'ack' && frame.cmd_id === 'send' && frame.ok));
+    const seq = api.feed.snapshot().seq;
+    t.mock.timers.setTime(NOW + SEND_WATCH_TIMEOUT_MS);
+    await delay(550);
+    assert.equal(api.feed.snapshot().seq, seq);
+    assert.ok(frames.some(frame => frame.type === 'send_watches' && frame.rows.some((row: { state: string }) => row.state === 'failed')));
+    addMessage(f, 'late', 'Next step');
+    await delay(550);
+    assert.equal(f.read().state, 'closed');
+    assert.deepEqual(frames.filter(frame => frame.type === 'send_watches').at(-1)!.rows, []);
+  } finally { await api.close(); }
+});
+
+for (const errcode of [5, 11]) {
+  test(`見張りの errcode ${errcode} が HTTP・hello・patch・runner の ack を壊さない`, async t => {
+    const f = createFixture(t);
+    const a = await createApiFixture(t, f);
+    try {
+      const failure = Object.assign(new Error('injected watch failure'), { errcode });
+      t.mock.method(SendWatch.prototype, 'recordAccepted', async () => { throw failure; });
+      t.mock.method(SendWatch.prototype, 'check', () => { throw failure; });
+      f.append('conversation.renamed', `conversation:${CONVERSATION}`, { user_name: 'changed' });
+      const snapshot = a.get('/snapshot');
+      assert.ok(a.frames.some(frame => frame.type === 'patch' && frame.seq === snapshot.seq));
+      assert.ok(!a.frames.some(frame => frame.type === 'resync'));
+      a.get(`/conversation?id=${encodeURIComponent(CONVERSATION)}`);
+      a.get('/api/search?q=changed');
+      a.get(`/api/send-watches?conversation=${encodeURIComponent(CONVERSATION)}`);
+      await a.receive({ type: 'hello', seq: snapshot.seq, generation: snapshot.generation });
+      assert.equal((await a.command('send', 'send', { runId: 'root', input: { text: 'Next step' } })).ok, true);
+      assert.equal((await a.command('again', 'send', { runId: 'root', input: { text: 'Still alive' } })).ok, true);
+      assert.ok(a.errors.mock.calls.some(call => call.arguments[0] === 'Send watch recording failed:'));
+      t.mock.method(SendWatch.prototype, 'capture', () => { throw failure; });
+      assert.equal((await a.command('capture-error', 'send', { runId: 'root', input: { text: 'No capture' } })).ok, true);
+    } finally { await a.api.close(); }
+  });
+}
+
+test('実際の SQLite ロック中も runner の ack を返し、解除後に見張りを保存する', async t => {
+  const f = createFixture(t);
+  const a = await createApiFixture(t, f);
+  const writer = new DatabaseSync(join(f.directory, 'ledger.db'));
+  try {
+    writer.exec('BEGIN IMMEDIATE');
+    assert.equal((await a.command('send', 'send', { runId: 'root', input: { text: 'Next step' } })).ok, true);
+    assert.equal(f.read(), undefined);
+    a.get('/snapshot');
+    writer.exec('ROLLBACK');
+    for (let attempt = 0; attempt < 100 && !f.read(); attempt++) await delay(5);
+    assert.equal(f.read().state, 'pending');
+  } finally { writer.close(); await a.api.close(); }
+});
+
+for (const failure of ['busy', 'exception'] as const) {
+  test(`端末への貼り付け後の見張り ${failure} でも成功 ack を返し、同じ cmd_id を二重送信しない`, async t => {
+    const f = createFixture(t);
+    const session = '12345678-1234-1234-1234-123456789abc';
+    const conversationId = JSON.stringify(['claude', session]);
+    f.append('project.created', 'project:project', { repository_id: 'project', root_path: f.directory, state: 'registered', display_name: 'Fixture' });
+    const writes: string[] = [];
+    writeFileSync(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: session }));
+    const a = await createApiFixture(t, f, {
+      sessionsDirectory: f.directory, listProcesses: async () => [], quietMs: 0, warmupMs: 0, submitDelayMs: 0,
+      openTerminal: () => ({ pid: 1000, write: (body: string) => writes.push(body), resize() {}, kill() {},
+        onData: (output: (data: string) => void) => { queueMicrotask(() => output(promptFrame())); return { dispose() {} }; }, onExit: () => ({ dispose() {} }) }) as unknown as IPty,
+    });
+    const writer = new DatabaseSync(join(f.directory, 'ledger.db'));
+    try {
+      assert.equal((await a.command('launch', 'session.launch', { projectId: 'project', provider: 'claude', resume: session })).ok, true);
+      for (let attempt = 0; attempt < 100; attempt++) {
+        const hosts = await a.command(`hosts-${attempt}`, 'session.hosts', {});
+        if (hosts.result.hosts.length) {
+          assert.equal(hosts.result.hosts[0].startedAt, new Date(NOW).toISOString());
+          break;
+        }
+        await delay(5);
+      }
+      if (failure === 'busy') writer.exec('BEGIN IMMEDIATE');
+      else t.mock.method(SendWatch.prototype, 'record', () => { throw new Error('injected write failure'); });
+      const payload = { conversationId, text: 'Pasted once' };
+      assert.equal((await a.command('send', 'session.send', payload)).ok, true);
+      assert.deepEqual(writes, ['\x15', '\x1b[200~Pasted once\x1b[201~', '\r']);
+      const ackCount = a.frames.filter(frame => frame.type === 'ack' && frame.cmd_id === 'send').length;
+      await a.receive({ type: 'cmd', cmd_id: 'send', command: 'session.send', payload });
+      await delay(10);
+      assert.equal(a.frames.filter(frame => frame.type === 'ack' && frame.cmd_id === 'send' && frame.ok).length, ackCount + 1);
+      assert.equal(writes.length, 3);
+      assert.equal(f.read(), undefined);
+      if (failure === 'busy') {
+        writer.exec('ROLLBACK');
+        for (let attempt = 0; attempt < 100 && !f.read(); attempt++) await delay(5);
+        assert.equal(f.read().state, 'pending');
+      } else assert.ok(a.errors.mock.calls.some(call => call.arguments[0] === 'Send watch recording failed:'));
+      a.get('/snapshot');
+      assert.equal((await a.command('alive', 'session.hosts', {})).ok, true);
+    } finally { writer.close(); await a.api.close(); }
+  });
+}
+
+test('5秒を超える BUSY はメモリに残し、次の check で記録と再送元の解消をやり直す', async t => {
+  const f = createFixture(t);
+  const errors = t.mock.method(console, 'error', () => {});
+  record(f);
+  f.watch.check(NOW + SEND_WATCH_TIMEOUT_MS);
+  const acceptedAt = NOW + SEND_WATCH_TIMEOUT_MS + 1;
+  t.mock.method(Date, 'now', () => acceptedAt);
+  const captured = f.watch.capture(CONVERSATION, NOW);
+  const writer = new DatabaseSync(join(f.directory, 'ledger.db'));
+  try {
+    writer.exec('BEGIN IMMEDIATE');
+    const started = performance.now();
+    await f.watch.recordAccepted('resend', CONVERSATION, 'Next step', captured, ['image-id'], 'send');
+    assert.ok(performance.now() - started >= 5000);
+    assert.equal(f.read('resend'), undefined);
+    assert.equal(f.watch.check(acceptedAt + 1000), false);
+    assert.equal(f.read('send').state, 'failed');
+    assert.ok(errors.mock.calls.some(call => call.arguments[0] === 'Send watch recording failed:'));
+    writer.exec('ROLLBACK');
+    assert.equal(f.watch.check(acceptedAt + 2000), true);
+    assert.equal(f.read('resend').state, 'pending');
+    assert.equal(f.read('resend').baseline_seq, captured.baseline_seq);
+    assert.equal(f.read('resend').sent_ts, new Date(acceptedAt).toISOString());
+    assert.equal(f.read('resend').deadline_ms, acceptedAt + SEND_WATCH_TIMEOUT_MS);
+    assert.deepEqual(JSON.parse(String(f.read('resend').attachments)), ['image-id']);
+    assert.equal(f.read('send').state, 'retried');
+    assert.equal(f.watch.check(acceptedAt + 2001), false);
+    assert.equal(f.watch.history(CONVERSATION).length, 2);
+  } finally { writer.close(); }
+});
+
+test('BUSY 以外の記録失敗も次の check でやり直す', async t => {
+  const f = createFixture(t);
+  t.mock.method(Date, 'now', () => NOW);
+  t.mock.method(console, 'error', () => {});
+  const record = t.mock.method(f.watch, 'record', () => { throw new Error('write unavailable'); });
+  await f.watch.recordAccepted('send', CONVERSATION, 'Next step', f.watch.capture(CONVERSATION, NOW));
+  record.mock.restore();
+  assert.equal(f.watch.check(NOW + 1), true);
+  assert.equal(f.read().state, 'pending');
+});
+
+test('壊れた行を失敗にして後続を評価し、壊れた添付も一覧の配信を止めない', t => {
+  const f = createFixture(t);
+  const errors = t.mock.method(console, 'error', () => {});
+  record(f, '');
+  f.watch.record('later', CONVERSATION, 'Delivered', f.watch.capture(CONVERSATION, NOW + 1));
+  addMessage(f, 'delivered', 'Delivered');
+  const writer = new DatabaseSync(join(f.directory, 'ledger.db'));
+  try { writer.prepare("UPDATE api_send_watches SET attachments = '{' WHERE id = 'send'").run(); }
+  finally { writer.close(); }
+  assert.equal(f.watch.check(NOW + 2), true);
+  assert.equal(f.read().state, 'failed');
+  assert.equal(f.read('later').state, 'closed');
+  assert.equal(f.read('later').message_id, 'delivered');
+  assert.deepEqual(f.watch.list()[0].attachments, []);
+  const failedAt = f.read().failed_ts;
+  f.watch.record('next', CONVERSATION, 'Next delivery', f.watch.capture(CONVERSATION, NOW + 3));
+  addMessage(f, 'next-delivered', 'Next delivery');
+  assert.equal(f.watch.check(NOW + 4), true);
+  assert.equal(f.read('next').state, 'closed');
+  assert.equal(f.read().failed_ts, failedAt);
+  assert.equal(errors.mock.callCount(), 1);
+});
+
+for (const queued of [false, true]) {
+  test(`終わらない実行の見張りは24時間で失敗にして一度だけ知らせる（待ち行列=${queued}）`, t => {
+    const f = createFixture(t, true);
+    const errors = t.mock.method(console, 'error', () => {});
+    record(f);
+    if (queued) {
+      f.append('conversation.input_queue_changed', `conversation:${CONVERSATION}`, { input_queue_event: { operation: 'enqueue', body: 'Next step' } }, NOW + 1);
+      f.feed.refresh();
+    }
+    assert.equal(f.watch.check(NOW + SEND_WATCH_PENDING_MAX_AGE_MS - 1), false);
+    assert.equal(f.read().state, 'pending');
+    assert.equal(f.watch.check(NOW + SEND_WATCH_PENDING_MAX_AGE_MS), true);
+    assert.equal(f.read().state, 'failed');
+    assert.equal(f.watch.list()[0].state, 'failed');
+    assert.match(String(errors.mock.calls[0].arguments[0]), /pending age limit exceeded/);
+    assert.equal(f.watch.check(NOW + SEND_WATCH_PENDING_MAX_AGE_MS + 1), false);
+    assert.equal(errors.mock.callCount(), 1);
+  });
+}
+
+test('掃除の DELETE は該当0件でも毎周期は走らず、1分間隔で走る', t => {
+  const f = createFixture(t);
+  const prepare = DatabaseSync.prototype.prepare;
+  let cleanups = 0;
+  t.mock.method(DatabaseSync.prototype, 'prepare', function (this: DatabaseSync, sql: string) {
+    if (sql.startsWith('DELETE FROM api_send_watches')) cleanups++;
+    return prepare.call(this, sql);
+  });
+  assert.equal(f.watch.check(NOW), false);
+  assert.equal(cleanups, 1);
+  for (let elapsed = 500; elapsed < SEND_WATCH_CLEANUP_INTERVAL_MS; elapsed += 500) f.watch.check(NOW + elapsed);
+  assert.equal(cleanups, 1);
+  f.watch.check(NOW + SEND_WATCH_CLEANUP_INTERVAL_MS);
+  assert.equal(cleanups, 2);
+});
+
+test('掃除が BUSY でも未配信の変更を返し、次の周期で掃除を繰り返さない', t => {
+  const f = createFixture(t);
+  t.mock.method(console, 'error', () => {});
+  record(f);
+  f.watch.check(NOW + SEND_WATCH_TIMEOUT_MS);
+  const retryAt = NOW + 2 * SEND_WATCH_TIMEOUT_MS;
+  f.watch.retry('send', CONVERSATION, retryAt);
+  const writer = new DatabaseSync(join(f.directory, 'ledger.db'));
+  const prepare = DatabaseSync.prototype.prepare;
+  let cleanups = 0;
+  t.mock.method(DatabaseSync.prototype, 'prepare', function (this: DatabaseSync, sql: string) {
+    if (sql.startsWith('DELETE FROM api_send_watches')) cleanups++;
+    return prepare.call(this, sql);
+  });
+  try {
+    writer.exec('BEGIN IMMEDIATE');
+    assert.equal(f.watch.check(retryAt), true);
+    assert.equal(cleanups, 1);
+    assert.equal(f.watch.check(retryAt + 500), false);
+    assert.equal(cleanups, 1);
+  } finally { writer.close(); }
+});
+
+test('履歴に記録される compact が届かない場合は削除せず配達失敗になる', t => {
+  const f = createFixture(t);
+  t.mock.method(console, 'error', () => {});
+  record(f, '/compact keep the summary');
+  assert.equal(f.watch.check(NOW + SEND_WATCH_TIMEOUT_MS), true);
+  assert.equal(f.read().state, 'failed');
+  assert.equal(f.watch.list()[0].body, '/compact keep the summary');
+});
+
+test('未確認の Codex の compact は見張らない', async t => {
+  const f = createFixture(t);
+  const conversation = JSON.stringify(['codex', 'fixture']);
+  f.append('conversation.created', `conversation:${conversation}`, { provider: 'codex', native_id: 'fixture', origin: 'observed', type: 'interactive' });
+  f.feed.refresh();
+  const errors = t.mock.method(console, 'error', () => {});
+  await f.watch.recordAccepted('compact', conversation, '/compact', f.watch.capture(conversation, NOW));
+  assert.equal(f.watch.check(NOW + 2 * SEND_WATCH_TIMEOUT_MS), false);
+  assert.deepEqual(f.watch.history(conversation), []);
+  assert.equal(errors.mock.callCount(), 0);
+});
+
 test('WebSocket returns panel output once and rejects subsequent sends into a model picker', async t => {
   const f = createFixture(t);
   const session = '12345678-1234-1234-1234-123456789abc';
@@ -131,7 +644,7 @@ test('WebSocket returns panel output once and rejects subsequent sends into a mo
     assert.equal(help.ok, true);
     assert.match(help.result.command.output, /Claude understands/);
     assert.equal(help.result.command.status, 'completed');
-    assert.equal(f.decide('help').display, 'Handled in terminal');
+    assert.equal(f.read('help'), undefined, 'a captured panel is not falsely timed out by the transcript watch');
     const before = writes.length;
     assert.deepEqual(await a.command('help', 'session.send', { conversationId, text: '/help' }), help);
     assert.equal(writes.length, before);
@@ -142,390 +655,6 @@ test('WebSocket returns panel output once and rejects subsequent sends into a mo
     assert.match(blocked.error, /Terminal is not ready/);
     assert.equal(blocked.result.terminalId, model.result.terminalId);
     assert.ok(!writes.some(value => value.includes('not lost')));
-    assert.equal(f.decide('blocked').display, 'Not delivered');
-  } finally { await a.api.close(); }
-});
-
-test('送出の期限は作業中・待ち行列・後の turn によって延ばさず Unconfirmed にする', t => {
-  const f = createFixture(t, true); record(f);
-  f.append('conversation.input_queue_changed', `conversation:${CONVERSATION}`, { input_queue_event: { operation: 'enqueue', body: 'Other' } }, NOW + 1);
-  f.append('run.state_changed', 'run:root', { state: 'running' }, NOW + 50_000);
-  assert.equal(f.decide('send', NOW + SEND_WATCH_TIMEOUT_MS - 1).display, 'Sending');
-  const d = f.decide('send', NOW + SEND_WATCH_TIMEOUT_MS);
-  assert.equal(d.display, 'Unconfirmed'); assert.equal(d.reason, 'delivery_expired'); assert.equal(d.resendAutomatically, false);
-});
-
-test('古い同文と assistant を除外し、相関のない新しい一件は Likely delivered まで', t => {
-  const f = createFixture(t); addMessage(f, 'old', 'Next step', NOW - 1); record(f);
-  addMessage(f, 'reply', 'Next step', NOW + 1, 'assistant');
-  assert.equal(f.decide('send', NOW + 1).display, 'Sending');
-  addMessage(f, 'actual', 'Next step', NOW + 2);
-  assert.equal(f.decide('send', NOW + 2).display, 'Likely delivered');
-  assert.equal(f.read('send', NOW + 2)?.message_id, 'actual');
-  assert.equal(f.decide('send', NOW + 10 * SEND_WATCH_TIMEOUT_MS).display, 'Likely delivered');
-});
-
-test('同文を別の端末から送った二つの入力を seq で勝手に割り当てない', t => {
-  const f = createFixture(t); record(f);
-  addMessage(f, 'one', 'Next step', NOW + 1); addMessage(f, 'two', 'Next step', NOW + 2);
-  const d = f.decide('send', NOW + 2);
-  assert.equal(d.display, 'Unconfirmed'); assert.equal(d.reason, 'ambiguous_candidates');
-  assert.equal(f.read('send', NOW + 2)?.message_id, undefined);
-});
-
-test('同じ対象への同文の並行操作も双方 Unconfirmed にし、一つの候補を奪わない', t => {
-  const f = createFixture(t); record(f);
-  f.watch.record('another', CONVERSATION, 'Next step', f.watch.capture(CONVERSATION, NOW));
-  addMessage(f, 'one', 'Next step', NOW + 1);
-  for (const id of ['send', 'another']) assert.equal(f.decide(id, NOW + 1).reason, 'ambiguous_candidates');
-});
-
-test('送出前の拒否と送出後の失敗を区別し、再起動は再送しない', t => {
-  const f = createFixture(t); const captured = f.watch.capture(CONVERSATION, NOW);
-  f.watch.begin('before', CONVERSATION, 'Before', captured); f.watch.phase('before', 'rejected', NOW);
-  f.watch.begin('accepted', CONVERSATION, 'Accepted', captured);
-  f.watch.begin('after', CONVERSATION, 'After', captured); f.watch.phase('after', 'emitting', NOW); f.watch.phase('after', 'aborted', NOW);
-  f.watch.begin('uncertain', CONVERSATION, 'Uncertain', captured); f.watch.phase('uncertain', 'emitting', NOW);
-  assert.equal(f.decide('before').display, 'Not delivered'); assert.equal(f.decide('after').display, 'Unconfirmed');
-  const reopened = new SendWatch(f.path); t.after(() => reopened.close());
-  const rows = reopened.list();
-  assert.equal((rows.find(row => row.id === 'accepted')!.decision as { display: string }).display, 'Not delivered');
-  assert.equal((rows.find(row => row.id === 'uncertain')!.decision as { display: string }).display, 'Unconfirmed');
-  assert.equal(reopened.begin('uncertain', CONVERSATION, 'Uncertain', captured), false);
-});
-
-test('同じ cmd_id の異なる内容は衝突を保存し、どちらも送出し直さない', t => {
-  const f = createFixture(t); record(f);
-  assert.equal(f.watch.begin('send', CONVERSATION, 'Different', f.watch.capture(CONVERSATION, NOW)), false);
-  assert.equal(f.decide().reason, 'cmd_id_conflict');
-});
-
-test('相関が確認できる receipt だけは遅れて届いても Delivered にできる', t => {
-  const f = createFixture(t); record(f);
-  const target = f.watch.capture(CONVERSATION, NOW).target;
-  f.watch.add({ kind: 'binding', id: 'binding', cmdId: 'send', target, correlation: { protocol: 'codex', id: 'turn-1' }, at: NOW, observedAt: NOW });
-  f.watch.add({ kind: 'receipt', id: 'receipt', target, inputId: 'input', phase: 'consumed', correlation: { protocol: 'codex', id: 'turn-1' }, at: NOW + 120_000, observedAt: NOW + 120_000 });
-  assert.equal(f.decide('send', NOW + 120_000).display, 'Delivered');
-});
-
-test('走査の失敗と遅延を配達結果と別に持ち、失敗だけで Not delivered にしない', t => {
-  const f = createFixture(t); record(f);
-  f.watch.recordScan({ id: 'scan', at: NOW + 1, status: 'failed', sessions: [], processes: [] });
-  assert.equal(f.decide('send', NOW + 1).observation, 'failed');
-  assert.equal(f.decide('send', NOW + 60_000).display, 'Unconfirmed');
-});
-
-test('本文の包みは API で正規化し、画面では同文を照合しない', () => {
-  assert.equal(normalizeSentBody('[Image #1] <pasted_content id="x"> hello </pasted_content>'), 'hello');
-  assert.equal(normalizeSentBody('<command-name>/compact</command-name><command-args>short</command-args>'), '/compact short');
-  assert.equal(normalizeSentBody('<bash-input>echo hello</bash-input>'), '!echo hello');
-});
-
-for (const body of ['! echo delivered', '!echo delivered', '!  echo delivered  ']) {
-  test(`9-bang: bash-input と送信を現在の配達規則で照合する: ${body}`, t => {
-    const f = createFixture(t);
-    record(f, body);
-    addMessage(f, 'wrong', '<bash-input> echo other</bash-input>');
-    addMessage(f, 'output', '<bash-stdout>echo delivered</bash-stdout>');
-    assert.equal(f.decide('send', NOW + 1000).value, 'emitted');
-    addMessage(f, 'delivered', '<bash-input> echo delivered</bash-input>');
-    assert.equal(f.decide('send', NOW + SEND_WATCH_TIMEOUT_MS).value, 'received_candidate');
-    assert.equal(f.read('send', NOW + SEND_WATCH_TIMEOUT_MS)?.message_id, 'delivered');
-  });
-}
-
-test('本番 API 経路は送出前に永続化し、seq 不変でも期限を配信する', async t => {
-  const f = createFixture(t); const a = await createApiFixture(t, f);
-  try {
-    let sent = 0;
-    t.mock.method(a.api.runner, 'request', async (request: RunnerRequest) => {
-      sent++; assert.ok(f.db.prepare("SELECT 1 FROM api_delivery_evidence WHERE id = 'send:emitting'").get());
-      return { type: 'res' as const, cmd_id: request.cmd_id, ok: true, result: {} };
-    });
-    const payload = { runId: 'root', input: { text: 'Next step' } };
-    assert.equal((await a.command('send', 'send', payload)).ok, true);
-    await a.command('send', 'send', payload); assert.equal(sent, 1);
-    const seq = a.api.feed.snapshot().seq;
-    t.mock.timers.setTime(NOW + SEND_WATCH_TIMEOUT_MS); await delay(550);
-    assert.equal(a.api.feed.snapshot().seq, seq);
-    assert.ok(a.frames.some(frame => frame.type === 'send_watches' && frame.rows.some((row: any) => row.decision.display === 'Unconfirmed')));
-  } finally { await a.api.close(); }
-});
-
-for (const failure of ['busy', 'exception']) test(`送出前の永続化 ${failure} は runner を呼ぶ前に拒否する`, async t => {
-  const f = createFixture(t); const a = await createApiFixture(t, f); const writer = new DatabaseSync(f.path);
-  let sent = 0;
-  t.mock.method(a.api.runner, 'request', async (request: RunnerRequest) => { sent++; return { type: 'res' as const, cmd_id: request.cmd_id, ok: true, result: {} }; });
-  try {
-    if (failure === 'busy') writer.exec('BEGIN IMMEDIATE');
-    else t.mock.method(SendWatch.prototype, 'begin', () => { throw new Error('Injected failure'); });
-    const ack = await a.command('send', 'send', { runId: 'root', input: { text: 'Next step' } });
-    assert.equal(ack.ok, false); assert.equal(sent, 0);
-  } finally { if (failure === 'busy') writer.exec('ROLLBACK'); writer.close(); await a.api.close(); }
-});
-
-test('送出前の永続化は他の書き手の短い書き込みを待ってから runner を呼ぶ', async t => {
-  const f = createFixture(t); const a = await createApiFixture(t, f); const writer = new DatabaseSync(f.path);
-  let sent = 0;
-  t.mock.method(a.api.runner, 'request', async (request: RunnerRequest) => { sent++; return { type: 'res' as const, cmd_id: request.cmd_id, ok: true, result: {} }; });
-  try {
-    // 観測の worker や runner が書き込み中の瞬間に送信しても、利用者の送信を拒否しない。
-    writer.exec('BEGIN IMMEDIATE');
-    const release = setTimeout(() => writer.exec('ROLLBACK'), 100);
-    const ack = await a.command('send-after-lock', 'send', { runId: 'root', input: { text: 'Next step' } });
-    clearTimeout(release);
-    assert.equal(ack.ok, true, JSON.stringify(ack)); assert.equal(sent, 1);
-  } finally { if (writer.isTransaction) writer.exec('ROLLBACK'); writer.close(); await a.api.close(); }
-});
-
-test('本文の保持期限後も cmd_id の墓標を残し、再送せず異なる内容を衝突にする', t => {
-  const f = createFixture(t); record(f);
-  const captured = f.watch.capture(CONVERSATION, NOW);
-  const later = NOW + 8 * 24 * 60 * 60_000;
-  f.watch.check(later);
-  assert.equal(f.watch.list().length, 0);
-  assert.equal(JSON.stringify(f.db.prepare('SELECT data FROM api_delivery_operations').all()).includes('Next step'), false);
-  assert.equal(f.watch.begin('send', CONVERSATION, 'Next step', captured), false);
-  const reopened = new SendWatch(f.path); t.after(() => reopened.close());
-  assert.equal(reopened.begin('send', CONVERSATION, 'Different', { ...captured, sent_ts: new Date(later).toISOString() }), false);
-  reopened.check(later);
-  assert.equal(reopened.decision('send')?.reason, 'cmd_id_conflict');
-});
-
-test('送出後の永続化が失敗しても同じ cmd_id をもう一度実行せず Unconfirmed にする', async t => {
-  const f = createFixture(t); const a = await createApiFixture(t, f);
-  let sent = 0;
-  t.mock.method(a.api.runner, 'request', async (request: RunnerRequest) => { sent++; return { type: 'res' as const, cmd_id: request.cmd_id, ok: true, result: {} }; });
-  const phase = SendWatch.prototype.phase;
-  t.mock.method(SendWatch.prototype, 'phase', function (this: SendWatch, ...[id, value, at]: Parameters<SendWatch['phase']>) {
-    if (value === 'emitted') throw new Error('Injected failure after write');
-    return phase.call(this, id, value, at);
-  });
-  try {
-    const payload = { runId: 'root', input: { text: 'Next step' } };
-    await a.command('send', 'send', payload);
-    await a.command('send', 'send', payload);
-    assert.equal(sent, 1);
-    t.mock.timers.setTime(NOW + SEND_WATCH_TIMEOUT_MS);
-    await delay(550);
-    assert.ok(a.frames.some(frame => frame.type === 'send_watches' && frame.rows.some((row: any) => row.decision.display === 'Unconfirmed')));
-  } finally { await a.api.close(); }
-});
-
-test('同じ cmd_id の端末世代が変わった再提示も対象の衝突として残す', t => {
-  const f = createFixture(t); record(f);
-  assert.equal(f.watch.begin('send', CONVERSATION, 'Next step', f.watch.capture(CONVERSATION, NOW, 'new-terminal')), false);
-  assert.equal(f.decide().reason, 'cmd_id_conflict');
-});
-
-test('runner への送信対象は表示上の最新 run ではなく要求した run に固定する', t => {
-  const f = createFixture(t);
-  const original = f.watch.capture(CONVERSATION, NOW, 'runner', 'root').target;
-  f.append('run.created', 'run:new', { conversation_id: CONVERSATION, generation: 2, started_ts: new Date(NOW + 1000).toISOString() }, NOW + 1000);
-  f.feed.refresh(NOW + 1000);
-  assert.notEqual(f.watch.capture(CONVERSATION, NOW + 1000, 'runner').target, original);
-  assert.equal(f.watch.capture(CONVERSATION, NOW + 1000, 'runner', 'root').target, original);
-});
-
-test('受付の後で会話と run の別名が解決しても、同じ start の再提示を衝突にしない', t => {
-  const f = createFixture(t);
-  const captured = f.watch.capture('c-new', NOW, 'runner', 'r-new');
-  assert.equal(captured.target, JSON.stringify(['c-new', 'r-new', 'runner']));
-  assert.equal(f.watch.begin('start', 'c-new', 'hello', captured), true);
-  f.append('run.created', 'run:r-new', { conversation_id: 'c-new', generation: 1, state: 'starting', started_ts: new Date(NOW + 1).toISOString() }, NOW + 1);
-  f.append('conversation.created', 'conversation:c-new', { provider: 'claude', native_id: 'native-new', origin: 'managed', type: 'interactive', history_format: 'jsonl' }, NOW + 1);
-  f.feed.refresh(NOW + 1);
-  const replay = f.watch.capture('c-new', NOW + 2, 'runner', 'r-new');
-  assert.notEqual(replay.target, captured.target);
-  assert.equal(f.watch.begin('start', 'c-new', 'hello', replay), false);
-  assert.notEqual(f.decide('start', NOW + 2).reason, 'cmd_id_conflict');
-  assert.deepEqual(f.watch.history(JSON.stringify(['claude', 'native-new'])).map(row => row.id), ['start']);
-  assert.equal(f.watch.begin('start', 'c-new', 'other', f.watch.capture('c-new', NOW + 3, 'runner', 'r-new')), false);
-  assert.equal(f.decide('start', NOW + 3).reason, 'cmd_id_conflict');
-});
-
-for (const state of ['failed', 'closed']) test(`旧い ${state} の baseline_seq と message_id を移行し、再起動でも配達を保つ`, t => {
-  const f = createFixture(t);
-  const sent = Date.parse('2026-10-14T09:08:58.299Z');
-  t.mock.timers.setTime(sent);
-  f.db.prepare("UPDATE sqlite_sequence SET seq = 301133 WHERE name = 'facts'").run();
-  f.append('run.updated', 'run:root', { model: 'before-send' }, sent);
-  const baseline = f.watch.capture(CONVERSATION, sent).baseline_seq;
-  assert.equal(baseline, 301134);
-  f.append('run.updated', 'run:root', { model: 'after-send' }, sent);
-  const message = JSON.stringify(['claude', '88548f43-087b-4425-9cd0-61bbb2b6bc54']);
-  addMessage(f, message, '<bash-input> echo delivered</bash-input>', sent + 1000);
-  f.db.exec('CREATE TABLE api_send_watches (id TEXT PRIMARY KEY, conversation_id TEXT, body TEXT, sent_ts TEXT, baseline_seq INTEGER, state TEXT, message_id TEXT, attachments TEXT)');
-  f.db.prepare('INSERT INTO api_send_watches VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run('legacy', CONVERSATION, '! echo delivered', new Date(sent).toISOString(), baseline, state, state === 'closed' ? message : null, '[]');
-  for (let i = 0; i < 2; i++) {
-    const watch = new SendWatch(f.path);
-    watch.check(sent + SEND_WATCH_TIMEOUT_MS);
-    const row = watch.list().find(row => row.id === 'legacy')!;
-    assert.equal(row.baseline_seq, baseline); assert.equal(row.message_id, message);
-    assert.equal(watch.decision('legacy')!.display, state === 'closed' ? 'Delivered' : 'Likely delivered');
-    assert.equal(watch.decision('legacy')!.resendAutomatically, false);
-    watch.close();
-    if (i === 0) {
-      const data = JSON.parse(String(f.db.prepare("SELECT data FROM api_delivery_operations WHERE id = 'legacy'").get()!.data));
-      data.baseline_seq = 301999; delete data.message_id;
-      f.db.prepare("UPDATE api_delivery_operations SET data = ? WHERE id = 'legacy'").run(JSON.stringify(data));
-    }
-  }
-});
-
-test('他接続のコミットで既に読んだ受信を結合し直さず、後着の競合入力は再評価する', t => {
-  const f = createFixture(t); record(f); addMessage(f, 'first', 'Next step');
-  assert.equal(f.decide('send', NOW + 3).display, 'Likely delivered');
-  const prepare = DatabaseSync.prototype.prepare; let joins = 0;
-  t.mock.method(DatabaseSync.prototype, 'prepare', function(this: DatabaseSync, sql: string) {
-    if (sql.includes('JOIN messages') || sql.includes('FROM messages')) joins++;
-    return prepare.call(this, sql);
-  });
-  f.db.exec('CREATE TABLE unrelated (id INTEGER); INSERT INTO unrelated VALUES (1)');
-  assert.equal(f.decide('send', NOW + 3).display, 'Likely delivered'); assert.equal(joins, 0);
-  addMessage(f, 'second', 'Next step', NOW + 2);
-  assert.equal(f.decide('send', NOW + 3).reason, 'ambiguous_candidates');
-});
-
-test('差分照合は所属の後着・訂正・再構築でも受信集合を更新する', t => {
-  const f = createFixture(t); record(f);
-  f.append('message.created', 'message:late-link', { role: 'user', body: 'Next step', body_state: 'stored', version: 1 }, NOW + 1);
-  f.feed.refresh(NOW + 2); assert.equal(f.decide('send', NOW + 2).value, 'emitted');
-  f.append('message_membership.created', 'message_membership:late-link', { message_id: 'late-link', conversation_id: CONVERSATION, active: true }, NOW + 1);
-  f.feed.refresh(NOW + 3); assert.equal(f.decide('send', NOW + 3).value, 'received_candidate');
-  f.append('message.corrected', 'message:late-link', { role: 'user', body: 'Different', body_state: 'stored', version: 2 }, NOW + 2,
-    f.ledger.readSince(0, Number.MAX_SAFE_INTEGER).find(fact => fact.subject === 'message:late-link')!.fact_id);
-  f.feed.refresh(NOW + 4); assert.equal(f.decide('send', NOW + 4).value, 'emitted');
-  f.service.rebuild(); f.feed.refresh(NOW + 4); assert.equal(f.decide('send', NOW + 4).value, 'emitted');
-});
-
-for (const phaseName of ['emitting', 'emitted'] as const) for (const transient of [true, false]) test(`P1: runner ${phaseName} の保存${transient ? '競合' : '失敗'}は送信を再実行せず記録された段階を返す`, async t => {
-  const f = createFixture(t); const a = await createApiFixture(t, f);
-  let sent = 0, failed = 0;
-  t.mock.method(a.api.runner, 'request', async (request: RunnerRequest) => {
-    assert.ok(f.db.prepare("SELECT 1 FROM api_delivery_evidence WHERE id = 'p1:emitting'").get());
-    sent++; return { type: 'res' as const, cmd_id: request.cmd_id, ok: true, result: {} };
-  });
-  const phase = SendWatch.prototype.phase;
-  t.mock.method(SendWatch.prototype, 'phase', function (this: SendWatch, ...[id, value, at]: Parameters<SendWatch['phase']>) {
-    if (id === 'p1' && value === phaseName && (!transient || failed++ === 0)) {
-      throw Object.assign(new Error('database is locked'), { errcode: transient ? 5 : 10 });
-    }
-    return phase.call(this, id, value, at);
-  });
-  try {
-    const payload = { runId: 'root', input: { text: 'Next step' } };
-    const first = await a.command('p1', 'send', payload);
-    a.frames.length = 0;
-    const second = await a.command('p1', 'send', payload);
-    const expected = !transient && phaseName === 'emitting' ? 'rejected' : !transient ? 'emitting' : 'emitted';
-    assert.equal(sent, expected === 'rejected' ? 0 : 1);
-    assert.equal(first.ok, expected !== 'rejected');
-    assert.equal(second.ok, expected !== 'rejected');
-    assert.equal(second.result.delivery.value, expected);
-    assert.equal(f.decide('p1').value, expected);
-  } finally { await a.api.close(); }
-});
-
-test('P1: 並行する同じ cmd_id は送出を一回にまとめ、保存後の同じ段階を返す', async t => {
-  const f = createFixture(t); const a = await createApiFixture(t, f);
-  let complete!: () => void;
-  const pending = new Promise<void>(resolve => { complete = resolve; });
-  const request = t.mock.method(a.api.runner, 'request', async (request: RunnerRequest) => {
-    await pending;
-    return { type: 'res' as const, cmd_id: request.cmd_id, ok: true, result: {} };
-  });
-  try {
-    const message = { type: 'cmd', cmd_id: 'parallel', command: 'send', payload: { runId: 'root', input: { text: 'Next step' } } };
-    const first = a.receive(message), second = a.receive(message);
-    await delay(20);
-    assert.equal(request.mock.callCount(), 1);
-    assert.equal(a.frames.filter(frame => frame.type === 'ack').length, 0);
-    complete(); await Promise.all([first, second]);
-    const responses = a.frames.filter(frame => frame.type === 'ack');
-    assert.equal(responses.length, 2);
-    for (const response of responses) { assert.equal(response.ok, true); assert.equal(response.result.delivery.value, 'emitted'); }
-    assert.equal(request.mock.callCount(), 1);
-  } finally { complete(); await a.api.close(); }
-});
-
-test('P1: 拒否の保存も失敗した再提示は accepted を返し成功にしない', async t => {
-  const f = createFixture(t); const a = await createApiFixture(t, f);
-  const request = t.mock.method(a.api.runner, 'request', async () => { assert.fail('must not send'); });
-  t.mock.method(SendWatch.prototype, 'phase', () => { throw new Error('storage unavailable'); });
-  try {
-    const payload = { runId: 'root', input: { text: 'Next step' } };
-    assert.equal((await a.command('accepted', 'send', payload)).ok, false);
-    a.frames.length = 0;
-    const retry = await a.command('accepted', 'send', payload);
-    assert.equal(retry.ok, false); assert.equal(retry.result.delivery.value, 'accepted');
-    t.mock.timers.tick(SEND_WATCH_TIMEOUT_MS + 1);
-    a.frames.length = 0;
-    const expired = await a.command('accepted', 'send', payload);
-    assert.equal(expired.ok, false); assert.equal(expired.result.delivery.value, 'unverifiable');
-    assert.equal(request.mock.callCount(), 0);
-  } finally { await a.api.close(); }
-});
-
-for (const phaseName of ['emitting', 'emitted'] as const) test(`P1: PTY の ${phaseName} 保存失敗は書き込みの前後で区別する`, async t => {
-  const f = createFixture(t);
-  const session = '12345678-1234-1234-1234-123456789abc';
-  const conversationId = JSON.stringify(['claude', session]);
-  f.append('project.created', 'project:project', { repository_id: 'project', root_path: f.directory, state: 'registered', display_name: 'Fixture' });
-  writeFileSync(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: session }));
-  const writes: string[] = [];
-  const a = await createApiFixture(t, f, {
-    sessionsDirectory: f.directory, listProcesses: async () => [], quietMs: 0, warmupMs: 0, submitDelayMs: 0, wait: async () => {},
-    openTerminal: () => ({ pid: 1000, resize() {}, kill() {},
-      onData(callback: (data: string) => void) { queueMicrotask(() => callback(promptFrame())); return { dispose() {} }; },
-      onExit: () => ({ dispose() {} }), write(data: string) { writes.push(data); },
-    }) as unknown as IPty,
-  });
-  const phase = SendWatch.prototype.phase;
-  t.mock.method(SendWatch.prototype, 'phase', function (this: SendWatch, ...[id, value, at]: Parameters<SendWatch['phase']>) {
-    if (value === phaseName) throw new Error('storage unavailable');
-    return phase.call(this, id, value, at);
-  });
-  try {
-    await a.command('launch', 'session.launch', { projectId: 'project', provider: 'claude', resume: session });
-    const payload = { conversationId, text: 'Next step' };
-    const first = await a.command('pty', 'session.send', payload);
-    a.frames.length = 0;
-    const second = await a.command('pty', 'session.send', payload);
-    assert.equal(writes.filter(data => data === '\r').length, phaseName === 'emitting' ? 0 : 1);
-    assert.equal(first.ok, phaseName === 'emitted'); assert.equal(second.ok, first.ok);
-    assert.equal(f.decide('pty').value, phaseName === 'emitting' ? 'rejected' : 'emitting');
-    assert.equal(f.db.prepare("SELECT 1 FROM api_delivery_evidence WHERE id = 'pty:aborted'").get(), undefined);
-  } finally { await a.api.close(); }
-});
-
-test('P1: emitting 保存の再試行中に端末の会話が変われば一文字も書かない', async t => {
-  const f = createFixture(t), session = '12345678-1234-1234-1234-123456789abc';
-  f.append('project.created', 'project:project', { repository_id: 'project', root_path: f.directory, state: 'registered', display_name: 'Fixture' });
-  const sessionPath = join(f.directory, '1000.json');
-  writeFileSync(sessionPath, JSON.stringify({ pid: 1000, sessionId: session }));
-  const writes: string[] = [];
-  const a = await createApiFixture(t, f, {
-    sessionsDirectory: f.directory, listProcesses: async () => [], quietMs: 0, warmupMs: 0, submitDelayMs: 0, wait: async () => {},
-    openTerminal: () => ({ pid: 1000, resize() {}, kill() {},
-      onData(callback: (data: string) => void) { queueMicrotask(() => callback(promptFrame())); return { dispose() {} }; },
-      onExit: () => ({ dispose() {} }), write(data: string) { writes.push(data); },
-    }) as unknown as IPty,
-  });
-  const phase = SendWatch.prototype.phase;
-  let attempts = 0;
-  t.mock.method(SendWatch.prototype, 'phase', function (this: SendWatch, ...[id, value, at]: Parameters<SendWatch['phase']>) {
-    if (value === 'emitting' && attempts++ === 0) {
-      writeFileSync(sessionPath, JSON.stringify({ pid: 1000, sessionId: '87654321-4321-4321-4321-cba987654321' }));
-      throw Object.assign(new Error('database is locked'), { errcode: 5 });
-    }
-    return phase.call(this, id, value, at);
-  });
-  try {
-    await a.command('launch', 'session.launch', { projectId: 'project', provider: 'claude', resume: session });
-    const ack = await a.command('changed', 'session.send', { conversationId: JSON.stringify(['claude', session]), text: 'Next step' });
-    assert.equal(ack.ok, false); assert.deepEqual(writes, []);
-    assert.equal(f.decide('changed').value, 'rejected');
-    assert.equal(attempts, 1);
+    assert.equal(f.read('blocked'), undefined);
   } finally { await a.api.close(); }
 });

@@ -16,7 +16,12 @@ export function resolveWorkingTurn(run: Row | undefined, messages: Row[] = []): 
   const state = readText(run?.state);
   if (!['starting', 'running', 'waiting_approval', 'waiting_input'].includes(state)) return undefined;
   const projected = readText(run?.turn_started_ts);
-  const startEvidence = projected;
+  const hook = readObject(run?.last_evidence);
+  // 道具の時刻や実行世代の開始は、前のターンを含むため代用しない。
+  const promptTime = hook.hook_event_name === 'UserPromptSubmit' ? readText(run?.last_evidence_ts) : '';
+  const knownStart = [projected, promptTime].find(time => Number.isFinite(Date.parse(time)));
+  const startEvidence = knownStart ?? messages.filter(row => !row.delivery_state && senderOf(row, { child: false, parent: '', self: '' }).side === 'end')
+    .map(row => readText(row.source_ts)).filter(time => Number.isFinite(Date.parse(time))).sort().at(-1) ?? '';
   return { runKey: JSON.stringify([run?.id, run?.generation]), state, started: Date.parse(startEvidence), startEvidence };
 }
 export function useWorkingTurn(run: Row | undefined, messages: Row[] = []): WorkingTurn | undefined {
@@ -67,15 +72,15 @@ export function selectTurns(state: ScreenState, history: NavigationHistory, root
     id: `approval-${row.id}`, kind: 'approval', conversationId: getConversation(row, state),
     time: getRequestedTime(row, state), to: `/inbox?approval=${encodeURIComponent(String(row.id))}`,
   }));
-  const runs = new Map((state.projection.runs ?? []).map(run => [run.id, run]));
-  for (const conversation of state.projection.conversations ?? []) {
-    const run = runs.get(conversation.current_run_id);
-    const id = String(conversation.id);
-    if (conversation.state === 'waiting_input') turns.push({
-      id: `input-${id}`, kind: 'input', conversationId: id,
-      time: String(run?.last_evidence_ts ?? run?.started_ts ?? ''), to: `/c/${encodeURIComponent(id)}`,
-    });
+  const latest = new Map<string, Row>();
+  for (const run of state.projection.runs ?? []) {
+    const id = String(run.conversation_id ?? '');
+    if (!latest.has(id) || Number(run.generation ?? 0) >= Number(latest.get(id)?.generation ?? 0)) latest.set(id, run);
   }
+  for (const [id, run] of latest) if (run.state === 'waiting_input') turns.push({
+    id: `input-${id}`, kind: 'input', conversationId: id,
+    time: String(run.last_evidence_ts ?? run.started_ts ?? ''), to: `/c/${encodeURIComponent(id)}`,
+  });
   for (const root of roots) {
     if (root.state !== 'idle') continue;
     const unread = root.conversation_ids.filter(id => history.ready[id] && history.read[id] !== history.ready[id]);

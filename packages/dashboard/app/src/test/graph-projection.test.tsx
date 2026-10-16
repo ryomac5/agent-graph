@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { cleanup, render, renderHook, screen, fireEvent } from '@testing-library/react';
 import { Link, MemoryRouter } from 'react-router';
-import { createStore } from "./current-fixture.ts";
+import { createStore } from '../lib/store.ts';
 import { buildRootTree, isCompletedGraph, selectRoots, useRootIndex } from '../lib/roots.ts';
 import { RootTree } from '../components/RootViews.tsx';
 import { GraphPage } from '../pages/graph/GraphPage.tsx';

@@ -96,7 +96,8 @@ if (isMainThread) {
   await release();
 } else {
   const { path, home } = workerData;
-  const service = openObservationService({ dbPath: path, home, env: { HOME: home }, writerOnly: true });
+  const service = openObservationService({ dbPath: path, home, env: { HOME: home }, writerOnly: true,
+    codexProcessReader: { listProcesses: () => "", readOpenFiles: () => "" } });
   service.ingestOnce(); service.checkpoint();
   parentPort!.postMessage(process.memoryUsage());
   await new Promise(resolve => parentPort!.once("message", resolve));

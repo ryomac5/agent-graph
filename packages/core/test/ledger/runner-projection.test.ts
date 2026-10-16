@@ -68,7 +68,7 @@ test("runner records preserve corrections and incremental updates; old projectio
   } finally { reopened.close(); }
 });
 
-test('投影は UserPromptSubmit の時計を計算せず、再構築でも事実の欄だけを保つ', (t) => {
+test('UserPromptSubmit の時計は、旧版の再構築と api 再接続と作業中の追加入力でも残る', (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'hook-turn-projection-'));
   const path = join(directory, 'ledger.db');
   const ledger = openLedger(path);
@@ -81,17 +81,17 @@ test('投影は UserPromptSubmit の時計を計算せず、再構築でも事�
       last_evidence: { hook_event_name: 'UserPromptSubmit' }, last_evidence_ts: ts } });
   appendPrompt('first', start);
   let state = applyIncremental(db, 0);
-  assert.equal(db.prepare('SELECT turn_started_ts FROM runs').get()!.turn_started_ts, null);
+  assert.equal(db.prepare('SELECT turn_started_ts FROM runs').get()!.turn_started_ts, start);
   db.exec("UPDATE runner_projection_version SET version = 10; UPDATE runs SET turn_started_ts = NULL");
   const reopened = new DatabaseSync(path);
   try {
     state = applyIncremental(reopened, state.last_seq);
-    assert.equal(reopened.prepare('SELECT turn_started_ts FROM runs').get()!.turn_started_ts, null);
+    assert.equal(reopened.prepare('SELECT turn_started_ts FROM runs').get()!.turn_started_ts, start);
     assert.equal(reopened.prepare('SELECT version FROM runner_projection_version').get()!.version, 11);
     appendPrompt('midturn', '2026-10-12T22:06:00.000Z');
     state = applyIncremental(reopened, state.last_seq);
-    assert.equal(reopened.prepare('SELECT turn_started_ts FROM runs').get()!.turn_started_ts, null);
+    assert.equal(reopened.prepare('SELECT turn_started_ts FROM runs').get()!.turn_started_ts, start);
     rebuild(reopened);
-    assert.equal(reopened.prepare('SELECT turn_started_ts FROM runs').get()!.turn_started_ts, null);
+    assert.equal(reopened.prepare('SELECT turn_started_ts FROM runs').get()!.turn_started_ts, start);
   } finally { reopened.close(); }
 });

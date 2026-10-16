@@ -1,14 +1,7 @@
 // hook やハーネスが利用者の行に差し込む札。人が書いた本文ではないので画面に出さない。
 const INJECTED_BLOCKS = /<(system-reminder|local-command-caveat|local-command-stdout|local-command-stderr|command-message|user-prompt-submit-hook|task-notification)>[\s\S]*?<\/\1>/g;
-/** 保存済みの旧いコマンド本文も、投影を再構築せず読むときに整える。 */
-function readSlashCommand(text: string): string | undefined {
-  const command = /^\s*<command-name>(\/[^<\s]+)<\/command-name>\s*(?:<command-message>[\s\S]*?<\/command-message>\s*)?(?:<command-args>([\s\S]*?)<\/command-args>\s*)?$/u.exec(text);
-  return command ? [command[1], command[2]?.trim()].filter(Boolean).join(' ') : undefined;
-}
 /** 本文から差し込まれた札を外し、人が読む文だけを残す。コマンドの札は中の語だけを残す。 */
 export function visibleText(text: string, normalized = false): string {
-  const command = readSlashCommand(text);
-  if (command !== undefined) return command;
   if (normalized) return text.trim();
   return text.replace(INJECTED_BLOCKS, '').replace(/<\/?(command-name|command-args)>/g, ' ').replace(/[ \t]+\n/g, '\n').trim();
 }
@@ -53,7 +46,7 @@ export function readBody(value: unknown): string {
 function decodeBody(value: unknown): string {
   if (typeof value === 'string') {
     // 通常の文章と数値は JSON を展開しても本文形式にならない。
-    if (!/^[\s]*["{\[]/.test(value)) return readSlashCommand(value) ?? value;
+    if (!/^[\s]*["{\[]/.test(value)) return value;
     let decoded: unknown;
     try { decoded = JSON.parse(value); } catch { return value; }
     // 本文形式でない JSON（コードや道具の出力）は元の文字列を保つ。

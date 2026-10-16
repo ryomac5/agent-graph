@@ -92,7 +92,7 @@ const stoppedNotice = production.E1.parent.find(sample => sample.line === 12153)
 
 test("E1: actual stopped notification clears Working even with the same live parent", () => {
   const terminal = native(stoppedNotice, "claude_child", { childId, turnId: childTurn, attemptId: "child-attempt" });
-  assert.deepEqual(terminal.map(e => e.kind === "signal" ? e.event : e.kind), ["child_stopped"]);
+  assert.deepEqual(terminal.map(e => e.kind === "signal" ? e.event : e.kind), ["complete", "interrupted"]);
   const evidence = [...childEvidence, ...terminal, scan(now)];
   const target = { ...productionCases[0].input, evidence, process: PROCESS, parentProcessAtLaunch: { ...PROCESS } };
   const output = evaluateState(target, now);
@@ -100,7 +100,7 @@ test("E1: actual stopped notification clears Working even with the same live par
   assert.equal(output.turn.value, "unknown"); assert.equal(output.turn.reason, "boundary_unavailable");
   assert.equal(output.display.label, "Unknown"); assert.equal(output.display.details.includes("running tool"), false);
   assert.equal(output.result.stage, "launched"); assert.equal(output.result.value, "incomplete");
-  assert.ok(output.turn.evidenceIds.includes("line-12153:child_stopped"));
+  assert.ok(output.turn.evidenceIds.includes("line-12153:complete"));
   checkOrders(evidence, evidence => evaluateState({ ...target, evidence }, now));
 });
 
@@ -123,7 +123,7 @@ test("child notifications require an exact task ID and an explicitly correlated 
     assert.deepEqual(native(sample, "claude_child", { childId: childId + "-other", turnId: childTurn }), []);
     assert.deepEqual(native(sample, "claude_child", { turnId: childTurn }), []);
     const proof = native(sample, "claude_child", { childId, turnId: childTurn });
-    assert.deepEqual(proof.map(e => e.kind === "signal" ? e.event : e.kind), status === "stopped" ? ["child_stopped"] : ["complete"]);
+    assert.deepEqual(proof.map(e => e.kind === "signal" ? e.event : e.kind), status === "stopped" ? ["complete", "interrupted"] : ["complete"]);
     const output = evaluateState(stateInput([...childEvidence, ...proof], { turnId: childTurn }), now);
     assert.equal(output.turn.value, status === "stopped" ? "unknown" : "completed");
     assert.equal(output.result.stage, null); assert.notEqual(output.display.result, "Done");

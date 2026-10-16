@@ -1,43 +1,229 @@
-import assert from 'node:assert/strict';
-import test from 'node:test';
-import { projectRuns, projectRunHistory } from '../../src/ledger/projections/runs.ts';
-import type { Fact } from '../../src/ledger/facts.ts';
-const AT = '2026-10-15T00:00:00.000Z';
-function fact(id: string, payload: object, kind = 'run.updated', at = AT): Fact {
-  return { fact_id: id, source_event_id: id, subject: 'run:r', source: 'hook', kind,
-    payload, source_ts: at, observed_ts: at, confidence: 'confirmed', seq: 1, cursor: null, supersedes: null, payload_hash: id, schema_version: 1 } as Fact;
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+import type { Fact, FactInput, RunPayload, Source } from "../../src/ledger/facts.ts";
+import { projectConnections } from "../../src/ledger/projections/connections.ts";
+import { projectRuns } from "../../src/ledger/projections/runs.ts";
+import type { EndEvidence } from "../../src/ledger/projections/runs.ts";
+
+const SOURCE_TS = "2026-01-01T00:00:00.000Z";
+const LATER_TS = "2026-01-01T00:40:00.000Z";
+const SHUFFLE_SEED = 123456789;
+const SHUFFLE_REPETITIONS = 32;
+
+function createFact(input: FactInput): Fact {
+  return {
+    ...input, seq: 1, fact_id: input.source_event_id, payload_hash: "structural-test",
+    source_ts: input.source_ts, observed_ts: SOURCE_TS, schema_version: 1,
+    cursor: null, supersedes: input.supersedes ?? null,
+  } as Fact;
 }
-const created = fact('created', { conversation_id: 'c', generation: 1, state: 'unknown', started_ts: AT, pid: 41, start_fingerprint: 'A' }, 'run.created');
 
-test('run 投影は台帳の属性を保持し、申告状態の真偽を決めない', () => {
-  const declared = fact('declared', { state: 'ended', reason: 'unconfirmed', end_evidence: { kind: 'unrecognized' } }, 'run.state_changed');
-  const run = projectRuns([created, declared])[0];
-  assert.equal(run.state, 'ended'); assert.equal(run.reason, 'unconfirmed');
-  assert.deepEqual(run.end_evidence, { kind: 'unrecognized' });
-  assert.deepEqual(projectRuns([declared, created]), [run]);
+function createRun(id = "start", payload: Partial<RunPayload> = {}): Fact {
+  return createFact({
+    source: "host-claude", source_event_id: id, kind: "run.created", subject: "run:r1",
+    payload: { conversation_id: "c1", generation: 1, state: "running", pid: 101, start_fingerprint: "process-1", ...payload },
+    source_ts: SOURCE_TS, confidence: "confirmed",
+  });
+}
+
+function createState(payload: Partial<RunPayload> & Pick<RunPayload, "state">, source: Source = "host-claude", id = "state"): Fact {
+  return createFact({
+    source, source_event_id: id, kind: "run.state_changed", subject: "run:r1",
+    payload, source_ts: LATER_TS, confidence: "confirmed",
+  });
+}
+
+function shuffleFacts(facts: readonly Fact[], seed: number): Fact[] {
+  const shuffled = [...facts];
+  let state = seed;
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    const target = state % (index + 1);
+    [shuffled[index], shuffled[target]] = [shuffled[target], shuffled[index]];
+  }
+  return shuffled;
+}
+
+for (const sample of ["S2", "S3", "S11"]) {
+  test(`${sample}: 標本の投影と固定種の並べ替えが一致する`, () => {
+    const root = new URL(`../samples/${sample}/`, import.meta.url);
+    const facts = JSON.parse(readFileSync(new URL("facts.json", root), "utf8")) as Fact[];
+    const expected = JSON.parse(readFileSync(new URL("expected.json", root), "utf8"));
+    const snapshot = JSON.stringify(facts);
+    for (let iteration = 0; iteration <= SHUFFLE_REPETITIONS; iteration += 1) {
+      const input = iteration === 0 ? facts : shuffleFacts(facts, SHUFFLE_SEED + iteration);
+      assert.deepEqual({ runs: projectRuns(input), connections: projectConnections(input) }, expected);
+    }
+    assert.equal(JSON.stringify(facts), snapshot);
+    assert.ok(!snapshot.includes('"body"'));
+  });
+}
+
+const END_CASES: { source: Source; evidence: EndEvidence }[] = [
+  { source: "host-claude", evidence: { kind: "host_exit", exit_code: 0 } },
+  { source: "host-codex", evidence: { kind: "thread_closed" } },
+  { source: "hook", evidence: { kind: "session_end", generation: 1 } },
+  { source: "rollout-codex", evidence: { kind: "archived", location: "archived_sessions" } },
+  { source: "hook", evidence: { kind: "process_check", succeeded: true, matches: false, pid: 101, start_fingerprint: "process-1" } },
+  { source: "ui", evidence: { kind: "user_correction" } },
+  { source: "legacy", evidence: { kind: "legacy_delegation", table: "delegations", id: "d1", status: "done" } },
+];
+for (const { source, evidence } of END_CASES) {
+  test(`終了の根拠 ${evidence.kind} を確認する`, () => {
+    const runs = projectRuns([createRun(), createState({ state: "ended", end_evidence: evidence }, source)]);
+    assert.equal(runs[0].state, "ended");
+    assert.deepEqual(runs[0].end_evidence, evidence);
+    assert.equal(runs[0].ended_ts, LATER_TS);
+  });
+}
+
+test("旧委譲の失敗は確認済みの記録だけを根拠にし、idle や別の出所を終了としない", () => {
+  const evidence = { kind: "legacy_delegation", table: "delegations", id: "d1", status: "failed" };
+  const failed = createState({ state: "failed", cause: "legacy delegation failed", end_evidence: evidence }, "legacy");
+  assert.equal(projectRuns([createRun(), failed])[0].state, "failed");
+  for (const fact of [
+    { ...failed, confidence: "inferred" as const },
+    { ...failed, source: "hook" as const },
+    createState({ state: "ended", end_evidence: { ...evidence, status: "idle" } }, "legacy"),
+    createState({ state: "ended", end_evidence: evidence }, "legacy"),
+  ]) {
+    const run = projectRuns([createRun(), fact])[0];
+    assert.equal(run.state, "unknown");
+    assert.equal(run.ended_ts, undefined);
+  }
 });
 
-test('現在の turn の時計や終了の判定を投影に書き込まない', () => {
-  const start = fact('prompt', { generation: 1, state: 'running', last_evidence: { hook_event_name: 'UserPromptSubmit' } });
-  const run = projectRuns([created, start])[0];
-  assert.equal(run.turn_started_ts, undefined);
-  const native = fact('record', { generation: 1, last_evidence: { native_source: 'claude', native_record: { type: 'assistant' } }, last_evidence_ts: AT });
-  assert.deepEqual(projectRuns([created, start, native]), [run]);
+for (const reason of ["no_updates", "mcp_disconnected", "runner_restarted", "runner_updated", "api_restarted", "process_list_failed"]) {
+  test(`${reason} は終了にせず最後の根拠を保持する`, () => {
+    const start = createRun();
+    const run = projectRuns([start, createState({ state: "unknown", reason })])[0];
+    assert.equal(run.state, "unknown");
+    assert.equal(run.reason, reason);
+    assert.deepEqual(run.last_evidence, { fact_id: start.fact_id, kind: start.kind });
+    assert.equal(run.last_evidence_ts, SOURCE_TS);
+    assert.equal(run.end_evidence, undefined);
+    assert.equal(run.ended_ts, undefined);
+    assert.equal(projectRuns([start, createState({ state: "ended", reason })])[0].state, "unknown");
+  });
+}
+
+test("世代、PID、開始指紋、確認の成功、出所、確度の不一致は終了の根拠にしない", () => {
+  const invalid = [
+    createState({ state: "ended", end_evidence: { kind: "session_end", generation: 2 } }, "hook"),
+    ...[
+      { succeeded: false }, { matches: true }, { pid: 102 }, { start_fingerprint: "reused-pid" },
+    ].map((patch) => createState({ state: "ended", end_evidence: {
+      kind: "process_check", succeeded: true, matches: false, pid: 101, start_fingerprint: "process-1", ...patch,
+    } })),
+    createState({ state: "ended", end_evidence: { kind: "host_exit", exit_code: 0 } }, "hook"),
+    { ...createState({ state: "ended", end_evidence: { kind: "host_exit", exit_code: 0 } }), confidence: "inferred" } as Fact,
+    createState({ state: "ended", end_evidence: { kind: "unrecognized" } }),
+  ];
+  for (const fact of invalid) assert.equal(projectRuns([createRun(), fact])[0].state, "unknown");
 });
 
-test('世代ごとに PID を隔離し、訂正と並べ替えで同じ属性を再現する', () => {
-  const next = fact('new', { conversation_id: 'c', generation: 2, state: 'unknown', model: 'model-B' }, 'run.created', '2026-10-15T00:01:00Z');
-  const correction = { ...fact('corrected', { model: 'model-C', generation: 2 }), source_ts: next.source_ts, supersedes: null };
-  const expected = projectRuns([created, next, correction]);
-  assert.equal(expected[1].pid, undefined); assert.equal(expected[1].start_fingerprint, undefined);
-  assert.deepEqual(projectRuns([correction, next, created]), expected);
-  assert.equal(projectRuns([created, { ...fact('cancel', { state: 'idle' }), supersedes: created.fact_id }]).length, 0);
+test("失敗には終了の根拠と原因の両方が必要", () => {
+  assert.equal(projectRuns([createRun(), createState({ state: "failed", cause: "host error" })])[0].state, "unknown");
+  assert.equal(projectRuns([createRun(), createState({ state: "failed", end_evidence: { kind: "host_exit", exit_code: 1 } })])[0].state, "unknown");
+  const failed = projectRuns([createRun(), createState({ state: "failed", cause: "host error", end_evidence: { kind: "host_exit", exit_code: 1 } })])[0];
+  assert.equal(failed.state, "failed");
+  assert.equal(failed.cause, "host error");
 });
 
-test('終了の履歴は新しい申告で消さず、キューの過去の区切りに使える', () => {
-  const end = fact('end', { state: 'ended', ended_ts: '2026-10-15T00:01:00Z' }, 'run.ended', '2026-10-15T00:01:00Z');
-  const resumed = fact('resume', { state: 'running' }, 'run.state_changed', '2026-10-15T00:02:00Z');
-  const history = projectRunHistory([created, end, resumed]);
-  assert.equal(history.runs[0].state, 'running');
-  assert.equal(history.ends[0].ended_ts, '2026-10-15T00:01:00Z');
+test("Claude の同じターンの中断を照合し failed にしない", () => {
+  const request = createFact({
+    source: "ui", source_event_id: "interrupt", kind: "run.interrupt_requested", subject: "run:r1",
+    payload: { turn_id: "turn-1" }, source_ts: "2026-01-01T00:30:00.000Z", confidence: "confirmed",
+  });
+  const result = createState({ state: "failed", cause: "error_during_execution", end_evidence: {
+    kind: "host_exit", exit_code: 1, turn_id: "turn-1", is_error: true, subtype: "error_during_execution",
+  } });
+  const input = [createRun(), request, result];
+  const run = projectRuns(input)[0];
+  assert.equal(run.state, "ended");
+  assert.equal((run.end_evidence as { interrupted: boolean }).interrupted, true);
+  assert.equal(run.cause, undefined);
+  for (let iteration = 0; iteration < SHUFFLE_REPETITIONS; iteration += 1) {
+    assert.deepEqual(projectRuns(shuffleFacts(input, SHUFFLE_SEED + iteration)), [run]);
+  }
+  assert.equal(projectRuns([input[0], result])[0].state, "failed");
+  assert.equal(projectRuns([input[0], { ...request, payload: { turn_id: "other-turn" } } as Fact, result])[0].state, "failed");
+  const exit = createState({ state: "failed", cause: "exit 1", end_evidence: { kind: "host_exit", exit_code: 1, turn_id: "turn-1" } });
+  assert.equal(projectRuns([input[0], request, exit])[0].state, "ended");
+});
+
+test("訂正された終了と接続の事実を除外する", () => {
+  const end = createState({ state: "ended", end_evidence: { kind: "host_exit", exit_code: 0 } });
+  const correction = createFact({
+    source: "ui", source_event_id: "correction", kind: "run.corrected", subject: "run:r1",
+    payload: { state: "running" }, supersedes: end.fact_id, source_ts: LATER_TS, confidence: "confirmed",
+  });
+  assert.equal(projectRuns([end, correction, createRun()])[0].state, "running");
+  const connection = createFact({
+    source: "hook", source_event_id: "connect", kind: "connection.created", subject: "connection:m1",
+    payload: { run_id: "r1", type: "mcp", fingerprint: "m1", state: "connected" }, source_ts: SOURCE_TS, confidence: "confirmed",
+  });
+  const disconnect = createFact({
+    source: "hook", source_event_id: "disconnect", kind: "connection.state_changed", subject: "connection:m1",
+    payload: { state: "disconnected" }, source_ts: LATER_TS, confidence: "confirmed",
+  });
+  const corrected = createFact({
+    source: "ui", source_event_id: "connection-correction", kind: "connection.corrected", subject: "connection:m1",
+    payload: { state: "connected" }, supersedes: disconnect.fact_id, source_ts: LATER_TS, confidence: "confirmed",
+  });
+  assert.equal(projectConnections([corrected, disconnect, connection])[0].state, "connected");
+  assert.deepEqual(projectRuns([createRun(), connection, disconnect]), projectRuns([createRun()]));
+});
+
+test("同じ subject の再開も独立した世代とし古い PID を引き継がない", () => {
+  const resume = { ...createRun("resume", { generation: 2 }), source_ts: "2026-01-01T00:01:00.000Z" };
+  assert.ok(resume.kind === "run.created");
+  delete resume.payload?.pid;
+  delete resume.payload?.start_fingerprint;
+  const death = createState({ generation: 1, state: "ended", end_evidence: {
+    kind: "process_check", succeeded: true, matches: false, pid: 101, start_fingerprint: "process-1",
+  } });
+  const runs = projectRuns([death, resume, createRun()]);
+  assert.equal(runs.length, 2);
+  assert.equal(runs[0].state, "ended");
+  assert.equal(runs[1].state, "running");
+  assert.equal(runs[1].pid, undefined);
+  assert.equal(runs[1].start_fingerprint, undefined);
+});
+
+test("source_ts と source_event_id で順序を決め seq と observed_ts を無視する", () => {
+  const first = createState({ state: "waiting_approval" }, "host-claude", "a");
+  const second = createState({ state: "waiting_input" }, "host-claude", "z");
+  assert.equal(projectRuns([second, createRun(), first])[0].state, "waiting_input");
+  const facts = [createRun(), first, second].map((fact, index) => ({ ...fact, seq: 100 - index, observed_ts: "2099-01-01T00:00:00.000Z" }));
+  assert.deepEqual(projectRuns(facts.reverse()), projectRuns([createRun(), first, second]));
+});
+
+test("unknown は新しい確かな状態でのみ解消する", () => {
+  const unknown = createState({ state: "unknown", reason: "no_updates" }, "host-claude", "a");
+  const inferred = { ...createState({ state: "running" }, "hook", "b"), confidence: "inferred" } as Fact;
+  const confirmed = createState({ state: "idle" }, "host-claude", "c");
+  assert.equal(projectRuns([createRun(), unknown, inferred])[0].state, "unknown");
+  assert.equal(projectRuns([createRun(), unknown, inferred, confirmed])[0].state, "idle");
+  assert.equal(projectRuns([createRun(), unknown, inferred, confirmed])[0].reason, undefined);
+});
+
+test("保持整理済みの null payload を安全に無視する", () => {
+  const purged = { ...createState({ state: "ended" }), payload: null } as Fact;
+  assert.deepEqual(projectRuns([purged, createRun()]), projectRuns([createRun()]));
+  assert.deepEqual(projectConnections([purged]), []);
+});
+
+test("Codex の同じ状態の版は v3・v9・v10 の数値順で投影し、入力順に依存しない", () => {
+  const states = [
+    createState({ generation: 1, state: "unknown", reason: "legacy" }, "rollout-codex", "file:42:hash:thread:state"),
+    ...[3, 9, 10].map(version => createState({ generation: 1, state: "unknown", reason: `rule-${version}` },
+      "rollout-codex", `file:42:hash:thread:state:v${version}`)),
+  ];
+  const facts = [createRun(), ...states];
+  for (let iteration = 0; iteration < SHUFFLE_REPETITIONS; iteration += 1) {
+    assert.equal(projectRuns(shuffleFacts(facts, SHUFFLE_SEED + iteration))[0].reason, "rule-10");
+  }
+  assert.equal(states[1].source_event_id, "file:42:hash:thread:state:v3");
 });

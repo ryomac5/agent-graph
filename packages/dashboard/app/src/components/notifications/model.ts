@@ -1,7 +1,6 @@
 import { translate } from '../conversation/text.ts';
 import type { ScreenState, Row } from '../../lib/store.ts';
 import { getConversation, isPending, readText } from '../../pages/inbox/model.ts';
-import { readObject } from '../conversation/model.ts';
 import { conversationName } from '../../lib/format.ts';
 import { selectRoots } from '../../lib/roots.ts';
 import type { Language } from '../../lib/i18n.ts';
@@ -61,33 +60,28 @@ export function collectNotifications(previous: ScreenState | undefined, next: Sc
   }
   const approvalsBefore = indexRows(previous?.projection.approvals);
   const runsBefore = indexRows(previous?.projection.runs);
-  const decisionsBefore = indexRows(previous?.projection.state_decisions);
-  const decisions = indexRows(next.projection.state_decisions);
   for (const row of previous?.projection.approvals === next.projection.approvals ? [] : next.projection.approvals ?? []) {
     const before = approvalsBefore.get(row.id);
     if (before === row) continue;
     if (isPending(row) && (!before || !isPending(before))) add('approval', row, String(row.id));
   }
   const pendingRuns = new Set((next.projection.approvals ?? []).filter(isPending).map(row => row.run_id));
-  for (const row of previous?.projection.runs === next.projection.runs && previous?.projection.state_decisions === next.projection.state_decisions ? [] : next.projection.runs ?? []) {
+  for (const row of previous?.projection.runs === next.projection.runs ? [] : next.projection.runs ?? []) {
     const before = runsBefore.get(row.id);
-    if (before === row && decisionsBefore.get(row.decision_id) === decisions.get(row.decision_id)) continue;
-    const result = readObject(decisions.get(row.decision_id)?.result).value;
-    const previousResult = readObject(decisionsBefore.get(before?.decision_id)?.result).value;
-    const previousState = before?.state;
-    if (previousState === row.state && previousResult === result) continue;
+    if (before === row) continue;
+    if (before?.state === row.state) continue;
     // 一覧を後から読み足した古い行は、いま起きた変化ではない。前から知っている行か、直前に動いた行だけを通知する。
     const changed = Date.parse(readText(row.last_evidence_ts ?? row.ended_ts ?? row.started_ts));
     if (!before && !(Number.isFinite(changed) && now - changed < RECENT_MS)) continue;
-    if (row.state === 'waiting_input' && previousState !== row.state) add('input', row);
-    if (row.state === 'waiting_approval' && previousState !== row.state && !pendingRuns.has(row.id)) add('approval', row);
+    if (row.state === 'waiting_input') add('input', row);
+    if (row.state === 'waiting_approval' && !pendingRuns.has(row.id)) add('approval', row);
     // 初回の履歴取得を、新しく終了した実行として通知しない。
     const hasHistory = previous && Object.keys(previous.projection).length > 0;
-    if (hasHistory && result === 'failed' && previousResult !== result) add('failed', row);
-    if (hasHistory && (result === 'succeeded' && previousResult !== result || row.state === 'idle' && previousState !== 'idle' && result !== 'failed' && result !== 'interrupted')) add('completed', row);
+    if (hasHistory && row.state === 'failed') add('failed', row);
+    if (hasHistory && row.state === 'ended') add('completed', row);
   }
   for (const row of next.projection.send_watches ?? []) {
-    if ((row.decision as { display?: string } | undefined)?.display !== 'Not delivered' || previous?.projection.send_watches?.some(before => before.id === row.id && (before.decision as { display?: string } | undefined)?.display === 'Not delivered')) continue;
+    if (row.state !== 'failed' || previous?.projection.send_watches?.some(before => before.id === row.id && before.state === 'failed')) continue;
     notices.push({ id: 'delivery:' + row.id, deliveryId: String(row.id), kind: 'delivery_failed', title: translate(language, 'deliveryFailed'),
       detail: readText(row.body).slice(0, 120), conversationId: readText(row.conversation_id), time: readText(row.failed_ts) });
   }

@@ -8,7 +8,7 @@ import { FileTreePanel, useFileExplorer } from '../pages/files/FilesPage.tsx';
 import { DiffView } from '../components/diff/DiffView.tsx';
 import { parseDiff } from '../components/diff/model.ts';
 import { OpenWorkspaceFile, WorkspaceConversationHeader, type ConversationTabMetadata } from '../lib/workspace-context.ts';
-import { createStore } from "./current-fixture.ts";
+import { createStore } from '../lib/store.ts';
 import { workspaceKey } from '../lib/panes.ts';
 import { DEFAULT_KEYS } from '../lib/keys.ts';
 import { trackReloadInputs } from '../lib/reload-inputs.ts';

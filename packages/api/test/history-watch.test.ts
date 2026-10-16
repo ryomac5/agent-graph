@@ -58,9 +58,9 @@ test("長いターンの履歴は更新が十分以上止まっていても監�
   assert.ok(service.watchPaths().includes(path));
   const run = service.ledger.readSince(0, 100).find(fact => fact.kind === "run.created");
   assert.ok(run?.kind === "run.created" && run.payload);
-  service.ledger.append({ source: "hook", source_event_id: "idle-long", kind: "run.updated", subject: run.subject,
-    source_ts: new Date().toISOString(), confidence: "confirmed",
-    payload: { conversation_id: String(run.payload.conversation_id), generation: Number(run.payload.generation), last_evidence: { native_source: "claude", native_record: { type: "system", subtype: "turn_duration", parentUuid: "long" } } } });
+  service.ledger.append({ source: "hook", source_event_id: "idle-long", kind: "run.state_changed", subject: run.subject,
+    source_ts: new Date(Date.parse(timestamp) + 1000).toISOString(), confidence: "confirmed",
+    payload: { conversation_id: String(run.payload.conversation_id), generation: Number(run.payload.generation), state: "idle" } });
   service.catchUp();
   assert.ok(!service.watchPaths().includes(path));
 });

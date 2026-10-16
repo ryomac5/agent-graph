@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { ConversationPage } from '../pages/conversation/ConversationPage.tsx';
-import { createStore } from "./current-fixture.ts";
+import { createStore } from '../lib/store.ts';
 
 beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ generation: 0,

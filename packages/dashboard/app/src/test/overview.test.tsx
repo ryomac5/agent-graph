@@ -2,7 +2,7 @@ import { projectRoots } from './root-fixture.ts';
 import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
-import { createStore, type Row } from "./current-fixture.ts";
+import { createStore, type Row } from '../lib/store.ts';
 import { createProjectMatcher, resolveProjectId } from '../lib/projects.ts';
 import { HomePage } from '../pages/home/HomePage.tsx';
 import { buildDelegationTree } from '../pages/tree/model.ts';
@@ -99,7 +99,7 @@ it('shows roots and only their running descendants on the overview', () => {
  const section = screen.getByRole('region', { name: 'agent-graph' });
  expect(section.querySelector('.root-row')!.textContent).toContain('Unrelated terminal');
  expect(within(section).getByRole('link', { name: /Terminal root/ })).toBeTruthy();
- expect(within(section).getByRole('button', { name: /GPT-6.1 Sol · Implementation · Working$/ })).toBeTruthy();
+ expect(within(section).getByRole('button', { name: /GPT-6.1 Sol · Implementation · Running$/ })).toBeTruthy();
  expect(within(section).queryByText('Review the overview')).toBeNull(); expect(screen.queryByText('External conversations')).toBeNull();
  // 根でない会話は一覧に出さない。
  expect(screen.queryByText('Background')).toBeNull();

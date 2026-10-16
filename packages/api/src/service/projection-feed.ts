@@ -1,5 +1,3 @@
-import { CurrentState } from './current-state.ts';
-import type { SessionScan } from './session-scan.ts';
 import { VISIBLE_CONVERSATION_SQL } from '../usage/probe-path.ts';
 import { projectRoots, connectRootDelegations, type RootProjection, type RootConversation } from "../../../core/src/ledger/projections/roots.ts";
 import { DatabaseSync, type SQLOutputValue, type StatementSync } from "node:sqlite";
@@ -20,7 +18,6 @@ export interface ProjectionPatch {
   type: "patch"; from_seq: number; seq: number; generation: number;
   changes: Record<string, { upsert: Record<string, unknown>[]; remove: string[] }>;
   identities?: ScreenIdentities;
-  evaluated_at?: number;
   // 本文は履歴へ複製せず、購読する会話だけ SQLite から取得する。
   detail?: { messages: string[]; memberships: string[]; conversations: string[];
     membership_conversations: Record<string, string[]> };
@@ -46,22 +43,17 @@ function readMessageCursor(value: string | MessageCursor): string | MessageCurso
   return value;
 }
 const NAME_LENGTH = 160;
-const SCREEN_CACHE_KIB = 4 * 1024;
+const SCREEN_CACHE_KIB = 16 * 1024;
 const IDENTITY_BATCH_FACTS = 256;
 const LIST_TABLES = PROJECTION_TABLES.filter(table => table !== "messages" && table !== "message_memberships");
 const LIST_COLUMNS: Record<string, string> = {
   tasks: "id, name, project, state",
-  runs: "id, conversation_id, generation, state, started_ts, turn_started_ts, ended_ts, cause, last_evidence_ts, reason, repository_id, worktree_id, cwd, branch, launch, model, effort",
+  runs: "id, conversation_id, generation, state, started_ts, turn_started_ts, ended_ts, end_evidence, cause, last_evidence, last_evidence_ts, reason, repository_id, worktree_id, cwd, branch, launch, model, effort",
   artifacts: "id, run_id, version, repository_id, worktree_id, patch_hash, attribution, previous_artifact_id",
   // 承認は、何を許すかの要求の中身と、選べる判断がないと答えられない。
   approvals: "id, run_id, connection_id, conversation_id, request_id, state, available_decisions, decision, request, reason, artifact_id, patch_hash, requested_ts",
   findings: "id, artifact_id, version, file, start_line, end_line, severity, state",
 };
-const CONVERSATION_JOINS = `FROM conversations t LEFT JOIN tasks task ON task.id = t.task_id
-      LEFT JOIN api_project_resolution r ON r.id = coalesce(task.project, t.repository_id,
-        (SELECT repository_id FROM runs WHERE (conversation_id = t.id OR conversation_id IN (
-          SELECT id FROM api_conversation_ids WHERE canonical_id = t.id)) AND repository_id IS NOT NULL ORDER BY generation DESC LIMIT 1))
-      LEFT JOIN api_conversation_summaries s ON s.id = t.id`;
 function decodeFacts(rows: Record<string, unknown>[]): Fact[] {
   return rows.map(row => ({ ...row, payload: row.payload === null ? null : JSON.parse(String(row.payload)) } as Fact));
 }
@@ -83,7 +75,6 @@ function compactRelation(row: Record<string, unknown>): Record<string, unknown> 
 
 export class ProjectionFeed {
   private db: DatabaseSync;
-  readonly current: CurrentState;
   private catchUp: () => ProjectionState;
   private state: ProjectionState;
   private history: ProjectionPatch[] = [];
@@ -100,15 +91,13 @@ export class ProjectionFeed {
   private projectBaseline?: { projects: Map<string, Record<string, SQLOutputValue>>; references: Map<string, string> };
   private registeredRepositories = new Map<string, string[]>();
   private statements = new Map<string, StatementSync>();
-  private decisions = new Map<string, Record<string, unknown>>();
-  private decisionRows = new WeakMap<object, Record<string, unknown> & { id: string }>();
   private inputQueues = new Map<string, unknown[]>();
   private prepare(sql: string): StatementSync {
     let statement = this.statements.get(sql);
     if (!statement) { statement = this.db.prepare(sql); this.statements.set(sql, statement); }
     return statement;
   }
-  constructor(path: string, catchUp: () => ProjectionState, limit = PATCH_RETENTION, scans: readonly SessionScan[] = []) {
+  constructor(path: string, catchUp: () => ProjectionState, limit = PATCH_RETENTION) {
     if (!Number.isSafeInteger(limit) || limit < 1) throw new RangeError("Invalid patch retention");
     this.state = catchUp();
     this.observation = (this.state as ProjectionState & { observation?: ObservationProgress }).observation;
@@ -154,9 +143,6 @@ export class ProjectionFeed {
       this.cursor = Number(this.prepare("SELECT coalesce(max(cursor), 0) AS cursor FROM api_projection_changes").get()!.cursor);
       this.prepare("DELETE FROM api_projection_changes WHERE cursor <= ?").run(this.cursor);
       this.updateInputQueues();
-      this.current = new CurrentState(this.db, id => this.conversationId(id), true);
-      for (const scan of scans) this.current.recordScan(scan);
-      this.current.refresh(this.state.last_seq);
       this.roots = this.readRoots();
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); this.db.close(); throw error; }
@@ -287,12 +273,9 @@ export class ProjectionFeed {
         || (Number(row.source_time) - Number(best.source_time)
           || compareEventOrder(String(row.source_event_id ?? ""), String(best.source_event_id ?? "")) || compareEventOrder(String(row.id), String(best.id))) > 0
         ? row : best, undefined);
-    // 文字列の本文は SQLite 内で抜粋し、一覧のために長い本文を JS へ複製しない。
-    const last = latest && this.prepare(`SELECT
-      CASE WHEN json_type(body) = 'text' THEN substr(json_extract(body, '$'), 1, ${EXCERPT_LENGTH}) END AS excerpt,
-      CASE WHEN json_type(body) != 'text' THEN body END AS body FROM messages WHERE id = ?`).get(latest.id!);
-    const excerpt = String(last?.excerpt ?? (last?.body ? getMessageText(JSON.parse(String(last.body))) : "")).slice(0, EXCERPT_LENGTH);
-    this.prepare("INSERT OR REPLACE INTO api_conversation_summaries VALUES (?, ?, ?, ?)").run(id, count, latest?.source_ts ?? null, excerpt);
+    const last = latest && { source_ts: latest.source_ts, body: this.prepare("SELECT body FROM messages WHERE id = ?").get(latest.id!)?.body };
+    const excerpt = last?.body ? getMessageText(JSON.parse(String(last.body))).slice(0, EXCERPT_LENGTH) : "";
+    this.prepare("INSERT OR REPLACE INTO api_conversation_summaries VALUES (?, ?, ?, ?)").run(id, count, last?.source_ts ?? null, excerpt);
   }
   private readList(table: string, ids?: string[], after = "", includeHidden = false): Record<string, unknown>[] {
     const where = (ids ? "WHERE t.id IN (SELECT value FROM json_each(?))" : "WHERE t.id > ?")
@@ -307,19 +290,12 @@ export class ProjectionFeed {
       coalesce((SELECT json_extract(data, '$.hidden') FROM projection_records WHERE projection = 'conversations' AND entity_id = t.id), 0) AS hidden,
       r.project_id AS project, coalesce(r.state, 'unregistered') AS project_state,
       coalesce(s.message_count, 0) AS message_count, s.last_message_ts, coalesce(s.last_message_excerpt, '') AS last_message_excerpt
-      ${CONVERSATION_JOINS} ${where} ORDER BY t.id ${limit}`).iterate(parameter);
-      return Array.from(rows, (row): Record<string, unknown> => {
-        const current = this.current?.conversations.get(String(row.id));
-        return { id: row.id, provider: row.provider, origin: row.origin, type: row.type, task_id: row.task_id,
-          kit_name: row.kit_name, user_name: row.user_name, created_ts: row.created_ts, name: row.name,
-          name_is_provisional: row.name_is_provisional === 1, ai_title: row.ai_title ?? undefined, first_request_excerpt: row.first_request_excerpt,
-          cwd: row.cwd, hidden: row.hidden, project: row.project, project_state: row.project_state,
-          message_count: row.message_count, last_message_ts: row.last_message_ts, last_message_excerpt: row.last_message_excerpt,
-          state: current?.state ?? 'unknown', current_run_id: current?.id,
-          activity_rank: current?.activity_rank ?? 8,
-          last_activity_ts: current?.last_evidence_ts && String(current.last_evidence_ts) > String(row.last_message_ts ?? '') ? current.last_evidence_ts : row.last_message_ts,
-          pending_inputs: this.inputQueues.get(String(row.id)) ?? [] };
-      });
+      FROM conversations t LEFT JOIN tasks task ON task.id = t.task_id
+      LEFT JOIN api_project_resolution r ON r.id = coalesce(task.project, t.repository_id,
+        (SELECT repository_id FROM runs WHERE (conversation_id = t.id OR conversation_id IN (
+          SELECT id FROM api_conversation_ids WHERE canonical_id = t.id)) AND repository_id IS NOT NULL ORDER BY generation DESC LIMIT 1))
+      LEFT JOIN api_conversation_summaries s ON s.id = t.id ${where} ORDER BY t.id ${limit}`).all(parameter);
+      return rows.map(row => ({ ...row, pending_inputs: this.inputQueues.get(String(row.id)) ?? [], name_is_provisional: row.name_is_provisional === 1 }));
     }
     // 試行は画面が木と 1 行の要約に使う欄だけを配り、受け入れの出力や報告の本文は配らない。
     if (table === "delegations") return this.prepare(`SELECT t.id, t.request_id, t.kit, t.parent_run_id, t.role, t.title, t.attempt, t.state,
@@ -333,19 +309,13 @@ export class ProjectionFeed {
     if (table === "tasks") return this.prepare(`SELECT t.id, substr(t.name, 1, ${NAME_LENGTH}) AS name, coalesce(r.project_id, t.project) AS project,
       coalesce(r.state, 'unregistered') AS project_state, t.state FROM tasks t
       LEFT JOIN api_project_resolution r ON r.id = t.project ${where} ORDER BY t.id ${limit}`).all(parameter);
-    const statement = this.prepare(`SELECT ${LIST_COLUMNS[table] ?? "*"} FROM ${table} t ${where} ORDER BY t.id ${limit}`);
-    if (table === 'runs') return Array.from(statement.iterate(parameter), row => this.stateRow(row));
-    const rows = statement.all(parameter);
+    const rows = this.prepare(`SELECT ${LIST_COLUMNS[table] ?? "*"} FROM ${table} t ${where} ORDER BY t.id ${limit}`).all(parameter);
     return table === 'relations' ? rows.map(compactRelation) : rows;
   }
-  refresh(now = Date.now()): ProjectionPatch | "resync" | undefined {
+  refresh(): ProjectionPatch | "resync" | undefined {
     const state = this.catchUp();
     this.observation = (state as ProjectionState & { observation?: ObservationProgress }).observation;
-    if (state.generation === this.state.generation && state.last_seq === this.state.last_seq) {
-      const changed = this.current.refresh(state.last_seq, now);
-      if (!changed.length) return;
-      return this.statePatch(changed);
-    }
+    if (state.generation === this.state.generation && state.last_seq === this.state.last_seq) return;
     const previous = this.state;
     const cursor = this.cursor;
     const identities = { conversations: { ...this.identities.conversations }, runs: { ...this.identities.runs } };
@@ -363,7 +333,7 @@ export class ProjectionFeed {
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
     try {
-      const patch = this.refreshProjection(stored, changes, now);
+      const patch = this.refreshProjection(stored, changes);
       const nextCursor = Number(changes.at(-1)?.cursor ?? cursor);
       // 成功した組だけ消す。途中の失敗と並行追記は次回に残す。
       this.prepare("DELETE FROM api_projection_changes WHERE cursor <= ?").run(nextCursor);
@@ -413,7 +383,7 @@ export class ProjectionFeed {
       this.historyBytes -= this.historySizes.shift()!;
     }
   }
-  private refreshProjection(state: ProjectionState, changes: Record<string, SQLOutputValue>[], now: number): ProjectionPatch | "resync" {
+  private refreshProjection(state: ProjectionState, changes: Record<string, SQLOutputValue>[]): ProjectionPatch | "resync" {
     const previous = this.state;
     this.state = state;
     const groups = new Map<string, Set<string>>();
@@ -482,27 +452,15 @@ export class ProjectionFeed {
     const resetQueues = state.generation !== previous.generation || state.last_seq < previous.last_seq
       || Object.keys(identities?.conversations ?? {}).length > 0;
     this.updateInputQueues(resetQueues ? undefined : [...queueIds]);
-    if (state.generation !== previous.generation) this.current.invalidateFacts();
-    const changedStates = this.current.refresh(state.last_seq, now);
-    this.decisions.clear();
     groups.set("conversations", ids);
     if (state.generation !== previous.generation || state.last_seq < previous.last_seq) {
       this.roots = this.readRoots();
       return "resync";
     }
     const patch: ProjectionPatch = { type: "patch", from_seq: previous.last_seq, seq: state.last_seq,
-      generation: state.generation, evaluated_at: this.current.evaluatedAt, changes: {}, ...(identities ? { identities } : {}),
+      generation: state.generation, changes: {}, ...(identities ? { identities } : {}),
       detail: { messages, memberships: [...groups.get("message_memberships") ?? []], conversations: [...conversations],
         membership_conversations: membershipConversations } };
-    if (changedStates.length) {
-      const runs = groups.get('runs') ?? new Set<string>();
-      for (const id of changedStates) {
-        runs.add(id);
-        const row = this.current.runs.get(id);
-        if (row) ids.add(String(row.conversation_id));
-      }
-      groups.set('runs', runs);
-    }
     for (const table of LIST_TABLES) {
       const changed = [...groups.get(table) ?? []];
       if (!changed.length) continue;
@@ -541,8 +499,6 @@ export class ProjectionFeed {
       patch.identities = { conversations: { ...referenced.conversations, ...identities?.conversations },
         runs: { ...referenced.runs, ...identities?.runs } };
     }
-    // 他の表と同じく、変わった判定がある patch にだけ載せる。空の表を変更として配らない。
-    if (this.decisions.size) patch.changes.state_decisions = { upsert: [...this.decisions.values()], remove: [] };
     return patch;
   }
   replay(seq: number, generation?: number): ProjectionPatch[] | undefined {
@@ -552,33 +508,34 @@ export class ProjectionFeed {
   }
   private readRoots(): RootProjection[] {
     const conversations: RootConversation[] = [];
-    const rows = this.prepare(`SELECT t.id, t.type, t.user_name, substr(t.name, 1, ${NAME_LENGTH}) AS name, t.kit_name, t.created_ts,
-      coalesce((SELECT json_extract(data, '$.hidden') FROM projection_records WHERE projection = 'conversations' AND entity_id = t.id), 0) AS hidden,
-      r.project_id AS project, s.last_message_ts AS last_activity_ts ${CONVERSATION_JOINS} ORDER BY t.id`).iterate();
-    for (const raw of rows) {
-      const row: RootConversation = { id: String(raw.id), type: raw.type as string, user_name: raw.user_name as string | null,
-        name: raw.name as string | null, kit_name: raw.kit_name as string | null, created_ts: raw.created_ts as string | null,
-        hidden: Boolean(raw.hidden), project: raw.project as string | null, last_activity_ts: raw.last_activity_ts as string | null };
-      const run = this.current?.conversations.get(row.id);
-      row.state = run ? String(run.state) : 'unknown';
-      row.activity_rank = Number(run?.activity_rank ?? 8);
-      const ts = run?.last_evidence_ts;
-      if (typeof ts === 'string' && ts > (row.last_activity_ts ?? '')) row.last_activity_ts = ts;
-      conversations.push(row);
+    let after = "";
+    for (;;) {
+      const page = this.readList("conversations", undefined, after, true);
+      // 根の投影に使わない一覧の列と抜粋を、全会話分の中間配列へ複製しない。
+      for (const row of page) conversations.push({ id: String(row.id), type: row.type as string, hidden: Boolean(row.hidden),
+        user_name: row.user_name as string | null, name: row.name as string | null, kit_name: row.kit_name as string | null, project: row.project as string | null,
+        created_ts: row.created_ts as string | null, last_activity_ts: row.last_message_ts as string | null, state: "unknown" });
+      if (page.length < LIST_PAGE_SIZE) break;
+      after = String(page.at(-1)!.id);
+    }
+    const latest = new Map<string, Record<string, unknown>>();
+    for (const row of this.prepare("SELECT conversation_id, generation, state, last_evidence_ts, ended_ts, started_ts FROM runs ORDER BY generation").iterate()) {
+      latest.set(this.conversationId(String(row.conversation_id)), row);
+    }
+    for (const row of conversations) {
+      const run = latest.get(row.id);
+      row.state = run ? String(run.state) : "unknown";
+      const ts = run?.last_evidence_ts ?? run?.ended_ts ?? run?.started_ts;
+      if (typeof ts === "string" && ts > (row.last_activity_ts ?? "")) row.last_activity_ts = ts;
     }
     // 名前を持つ subject の履歴だけを読む。解除の null と部分訂正の継承も残す。
-    // seq の範囲から SQLite が全事実の rowid 走査を選ばないよう、起動時に作った名前の部分索引を指定する。
     const facts = decodeFacts(this.prepare(`SELECT * FROM facts WHERE subject IN (
-      SELECT subject FROM facts INDEXED BY api_root_name_subject_seq WHERE kind GLOB 'conversation.*'
+      SELECT subject FROM facts WHERE kind GLOB 'conversation.*'
         AND json_type(payload, '$.user_name') IS NOT NULL AND seq <= ?)
       AND seq <= ? AND kind GLOB 'conversation.*' AND kind != 'conversation.input_queue_changed'`)
       .all(this.state.last_seq, this.state.last_seq));
-    const relations = this.prepare("SELECT from_id, to_id, type, active, confidence FROM relations").all() as { from_id: string; to_id: string; type: string; active: number; confidence: string }[];
-    const roots = projectRoots(conversations, relations, facts);
-    for (const root of roots) Object.assign(root, { activity_rank: this.current.conversations.get(root.current_conversation_id)?.activity_rank ?? 8 });
-    return roots;
+    return projectRoots(conversations, this.prepare("SELECT from_id, to_id, type, active, confidence FROM relations").all() as { from_id: string; to_id: string; type: string; active: number; confidence: string }[], facts);
   }
-
   private rootDelegations(rows: Record<string, unknown>[]): Record<string, unknown>[] {
     return rows.map(row => {
       const kit = typeof row.kit === "string" ? JSON.parse(row.kit) : row.kit;
@@ -610,67 +567,11 @@ export class ProjectionFeed {
     }
     return compactScreenIdentities(identities);
   }
-  private stateRow(row: Record<string, unknown>): Record<string, unknown> {
-    const current = this.current.runs.get(this.identities.runs[String(row.id)] ?? String(row.id));
-    if (!current) return { ...row, state: 'unknown' };
-    const decision = current.decision as Record<string, unknown>;
-    // 判定は実行の間で共有され、同じ行にも新しい判定が入る。写しは判定ごとに作る。
-    let proof = this.decisionRows.get(decision);
-    if (!proof || proof.id !== String(current.decision_id)) {
-      // 評価・走査の時刻は配信に残し、識別には走査結果の中身を使う。
-      const { evaluatedAt, ...content } = decision;
-      proof = { id: String(current.decision_id), ...content };
-      this.decisionRows.set(decision, proof);
-    }
-    this.decisions.set(proof.id, proof);
-    // 識別の別名は元の行に残し、同じ判定の全体は一度だけ配る。
-    return { id: row.id, conversation_id: row.conversation_id, generation: row.generation,
-      started_ts: row.started_ts, ended_ts: row.ended_ts, cause: row.cause, repository_id: row.repository_id,
-      worktree_id: row.worktree_id, cwd: row.cwd, branch: row.branch, launch: row.launch, model: row.model, effort: row.effort,
-      state: current.state, turn_started_ts: current.turn_started_ts ?? undefined, last_evidence_ts: current.last_evidence_ts ?? undefined,
-      activity_rank: current.activity_rank, decision_id: proof.id };
-  }
-  recordScan(scan: SessionScan): void { this.current.recordScan(scan); }
-  currentPatch(): ProjectionPatch {
-    this.decisions.clear();
-    return { type: 'patch', from_seq: this.state.last_seq, seq: this.state.last_seq, generation: this.state.generation,
-      evaluated_at: this.current.evaluatedAt, changes: {
-        runs: { upsert: Array.from(this.prepare(`SELECT ${LIST_COLUMNS.runs} FROM runs ORDER BY id`).iterate(), row => this.stateRow(row)), remove: [] },
-        state_decisions: { upsert: [...this.decisions.values()], remove: [] },
-        conversations: { upsert: this.readList('conversations', [...this.current.conversations.keys()]), remove: [] },
-        roots: { upsert: this.roots as unknown as Record<string, unknown>[], remove: [] },
-      } };
-  }
-  /** 時刻と走査だけで変わった実行と、その会話と root だけを配る。変わらない行は作り直さない。 */
-  private statePatch(changedRuns: string[]): ProjectionPatch {
-    this.decisions.clear();
-    const changed = new Set(changedRuns);
-    const runIds = new Set(changed);
-    for (const [alias, id] of Object.entries(this.identities.runs)) if (changed.has(id)) runIds.add(alias);
-    const runs = this.readList('runs', [...runIds]).filter(row => changed.has(this.identities.runs[String(row.id)] ?? String(row.id)));
-    const conversationIds = new Set<string>();
-    for (const id of changed) { const row = this.current.runs.get(id); if (row) conversationIds.add(String(row.conversation_id)); }
-    const previousRoots = new Map(this.roots.map(row => [row.id, JSON.stringify(row)]));
-    this.roots = this.readRoots();
-    const current = new Set(this.roots.map(row => row.id));
-    const roots = { upsert: this.roots.filter(row => JSON.stringify(row) !== previousRoots.get(row.id)) as unknown as Record<string, unknown>[],
-      remove: [...previousRoots.keys()].filter(id => !current.has(id)) };
-    const changes: ProjectionPatch['changes'] = {
-      runs: { upsert: runs, remove: [] },
-      state_decisions: { upsert: [...this.decisions.values()], remove: [] },
-      conversations: { upsert: conversationIds.size ? this.readList('conversations', [...conversationIds]) : [], remove: [] },
-    };
-    if (roots.upsert.length || roots.remove.length) changes.roots = roots;
-    return { type: 'patch', from_seq: this.state.last_seq, seq: this.state.last_seq, generation: this.state.generation,
-      evaluated_at: this.current.evaluatedAt, changes };
-  }
   hasRoot(id: string): boolean { return this.roots.some(root => root.id === id); }
   snapshot() {
-    this.decisions.clear();
     const projection = Object.fromEntries(LIST_TABLES.map(table => [table, this.readList(table)]));
     projection.roots = this.roots.slice(0, LIST_PAGE_SIZE) as unknown as Record<string, unknown>[];
     projection.delegations = this.rootDelegations(projection.delegations);
-    projection.state_decisions = [...this.decisions.values()];
     projection.projects = this.prepare("SELECT * FROM api_projects ORDER BY id").all();
     const pages = Object.fromEntries(LIST_TABLES.map(table => [table, {
       total: Number(this.prepare(`SELECT count(*) AS count FROM ${table} t${table === 'conversations' ? ` WHERE ${VISIBLE_CONVERSATION_SQL}` : ''}`).get()!.count),
@@ -678,7 +579,7 @@ export class ProjectionFeed {
     }]));
     pages.roots = { total: this.roots.length, next: this.roots.length >= LIST_PAGE_SIZE ? this.roots[LIST_PAGE_SIZE - 1].id : null };
     const identities = compactScreenIdentities(this.identities);
-    return { seq: this.state.last_seq, generation: this.state.generation, evaluated_at: this.current.evaluatedAt, projection, pages, identities,
+    return { seq: this.state.last_seq, generation: this.state.generation, projection, pages, identities,
       ...(this.observation ? { observation: this.observation } : {}) };
   }
   list(table: string, after = "") {
@@ -688,11 +589,10 @@ export class ProjectionFeed {
         identities: this.readReferencedIdentities(rows as unknown as Record<string, unknown>[]), next: rows.length === LIST_PAGE_SIZE ? rows.at(-1)!.id : null };
     }
     if (!(LIST_TABLES as readonly string[]).includes(table)) throw new RangeError("Invalid list table");
-    this.decisions.clear();
     const page = this.readList(table, undefined, after);
     const rows = table === "delegations" ? this.rootDelegations(page) : page;
     return { seq: this.state.last_seq, generation: this.state.generation, rows,
-      identities: this.readReferencedIdentities(rows), state_decisions: [...this.decisions.values()],
+      identities: this.readReferencedIdentities(rows),
       next: rows.length === LIST_PAGE_SIZE ? rows.at(-1)!.id : null };
   }
   conversation(id: string, after = "", window?: { latest?: boolean; before?: string | MessageCursor; message?: string; edits?: boolean }) {

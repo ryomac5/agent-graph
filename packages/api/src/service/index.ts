@@ -1,5 +1,3 @@
-import { CurrentState } from './current-state.ts';
-import { expandNativeEvidence } from '../../../core/src/ledger/native-evidence.ts';
 import { observeCodexTitles } from "../observe/codex/titles.ts";
 import { readRemoteMetadata, observeRemoteStatus } from '../remote/observation.ts';
 import { cacheRoot } from '../remote/index.ts';
@@ -19,6 +17,10 @@ import { claudeTitleBackfillEventId } from "../observe/claude/titles.ts";
 import { CLAUDE_HISTORY_DETAILS_VERSION, CLAUDE_MESSAGE_FLAGS_VERSION, CLAUDE_QUEUED_COMMANDS_VERSION } from "../observe/claude/index.ts";
 import { CODEX_HISTORY_DETAILS_VERSION } from "../observe/codex/index.ts";
 import { registerLedgerDatabase } from "../../../core/src/ledger/repository.ts";
+import { createSessionQuery } from "../observe/session-query.ts";
+import { createClaudeSessionObserver } from "../observe/claude/sessions.ts";
+import { createCodexSessionObserver } from "../observe/codex/sessions.ts";
+import type { CodexProcessReader } from "../observe/codex/sessions.ts";
 import { createLocationResolver } from "../observe/location.ts";
 import { createKitObserver } from "../observe/kit/index.ts";
 import { hookOutboxPath, ledgerDbPath } from "../paths.ts";
@@ -33,7 +35,7 @@ import { openReadLedger } from "./read-ledger.ts";
 import { rebuildInitialProjection } from "./initial-projection.ts";
 
 const PROJECTION_CACHE_KIB = 64 * 1024;
-const OBSERVATION_CONTEXT_CACHE_KIB = 4 * 1024;
+const OBSERVATION_CONTEXT_CACHE_KIB = 8 * 1024;
 const PROJECTION_BATCH_FACTS = 8;
 const SNAPSHOT_READ_FACTS = 1024;
 const INITIAL_PROJECTION_FACTS = 4096;
@@ -51,6 +53,7 @@ export interface ObservationOptions {
   writerOnly?: boolean;
   readerOnly?: boolean;
   projectInWorker?: boolean;
+  codexProcessReader?: CodexProcessReader;
   onProgress?: (progress: { processed: number; total: number }) => void;
 }
 export interface IngestionReport {
@@ -206,12 +209,9 @@ export function openObservationService(options: ObservationOptions = {}) {
   }
   scheduleProjection();
   let decorate = (input: FactInput): FactInput => input;
-  let captureConflict: ((input: FactInput) => void) | undefined;
   const projectedLedger: Ledger = { ...ledger, append(input) {
     if (options.readerOnly) throw new Error("Ledger writes belong to the observation worker");
-    const result = ledger.append(decorate(input));
-    if (result.status === 'conflict') captureConflict?.(input);
-    return result;
+    return ledger.append(decorate(input));
   } };
   registerLedgerDatabase(projectedLedger, projectionDb);
   const snapshot: Fact[] = [];
@@ -269,12 +269,21 @@ export function openObservationService(options: ObservationOptions = {}) {
   let changedHistoryPaths: ReadonlySet<string> | undefined;
   const readDirectFacts = prepareDirectFacts(projectionDb);
   const readDirectLocations = projectionDb.prepare("SELECT 1 FROM facts WHERE seq > ? AND seq <= ? AND kind GLOB 'conversation.*' AND json_type(payload, '$.cwd') = 'text' LIMIT 1");
-  let watchState: CurrentState | undefined;
+  const readWatchConversations = projectionDb.prepare(`SELECT c.provider, c.native_id FROM runs r
+    JOIN conversations c ON r.conversation_id IN (c.id, c.provider || ':' || c.native_id)
+    WHERE r.state IN ('running', 'waiting_approval', 'waiting_input') AND NOT EXISTS (
+      SELECT 1 FROM runs newer WHERE newer.conversation_id IN (c.id, c.provider || ':' || c.native_id)
+        AND newer.generation > r.generation)`);
   const list = createDirectoryReader();
   const listOutbox = createDirectoryReader(false);
   const kit = createKitObserver(scanLedger, checkpoints, refreshSnapshot);
   const claudeSessionsDirectory = join(env.CLAUDE_CONFIG_DIR ?? join(home, ".claude"), "sessions");
-
+  const sessionQuery = createSessionQuery(scanLedger, projectionDb, !options.readerOnly);
+  let remoteConversations = new Set<string>();
+  const localQuery = { ...sessionQuery, read: (provider: 'claude' | 'codex') => sessionQuery.read(provider).filter(run => !remoteConversations.has(run.conversation_id)) };
+  const observeClaudeSessions = createClaudeSessionObserver(scanLedger, claudeSessionsDirectory, localQuery);
+  const observeCodexSessions = createCodexSessionObserver(scanLedger, env.CODEX_HOME ?? join(home, ".codex"),
+    options.codexProcessReader, localQuery);
   let rollout: ReturnType<typeof createIncrementalRolloutReader> | undefined;
   function hasChanged(path: string): boolean {
     let stat;
@@ -320,75 +329,27 @@ export function openObservationService(options: ObservationOptions = {}) {
     contextAttempted.add(path);
     return !readLocated().has(`rollout-codex:${codexLocationEventId(nativeId)}`);
   }
-  const checkedConflicts = new Set<string>();
-  type HistoryConflict = Extract<Fact, { kind: 'observation.unsupported' }>;
-  let historyConflicts = new Map<string, HistoryConflict[]>();
-  let pendingConflicts = new Set<string>();
-  // snapshot は追記だけなので、競合の記録と置き換えの id は前回の続きから読む。毎周期の全件走査で一時の割り当てを作らない。
-  const historyConflictFacts: HistoryConflict[] = [];
-  const supersededFacts = new Set<string>();
-  let conflictsThrough = 0;
-  function readHistoryConflicts(): Map<string, HistoryConflict[]> {
-    for (; conflictsThrough < snapshot.length; conflictsThrough += 1) {
-      const fact = snapshot[conflictsThrough];
-      if (fact.supersedes) supersededFacts.add(fact.supersedes);
-      if (fact.kind === 'observation.unsupported' && (String(fact.payload?.reason).startsWith('Conflicting history')
-        || fact.payload?.reason === 'History conflict resolved by full reread')) historyConflictFacts.push(fact);
-    }
-    const byPath = new Map<string, HistoryConflict[]>();
-    for (const fact of historyConflictFacts) if (!supersededFacts.has(fact.fact_id)) {
-      const path = String(fact.payload?.file_path), group = byPath.get(path) ?? [];
-      group.push(fact); byPath.set(path, group);
-    }
-    return byPath;
-  }
+  const recordedConflicts = new Set<string>();
   function observeFileBatch<T>(path: string, source: "rollout-codex" | "transcript-claude",
-    operation: () => T, readRejected: (result: T) => AppendResult[], isComplete: (result: T) => boolean): T {
-    const previous = historyConflicts.get(path) ?? [];
-    const fullRead = pendingConflicts.has(path);
-    const rows: { at: string; uuid?: string; offset?: number }[] = [];
-    captureConflict = input => {
-      for (const fact of expandNativeEvidence(input as Fact)) {
-        const payload = fact.payload as Record<string, unknown>;
-        const last = payload.last_evidence as Record<string, unknown> | undefined;
-        const native = last?.native_record as Record<string, unknown> | undefined;
-        const uuid = native?.uuid ?? (source === 'transcript-claude' && fact.kind.startsWith('message.') ? payload.native_id : undefined);
-        const offset = source === 'rollout-codex' && fact.cursor ? JSON.parse(fact.cursor).offset : undefined;
-        rows.push({ at: fact.source_ts, ...(typeof uuid === 'string' ? { uuid } : {}), ...(typeof offset === 'number' ? { offset } : {}) });
-      }
-    };
-    let result: T;
-    try { result = buffered.batch(operation); }
-    finally { captureConflict = undefined; }
-    const conflicts = readRejected(result);
-    const locations = [...new Map(rows.map(row => [JSON.stringify(row), row])).values()];
-    const reason = conflicts.length ? 'Conflicting history; existing facts retained' : 'History conflict resolved by full reread';
-    // 差分の成功では古い競合を消さない。全件再読の結果でだけ置き換える。
-    const reread = fullRead && isComplete(result);
-    if (conflicts.length || reread) {
-      const targets = reread ? previous : previous.filter(fact => fact.payload?.reason === 'History conflict resolved by full reread');
-      for (const prior of targets.length ? targets : [undefined]) {
-        if (prior && conflicts.length && JSON.stringify(prior.payload?.rows) === JSON.stringify(locations)
-          && prior.payload?.count === conflicts.length) continue;
-        const input = { source,
-          source_event_id: JSON.stringify(['history-conflict', path, prior?.fact_id ?? null, locations, reason]),
-          kind: 'observation.unsupported' as const, subject: `observation:history-conflict:${path}` as const,
-          source_ts: new Date().toISOString(), confidence: 'confirmed' as const,
-          ...(prior ? { supersedes: prior.fact_id } : {}),
-          payload: { source_kind: source, file_path: path, format_name: 'jsonl', format_version: 'unknown',
-            reason, count: conflicts.length, rows: locations } };
-        const appended = ledger.append(input);
-        checkedConflicts.add(appended.fact_id);
-      }
-      if (reread) for (const prior of previous) checkedConflicts.add(prior.fact_id);
+    operation: () => T, readConflicts: (result: T) => AppendResult[]): T {
+    // 衝突した事実は台帳が拒否する。同じファイルの成功した追記は保持する。
+    const result = buffered.batch(operation);
+    const conflicts = readConflicts(result);
+    if (conflicts.length && !recordedConflicts.has(path)) {
+      const input: Extract<FactInput, { kind: "observation.unsupported" }> & { payload: { count: number } } = {
+        source, source_event_id: JSON.stringify(["history-conflict", path]), kind: "observation.unsupported",
+        subject: `observation:history-conflict:${path}`, source_ts: new Date().toISOString(), confidence: "confirmed",
+        payload: { source_kind: source, file_path: path, format_name: "jsonl", format_version: "unknown",
+          reason: "Conflicting history; existing facts retained", count: conflicts.length },
+      };
+      ledger.append(input);
+      recordedConflicts.add(path);
     }
     return result;
   }
   let ingesting = false;
   let appendUi: UiAppender = (input) => projectedLedger.append(input);
   return {
-    sessionDirectory: claudeSessionsDirectory,
-    codexHome: env.CODEX_HOME ?? join(home, ".codex"),
     ledger: projectedLedger, dbPath, outbox: hookOutboxPath(env, home), catchUp, batch: buffered.batch,
     async appendUi(input: UiFactInput): Promise<AppendResult> {
       if (input.source !== "ui") throw new Error("Only ui facts may be appended from the main thread");
@@ -397,23 +358,12 @@ export function openObservationService(options: ObservationOptions = {}) {
     setUiAppender(append: UiAppender) { appendUi = append; },
     checkpoint: buffered.checkpoint,
     watchPaths() {
-      if (!historyFiles.size) return [];
       const seq = Number(readProjectionState.get()?.last_seq ?? 0);
       if (!watchPathsDirty && seq === watchProjectionSeq && Date.now() < watchExpires) return selectedWatchPaths;
       watchPathsDirty = false;
       watchProjectionSeq = seq;
       watchExpires = Infinity;
-      watchState ??= new CurrentState(projectionDb, id => {
-        const row = projectionDb.prepare("SELECT id FROM conversations WHERE id = ? OR provider || ':' || native_id = ?").get(id, id);
-        return String(row?.id ?? id);
-      }, false);
-      watchState.refresh(seq);
-      watchExpires = watchState.reevaluateAt;
-      const active = new Set([...watchState.conversations.values()].filter(row => ['running', 'waiting_approval', 'waiting_input'].includes(String(row.state)))
-        .flatMap(row => {
-          const c = projectionDb.prepare('SELECT provider, native_id FROM conversations WHERE id = ?').get(String(row.conversation_id));
-          return c ? [`${c.provider}:${c.native_id}`] : [];
-        }));
+      const active = new Set(readWatchConversations.all().map(row => `${row.provider}:${row.native_id}`));
       const activePaths = new Set<string>();
       if (active.size) for (const path of historyFiles) {
         const meta = rollouts.get(path)?.context[0]?.value as { type?: string; id?: string; payload?: { id?: string } } | undefined;
@@ -464,32 +414,16 @@ export function openObservationService(options: ObservationOptions = {}) {
       const previousCheckpoints = new Map(checkpoints);
       try {
         const changes = changedHistoryPaths;
-        const fileChanges = new Map<string, boolean>();
-        const readChanged = (path: string): boolean => {
-          if (!fileChanges.has(path)) fileChanges.set(path, hasChanged(path));
-          return fileChanges.get(path)!;
-        };
-        const start = Number(readLastSeq.get()!.seq ?? 0);
-        if (!changes) ingestOutbox(scanLedger, listOutbox(hookOutboxPath(env, home),
-          name => !name.startsWith(".") && name.endsWith(".json")), buffered.batch);
         refreshSnapshot();
-        historyConflicts = readHistoryConflicts();
-        pendingConflicts = new Set([...historyConflicts].filter(([path, facts]) => facts.some(fact => String(fact.payload?.reason).startsWith('Conflicting history')
-          && (readChanged(path) || !checkedConflicts.has(fact.fact_id)))).map(([path]) => path));
-        // 部品が開始 cursor を読む前に、対象ファイルだけ先頭へ戻す。
-        for (const path of pendingConflicts) {
-          const start = { path, identity: 'conflict-recheck', offset: 0, size: 0, hash: createHash('sha256').digest('hex') };
-          checkpoints.set(path, start);
-          rollouts.set(path, { cursor: start, context: [] });
-        }
         const codex = rollout ??= createIncrementalRolloutReader(scanLedger, rollouts);
         decorate = codex.decorate;
+        const start = Number(readLastSeq.get()!.seq ?? 0);
         const claudeProjects = join(env.CLAUDE_CONFIG_DIR ?? join(home, ".claude"), "projects");
         const remoteProjects = join(cacheRoot(env, home), "remote");
         const remoteFiles = changes ? cachedRemoteFiles : list(remoteProjects, name => name.endsWith(".jsonl"));
         const claudeFiles = changes ? cachedClaudeFiles : [...remoteFiles.filter(path => !path.includes("/codex/")), ...list(claudeProjects, (name) => name.endsWith(".jsonl"))];
         const claudePaths = claudeFiles.filter((path) => changes
-          ? changes.has(path) && readChanged(path) || pendingConflicts.has(path) : pendingConflicts.has(path) || readChanged(path) || !checkpoints.get(path)?.claudeUuidChain || needsClaudeContext(path)
+          ? changes.has(path) && hasChanged(path) : hasChanged(path) || needsClaudeContext(path)
             || checkpoints.get(path)?.claudeQueuedCommandsVersion !== CLAUDE_QUEUED_COMMANDS_VERSION
             || checkpoints.get(path)?.claudeHistoryDetailsVersion !== CLAUDE_HISTORY_DETAILS_VERSION
             || checkpoints.get(path)?.claudeMessageFlagsVersion !== CLAUDE_MESSAGE_FLAGS_VERSION);
@@ -501,7 +435,7 @@ export function openObservationService(options: ObservationOptions = {}) {
           historyFiles = nextFiles;
           cachedClaudeFiles = claudeFiles; cachedCodexFiles = codexFiles; cachedRemoteFiles = remoteFiles;
         }
-        const codexPaths = new Set(codexFiles.filter(path => (!changes || changes.has(path) || pendingConflicts.has(path)) && (pendingConflicts.has(path) || readChanged(path) || !checkpoints.get(path)?.nativeStateEvidence
+        const codexPaths = new Set(codexFiles.filter(path => (!changes || changes.has(path)) && (hasChanged(path)
           || !changes && checkpoints.get(path)?.codexHistoryDetailsVersion !== CODEX_HISTORY_DETAILS_VERSION)));
         const codexLocations = codexFiles.filter((path) => codexPaths.has(path) || !changes && needsCodexLocation(path));
         let processed = 0;
@@ -516,12 +450,12 @@ export function openObservationService(options: ObservationOptions = {}) {
           if (total) buffered.batch(() => {
             if (claudePaths.length) {
               observeClaudeHistories(scanLedger, claudeProjects, snapshot, trackBatch, claudePaths, checkpoints, locate,
-                (path, operation) => observeFileBatch(path, "transcript-claude", () => trackBatch(operation), result => result.conflicts, result => result.pendingBytes === 0));
+                (path, operation) => observeFileBatch(path, "transcript-claude", () => trackBatch(operation), result => result.conflicts));
             }
             if (codexPaths.size) observeCodex(scanLedger,
               { codexHome, reader: codex.reader, paths: codexPaths, titleCursors: checkpoints, observeTitles: !changes,
                 fileBatch: (path, operation) => observeFileBatch(path, "rollout-codex", () => trackBatch(operation),
-                  results => results.filter(result => result.status === "conflict"), () => codex.isComplete(path)) });
+                  results => results.filter(result => result.status === "conflict")) });
           });
           if (!changes && !codexPaths.size) {
             const titles = buffered.batch(() => observeCodexTitles(scanLedger, codexHome, new Date().toISOString(), undefined, checkpoints));
@@ -564,12 +498,15 @@ export function openObservationService(options: ObservationOptions = {}) {
         }
         let aliases = { pending: 0, deferred: 0 };
         if (!changes) {
+          ingestOutbox(scanLedger, listOutbox(hookOutboxPath(env, home),
+            (name) => !name.startsWith(".") && name.endsWith(".json")), buffered.batch);
+          refreshSnapshot();
           aliases = kit.observe();
           refreshSnapshot();
-          buffered.batch(() => observeRemoteStatus(scanLedger, remoteFiles, snapshot));
-
+          remoteConversations = buffered.batch(() => observeRemoteStatus(scanLedger, remoteFiles, snapshot));
+          if (existsSync(claudeSessionsDirectory)) buffered.batch(() => observeClaudeSessions());
           refreshSnapshot();
-
+          buffered.batch(() => observeCodexSessions());
         }
         const changedCheckpoints = [...checkpoints].filter(([path, cursor]) => previousCheckpoints.get(path) !== cursor);
         if (changedCheckpoints.some(([path]) => historyFiles.has(path))) watchPathsDirty = true;
@@ -594,6 +531,6 @@ export function openObservationService(options: ObservationOptions = {}) {
         if (!options.writerOnly) catchUp();
       }
     },
-    close() { clearImmediate(projectionTimer); projectionDb.close(); ledger.close(); },
+    close() { observeCodexSessions.close(); clearImmediate(projectionTimer); projectionDb.close(); ledger.close(); },
   };
 }

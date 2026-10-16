@@ -5,9 +5,14 @@
       "conversation_id": "observed",
       "generation": 1,
       "state": "unknown",
+      "reason": "process_list_failed",
       "pid": 202,
       "start_fingerprint": "observed-process",
-      "reason": "process_list_failed"
+      "last_evidence": {
+        "fact_id": "s11-start",
+        "kind": "run.created"
+      },
+      "last_evidence_ts": "2026-01-01T00:00:00.000Z"
     }
   ],
   "connections": [

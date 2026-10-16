@@ -6,7 +6,7 @@ import { App } from '../App.tsx';
 import { ChangesPage } from '../pages/changes/ChangesPage.tsx';
 import { detectLanguage, highlightLines, type Token } from '../pages/files/highlight.ts';
 import type { FileEntry, GitMark, ReadResult } from '../pages/files/model.ts';
-import { createStore } from "./current-fixture.ts";
+import { createStore } from '../lib/store.ts';
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 

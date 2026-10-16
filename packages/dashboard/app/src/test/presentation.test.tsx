@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { App } from '../App.tsx';
-import { createStore, type Row } from "./current-fixture.ts";
+import { createStore, type Row } from '../lib/store.ts';
 import { approvalOutcome, evidenceLabel, projectLabel, readApprovalRequest, runLabel, summarizeApproval, worktreeLabel } from '../lib/format.ts';
 import { HomePage } from '../pages/home/HomePage.tsx';
 import { WorkspacePage } from '../pages/workspace/WorkspacePage.tsx';
@@ -47,7 +47,7 @@ it.each(['approve', 'request_changes', 'reject'])('formats %s review output cons
   const workspace = render(<MemoryRouter><WorkspacePage target={target} client={client} project={REPO}/></MemoryRouter>);
   expect(within(screen.getByRole('region', { name: 'Conversations' })).queryByText(name)).toBeNull();
   fireEvent.click(within(screen.getByRole('complementary', { name: 'Panel' })).getByRole('treeitem', { name: /Earlier 1/ }));
-  fireEvent.click(within(screen.getByRole('complementary', { name: 'Panel' })).getByRole('treeitem', { name: /Review the work · Code review · Codex · Stopped$/ }));
+  fireEvent.click(within(screen.getByRole('complementary', { name: 'Panel' })).getByRole('treeitem', { name: /Review the work · Code review · Codex · Done$/ }));
   expect(document.querySelector('.conversation-markdown')!.textContent).toBe(expected);
   workspace.unmount();
   render(<MemoryRouter><ConversationPage conversationId={review} target={target} client={client}/></MemoryRouter>);
@@ -230,10 +230,10 @@ it('uses the same outcome marks in the inbox expired list and in notifications',
 it('keeps reviewers in the selected root tree and out of the root list', () => {
  const target = setup(); const review = 'review-conversation'; target.setSnapshot({ seq: 2, generation: 1, projection: projection({ conversations: [projection().conversations[0], { id: review, origin: 'managed', provider: 'codex', name: '{"verdict":"approve"}' }], runs: [...projection().runs, { id: 'review-run', conversation_id: review, generation: 1, state: 'running' }], relations: [{ id: 'review-edge', type: 'review_of', active: 1, confidence: 'confirmed', from_id: review, to_id: CONVERSATION }, { id: 'review-child', type: 'delegated', from_id: CONVERSATION, to_id: review, evidence: { agentType: 'review' } }] }) });
  const view = render(<MemoryRouter><HomePage target={target}/></MemoryRouter>); const group = screen.getByRole('region', { name: 'repo' });
- expect(group.querySelectorAll('.root-row')).toHaveLength(1); expect(within(group).getByRole('button', { name: /Codex · Code review · Working$/ })).toBeTruthy();
+ expect(group.querySelectorAll('.root-row')).toHaveLength(1); expect(within(group).getByRole('button', { name: /Codex · Code review · Running$/ })).toBeTruthy();
  expect(runLabel(target.getSnapshot(), 'review-run')).toBe('Review of Browser fixture task · Run 1'); view.unmount();
  render(<MemoryRouter><WorkspacePage target={target} client={client} project={REPO}/></MemoryRouter>);
- expect(within(screen.getByRole('region', { name: 'Conversations' })).getAllByRole('link')).toHaveLength(1); expect(screen.getByRole('treeitem', { name: /Review of .* · Code review · Codex · Working$/ })).toBeTruthy();
+ expect(within(screen.getByRole('region', { name: 'Conversations' })).getAllByRole('link')).toHaveLength(1); expect(screen.getByRole('treeitem', { name: /Review of .* · Code review · Codex · Running$/ })).toBeTruthy();
 });
 it('shows the projected unknown state once when root execution evidence is absent', () => {
  const target = setup(); target.setSnapshot({ seq: 2, generation: 1, projection: projection({ roots: [{ id: 'external', name: 'External root', project: REPO, state: 'unknown', last_activity_ts: null, conversation_ids: ['external'], running_children: 0, total_children: 0 }], conversations: [{ id: 'external', origin: 'observed', provider: 'codex' }], runs: [], tasks: [], messages: [], message_memberships: [], approvals: [] }) });

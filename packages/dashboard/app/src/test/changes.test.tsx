@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 import { ChangesPage } from '../pages/changes/ChangesPage.tsx';
 import { DiffView } from '../components/diff/DiffView.tsx';
 import { comparePatches, LARGE_FILE_LINES, parseDiff } from '../components/diff/model.ts';
-import { createStore, type Row } from "./current-fixture.ts";
+import { createStore, type Row } from '../lib/store.ts';
 
 afterEach(cleanup);
 const PATCH = 'diff --git a/code.txt b/code.txt\n--- a/code.txt\n+++ b/code.txt\n@@ -1,3 +1,3 @@\n before\n-old\n+new\n after\n';

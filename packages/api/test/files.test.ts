@@ -261,22 +261,14 @@ test("WebSocket acknowledges files commands and safe failures while runner is un
   t.after(() => socket.terminate());
   await once(socket, "open");
   const snapshot = await fetch(`${server.url}/snapshot?token=${server.token}`).then((response) => response.json());
-  // hello への応答は今の状態の patch を 1 件含む。台帳の seq は進めず、判定と評価時刻だけを配る
-  // （state-decisions.md「API と画面への接続」、state-contract.md 6.3 の画面の接続）。
-  const isCurrentStatePatch = (frame: Record<string, any>) => frame.type === 'patch' && frame.from_seq === snapshot.seq
-    && frame.seq === snapshot.seq && typeof frame.evaluated_at === 'number'
-    && Object.keys(frame.changes).every(table => ['runs', 'state_decisions', 'conversations', 'roots'].includes(table));
-  const greeted = new Promise<Record<string, any>>(resolve => socket.once('message', data => resolve(JSON.parse(data.toString()))));
   socket.send(JSON.stringify({ type: "hello", seq: snapshot.seq, generation: snapshot.generation }));
-  assert.ok(isCurrentStatePatch(await greeted));
   let sequence = 0;
   async function command(command: string, payload: unknown) {
     const cmd_id = `file-${++sequence}`;
     const pending = new Promise<Record<string, any>>(resolve => {
       const receive = (data: import('ws').RawData) => {
         const frame = JSON.parse(data.toString());
-        // 期限による再評価の patch も今の状態だけを配る。台帳を進める patch は ack と取り違えずに落とす。
-        if (frame.type === 'send_watches' || isCurrentStatePatch(frame)) return;
+        if (frame.type === 'send_watches') return;
         socket.off('message', receive);
         resolve(frame);
       };

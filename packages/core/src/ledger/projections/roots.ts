@@ -18,7 +18,7 @@ export interface RootConversation {
   user_name?: string | null;
   id: string; type?: string; name?: string | null; kit_name?: string | null;
   project?: string | null; repository_id?: string | null; created_ts?: string | null;
-  last_activity_ts?: string | null; state?: string; activity_rank?: number;
+  last_activity_ts?: string | null; state?: string;
 }
 interface RootRelation { from_id?: string; to_id?: string; type?: string; active?: boolean | number; confidence?: string }
 
@@ -98,7 +98,9 @@ export function projectRoots(conversations: readonly RootConversation[], relatio
       }
     }
     const descendants = [...reached].filter(id => !ids.has(id) && rows.has(id)).map(id => rows.get(id)!);
-    const latest = [...group].sort((a, b) => (a.activity_rank ?? 8) - (b.activity_rank ?? 8) || (b.last_activity_ts ?? b.created_ts ?? '').localeCompare(a.last_activity_ts ?? a.created_ts ?? '') || b.id.localeCompare(a.id))[0];
+    const rank = (row: RootConversation) => ["waiting_approval", "waiting_input"].includes(row.state ?? "") ? 2
+      : ["starting", "running"].includes(row.state ?? "") ? 1 : 0;
+    const latest = [...group].sort((a, b) => rank(b) - rank(a) || (b.last_activity_ts ?? b.created_ts ?? '').localeCompare(a.last_activity_ts ?? a.created_ts ?? '') || b.id.localeCompare(a.id))[0];
     const activity = [...group, ...descendants].flatMap(row => row.last_activity_ts ? [row.last_activity_ts] : row.created_ts ? [row.created_ts] : []).sort().at(-1) ?? null;
     const automatic = group.find(row => row.kit_name)?.kit_name ?? first.name ?? first.id;
     roots.push({ id: first.id, name: first.user_name || automatic,

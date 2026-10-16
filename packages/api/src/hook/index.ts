@@ -2,6 +2,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { sendJson } from '../ws/compression.ts';
+import { classifyHookEvent } from "../../../core/src/ledger/index.ts";
 import type { FactInput, JsonValue, Ledger } from "../../../core/src/ledger/index.ts";
 import { defaultLocationResolver, type LocationResolver } from "../observe/location.ts";
 import { verificationVisibility } from '../verification.ts';
@@ -62,10 +63,14 @@ export function createHookFacts(event: HookEvent, locate: LocationResolver = def
     const placed: FactInput[] = location ? [{ ...base, source_event_id: `${source_event_id}:location`, kind: "conversation.updated",
       subject: `conversation:${conversationId}`, payload: { ...location } }] : [];
     return [conversation, { ...run, kind: "run.created", payload: { ...run.payload, conversation_id: conversationId,
-      generation: event.generation, state: "unknown", started_ts: event.source_ts, ...location } }, ...placed];
+      generation: event.generation, state: "idle", started_ts: event.source_ts, ...location } }, ...placed];
   } else if (event.hook_event_name === "SessionEnd") {
     run.payload = { ...run.payload, state: "ended", ended_ts: event.source_ts,
       end_evidence: { kind: "session_end", generation: event.generation } };
+  } else {
+    // ターンの開始と終わりの読み替えは core の状態の規則に従う。
+    const turn = classifyHookEvent(event.hook_event_name);
+    if (turn) run.payload = { ...run.payload, state: turn.state };
   }
   return [conversation, run];
 }

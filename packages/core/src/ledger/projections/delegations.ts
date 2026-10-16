@@ -1,4 +1,3 @@
-import { expandNativeEvidenceSet } from '../native-evidence.ts';
 import type { DelegationPayload, Fact, FactPayloads, JsonValue } from "../facts.ts";
 import { isAbsolute } from "node:path";
 import { repoKey } from "../../paths.ts";
@@ -70,9 +69,7 @@ function readRecord(value: unknown): Record<string, unknown> {
 
 // 訂正の部分変更は元の内容を引き継ぎ、取り消された事実自体は適用しない。
 export function prepareProjectionFacts(facts: readonly Fact[]): Fact[] {
-  const stored = facts;
-  facts = expandNativeEvidenceSet(facts);
-  const byId = new Map([...stored, ...facts].map((fact) => [fact.fact_id, fact]));
+  const byId = new Map(facts.map((fact) => [fact.fact_id, fact]));
   const superseded = new Set(facts.flatMap((fact) => fact.supersedes ? [fact.supersedes] : []));
   function resolvePayload(fact: Fact, seen = new Set<string>()): Fact["payload"] {
     if (!fact.supersedes || seen.has(fact.fact_id)) return fact.payload;
@@ -91,19 +88,15 @@ export function prepareProjectionFacts(facts: readonly Fact[]): Fact[] {
     }
     return current.kind;
   }
-  const prepared = [...new Map(facts.map(fact => [fact.fact_id, fact])).values()].filter((fact) => !superseded.has(fact.fact_id))
-    .map((fact) => ({ ...fact, kind: resolveKind(fact), payload: resolvePayload(fact) } as Fact));
-  // compareProjectionFacts と同じ順を、時刻の解釈を一件一回にして求める。
-  const times = new Map(prepared.map((fact) => [fact, Date.parse(fact.source_ts)]));
-  return prepared.sort((left, right) => times.get(left)! - times.get(right)! || compareProjectionTies(left, right));
-}
-function compareProjectionTies(left: Fact, right: Fact): number {
-  return left.source_event_id.localeCompare(right.source_event_id)
-    || left.source.localeCompare(right.source)
-    || left.fact_id.localeCompare(right.fact_id);
+  return [...byId.values()].filter((fact) => !superseded.has(fact.fact_id))
+    .map((fact) => ({ ...fact, kind: resolveKind(fact), payload: resolvePayload(fact) } as Fact))
+    .sort(compareProjectionFacts);
 }
 export function compareProjectionFacts(left: Fact, right: Fact): number {
-  return Date.parse(left.source_ts) - Date.parse(right.source_ts) || compareProjectionTies(left, right);
+  return Date.parse(left.source_ts) - Date.parse(right.source_ts)
+    || left.source_event_id.localeCompare(right.source_event_id)
+    || left.source.localeCompare(right.source)
+    || left.fact_id.localeCompare(right.fact_id);
 }
 export function projectEntityRecords<P extends object>(facts: readonly Fact[], entity: string): (Partial<P> & { id: string })[] {
   const records = new Map<string, Partial<P> & { id: string }>();

@@ -4,7 +4,7 @@ import { MemoryRouter } from 'react-router';
 import { readFileSync } from 'node:fs';
 import { ConversationPage, type ConversationClient } from '../pages/conversation/ConversationPage.tsx';
 import { Workbench } from '../pages/workspace/Workbench.tsx';
-import { createStore, type Row } from "./current-fixture.ts";
+import { createStore, type Row } from '../lib/store.ts';
 
 vi.mock('@xterm/xterm', () => ({ Terminal: class {
   cols = 80; rows = 24; options = {};
@@ -43,7 +43,7 @@ it.each([['running', 'running'], ['waiting_approval', 'waiting'], ['waiting_inpu
   expect(tab.querySelector(`.status-${tone} .status-dot`)).toBeTruthy();
   expect(tab.firstElementChild?.classList.contains('status')).toBe(true);
   expect(tab.title).toContain('model-a');
-  expect(tab.title).toContain({ running: 'Working', waiting_approval: 'Needs approval', waiting_input: 'Waiting', failed: 'Unknown' }[state]!);
+  expect(tab.title).toContain({ running: 'Running', waiting_approval: 'Needs approval', waiting_input: 'Waiting', failed: 'Failed' }[state]!);
   expect(document.querySelector('.workbench-body .conv-header')).toBeNull();
   fireEvent.doubleClick(tab);
   fireEvent.change(screen.getByRole('textbox', { name: 'Tab name' }), { target: { value: 'My tab' } });

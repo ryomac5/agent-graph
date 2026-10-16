@@ -71,7 +71,7 @@ function createSample(entry: HistoryClassification): Record<string, unknown> {
 const expectedKinds: Record<string, string> = {
   "custom-title": "conversation.updated", "structured-output": "message.created", spawn: "message.created", "subagent-activity": "relation.created",
   message: "message.created", title: "conversation.updated", relation: "relation.created", queue: "conversation.input_queue_changed",
-  "queued-command-user": "message.created", "queued-command-report": "message.created", "queued-command-legacy-user": "message.created", meta: "conversation.created", model: "run.updated", turn: "run.updated", delegation: "relation.created",
+  "queued-command-user": "message.created", "queued-command-report": "message.created", "queued-command-legacy-user": "message.created", meta: "conversation.created", model: "run.updated", turn: "run.state_changed", delegation: "relation.created",
 };
 for (const entry of HISTORY_CLASSIFICATIONS) {
   test(`分類と読み手の一致: ${identifyHistoryKind(entry)}`, t => {
@@ -95,16 +95,8 @@ for (const entry of HISTORY_CLASSIFICATIONS) {
     const after = ledger.readSince(0, Number.MAX_SAFE_INTEGER);
     assert.deepEqual(after.slice(0, before.length), before);
     const added = after.slice(before.length);
-    if (entry.action === "ingest" && !(entry.handler === "turn" && sample.method === "thread/status/changed")) assert.ok(added.some(fact => fact.kind === expectedKinds[entry.handler]), JSON.stringify(added));
-    else {
-      // 画面の発言として無視する行にも、状態の native 証拠は含まれる。
-      assert.deepEqual(added.filter(fact => !fact.source_event_id.startsWith('native-record:')), []);
-      for (const fact of added) {
-        assert.equal(fact.kind, 'run.updated');
-        assert.equal((fact.payload?.last_evidence as Record<string, unknown>)?.native_source, entry.provider);
-        assert.equal(fact.payload?.state, undefined);
-      }
-    }
+    if (entry.action === "ingest") assert.ok(added.some(fact => fact.kind === expectedKinds[entry.handler]), JSON.stringify(added));
+    else assert.deepEqual(added, []);
     if (entry.handler.startsWith("queued-command-")) {
       const message = added.find(fact => fact.kind === "message.created")!;
       assert.equal(message.payload?.role, entry.handler === "queued-command-report" ? "agent_report" : "user");

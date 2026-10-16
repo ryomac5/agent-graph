@@ -633,9 +633,7 @@ for (const throws of [false, true]) {
     await done;
     assert.ok(events.some((event) => event.type === "exit" && event.exitCode === 0));
     const facts = getFacts(events);
-    assert.equal(facts[0].kind, "run.updated");
-    assert.equal((facts[0].payload.last_evidence as Record<string, unknown>).native_source, "claude");
-    assert.equal(facts[1].kind, "run.interrupt_requested");
+    assert.equal(facts[0].kind, "run.interrupt_requested");
     assert.ok(facts.some((fact) => {
       if (fact.kind !== "run.updated") return false;
       const evidence = fact.payload.last_evidence;
@@ -701,22 +699,4 @@ test("Claude managed runs skip claude.ai integrations by default and switch by h
   } finally {
     if (previous === undefined) delete process.env.ENABLE_CLAUDEAI_MCP_SERVERS; else process.env.ENABLE_CLAUDEAI_MCP_SERVERS = previous;
   }
-});
-
-test('Claude は待ち行列への送信で現在の turn を切り替えず、次の進行でだけ開始を記録する', async () => {
-  const { host, queries } = createFixture();
-  const handle = await host.start(makeRequest());
-  const { events, done } = collect(handle); const query = queries[0];
-  await flush(); const first = query.inputs[0].uuid;
-  await host.send('run-1', { text: 'Queued turn' }); await flush();
-  const second = query.inputs[1].uuid;
-  const native = () => getFacts(events).filter(f => f.kind === 'run.updated').map(f => f.payload.last_evidence as Record<string, unknown> | undefined).filter(Boolean);
-  assert.equal(native().filter(e => (e!.native_record as Record<string, unknown> | undefined)?.type === 'user').length, 1);
-  emitResult(query, false, [], first);
-  query.emit({ type: 'system', subtype: 'session_state_changed', state: 'idle' }); await flush();
-  assert.equal(native().at(-1)!.turn_id, first);
-  query.emit({ type: 'system', subtype: 'session_state_changed', state: 'running' }); await flush();
-  assert.ok(getFacts(events).some(f => f.kind === 'run.updated' && (f.payload.last_evidence as Record<string, unknown> | undefined)?.turn_id === second && f.payload.state === 'running'));
-  assert.equal(native().at(-1)!.turn_id, second);
-  await host.close('run-1'); await done;
 });

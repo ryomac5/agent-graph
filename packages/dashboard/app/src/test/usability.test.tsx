@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { App } from '../App.tsx';
-import { createStore, type ScreenState } from "./current-fixture.ts";
+import { createStore, type ScreenState } from '../lib/store.ts';
 import { selectRoots, startedAt, type Root } from '../lib/roots.ts';
 import { formatAgo, formatClock, formatWhen, modelName } from '../lib/format.ts';
 import { RootList, RootTree } from '../components/RootViews.tsx';
@@ -48,7 +48,7 @@ it('1: ignores unknown runs and shows only four notification kinds with a conver
   const store = target({ ...projection, runs: [...projection.runs, { id: 'run', conversation_id: 'c', state: 'running' }] });
   render(<MemoryRouter><Notifications target={store} client={client} language="ja" compact initiallyOpen={false}/></MemoryRouter>);
   expect(document.querySelector('.bell-count')).toBeNull();
-  act(() => store.setSnapshot(state({ ...projection, runs: [{ id: 'run', conversation_id: 'c', state: 'idle', last_evidence_ts: OLD }] })));
+  act(() => store.setSnapshot(state({ ...projection, runs: [{ id: 'run', conversation_id: 'c', state: 'ended', last_evidence_ts: OLD }] })));
   fireEvent.click(screen.getByRole('button', { name: '通知' }));
   expect(screen.getByRole('heading', { name: '完了' })).toBeTruthy();
   expect(screen.getByText('Repo-20261008は完了しました。')).toBeTruthy();
@@ -56,9 +56,9 @@ it('1: ignores unknown runs and shows only four notification kinds with a conver
   expect(screen.getByRole('button', { name: 'すべて消す' })).toBeTruthy();
   expect(screen.getByRole('combobox', { name: '承認待ち' })).toBeTruthy();
   expect(document.body.textContent).not.toContain('unconfirmed_end_evidence');
-  const notices = collectNotifications(previous, state({ ...projection, state_decisions: [{ id: 'failure', result: { value: 'failed' } }], approvals: [{ id: 'approval', state: 'pending', conversation_id: 'c' }],
-    runs: [{ id: 'input', conversation_id: 'c', state: 'waiting_input', last_evidence_ts: new Date(NOW).toISOString() }, { id: 'failed', conversation_id: 'c', state: 'idle', decision_id: 'failure', last_evidence_ts: new Date(NOW).toISOString() },
-      { id: 'done', conversation_id: 'c', state: 'idle', last_evidence_ts: new Date(NOW).toISOString() }] }), 'en', NOW);
+  const notices = collectNotifications(previous, state({ ...projection, approvals: [{ id: 'approval', state: 'pending', conversation_id: 'c' }],
+    runs: [{ id: 'input', conversation_id: 'c', state: 'waiting_input', last_evidence_ts: new Date(NOW).toISOString() }, { id: 'failed', conversation_id: 'c', state: 'failed', last_evidence_ts: new Date(NOW).toISOString() },
+      { id: 'done', conversation_id: 'c', state: 'ended', last_evidence_ts: new Date(NOW).toISOString() }] }), 'en', NOW);
   expect(notices.map(n => n.kind)).toEqual(['approval', 'input', 'failed', 'completed']);
   expect(notificationDetail(notices[0], state(projection), 'en')).toBe('Repo-20261008 is waiting for approval.');
 });
@@ -131,11 +131,11 @@ it('4: detail time wrappers retain Japanese timestamps and root dates use compac
   document.documentElement.lang = 'ja';
   expect(formatClock(OLD)).toBe(formatWhen(OLD, 'ja', NOW));
 });
-it('5: names the series after its first statement and preserves the API activity timestamp', () => {
+it('5: names the series after its first statement and lists its last statement instead of observation time', () => {
   const first = new Date(2026, 8, 26, 8, 0).toISOString();
   const snapshot = state({ projects: [{ id: 'repo', display_name: 'Repo', state: 'registered' }], roots: [{ ...root, conversation_ids: ['c', 'continued'], last_activity_ts: new Date(NOW).toISOString() }],
     conversations: [{ id: 'c', created_ts: new Date(NOW).toISOString(), first_message_ts: first, last_message_ts: first }, { id: 'continued', created_ts: RECENT, last_message_ts: RECENT }] });
-  expect(selectRoots(snapshot)[0]).toMatchObject({ name: 'Repo-20260926', last_activity_ts: new Date(NOW).toISOString() });
+  expect(selectRoots(snapshot)[0]).toMatchObject({ name: 'Repo-20260926', last_activity_ts: RECENT });
   delete snapshot.projection.conversations![0].first_message_ts;
   snapshot.projection.runs = [{ conversation_id: 'c', started_ts: first }];
   expect(startedAt(snapshot, { ...root, conversation_ids: ['c', 'continued'] })).toBe(Date.parse(first));

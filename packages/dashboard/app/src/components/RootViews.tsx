@@ -99,17 +99,16 @@ function RenderRootList({ roots, selected, onSelect, project, language = 'en', g
   const cutoffTime = Date.now() - EARLIER_MS;
   const group = (root: Root) => isWaiting(root) ? 0 : isRunning(activity(root)) ? 1 : !root.last_activity_ts || Date.parse(root.last_activity_ts) >= cutoffTime ? 2 : 3;
   const groups = [0, 1, 2, 3].map(value => roots.filter(root => group(root) === value).toSorted((a, b) => (b.last_activity_ts ?? '').localeCompare(a.last_activity_ts ?? '')));
-  const labels = language === 'ja' ? ['待機中', '実行中', '最近', '以前'] : ['Waiting', 'Working', 'Recent', 'Earlier'];
+  const labels = language === 'ja' ? ['待機中', '実行中', '最近', '以前'] : ['Waiting', 'Running', 'Recent', 'Earlier'];
   const row = (root: Root) => {
     const start = state ? startedAt(state, root) : undefined;
     const startIso = start === undefined ? undefined : new Date(start).toISOString();
-    const lastActive = Date.parse(root.last_activity_ts ?? '');
     const shownState = activity(root);
     const content = <><StatusDot className="root-state" dotOnly activity dotLabel={stateLabel(shownState, language)} state={shownState} language={language}/>
       <span className="root-row-line"><span className="root-name" title={root.name}>{root.name}</span></span>
       <span className="root-row-meta"><StatusDot state={shownState} language={language} activity/>
         {isRunning(shownState) && <RootElapsed state={state} root={root} language={language}/>}
-        {!isRunning(shownState) && Number.isFinite(lastActive) && <RootStarted start={lastActive} language={language}/>}</span></>;
+        {!isRunning(shownState) && start !== undefined && <RootStarted start={start} language={language}/>}</span></>;
     if (editing === root.id && client) return <div key={root.id} className="root-row"><SessionName key={root.id} root={root} client={client} language={language} editing onFinish={() => setEditing(undefined)}/></div>;
     return <div key={root.id} className="root-list-item" onKeyDown={event => { if (event.key === 'Escape') setMenu(undefined); }}><Link
       onDoubleClick={client ? event => { event.preventDefault(); setEditing(root.id); setMenu(undefined); } : undefined}
@@ -125,7 +124,7 @@ function RenderRootList({ roots, selected, onSelect, project, language = 'en', g
     const cutoff = Number.isFinite(newest) ? newest - EARLIER_MS : Number.NEGATIVE_INFINITY;
     const recent = (root: Root) => ACTIVE.includes(activity(root)) || isWaiting(root) || root.id === selected || !Number.isFinite(Date.parse(root.last_activity_ts ?? '')) || Date.parse(root.last_activity_ts ?? '') >= cutoff;
     const older = roots.filter(root => !recent(root));
-    return <div className="root-list">{roots.filter(recent).toSorted((a, b) => (a.activity_rank ?? 8) - (b.activity_rank ?? 8)).map(row)}{older.length > 0 && <><button className="btn btn-ghost btn-sm root-earlier" aria-expanded={showEarlier} onClick={() => setShowEarlier(value => !value)}>{labels[3]} <span className="numeric">{older.length}</span></button>{showEarlier && older.map(row)}</>}{!roots.length && <p className="empty-row">{t.noConversations}</p>}</div>;
+    return <div className="root-list">{roots.filter(recent).toSorted((a, b) => Number(isWaiting(b)) - Number(isWaiting(a))).map(row)}{older.length > 0 && <><button className="btn btn-ghost btn-sm root-earlier" aria-expanded={showEarlier} onClick={() => setShowEarlier(value => !value)}>{labels[3]} <span className="numeric">{older.length}</span></button>{showEarlier && older.map(row)}</>}{!roots.length && <p className="empty-row">{t.noConversations}</p>}</div>;
   }
   return <div className="root-list">{groups.map((items, index) => items.length > 0 && <section key={index} className="session-group" aria-label={labels[index]}>
     {index === 3 ? <><button className="btn btn-ghost btn-sm root-earlier" aria-expanded={showEarlier} onClick={() => setShowEarlier(value => !value)}>{labels[index]} <span className="numeric">{items.length}</span></button>{(showEarlier ? items : items.filter(root => root.id === selected)).map(row)}</> : <><p className="root-earlier-label">{labels[index]}</p>{items.map(row)}</>}
@@ -154,7 +153,7 @@ export function RootTree({ tree, selected, onSelect, runningOnly = false, langua
   const [showOlder, setShowOlder] = useState(false);
   const byId = new Map(tree.nodes.map(node => [node.id, node]));
   // 動いている子と待っている子を先に置き、それ以外は最後に動いた時刻の新しい順に並べる。
-  const rank = (id: string) => { const node = byId.get(id); return Number(node?.run?.activity_rank ?? 8); };
+  const rank = (id: string) => { const node = byId.get(id); return node ? (ACTIVE.includes(node.state) ? 0 : WAITING.includes(node.state) ? 1 : 2) : 3; };
   const latest = (id: string): string => { const node = byId.get(id); return node ? [lastActivity(node), ...node.children.map(latest)].sort().at(-1) ?? '' : ''; };
   const order = (ids: string[]) => ids.toSorted((a, b) => rank(a) - rank(b) || latest(b).localeCompare(latest(a)));
   function isEarlier(id: string, ancestors = new Set<string>()): boolean {
@@ -206,7 +205,7 @@ export function RootTree({ tree, selected, onSelect, runningOnly = false, langua
   const children = order(tree.nodes.find(node => node.id === tree.roots[0])?.children ?? []);
   const rendered = children.map(id => ({ id, item: branch(id) })).filter(entry => entry.item);
   // 終了から 24 時間を過ぎた依頼と、新しい 20 件を超えた依頼を畳む。
-  const resting = rendered.filter(entry => { const node = byId.get(entry.id); return node && !ACTIVE.includes(node.state) && !WAITING.includes(node.state); });
+  const resting = rendered.filter(entry => rank(entry.id) === 2);
   const earlier = resting.filter(entry => isEarlier(entry.id));
   const overflow = resting.filter(entry => !earlier.includes(entry)).slice(RECENT_LIMIT);
   const hidden = !showOlder && !runningOnly ? new Set([...earlier, ...overflow].map(entry => entry.id)) : new Set<string>();

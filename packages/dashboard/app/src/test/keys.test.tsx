@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import { App } from '../App.tsx';
-import { createStore } from "./current-fixture.ts";
+import { createStore } from '../lib/store.ts';
 import { createKeyHandler, DEFAULT_KEYS, SEQUENCE_TIMEOUT_MS, validateBindings } from '../lib/keys.ts';
 import { CommandPalette } from '../components/command/Commands.tsx';
 import { defaultConfig, defaultProject } from '../../../../core/src/settings/index.ts';

@@ -67,7 +67,7 @@ function readNativeSignals(record: NativeRecord): Signal[] {
     const notification = text?.trim().match(/^<task-notification>\s*<task-id>([^<]+)<\/task-id>([\s\S]*?)<\/task-notification>$/u);
     if (notification && record.childId && notification[1] === record.childId) {
       const status = notification[2].match(/<status>(stopped|completed)<\/status>/u)?.[1];
-      return status === "stopped" ? emit("child_stopped") : status === "completed" ? emit("complete") : [];
+      return status === "stopped" ? emit("complete", "interrupted") : status === "completed" ? emit("complete") : [];
     }
     const result = readObject(row.toolUseResult);
     const call = readBlocks(readObject(record.parentCall?.message).content).find(b => b.name === "Agent" && blocks.some(r => r.type === "tool_result" && r.tool_use_id === b.id));
@@ -78,10 +78,6 @@ function readNativeSignals(record: NativeRecord): Signal[] {
     return [];
   }
   if (source === "codex_child") {
-    const payload = readObject(row.payload), activity = readObject(payload.item);
-    if (payload.type === "item_completed" && activity.type === "SubAgentActivity" && record.childId && activity.agent_thread_id === record.childId) {
-      return activity.kind === "completed" ? emit("complete") : activity.kind === "started" ? emit("launched") : [];
-    }
     const item = readObject(readObject(row.params).item);
     if (row.method !== "item/completed" || item.type !== "collabAgentToolCall" || item.status !== "completed" ||
       !record.childId || !Array.isArray(item.receiverThreadIds) || !item.receiverThreadIds.includes(record.childId)) return [];
@@ -93,11 +89,7 @@ function readNativeSignals(record: NativeRecord): Signal[] {
   }
   if (source === "claude_sdk") {
     if (row.type === "result") return emit("complete", row.is_error === false ? "responded" : row.is_error === true ? "failure" : "stop_attempt");
-    if (row.type === "system" && row.subtype === "session_state_changed") {
-      if (row.state === "idle") return emit("complete");
-      if (row.state === "running") return emit("progress");
-      if (row.state === "requires_action") return emit("approval");
-    }
+    if (row.type === "system" && row.subtype === "session_state_changed" && row.state === "idle") return emit("complete");
     return [];
   }
   if (source === "claude") {

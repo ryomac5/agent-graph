@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { MemoryRouter } from 'react-router';
 import { ConversationPage } from '../pages/conversation/ConversationPage.tsx';
 import { OpenWorkspaceTerminal } from '../lib/workspace-context.ts';
-import { createStore } from "./current-fixture.ts";
+import { createStore } from '../lib/store.ts';
 import type { Ack } from '../lib/client.ts';
 
 beforeEach(() => {

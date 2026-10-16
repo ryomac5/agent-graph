@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
-import { createStore } from "./current-fixture.ts";
+import { createStore } from '../lib/store.ts';
 import { WorkspacePage } from '../pages/workspace/WorkspacePage.tsx';
 import { HomePage } from '../pages/home/HomePage.tsx';
 import { RootList } from '../components/RootViews.tsx';
@@ -77,28 +77,8 @@ it('lists only roots with running children and leaves orphan unattended runs out
   render(<MemoryRouter><HomePage target={fixture()}/></MemoryRouter>);
   expect(screen.getAllByRole('link', { name: /Repo-20261008|agent-graph-002/ })).toHaveLength(2);
   expect(screen.getByRole('heading', { name: /Screen graph/ })).toBeTruthy();
-  expect(screen.getByRole('button', { name: 'Build the screen · GPT-6.1 Sol · Implementation · Working' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Build the screen · GPT-6.1 Sol · Implementation · Running' })).toBeTruthy();
   expect(screen.queryByText('Check the screen')).toBeNull();
   // 根でない会話は一覧に出さない。
   expect(screen.queryByText('Orphan run')).toBeNull();
-});
-
-it('shows the current last_activity_ts after a root patch while retaining its start time', async () => {
-  const { createStore } = await import('../lib/store.ts');
-  const { selectRoots } = await import('../lib/roots.ts');
-  const target = createStore();
-  const old = '2026-10-13T00:00:00.000Z', latest = '2026-10-15T00:00:00.000Z';
-  const root = { id: 'a', name: 'Root a', state: 'idle', project: null, last_activity_ts: old, conversation_ids: ['a'], current_conversation_id: 'a', running_children: 0, total_children: 0 };
-  target.setSnapshot({ seq: 1, generation: 0, projection: {
-    roots: [root], conversations: [{ id: 'a', first_message_ts: old, state: 'idle', last_activity_ts: old }],
-  } });
-  const view = render(<MemoryRouter><RootList roots={selectRoots(target.getSnapshot())} state={target.getSnapshot()}/></MemoryRouter>);
-  expect(screen.getByRole('link', { name: 'Root a' }).querySelector('time')?.dateTime).toBe(old);
-  target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: {
-    roots: { upsert: [{ ...root, last_activity_ts: latest }], remove: [] },
-  } });
-  const state = target.getSnapshot();
-  view.rerender(<MemoryRouter><RootList roots={selectRoots(state)} state={state}/></MemoryRouter>);
-  expect(screen.getByRole('link', { name: 'Root a' }).querySelector('time')?.dateTime).toBe(latest);
-  expect(screen.getByRole('link', { name: 'Root a' }).title).toContain('Started: ' + old);
 });

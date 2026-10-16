@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import { App } from '../App.tsx';
-import { createStore } from "./current-fixture.ts";
+import { createStore } from '../lib/store.ts';
 beforeEach(() => {
   localStorage.clear();
   vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));

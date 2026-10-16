@@ -1,4 +1,3 @@
-import { expandNativeEvidence } from '../../core/src/ledger/native-evidence.ts';
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
@@ -53,11 +52,11 @@ test("Claude の会話の記録から、作業ツリーの場所を本体のリ�
   assert.equal(conversation.cwd, worktree);
   assert.equal(conversation.repository_id, repositoryId);
   assert.equal(view.runs.length, 1);
-  assert.equal(view.runs[0].state, "unknown");
-  assert.equal(view.runs[0].started_ts, "2026-10-07T01:00:00.000Z");
+  assert.equal(view.runs[0].state, "running");
+  assert.equal(view.runs[0].last_evidence_ts, "2026-10-07T01:00:00.000Z");
   assert.equal(view.runs[0].repository_id, repositoryId);
-  // 道具の開始と結果も判定の入力として残し、状態は API が評価する。
-  assert.equal(facts(ledger).flatMap(expandNativeEvidence).filter((fact) => fact.source_event_id.startsWith("native-record:")).length, 3);
+  // 道具の呼び出しと結果はターンの途中なので、状態の事実を増やさない。
+  assert.equal(facts(ledger).filter((fact) => fact.kind === "run.state_changed").length, 1);
   const cursor = observeClaudeFile(ledger, path).cursor;
   appendFileSync(path, row("assistant", "a2", "2026-10-07T01:01:00Z", [{ type: "text", text: "Done." }], { cwd: worktree }));
   // 続きの行だけを渡しても、直前の状態は台帳から引き継ぐ。
@@ -65,7 +64,7 @@ test("Claude の会話の記録から、作業ツリーの場所を本体のリ�
   assert.equal(added.lines.length, 1);
   observeClaudeContext(ledger, path, { lines: added.lines, fromStart: false });
   view = project(facts(ledger));
-  assert.equal(view.runs[0].state, "unknown");
+  assert.equal(view.runs[0].state, "idle");
   assert.equal(view.runs[0].model, "claude-test");
   // 再読しても事実は増えない。
   const before = facts(ledger).length;
@@ -86,7 +85,7 @@ test("場所の事実がない既存の会話は一度だけ先頭から読み�
   const result = observeClaudeContext(ledger, path, { lines: [], fromStart: false, locate: (cwd) => ({ cwd }) });
   assert.ok(result.appended > 0);
   const view = project(facts(ledger));
-  assert.equal(view.runs[0].state, "unknown");
+  assert.equal(view.runs[0].state, "idle");
   assert.equal(view.runs[0].ended_ts, undefined);
   assert.ok(facts(ledger).some((fact) => fact.source_event_id === claudeLocationEventId(createNativeId("claude", "old"))));
   assert.equal(observeClaudeContext(ledger, path, { lines: [], fromStart: false }).appended, 0);
@@ -105,7 +104,7 @@ test("hook の実行がある会話は、会話の記録の根拠を同じ世代
   const runs = project(facts(ledger)).runs;
   assert.equal(runs.length, 1);
   assert.equal(runs[0].generation, 5);
-  assert.equal(runs[0].state, "unknown");
+  assert.equal(runs[0].state, "idle");
   assert.equal(runs[0].repository_id, "repo");
   const managed = join(directory, "managed.jsonl");
   ledger.append({ source: "host-claude", source_event_id: "managed", kind: "conversation.created", subject: "conversation:runner-1",
@@ -141,7 +140,7 @@ test("Codex の rollout のメタの場所で会話と実行を結び、ター�
   assert.equal(conversation.repository_id, repositoryId);
   assert.equal(conversation.cwd, worktree);
   assert.equal(view.runs[0].repository_id, repositoryId);
-  assert.deepEqual([view.runs[0].state, view.runs[0].model, view.runs[0].effort], ["unknown", "gpt-test", "high"]);
+  assert.deepEqual([view.runs[0].state, view.runs[0].model, view.runs[0].effort], ["idle", "gpt-test", "high"]);
   assert.equal(facts(ledger).filter((fact) => fact.source_event_id.endsWith(":location")).length, 2);
 });
 
@@ -161,11 +160,10 @@ test("取り込みは、変更のない既存の会話の記録にも一度だ�
   ledger.close();
   const service = openObservationService({ env, home, dbPath });
   t.after(() => service.close());
-  // 場所・題名に加え、UUID 連鎖の補完済みの印も一件だけ保持する。
-  assert.equal(service.ingestOnce().appended, 5);
+  assert.equal(service.ingestOnce().appended, 4);
   assert.equal(service.ingestOnce().appended, 0);
   const view = project(openLedger(dbPath).readSince(0, Number.MAX_SAFE_INTEGER));
-  assert.equal(view.runs[0].state, "unknown");
+  assert.equal(view.runs[0].state, "running");
 });
 
 test("配信は会話と委譲を、場所から結んだ登録したプロジェクトに解決し、試行の要約を正しい JSON で配る", (t) => {

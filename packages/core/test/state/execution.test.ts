@@ -143,25 +143,3 @@ test("N2 success, failure and interruption sets have one result in all orders", 
   assert.equal(output.result.value, "unknown"); assert.equal(output.result.reason, "evidence_conflict");
   checkOrders(evidence, evidence => evaluateState({ ...input, evidence }, 40));
 });
-
-for (const [name, source, row] of [
-  ['Claude Esc', 'claude', { type: 'user', message: { content: '[Request interrupted by user]' } }],
-  ['Claude tool Esc', 'claude', { type: 'user', message: { content: '[Request interrupted by user for tool use]' } }],
-  ['Codex aborted', 'codex', { type: 'event_msg', payload: { type: 'turn_aborted' } }],
-  ['Codex interrupted', 'codex', { method: 'turn/completed', params: { turn: { status: 'interrupted' } } }],
-] as const) test(`${name} は子の停止通知と区別し Idle へ戻す`, () => {
-  const result = evaluateState(stateInput([start, ...native(source, row, 10)]), 20);
-  assert.equal(result.display.label, 'Idle');
-  assert.equal(result.turn.reason, 'turn_finished');
-});
-
-test('scoped history conflicts affect only their turn and can be superseded', () => {
-  const conflict: StateEvidence = { kind: 'conflict', id: 'conflict:old', at: 1, observedAt: 1, runId: 'run', turnId: 'old', count: 1 };
-  const current = stateInput([signal('start', 2), conflict]);
-  assert.deepEqual(evaluateState(current, 3).conflicts, []);
-  assert.equal(evaluateState(current, 3).turn.confidence, 'confirmed');
-  const old = stateInput([signal('start', 2, { turnId: 'old' }), conflict], { turnId: 'old' });
-  assert.deepEqual(evaluateState(old, 3).conflicts, ['conflict:old']);
-  const corrected = { ...old, evidence: [...old.evidence, { kind: 'unavailable' as const, id: 'reread', at: 3, observedAt: 3, runId: 'run', supersedes: ['conflict:old'] }] };
-  assert.deepEqual(evaluateState(corrected, 3).conflicts, []);
-});

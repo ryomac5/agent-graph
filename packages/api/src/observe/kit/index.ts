@@ -62,7 +62,6 @@ export function createKitObserver(ledger: Ledger, checkpoints?: Map<string, File
   const pending = new Map<string, { repository_id: string; native_id: string; name: string; source_ts: string }>();
   const resolved = new Set<string>();
   let contextSeq = -1;
-  let conversationSeq = -1;
   let projects: ReturnType<typeof projectProjects> = [];
   let registered = new Set<string>();
   const conversations = new Map<string, string[]>();
@@ -70,26 +69,22 @@ export function createKitObserver(ledger: Ledger, checkpoints?: Map<string, File
     observe(): KitObservationResult {
       const facts = ledger.readSince(0, Number.MAX_SAFE_INTEGER);
       const seq = facts.at(-1)?.seq ?? 0;
-      // 履歴に変化がない周期は、登録の対応表も組み直さない。
+      // 履歴に変化がない周期は、登録と会話の対応表も組み直さない。
       if (seq !== contextSeq) {
         projects = projectProjects(facts.filter((fact) => fact.kind.startsWith("project.")))
           .filter((entry) => entry.state === "registered" && entry.root_path);
         registered = new Set(projects.map((entry) => entry.id));
+        conversations.clear();
+        if (projects.length) {
+          for (const conversation of projectConversations(facts.filter((fact) => fact.kind.startsWith("conversation."))).conversations) {
+            if (!conversation.native_id) continue;
+            const matches = conversations.get(conversation.native_id) ?? [];
+            matches.push(conversation.id);
+            conversations.set(conversation.native_id, matches);
+          }
+        }
         contextSeq = seq;
       }
-      // 全会話の投影は、照合を待つ名前があるときだけ作る。名前のない周期に一時の大きな割り当てを作らない。
-      const readConversations = (): ReadonlyMap<string, string[]> => {
-        if (conversationSeq === seq) return conversations;
-        conversations.clear();
-        for (const conversation of projectConversations(facts.filter((fact) => fact.kind.startsWith("conversation."))).conversations) {
-          if (!conversation.native_id) continue;
-          const matches = conversations.get(conversation.native_id) ?? [];
-          matches.push(conversation.id);
-          conversations.set(conversation.native_id, matches);
-        }
-        conversationSeq = seq;
-        return conversations;
-      };
       const result: KitObservationResult = { appended: 0, duplicates: 0, pending: 0, deferred: 0 };
       if (projects.length === 0) return result;
       for (const project of projects) {
@@ -105,7 +100,7 @@ export function createKitObserver(ledger: Ledger, checkpoints?: Map<string, File
       }
       for (const [key, entry] of pending) {
         if (!registered.has(entry.repository_id)) continue;
-        const matches = readConversations().get(entry.native_id);
+        const matches = conversations.get(entry.native_id);
         // キットには provider がないため、曖昧な一致は保留する。
         if (matches?.length !== 1) {
           result.pending += 1;

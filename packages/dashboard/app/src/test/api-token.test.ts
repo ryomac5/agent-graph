@@ -1,6 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import { createClient } from '../lib/client.ts';
-import { createStore } from "./current-fixture.ts";
+import { createStore } from '../lib/store.ts';
 
 it('refreshes rotating credentials before reconnect and uses them for WebSocket and snapshot', async () => {
   vi.useFakeTimers();

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, useLocation, useNavigate } from 'react-router';
-import { createStore, type ScreenState } from "./current-fixture.ts";
+import { createStore, type ScreenState } from '../lib/store.ts';
 import { selectRoots } from '../lib/roots.ts';
 import { DEFAULT_KEYS, keyLabel } from '../lib/keys.ts';
 import { readHistory, recordTransitions, rememberConversation, selectTurns, publishTurns, RECENT_KEY, READ_KEY } from '../lib/turns.ts';
@@ -41,9 +41,7 @@ it('selects pending approvals, latest input waits and only transitioned unread i
   const history = recordTransitions(selectRoots(state), selectRoots(next), EMPTY);
   expect(selectTurns(next, history).map(turn => turn.kind)).toEqual(['approval', 'idle', 'input']);
   expect(selectTurns(next, { ...history, read: { root: LAST } }).map(turn => turn.kind)).toEqual(['approval', 'input']);
-  const newer = { ...next, projection: { ...next.projection,
-    conversations: next.projection.conversations.map(row => row.id === 'input' ? { ...row, state: 'idle', current_run_id: 'new' } : row),
-    runs: [...next.projection.runs, { id: 'new', conversation_id: 'input', generation: 2, state: 'idle' }] } };
+  const newer = { ...next, projection: { ...next.projection, runs: [...next.projection.runs, { id: 'new', conversation_id: 'input', generation: 2, state: 'idle' }] } };
   expect(selectTurns(newer, history).some(turn => turn.kind === 'input')).toBe(false);
   expect(recordTransitions(selectRoots(state), selectRoots({ ...next, projection: { ...next.projection, roots: next.projection.roots.map(root => ({ ...root, state: 'unknown' })) } }), EMPTY).ready).toEqual({});
 });
@@ -51,14 +49,13 @@ it('updates the root dot, reads an opened root and remembers the read time after
   const target = fixture();
   const view = render(<MemoryRouter><TurnSignals target={target} bindings={DEFAULT_KEYS}/><RootList roots={selectRoots(idle(target.getSnapshot()))}/><Location/></MemoryRouter>);
   act(() => target.setSnapshot(idle(target.getSnapshot())));
-  expect(screen.getByRole('img', { name: 'Idle' })).toBeTruthy();
+  expect(screen.getByRole('img', { name: 'Waiting' })).toBeTruthy();
   fireEvent.click(screen.getByText('Read root'));
   expect(JSON.parse(localStorage.getItem(READ_KEY)!)).toEqual({ root: LAST });
   view.unmount();
   render(<MemoryRouter><TurnSignals target={target} bindings={DEFAULT_KEYS}/></MemoryRouter>);
   const snapshot = target.getSnapshot();
-  act(() => target.setSnapshot({ ...snapshot, projection: { ...snapshot.projection, approvals: [], runs: [],
-    conversations: snapshot.projection.conversations.map(row => ({ ...row, state: 'unknown', current_run_id: undefined })) } }));
+  act(() => target.setSnapshot({ ...snapshot, projection: { ...snapshot.projection, approvals: [], runs: [] } }));
   expect(selectTurns(target.getSnapshot(), readHistory())).toEqual([]);
 });
 it('keeps the tab title and favicon unchanged as the turn count changes', () => {
@@ -76,8 +73,7 @@ it('keeps the tab title and favicon unchanged as the turn count changes', () => 
   act(() => target.setSnapshot(idle(target.getSnapshot())));
   expectUnchanged(3);
   const snapshot = target.getSnapshot();
-  act(() => target.setSnapshot({ ...snapshot, projection: { ...snapshot.projection, approvals: [], runs: [], roots: [],
-    conversations: snapshot.projection.conversations.map(row => ({ ...row, state: 'unknown', current_run_id: undefined })) } }));
+  act(() => target.setSnapshot({ ...snapshot, projection: { ...snapshot.projection, approvals: [], runs: [], roots: [] } }));
   expectUnchanged(0);
   view.unmount();
   expectUnchanged(0);

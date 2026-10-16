@@ -8,8 +8,6 @@ export interface RolloutLine {
   hash: string;
   value: unknown;
   contextOnly?: boolean;
-  // 既読の行から状態の原記録だけを補う。発言や件数などの他の事実は作らない。
-  evidenceOnly?: boolean;
 }
 export interface RolloutFile {
   lines: RolloutLine[];

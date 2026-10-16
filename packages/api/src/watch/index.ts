@@ -6,12 +6,10 @@ import type { Fact, RunPayload } from "../../../core/src/ledger/facts.ts";
 import { prepareProjectionFacts, projectDelegations, projectEntityRecords } from "../../../core/src/ledger/projections/delegations.ts";
 import { projectRuns } from "../../../core/src/ledger/projections/runs.ts";
 import { ledgerDbPath } from "../paths.ts";
-import { initializeSchema, rebuild } from '../../../core/src/ledger/index.ts';
-import { CurrentState } from '../service/current-state.ts';
 
 const BATCH_SIZE = 1000;
 const POLL_MS = 500;
-const EXIT_CODES: Record<string, number> = { done: 0, stopped: 0, closed: 0, failed: 1, interrupted: 2, denied: 3 };
+const EXIT_CODES: Record<string, number> = { done: 0, failed: 1, interrupted: 2, denied: 3 };
 export const WATCH_HELP = `Usage: agent-graph-api watch <requestId> | watch --graph <graphId> | watch --conversation <conversationId>
   [--json] [--db <path> | --db-path <path> | --state-dir <path>]
 Print the current state, then every state/attempt change in ledger seq order.
@@ -39,7 +37,7 @@ function readPlannerIdentity(requestId: string): [string, string, number] | unde
     && typeof parts[1] === "string" && Number.isSafeInteger(parts[2]) && parts[2] > 0) return parts as [string, string, number];
 }
 
-function readStates(facts: Fact[], target: WatchTarget, current?: CurrentState): Omit<WatchLine, "time" | "seq">[] {
+function readStates(facts: Fact[], target: WatchTarget): Omit<WatchLine, "time" | "seq">[] {
   const runs = projectRuns(facts);
   if (target.kind === "conversation") {
     const conversations = projectEntityRecords<{ provider: string; native_id: string }>(facts, "conversation");
@@ -47,8 +45,11 @@ function readStates(facts: Fact[], target: WatchTarget, current?: CurrentState):
       || JSON.stringify([row.provider, row.native_id]) === target.id);
     if (!conversation) return [];
     const canonicalId = JSON.stringify([conversation.provider, conversation.native_id]);
-    const run = current?.conversations.get(conversation.id) ?? current?.conversations.get(canonicalId);
-    return [{ target: target.id, state: String(run?.state ?? 'unknown'), attempt: Number(run?.generation ?? 0), reason: String(run?.reason ?? '') }];
+    const run = runs.filter((row) => row.conversation_id === conversation.id
+      || row.conversation_id === canonicalId).sort((a, b) => b.generation - a.generation)[0];
+    const evidence = run?.end_evidence as { interrupted?: boolean } | undefined;
+    return [{ target: target.id, state: run?.state === "ended" ? (evidence?.interrupted || run.reason === "interrupted" ? "interrupted" : "done")
+      : run?.state ?? "unknown", attempt: run?.generation ?? 0, reason: run?.cause ?? run?.reason ?? "" }];
   }
   let delegations = projectDelegations(facts);
   if (target.kind === "request") delegations = delegations.filter((row) => row.request_id === target.id);
@@ -80,7 +81,7 @@ function readStates(facts: Fact[], target: WatchTarget, current?: CurrentState):
 
 function readExitCode(rows: Omit<WatchLine, "time" | "seq">[]): number | undefined {
   if (!rows.length || rows.some((row) => EXIT_CODES[row.state] === undefined)) return;
-  for (const state of ["failed", "interrupted", "denied", "stopped", "closed", "done"]) {
+  for (const state of ["failed", "interrupted", "denied", "done"]) {
     if (rows.some((row) => row.state === state)) return EXIT_CODES[state];
   }
 }
@@ -95,13 +96,6 @@ export async function watchLedger(options: {
   dbPath: string; target: WatchTarget; write: (line: WatchLine) => void; signal?: AbortSignal;
 }): Promise<number> {
   const db = new DatabaseSync(options.dbPath, { readOnly: true });
-  // watch は台帳へ書かず、一時投影にも API と同じ判定器を使う。
-  const view = options.target.kind === 'conversation' ? new DatabaseSync(':memory:') : undefined;
-  if (view) initializeSchema(view);
-  const identities = new Map<string, string>();
-  const current = view ? new CurrentState(view, id => identities.get(id) ?? id) : undefined;
-  let viewSeq = -1;
-  const insert = view?.prepare('INSERT INTO facts(seq, fact_id, source, source_event_id, kind, subject, payload, payload_hash, source_ts, observed_ts, schema_version, cursor, confidence, supersedes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
   let timer: ReturnType<typeof setInterval> | undefined;
   let notifier: FSWatcher | undefined;
   let abort: () => void = () => {};
@@ -121,19 +115,10 @@ export async function watchLedger(options: {
       seq = fact.seq;
       if (!/^(delegation|run|conversation)\./.test(fact.kind)) return false;
       facts.push(fact);
-      insert?.run(fact.seq, fact.fact_id, fact.source, fact.source_event_id, fact.kind, fact.subject, JSON.stringify(fact.payload), fact.payload_hash,
-        fact.source_ts, fact.observed_ts, fact.schema_version, fact.cursor ?? null, fact.confidence, fact.supersedes ?? null);
       return true;
     }
     function report(time: string): number | undefined {
-      if (view) {
-        if (seq !== viewSeq) {
-          for (const row of projectEntityRecords<{ provider: string; native_id: string }>(facts, 'conversation')) identities.set(row.id, JSON.stringify([row.provider, row.native_id]));
-          rebuild(view); viewSeq = seq;
-        }
-        current!.refresh(seq);
-      }
-      const rows = readStates(facts, options.target, current);
+      const rows = readStates(facts, options.target);
       for (const row of rows) {
         const signature = JSON.stringify([row.state, row.attempt]);
         if (previous.get(row.target) !== signature) {
@@ -169,7 +154,6 @@ export async function watchLedger(options: {
               if (code !== undefined) { complete(code); return; }
             }
           }
-          if (current) { const code = report(new Date().toISOString()); if (code !== undefined) complete(code); }
         } catch (error) { settled = true; reject(error); }
       }
       abort = () => complete(EXIT_CODES.interrupted);
@@ -188,7 +172,6 @@ export async function watchLedger(options: {
     notifier?.close();
     options.signal?.removeEventListener("abort", abort);
     db.close();
-    view?.close();
   }
 }
 

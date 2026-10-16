@@ -298,28 +298,3 @@ test("runtime validates integrationMode, passes it to the host and keeps it for 
   host.emit("plain", { type: "exit", exitCode: 0 });
   for (const request of host.starts.slice(-1)) host.emit(request.runId, { type: "exit", exitCode: 0 });
 });
-
-test('state だけのホストも turn を保持し、idle の後だけ新しい turn にする（ソケット不要）', async t => {
-  const { Supervisor } = await import('../src/supervisor.ts');
-  const directory = mkdtempSync(join(tmpdir(), 'state-only-host-'));
-  const path = join(directory, 'ledger.db'), ledger = openLedger(path);
-  const service = openObservationService({ dbPath: path, home: directory, env: {} });
-  const feed = new ProjectionFeed(path, service.catchUp);
-  const supervisor = new Supervisor(ledger), host = new FakeHost('antigravity'); supervisor.registerHost(host);
-  t.after(() => { feed.close(); service.close(); ledger.close(); rmSync(directory, { recursive: true, force: true }); });
-  await supervisor.start('antigravity', { runId: 'state-only', conversationId: 'c-state-only', generation: 1, cwd: directory, input: { text: 'test' }, model: { model: 'fake' } });
-  const keys: string[] = [];
-  for (const state of ['running', 'waiting_input', 'running', 'idle', 'running', 'idle'] as const) {
-    const before = ledger.readSince(0, Number.MAX_SAFE_INTEGER).length;
-    host.emit('state-only', { type: 'state', state });
-    await waitUntil(() => ledger.readSince(0, Number.MAX_SAFE_INTEGER).length > before);
-    const facts = ledger.readSince(0, Number.MAX_SAFE_INTEGER);
-    const fact = facts.findLast(row => row.kind === 'run.state_changed')!;
-    keys.push(String((fact.payload as Record<string, unknown>).turn_id));
-    feed.refresh(Date.now() + 100);
-    assert.equal(feed.current.conversations.get(createNativeId('antigravity', 'state-only'))!.state, state);
-  }
-  assert.ok(keys[0] && keys[0] !== 'undefined');
-  assert.equal(new Set(keys.slice(0, 4)).size, 1); assert.notEqual(keys[4], keys[0]); assert.equal(keys[5], keys[4]);
-  host.emit('state-only', { type: 'exit', exitCode: 0 }); await supervisor.wait('state-only');
-});

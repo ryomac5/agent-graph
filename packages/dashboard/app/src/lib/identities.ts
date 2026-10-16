@@ -29,8 +29,6 @@ export function resolveRow(table: string, row: Row, identities?: ScreenIdentitie
   const run = (value: unknown) => typeof value === 'string' ? resolveRunId(value, identities) : value;
   if ('conversation_id' in result) result.conversation_id = conversation(result.conversation_id);
   if ('run_id' in result) result.run_id = run(result.run_id);
-  if ('current_run_id' in result) result.current_run_id = run(result.current_run_id);
-  if ('current_conversation_id' in result) result.current_conversation_id = conversation(result.current_conversation_id);
   if (table === 'runs') result.id = run(row.id);
   if (table === 'relations') {
     result.from_id = run(conversation(result.from_id));

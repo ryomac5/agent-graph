@@ -1,4 +1,3 @@
-import { stateLabel } from '../../components/StateBadge.tsx';
 import { LoadingFeature } from '../../components/LoadingFeature.tsx';
 import { readSessionProvider, SESSION_PROVIDER_KEY } from '../../lib/session-start.ts';
 import { resolveRunId } from '../../lib/identities.ts';
@@ -139,6 +138,11 @@ function ApprovalCard({ entry, t, disabled, answered, onAnswer, screen }: {
 export function providerFromId(conversationId: string | undefined): string {
   try { const parsed: unknown = JSON.parse(conversationId ?? ''); return Array.isArray(parsed) && typeof parsed[0] === 'string' ? parsed[0] : ''; } catch { return ''; }
 }
+export function sameSent(recorded: string, sent: string): boolean {
+  // Claude Code は貼った画像を「[Image #1]」の印に置き換えて記録するので、その印も外して比べる。
+  const a = recorded.trim().replace(/^(?:\[Image #\d+\]\s*)+/, ''); const b = sent.trim();
+  return a === b || Boolean(b) && a.endsWith(b) && /^(?:\S+\.(?:png|jpe?g|gif|webp)\s+)+$/i.test(a.slice(0, a.length - b.length));
+}
 export function ConversationTabHeader({ metadata, breadcrumb, actions }: { metadata: ConversationTabMetadata; breadcrumb?: React.ReactNode; actions: React.ReactNode }) {
   const header = useContext(WorkspaceConversationHeader);
   const [slots, setSlots] = useState<{ back: HTMLElement; actions: HTMLElement }>();
@@ -156,10 +160,10 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
   const hasBeenVisible = useRef(visible);
   if (visible) hasBeenVisible.current = true;
   const params = useParams();
-  const selectState = useMemo(() => selectScreenTables(['conversations', 'runs', 'relations', 'delegations', 'messages', 'message_memberships', 'approvals', 'observation_gaps', 'projects', 'tasks', 'roots', 'aliases', 'artifacts', 'send_watches', 'state_decisions'], ['connection', 'deltas']), []);
+  const selectState = useMemo(() => selectScreenTables(['conversations', 'runs', 'relations', 'delegations', 'messages', 'message_memberships', 'approvals', 'observation_gaps', 'projects', 'tasks', 'roots', 'aliases', 'artifacts', 'send_watches'], ['connection', 'deltas']), []);
   const state = useScreenStore(target, selectState);
   const requestedId = explicitId ?? params.conversation ?? '';
-  const resolveConversation = useCallback((id: string) => state.identities?.conversations[id] ?? id, [state.identities?.conversations]);
+  const resolveConversation = (id: string) => state.identities?.conversations[id] ?? id;
   const conversationId = resolveConversation(requestedId);
   const visibleConversation = useRef(conversationId);
   visibleConversation.current = conversationId;
@@ -230,7 +234,7 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
     ? { ...projectedConversation, id: conversationId, provider: receipt.provider, origin: 'managed' }
     : projectedConversation ?? (hostedConversation?.id === conversationId ? hostedConversation : undefined) ?? (creatingHost ? { id: conversationId, provider: creatingHost.provider || nativeProvider || 'claude', origin: 'observed', project: creatingHost.projectId, cwd: creatingHost.cwd || newSession?.cwd } : undefined) ?? (starting ? { id: '', provider: sessionProvider, origin: 'observed' } : undefined);
   const runs = (state.projection.runs ?? []).filter(row => row.conversation_id === conversationId);
-  const projectedRun = runs.find(row => row.id === conversation?.current_run_id);
+  const projectedRun = [...runs].sort((a, b) => Number(b.generation) - Number(a.generation))[0];
   const run: Row | undefined = receipt && receiptConversationId === conversationId && projectedRun?.id !== receiptRunId
     ? { id: receiptRunId, conversation_id: conversationId, state: 'idle', launch: { cwd: receipt.cwd, model: { model: receipt.model, effort: receipt.effort } } } : projectedRun;
   useEffect(() => {
@@ -275,7 +279,7 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
   const external = conversation?.origin !== 'managed';
   const terminalConversation = external && (provider === 'claude' || provider === 'codex' || Boolean(creatingHost));
   const host = hosts.find(host => host.conversationId === conversationId) ?? (pendingHost?.conversationId === conversationId ? pendingHost : undefined);
-  const stopped = ['stopped', 'closed', 'not_hosted'].includes(readText(run?.state));
+  const stopped = ['ended', 'failed', 'idle'].includes(readText(run?.state)) && isStoppedEvidence(run?.last_evidence);
   const active = ACTIVE_STATES.includes(readText(run?.state));
   const codexActive = provider === 'codex' && active && !external;
   const terminalCodex = terminalConversation && provider === 'codex';
@@ -328,17 +332,21 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
     return previousTimeline.current = { allEntries, owner };
   }, [historyMessages, historyMemberships, state.projection.approvals, state.projection.relations, state.projection.observation_gaps, timelineRuns, seriesKey, Boolean(seriesIds)]);
   const messageEntries = useMemo(() => allEntries.filter(entry => entry.kind === 'message'), [allEntries]);
-  const deliveryRows = useRef<Row[]>([]);
-  const deliveries = useMemo(() => {
-    const rows = (state.projection.send_watches ?? []).filter(row => resolveConversation(readText(row.conversation_id)) === conversationId);
-    if (rows.length !== deliveryRows.current.length || rows.some((row, index) => row !== deliveryRows.current[index])) deliveryRows.current = rows;
-    return deliveryRows.current;
-  }, [state.projection.send_watches, resolveConversation, conversationId]);
+  const failedDeliveries = (state.projection.send_watches ?? []).filter(row => row.state === 'failed' && resolveConversation(readText(row.conversation_id)) === conversationId);
   const pendingInputs = useMemo(() => (Array.isArray(conversation?.pending_inputs) ? conversation.pending_inputs : []).map(readObject), [conversation?.pending_inputs]);
   useEffect(() => {
-    const ids = new Set((state.projection.send_watches ?? []).map(row => row.id));
-    setSentMessages(previous => previous.some(message => ids.has(message.id)) ? previous.filter(message => !ids.has(message.id)) : previous);
-  }, [state.projection.send_watches]);
+    const reconciled = new Set<unknown>();
+    setSentMessages(previous => {
+      const remaining = previous.filter(message => {
+        if (resolveConversation(message.conversationId) !== conversationId) return true;
+        const match = messageEntries.find(entry => !message.known.has(entry.row.id) && !reconciled.has(entry.row.id) && entry.row.role === 'user' && sameSent(readMessageBody(entry.row), message.text))?.row
+          ?? pendingInputs.find(row => !message.known.has(row.id) && !reconciled.has(row.id) && sameSent(readMessageBody(row), message.text));
+        if (match) reconciled.add(match.id);
+        return !match;
+      });
+      return remaining.length === previous.length ? previous : remaining;
+    });
+  }, [conversationId, state.seq, detail]);
   const task = state.projection.tasks?.find(row => row.id === conversation?.task_id);
   const projectId = resolveProjectId(state, readText(conversation?.project ?? task?.project ?? newSession?.projectId)
     || readText(state.projection.projects?.find(row => row.root_path === cwd.trim())?.id));
@@ -401,7 +409,7 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
   if (anchorId) shownMessages.add(anchorId);
   const entries = useMemo(() => [...allEntries.filter(entry => entry.kind !== 'message' || shownMessages.has(entry.row.id)),
     ...pendingInputs.filter(() => active).map(row => ({ kind: 'message', key: readText(row.id), time: readText(row.source_ts),
-      row: { ...row, role: 'user', body_state: 'stored', delivery_decision: deliveries.find(watch => watch.queue_id === row.id)?.decision } } satisfies TimelineEntry))].sort(compareEntries), [allEntries, firstIndex, messageLimit, anchorId, pendingInputs, active, deliveries]);
+      row: { ...row, role: 'user', body_state: 'stored', delivery_state: 'queued' } } satisfies TimelineEntry))].sort(compareEntries), [allEntries, firstIndex, messageLimit, anchorId, pendingInputs, active]);
   async function loadHistory(older = false) {
     historyController.current?.abort();
     const controller = new AbortController(); historyController.current = controller;
@@ -569,12 +577,12 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
     return () => { disposed = true; };
   }, [client, provider, connected, conversationId]);
 
-  async function execute(command: string, payload: unknown, retainAck = false, cmdId?: string): Promise<Ack | undefined> {
+  async function execute(command: string, payload: unknown, retainAck = false): Promise<Ack | undefined> {
     if (pending || !connected) return;
     const sourceConversation = conversationId;
     setPending(true); setError('');
     try {
-      const ack = await (cmdId ? client.command(command, payload, cmdId) : client.command(command, payload));
+      const ack = await client.command(command, payload);
       if (!isVisible(sourceConversation)) return retainAck && ack.ok ? ack : undefined;
       if (!ack.ok) { setError(ack.error ?? t('failed')); return; }
       return ack;
@@ -626,7 +634,7 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
           }
         }
         const ids = await attachments.upload();
-        const ack = await client.command('session.send', { conversationId: destination, text: sent, ...(ids.length ? { attachments: ids } : {}) }, messageId);
+        const ack = await client.command('session.send', { conversationId: destination, text: sent, ...(ids.length ? { attachments: ids } : {}) });
         const result = readObject(ack.result);
         const terminalId = readText(result.terminalId);
         if (!ack.ok) throw new Error(['Invalid attachment', 'Invalid attachments', 'Attachment too large', 'Attachment transfer failed'].includes(ack.error ?? '') ? attachments.text.failed : ack.error ?? t('failed'));
@@ -654,12 +662,13 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
       return;
     }
     const launchPayload = { cwd: cwd.trim(), model: { model, ...(effort ? { effort } : {}) }, input: { text: sent } };
-    const stopped = ['stopped', 'closed', 'not_hosted'].includes(readText(run?.state));
+    const stopped = ['ended', 'failed', 'idle'].includes(readText(run?.state))
+      && isStoppedEvidence(run?.last_evidence);
     const command = starting ? 'start' : external ? stopped ? 'adopt' : 'fork' : 'send';
     const payload = starting ? { provider, ...launchPayload } : external
       ? { conversationId, ...launchPayload, ...(stopped ? { confirmStopped: true } : {}) }
       : { runId: run!.id, input: { text: sent } };
-    const ack = await execute(command, payload, true, messageId);
+    const ack = await execute(command, payload, true);
     if (!ack) { if (mounted.current) setSentMessages(previous => previous.filter(message => message.id !== messageId)); return; }
     clearSentDraft(draftKey, sent);
     if (mounted.current) setSentMessages(previous => previous.map(message => message.id === messageId ? { ...message, acknowledged: true } : message));
@@ -676,11 +685,10 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
     }
   }
   async function retryDelivery(row: Row) {
-    const cmdId = crypto.randomUUID();
     const ack = terminalConversation
-      ? await execute('session.send', { conversationId, text: readText(row.body), attachments: row.attachments, retryOf: row.id }, false, cmdId)
-      : await execute('send', { runId: run?.id, input: { text: readText(row.body) }, retryOf: row.id }, false, cmdId);
-    if (ack) setSentMessages(previous => previous.filter(message => message.id !== row.id));
+      ? await execute('session.send', { conversationId, text: readText(row.body), attachments: row.attachments, retryOf: row.id })
+      : await execute('send', { runId: run?.id, input: { text: readText(row.body) }, retryOf: row.id });
+    if (ack) setSentMessages(previous => previous.filter(message => message.text !== row.body));
   }
   async function applyModel() {
     const applied = model === 'default' ? recommendedModel : model;
@@ -725,9 +733,7 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
     <Icon name="message" size={22}/><h1>{t('conversation')}</h1>{conversationId && hostsLoadedFor !== conversationId
       ? <LoadingFeature language={language}/> : <p>{t('noConversation')}</p>}</div></section>;
   const Heading = embedded ? 'h2' : 'h1';
-  const decision = state.projection.state_decisions?.find(row => row.id === run?.decision_id);
-  const display = readObject(decision?.display);
-  const evidence = readObject(decision?.turn).evidenceIds;
+  const evidence = status === 'ended' ? run?.end_evidence : run?.last_evidence;
   const elapsedTurn = !seriesIds && isWorkingTurn(workingTurn) ? workingTurn : undefined;
   const worktree = worktreeLabel(run);
   const shownModel = appliedModel?.model || currentModel;
@@ -770,7 +776,7 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
       </div>
     </div>;
   return <section className={`conversation-page${embedded ? ' embedded' : ''}`} aria-label={t('conversation')}>
-    {workspaceHeader ? <ConversationTabHeader metadata={{ autoName: nameRoot?.auto_name, startedAt: conversationStart(state, conversationId), name: nameRoot?.user_name || nameRoot?.name || title, state: status, title: [nameRoot?.name || title, stateLabel(status, language)].filter(Boolean).join(' · '), elapsedEnabled: !seriesIds, elapsedStarted: Number.isFinite(elapsedTurn?.started) ? elapsedTurn!.started : undefined, elapsedLabel: t(status.startsWith('waiting') ? 'waiting' : 'elapsed'), model: shownModel }} breadcrumb={back} actions={headerActions}/> : <header className="conv-header">
+    {workspaceHeader ? <ConversationTabHeader metadata={{ autoName: nameRoot?.auto_name, startedAt: conversationStart(state, conversationId), name: nameRoot?.user_name || nameRoot?.name || title, state: status, title: [nameRoot?.name || title, dictionaries[language][status]].filter(Boolean).join(' · '), elapsedEnabled: !seriesIds, elapsedStarted: Number.isFinite(elapsedTurn?.started) ? elapsedTurn!.started : undefined, elapsedLabel: t(status.startsWith('waiting') ? 'waiting' : 'elapsed'), model: shownModel }} breadcrumb={back} actions={headerActions}/> : <header className="conv-header">
       <div className="conv-title-row" onClick={event => {
         if (!(event.target instanceof Element) || !event.target.closest('.state-badge')) return;
         event.preventDefault(); setDetailsOpen(true);
@@ -778,8 +784,8 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
         {breadcrumb && <div className="conv-breadcrumb">{breadcrumb}</div>}
         <Heading className="conv-title truncate" aria-label={nameRoot?.name ?? title} title={nameRoot?.user_name ? nameRoot.auto_name : title}>{nameRoot ? <SessionName key={nameRoot.id} root={nameRoot} client={client} language={language}/> : title}</Heading>
         <WorkingStateBadge turn={elapsedTurn} state={status} language={language} evidenceUrl="#conversation-details"
-          evidence={Array.isArray(display.details) ? display.details.join(' · ') : undefined}
-          reason={readText(readObject(decision?.turn).reason) || undefined}/>
+          evidence={evidenceLabel(evidence) || undefined}
+          reason={readText(run?.cause ?? run?.reason) || undefined}/>
         {provider && <span className="conv-agent truncate" title={[providerName(provider), shownModel].filter(Boolean).join(' · ')}>{agentName(provider, shownModel)}</span>}
         <span className="spacer"/>
         {headerActions}
@@ -792,10 +798,7 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
           <div title={worktree?.full || t('worktree')}><dt>{t('worktree')}</dt><dd className="meta-item"><Icon name="branch" size={14}/>
             {worktree ? <><span className="truncate mono">{worktree.place}</span>{worktree.branch && <span className="branch-name mono">{worktree.branch}</span>}</>
               : <span className="muted-text">{t('noWorktree')}</span>}</dd></div>
-          {decision && <div><dt>{t('reason')}</dt><dd>{readText(readObject(decision?.turn).reason)}{Array.isArray(display.details) && display.details.length ? ' · ' + display.details.join(' · ') : ''}</dd></div>}
-          {decision && state.evaluated_at !== undefined && <div><dt>Evaluated</dt><dd>{new Date(state.evaluated_at).toISOString()}</dd></div>}
-          {Array.isArray(evidence) && evidence.length > 0 && <div><dt>Evidence</dt><dd>{evidence.join(', ')}</dd></div>}
-          {Boolean(display.result) && <div><dt>Result</dt><dd>{String(display.result)}</dd></div>}
+          {reasonText(run?.cause ?? run?.reason) && <div><dt>{t('reason')}</dt><dd>{reasonText(run?.cause ?? run?.reason)}</dd></div>}
           {readText(run?.last_evidence_ts) && <div><dt>{t('lastEvidence')}</dt><dd><LiveRelativeTime value={readText(run?.last_evidence_ts)} language={language}/></dd></div>}
         </dl>
       </section>}
@@ -823,8 +826,7 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
         </details>;
         if (entry.kind === 'message') {
           const sender = senderOf(entry.row, participants);
-          const delivery = deliveries.find(row => (row.message_id === (entry.row as Row).id || row.queue_id === (entry.row as Row).id));
-          return <Message key={entry.key} row={delivery ? { ...entry.row, delivery_decision: delivery.decision } : entry.row} sender={sender} showName={nameShown(sender)} parentRequest={participants.child && sender.side === 'end' && entries.find(item => item.kind === 'message' && senderOf(item.row, participants).side === 'end' && !isToolOnly(item.row) && !instructionKind(item.row))?.key === entry.key} language={language} toolResults={toolResults} delegationNodes={delegationNodes(entry.row)} onSelectChild={selectChild}/>;
+          return <Message key={entry.key} row={entry.row} sender={sender} showName={nameShown(sender)} parentRequest={participants.child && sender.side === 'end' && entries.find(item => item.kind === 'message' && senderOf(item.row, participants).side === 'end' && !isToolOnly(item.row) && !instructionKind(item.row))?.key === entry.key} language={language} toolResults={toolResults} delegationNodes={delegationNodes(entry.row)} onSelectChild={selectChild}/>;
         }
         if (entry.kind === 'approval') return <ApprovalCard screen={historyState} key={entry.key} entry={entry} t={t} disabled={!writable} answered={answered.has(entry.row.id)} onAnswer={decision => void answer(entry.row.id, decision)}/>;
         nameShown(undefined);
@@ -836,8 +838,10 @@ function RenderConversationPage({ client, conversationId: explicitId, target = s
           {!entry.row.series && entry.time && <TimeStamp value={entry.time} fallback="" language={language}/>}
         </div>;
       })}
-      {deliveries.filter(row => !entries.some(entry => entry.kind === 'message' && ((entry.row as Row).id === row.message_id || (entry.row as Row).id === row.queue_id))).map(row => <Message key={'delivery:' + row.id} language={language} sender={senderOf({ role: 'user' }, participants)} row={{ ...row, source_ts: row.sent_ts, role: 'user', body_state: 'stored', delivery_decision: row.decision, retry_pending: pending }} onRetry={retryDelivery}/>)}
-      {sentMessages.filter(message => resolveConversation(message.conversationId) === conversationId && !deliveries.some(row => row.id === message.id)).map(message => <Message key={message.id} language={language} sender={senderOf({ role: 'user' }, participants)} row={{ id: message.id, role: 'user', body: message.text, body_state: 'stored', delivery_decision: { display: 'Sending' } }}/>) }
+      {failedDeliveries.map(row => <Message key={'delivery:' + row.id} language={language} sender={senderOf({ role: 'user' }, participants)} row={{ ...row, source_ts: row.sent_ts, role: 'user', body_state: 'stored', delivery_state: 'failed', retry_pending: pending }} onRetry={retryDelivery}/>)}
+      {sentMessages.filter(message => resolveConversation(message.conversationId) === conversationId
+        && !failedDeliveries.some(row => row.body === message.text)
+        && !pendingInputs.some(row => !message.known.has(row.id) && sameSent(readMessageBody(row), message.text))).map(message => <Message key={message.id} language={language} sender={senderOf({ role: 'user' }, participants)} row={{ id: message.id, role: 'user', body: message.text, body_state: 'stored', delivery_state: message.acknowledged ? undefined : 'sending' }}/>) }
       {deltas.map(([key, delta]) => <Message key={key} language={language} streaming sender={agentSender} showName={nameShown(agentSender)}
         row={{ id: delta.messageId ?? key, role: 'assistant', body: delta.text, body_state: 'stored' } satisfies Row}/>)}
       {commandResults.filter(result => result.conversationId === conversationId).map(result => <div key={result.id} className="command-result" role="status" aria-label="Command result">

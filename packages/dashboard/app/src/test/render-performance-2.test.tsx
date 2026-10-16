@@ -1,9 +1,8 @@
 import { Profiler, useState } from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
-import { createStore as createScreenStore } from '../lib/store.ts';
 import { afterEach, expect, it, vi } from 'vitest';
-import { createStore, useScreenStore, type Row, type ScreenState } from "./current-fixture.ts";
+import { createStore, useScreenStore, type Row, type ScreenState } from '../lib/store.ts';
 import { readBody, readMessageBody } from '../lib/message-body.ts';
 import { memoizeProjection } from '../lib/projection-cache.ts';
 import { selectRoots } from '../lib/roots.ts';
@@ -60,8 +59,7 @@ it('decodes each message body once across classification, display and repeated w
 });
 
 it('reuses projection calculations across interleaved windows and unrelated patches', () => {
-  const target = createScreenStore();
-  target.setSnapshot(createFixture().target.getSnapshot());
+  const { target } = createFixture();
   let names = 0;
   const state = target.getSnapshot();
   const roots = [{ ...state.projection.roots[0], get name() { names++; return 'Work'; } }];
@@ -83,11 +81,9 @@ it('reuses projection calculations across interleaved windows and unrelated patc
   expect(names).toBe(2);
   target.applyPatch({ type: 'patch', from_seq: 31, seq: 32, generation: 1, changes: {
     runs: { remove: [], upsert: [{ id: 'r', conversation_id: 'c', state: 'failed' }] },
-    roots: { remove: [], upsert: [{ ...roots[0], state: 'failed' }] },
   } });
   expect(selectRoots(target.getSnapshot())[0].state).toBe('failed');
-  select(target.getSnapshot());
-  expect(calculate).toHaveBeenCalledTimes(3);
+  expect(names).toBe(3);
   console.info('30 unrelated patches with 2 interleaved windows: projection builds 60 -> 2; root builds 60 -> 2; relevant run patch adds 1');
 });
 
@@ -168,12 +164,11 @@ it('does not commit Notifications or ConversationTabHeader on 30 clock ticks', a
   console.info('30 ticks: Notifications commits 0; ConversationTabHeader commits 0; live tab tooltip commits 30');
 });
 
-it('updates root activity labels at midnight instead of every second', async () => {
+it('updates root start labels at midnight instead of every second', async () => {
   vi.useFakeTimers(); vi.setSystemTime(new Date(2026, 9, 13, 23, 58));
   const { target } = createFixture();
   const before = target.getSnapshot();
   target.setSnapshot({ ...before, projection: { ...before.projection, runs: [{ id: 'r', conversation_id: 'c', state: 'idle' }],
-    roots: before.projection.roots.map(root => ({ ...root, last_activity_ts: new Date(2026, 9, 13, 9).toISOString() })),
     messages: [{ ...before.projection.messages[0], source_ts: new Date(2026, 9, 13, 9).toISOString() }],
   } });
   const state = target.getSnapshot();
@@ -296,14 +291,14 @@ it('preserves Sending, Queued and the next draft while a conversation is hidden'
     { id: 'a', kind: 'conversation', conversationId: 'c' }, { id: 'b', kind: 'conversation', conversationId: 'other' },
   ] }));
   let acknowledge!: (ack: Ack) => void;
-  const client = { ...base, command: vi.fn((name: string, _payload?: unknown, _cmdId?: string): Promise<Ack> => name === 'send'
+  const client = { ...base, command: vi.fn((name: string): Promise<Ack> => name === 'send'
     ? new Promise(resolve => { acknowledge = resolve; }) : Promise.resolve({ type: 'ack', cmd_id: 'cmd', ok: true, result: [] })) };
   render(<MemoryRouter><WorkspacePage project="p" target={target} client={client} showRootList={false} panelVisible={false}/></MemoryRouter>);
   await act(async () => {});
   const input = screen.getByRole('textbox', { name: 'Message' });
   fireEvent.change(input, { target: { value: 'Send this' } });
   fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-  expect(document.querySelector('.message [role="status"]')?.textContent?.trim()).toBe('Sending');
+  expect(document.querySelector('.message [role="status"]')?.textContent).toBe('Sending…');
   fireEvent.change(input, { target: { value: 'Keep the next draft' } });
   fireEvent.click(screen.getByRole('tab', { name: 'Other' }));
   await act(async () => acknowledge({ type: 'ack', cmd_id: 'send', ok: true }));
@@ -313,14 +308,13 @@ it('preserves Sending, Queued and the next draft while a conversation is hidden'
     conversations: { remove: [], upsert: [{ ...snapshot.projection.conversations[0], pending_inputs: [{ id: 'queued', body: 'Send this' }] }] },
     runs: { remove: [], upsert: [{ id: 'r', conversation_id: 'c', state: 'running', turn_started_ts: '2026-10-13T00:00:00Z' }] },
   } }));
-  act(() => target.setSendWatches([{ id: client.command.mock.calls.find(([name]) => name === 'send')![2], conversation_id: 'c', body: 'Send this', queue_id: 'queued', decision: { display: 'Likely queued' } }]));
   const tab = screen.getByRole('tab', { name: 'Renamed work' });
   expect(tab.querySelector('[data-state="running"]')).toBeTruthy();
   expect(group).not.toHaveBeenCalled();
   fireEvent.click(tab);
   await act(async () => {});
   expect(screen.queryByText('Sending…')).toBeNull();
-  expect(screen.getByText('Likely queued')).toBeTruthy();
+  expect(screen.getByText('Queued — Claude will read this after the current step')).toBeTruthy();
   expect(screen.getByRole('textbox', { name: 'Message' })).toHaveProperty('value', 'Keep the next draft');
   expect(screen.getByRole('status', { name: 'Working' })).toBeTruthy();
   console.info('hidden send: acknowledgement, queued input, next draft and tab name/state are preserved without timeline grouping');

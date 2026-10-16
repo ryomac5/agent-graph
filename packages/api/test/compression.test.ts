@@ -82,7 +82,7 @@ test('API and dashboard relay preserve compressed JSON and negotiate WS frames w
     rmSync(directory, { recursive: true });
   });
   f.append('message.created', 'message:reply', { role: 'assistant', body: '圧縮 SEARCHNEEDLE '.repeat(2000), body_state: 'stored', version: 2 });
-  api = await startWebSocketServer(service, { port: 0, runnerPath: join(directory, 'absent.sock'), now: () => Date.parse('2026-10-15T00:00:00Z') });
+  api = await startWebSocketServer(service, { port: 0, runnerPath: join(directory, 'absent.sock') });
   relay = await startStaticServer({ port: 0, dist: directory, upstream: api });
   const headers = { 'x-agent-graph-token': api.token };
   for (const path of ['/snapshot', `/conversation?id=${encodeURIComponent(LEGACY)}&latest=1`, '/projection?table=relations',
@@ -104,10 +104,10 @@ test('API and dashboard relay preserve compressed JSON and negotiate WS frames w
   assert.equal((await readResponse(relay.url + '/snapshot', { ...headers, 'accept-encoding': '*;q=0' })).status, 406);
   const snapshot = api.feed.snapshot();
   f.append('relation.updated', 'relation:delegated', { evidence: { description: 'Large patch 日本語 '.repeat(1000) } });
-  const patch = api.feed.refresh(Date.parse('2026-10-15T00:00:00Z'));
+  const patch = api.feed.refresh();
   assert.ok(patch && patch !== 'resync');
-  f.append('alias.created', 'alias:short', { entity_id: LEGACY, kind: 'kit', name: 'short' });
-  const smallPatch = api.feed.refresh(Date.parse('2026-10-15T00:00:00Z'));
+  f.append('run.state_changed', `run:${LEGACY}:1`, { state: 'idle' });
+  const smallPatch = api.feed.refresh();
   assert.ok(smallPatch && smallPatch !== 'resync');
   for (const endpoint of [api.url, relay.url]) for (const enabled of [true, false]) {
     const socket: WebSocket = new WebSocket(endpoint.replace('http:', 'ws:') + `/ws?token=${api.token}`, { perMessageDeflate: enabled, origin: endpoint });
@@ -121,7 +121,7 @@ test('API and dashboard relay preserve compressed JSON and negotiate WS frames w
     const received = messages.find(message => message.type === 'patch')!;
     assert.deepEqual(received.changes, JSON.parse(JSON.stringify(patch.changes)));
     assert.deepEqual(messages.filter(message => message.type === 'patch').map(message => message.changes),
-      JSON.parse(JSON.stringify([patch.changes, smallPatch.changes, api!.feed.currentPatch().changes])));
+      JSON.parse(JSON.stringify([patch.changes, smallPatch.changes])));
     assert.ok(Buffer.byteLength(JSON.stringify(messages.filter(message => message.type === 'patch')[1])) < COMPRESSION_MIN_BYTES);
     socket.send(JSON.stringify({ type: 'cmd', cmd_id: 'small', command: 'start' }));
     while (!messages.some(message => message.type === 'ack')) await once(socket, 'message');

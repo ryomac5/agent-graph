@@ -11,7 +11,7 @@ export interface TreeNode {
   conversationId?: string; run?: Row; delegation?: Row; attempts: Row[];
   role: string; provider: string; model: string; state: string; cost?: number; children: string[];
 }
-const EXECUTION_STATES = new Set(['starting', 'running', 'waiting_approval', 'waiting_input', 'waiting_agents', 'idle', 'ended', 'failed', 'unknown', 'stopped', 'closed', 'not_hosted', 'unresolved']);
+const EXECUTION_STATES = new Set(['starting', 'running', 'waiting_approval', 'waiting_input', 'idle', 'ended', 'failed', 'unknown']);
 /** 委譲の状態を、実行の状態の語彙に寄せる。印と色は実行と同じ規則で出す。 */
 export function toExecutionState(state: string): ExecutionState {
   if (EXECUTION_STATES.has(state)) return state as ExecutionState;
@@ -46,9 +46,10 @@ export function buildDelegationTree(state: ScreenState, project?: string): Deleg
   const conversationId = (id: string) => state.identities?.conversations[id] ?? id;
   const conversationsById = new Map(conversations.map(row => [readText(row.id), row]));
   const latestRuns = new Map<string, Row>();
-  for (const conversation of conversations) {
-    const run = runs.find(row => row.id === conversation.current_run_id);
-    if (run) latestRuns.set(String(conversation.id), run);
+  for (const run of runs) {
+    const id = readText(run.conversation_id);
+    const latest = latestRuns.get(id);
+    if (!latest || Number(run.generation ?? 0) > Number(latest.generation ?? 0)) latestRuns.set(id, run);
   }
   for (const c of conversations) {
     const id = readText(c.id);

@@ -110,7 +110,7 @@ test("Codex の起動・完了・親への連絡を分け、増分と再起動�
   appendFileSync(path, lines.slice(3, 4).join("\n") + "\n");
   observe();
   const child = createNativeId("codex", "child");
-  assert.equal(project(readFacts(ledger)).runs.find(run => run.conversation_id === child)?.state, "unknown");
+  assert.equal(project(readFacts(ledger)).runs.find(run => run.conversation_id === child)?.state, "running");
   appendFileSync(path, lines.slice(4).join("\n") + "\n");
   observe();
   const facts = readFacts(ledger);
@@ -120,7 +120,7 @@ test("Codex の起動・完了・親への連絡を分け、増分と再起動�
   assert.equal(projection.relations[0].to_id, child);
   assert.equal(projection.relations[0].confidence, "confirmed");
   assert.equal(projection.conversations.find(c => c.id === child)?.type, "subagent");
-  assert.equal(projection.runs.find(run => run.conversation_id === child)?.state, "unknown");
+  assert.equal(projection.runs.find(run => run.conversation_id === child)?.state, "idle");
   assert.equal(projection.runs.find(run => run.conversation_id === createNativeId("codex", "parent"))?.model, "gpt-6-sol");
   assert.ok(facts.some(f => f.kind === "run.updated" && (f.payload?.last_evidence as { activity_kind?: string })?.activity_kind === "interacted"));
   assert.deepEqual(projection.messages[0].body, [{ type: "tool_use", id: "spawn-call", name: "spawn_agent",
@@ -208,43 +208,4 @@ test("補完が中断されても cursor を進めず、構造化出力の所属
   const projection = project(readFacts(ledger));
   assert.equal(projection.messages.filter(m => m.native_id === "output").length, 1);
   assert.ok(projection.message_memberships.some(m => m.message_id === createNativeId("claude", "output")));
-});
-
-test("状態の原記録を持たない旧い Codex の cursor は、既読の行から原記録だけを一度補う", t => {
-  const home = mkdtempSync(join(tmpdir(), "history-details-codex-evidence-"));
-  const codexDir = join(home, ".codex/sessions");
-  mkdirSync(codexDir, { recursive: true });
-  writeFileSync(join(codexDir, "rollout-parent.jsonl"), codex);
-  const dbPath = join(home, "ledger.sqlite");
-  const options = { home, dbPath, env: { HOME: home, XDG_STATE_HOME: join(home, "state"), XDG_CONFIG_HOME: join(home, "config"),
-    CLAUDE_CONFIG_DIR: join(home, ".claude"), CODEX_HOME: join(home, ".codex") } };
-  let service = openObservationService(options);
-  t.after(() => { service.close(); rmSync(home, { recursive: true, force: true }); });
-  service.ingestOnce();
-  const isEvidence = (fact: Fact) => fact.source_event_id.startsWith("native-record:");
-  const evidence = readFacts(service.ledger).filter(isEvidence);
-  assert.ok(evidence.length > 0);
-  service.close();
-  // 原記録を取り込まない旧版が末尾まで読んだ状態を、一時 DB だけで再現する。
-  const db = new DatabaseSync(dbPath);
-  for (const fact of evidence) db.prepare("DELETE FROM facts WHERE fact_id=?").run(fact.fact_id);
-  for (const row of db.prepare("SELECT path, state FROM api_observation_cursors").all()) {
-    const state = JSON.parse(String(row.state));
-    delete state.cursor.nativeStateEvidence;
-    db.prepare("UPDATE api_observation_cursors SET state=? WHERE path=?").run(JSON.stringify(state), row.path);
-  }
-  rebuild(db); db.close();
-  service = openObservationService(options);
-  const before = readFacts(service.ledger);
-  service.ingestOnce();
-  const facts = readFacts(service.ledger);
-  assert.deepEqual(facts.slice(0, before.length), before);
-  // 補うのは原記録の事実だけで、発言や件数の事実を重ねない。
-  const added = facts.slice(before.length);
-  assert.ok(added.every(isEvidence), JSON.stringify(added.filter(fact => !isEvidence(fact)).map(fact => fact.source_event_id)));
-  const key = (fact: Fact) => JSON.stringify([fact.source_event_id, fact.subject, fact.payload]);
-  assert.deepEqual(added.map(key).sort(), evidence.map(key).sort());
-  assert.equal(service.ingestOnce().appended, 0);
-  service.close(); service = openObservationService(options);
-  assert.equal(service.ingestOnce().appended, 0);
 });

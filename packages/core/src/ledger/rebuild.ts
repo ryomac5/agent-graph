@@ -1,5 +1,3 @@
-import { createStableRunLinkCheck } from './run-link.ts';
-import { expandNativeEvidence } from './native-evidence.ts';
 import { encodeEventOrder } from "./event-order.ts";
 import type { DatabaseSync, SQLInputValue, StatementSync } from "node:sqlite";
 import type { Fact, JsonValue } from "./facts.ts";
@@ -13,8 +11,7 @@ import { encodeNameOrder, extractMessageName } from "./projections/conversations
 import type { ProjectedMessage } from "./projections/messages.ts";
 import type { Projection } from "./projections/index.ts";
 import { initializeRunnerProjection, forgetRunnerProjection, RECORD_ENTITIES } from "./projections/storage.ts";
-import { compareProjectionFacts, projectEntityRecords } from "./projections/delegations.ts";
-import { normalizeTimestampFields } from "./timestamps.ts";
+import { projectEntityRecords } from "./projections/delegations.ts";
 import { projectInitial } from "./projections/initial.ts";
 import { refreshSearch } from "./search.ts";
 
@@ -82,20 +79,17 @@ function expandSubjects(
 ): Set<string> {
   const result = new Set(subjects);
   // DISTINCT のために SQLite が全表を先に走査しないよう、起点を先に固定する。
-  // 依存の行は事実ごとに同じ鍵を繰り返す。起点の鍵を先に一意にし、事実数の二乗の結合を作らない。
-  // 起点は主キーの (projection, subject, direction) で引く。
   const targets = prepare(ledger, `SELECT DISTINCT target.subject
-    FROM (SELECT DISTINCT origin.key FROM json_each(?) AS seed
-      CROSS JOIN fact_projection_dependencies AS origin
-        ON origin.projection = ? AND origin.subject = seed.value AND origin.direction = ? AND origin.seq <= ?) AS origin
+    FROM fact_projection_dependencies AS origin
     CROSS JOIN fact_projection_dependencies AS target INDEXED BY fact_projection_dependency_lookup
-      ON target.projection = ? AND target.direction = ? AND target.key = origin.key
-    WHERE target.seq <= ?`);
+      ON target.projection = origin.projection AND target.key = origin.key
+    WHERE origin.projection = ? AND origin.subject IN (SELECT value FROM json_each(?)) AND origin.direction = ?
+      AND target.direction = ? AND origin.seq <= ? AND target.seq <= ?`);
   const targetDirection = direction === "needs" ? "offers" : "needs";
   let frontier = [...subjects];
   while (frontier.length) {
     const next: string[] = [];
-    for (const target of targets.all(JSON.stringify(frontier), table, direction, throughSeq, table, targetDirection, throughSeq)) {
+    for (const target of targets.all(table, JSON.stringify(frontier), direction, targetDirection, throughSeq, throughSeq)) {
       const subject = String(target.subject);
       if (!result.has(subject)) { result.add(subject); next.push(subject); }
     }
@@ -104,28 +98,10 @@ function expandSubjects(
   return result;
 }
 
-// 一回の差分反映で、同じ subject の事実を表ごとに読み直して展開しない。
-// 事実は追記だけで、反映の取引の間は同じ位置までの組が変わらない。保持する件数には上限を置く。
-const SUBJECT_FACT_CACHE_LIMIT = 200_000;
-interface SubjectFactCache { throughSeq: number; facts: Map<string, Fact[]>; size: number }
-
-function readSubjectFacts(ledger: DatabaseSync, subjects: Set<string>, throughSeq: number, cache?: SubjectFactCache): Fact[] {
-  const read = (ids: Iterable<string>) => prepare(ledger, `SELECT * FROM facts
+function readSubjectFacts(ledger: DatabaseSync, subjects: Set<string>, throughSeq: number): Fact[] {
+  return prepare(ledger, `SELECT * FROM facts
     WHERE subject IN (SELECT value FROM json_each(?)) AND seq <= ? ORDER BY seq`)
-    .all(JSON.stringify([...ids]), throughSeq).map(decodeFact);
-  if (!cache || cache.throughSeq !== throughSeq) return read(subjects);
-  const missing = [...subjects].filter((subject) => !cache.facts.has(subject));
-  const loaded = missing.length ? read(missing) : [];
-  if (cache.size + loaded.length <= SUBJECT_FACT_CACHE_LIMIT) {
-    for (const subject of missing) cache.facts.set(subject, []);
-    for (const fact of loaded) cache.facts.get(fact.subject)!.push(fact);
-    cache.size += loaded.length;
-  }
-  if (!missing.length || cache.facts.has(missing[0])) {
-    return [...subjects].flatMap((subject) => cache.facts.get(subject)!).sort((left, right) => left.seq - right.seq);
-  }
-  // 上限を超えた組は保持せず、読んだ分と保持済みの分を合わせて返す。
-  return [...[...subjects].flatMap((subject) => cache.facts.get(subject) ?? []), ...loaded].sort((left, right) => left.seq - right.seq);
+    .all(JSON.stringify([...subjects]), throughSeq).map(decodeFact);
 }
 
 // 関係の同一性の候補は起点の別名までに限り、委譲の木全体へ再帰的に広げない。
@@ -229,12 +205,12 @@ function readConversationNames(ledger: DatabaseSync, facts: readonly Fact[]): Ma
   return names;
 }
 
-function applyAffected(ledger: DatabaseSync, added: readonly Fact[], lastSeq: number, cache?: SubjectFactCache,
-  throughSeq = added.at(-1)!.seq): void {
+function applyAffected(ledger: DatabaseSync, added: readonly Fact[], lastSeq: number): void {
+  const throughSeq = added.at(-1)!.seq;
   const changed = new Set(added.map((fact) => fact.kind.split(".")[0]));
   const nameConversations = new Set<string>();
   const runSubjects = new Set(added.filter(fact => fact.kind.startsWith("run.")).map(fact => fact.subject));
-  for (const run of projectRuns(readSubjectFacts(ledger, runSubjects, throughSeq, cache))) nameConversations.add(run.conversation_id);
+  for (const run of projectRuns(readSubjectFacts(ledger, runSubjects, throughSeq))) nameConversations.add(run.conversation_id);
   const order = ["messages", "message_memberships", ...PROJECTION_TABLES.filter((table) => table !== "messages" && table !== "message_memberships")] as const;
   for (const table of order) {
     const entities: readonly string[] = PROJECTION_ENTITIES[table];
@@ -257,16 +233,16 @@ function applyAffected(ledger: DatabaseSync, added: readonly Fact[], lastSeq: nu
     if (![...affected].some((subject) => subject.startsWith(`${entity}:`))) continue;
     let subjects = expandSubjects(ledger, table, affected, "needs", throughSeq);
     if (table === "conversations") {
-      const identities = projectConversationIds(readSubjectFacts(ledger, subjects, throughSeq, cache));
+      const identities = projectConversationIds(readSubjectFacts(ledger, subjects, throughSeq));
       const ids = [...new Set([...identities.keys(), ...identities.values()])];
       for (const row of prepare(ledger, `SELECT subject_id FROM run_subjects
         WHERE conversation_id IN (SELECT value FROM json_each(?))`).all(JSON.stringify(ids))) subjects.add(`run:${row.subject_id}`);
       for (const subject of runSubjects) subjects.add(subject);
     }
-    let facts = readSubjectFacts(ledger, subjects, throughSeq, cache);
+    let facts = readSubjectFacts(ledger, subjects, throughSeq);
     if (table === "relations") {
       subjects = includeRelationPeers(ledger, subjects, facts, lastSeq, throughSeq);
-      facts = readSubjectFacts(ledger, subjects, throughSeq, cache);
+      facts = readSubjectFacts(ledger, subjects, throughSeq);
     }
     const previous = PROJECT_TABLE[table](facts.filter((fact) => fact.seq <= lastSeq));
     const next = table === "conversations"
@@ -284,51 +260,6 @@ function applyAffected(ledger: DatabaseSync, added: readonly Fact[], lastSeq: nu
       refreshNameCandidates(ledger, new Set([...previous, ...next].map((row) => row.id)), nameConversations);
     }
   }
-}
-
-// 投影済みの実行と同じ会話・世代を繰り返し、足すのは原記録の証拠だけという実行の事実。
-// 実行の投影は原記録の証拠欄を読まず、委譲・承認・会話・検索もこの欄を使わない。表の行は変わらず、変わるのは実体の記録の合成だけである。
-const EVIDENCE_ONLY_FIELDS = new Set(["conversation_id", "generation", "last_evidence", "last_evidence_ts"]);
-const CANONICAL_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
-function isEvidenceOnly(ledger: DatabaseSync, fact: Fact): boolean {
-  if (fact.kind !== "run.updated" || fact.supersedes || !fact.payload) return false;
-  const payload = fact.payload as Record<string, JsonValue>;
-  if (typeof payload.conversation_id !== "string" || typeof payload.generation !== "number") return false;
-  if (!Object.keys(payload).every((key) => EVIDENCE_ONLY_FIELDS.has(key))) return false;
-  // 原記録でない証拠と、証拠を伴わない時刻は、実行の投影が読む欄である。
-  const evidence = payload.last_evidence;
-  if (("last_evidence" in payload || "last_evidence_ts" in payload) && (!evidence || typeof evidence !== "object"
-    || Array.isArray(evidence) || typeof evidence.native_source !== "string")) return false;
-  return !!prepare(ledger, `SELECT 1 FROM run_subjects s JOIN runs r ON r.id = s.conversation_id || ':' || s.generation
-    WHERE s.subject_id = ? AND s.conversation_id = ? AND s.generation = ? AND r.conversation_id = ? AND r.generation = ?`)
-    .get(fact.subject.slice("run:".length), payload.conversation_id, payload.generation, payload.conversation_id, payload.generation);
-}
-
-// 証拠だけの事実が既存の全事実より後に並ぶ実行は、保存済みの記録へ欄を重ねるだけで全件の合成と一致する。
-// 時刻が前後する事実や正規形でない時刻を含む実行は、呼び出し側が全件から作り直す。
-function appendEvidenceRecords(ledger: DatabaseSync, added: readonly Fact[], evidenceOnly: ReadonlySet<Fact>, lastSeq: number): Set<string> {
-  const bySubject = new Map<string, Fact[]>();
-  for (const fact of added) { const group = bySubject.get(fact.subject) ?? []; group.push(fact); bySubject.set(fact.subject, group); }
-  const handled = new Set<string>();
-  for (const [subject, facts] of bySubject) {
-    if (!facts.every((fact) => evidenceOnly.has(fact) && CANONICAL_TIME.test(fact.source_ts))) continue;
-    const id = subject.slice("run:".length);
-    const stored = prepare(ledger, "SELECT data, last_seq FROM entity_records WHERE entity = 'run' AND id = ?").get(id);
-    if (!stored) continue;
-    const existing = prepare(ledger, `SELECT max(source_ts) AS latest,
-      coalesce(sum(source_ts NOT GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9]Z'), 0) AS irregular
-      FROM facts WHERE subject = ? AND seq <= ?`).get(subject, lastSeq)!;
-    const ordered = facts.flatMap(expandNativeEvidence).sort(compareProjectionFacts);
-    if (Number(existing.irregular) || typeof existing.latest !== "string" || ordered[0].source_ts < existing.latest) continue;
-    // 同時刻の圧縮内の行とは、全件の合成で順序を決める。
-    if (ordered[0].source_ts === existing.latest) continue;
-    let record = JSON.parse(String(stored.data)) as Record<string, JsonValue>;
-    for (const fact of ordered) record = { ...record, ...fact.payload, id };
-    prepare(ledger, "UPDATE entity_records SET data = ?, last_seq = ? WHERE entity = 'run' AND id = ?")
-      .run(JSON.stringify(normalizeTimestampFields(record)), Math.max(Number(stored.last_seq), ...facts.map((fact) => fact.seq)), id);
-    handled.add(subject);
-  }
-  return handled;
 }
 
 function writeEntityRecords(ledger: DatabaseSync, facts: readonly Fact[], subjects?: Set<string>): void {
@@ -370,16 +301,9 @@ function updateProjection(ledger: DatabaseSync, sinceSeq?: number, initial = fal
         writeMessageNames(ledger, projection.messages, []);
         refreshNameCandidates(ledger, new Set(projection.message_memberships.map((row) => row.id)), new Set());
       } else {
-        const throughSeq = added.at(-1)!.seq;
-        const cache: SubjectFactCache = { throughSeq, facts: new Map(), size: 0 };
-        // 証拠だけの事実は表の行を変えない。会話の多い実行で、追記ごとに全事実を読み直して投影しない。
-        const stableLink = createStableRunLinkCheck(ledger);
-        const evidenceOnly = new Set(added.filter((fact) => isEvidenceOnly(ledger, fact) && stableLink(fact)));
-        const projected = added.filter((fact) => !evidenceOnly.has(fact));
-        if (projected.length) applyAffected(ledger, projected, state.last_seq, cache, throughSeq);
-        const appended = appendEvidenceRecords(ledger, added, evidenceOnly, state.last_seq);
-        const subjects = new Set(added.map((fact) => fact.subject).filter((subject) => !appended.has(subject)));
-        if (subjects.size) writeEntityRecords(ledger, readSubjectFacts(ledger, subjects, throughSeq, cache), subjects);
+        applyAffected(ledger, added, state.last_seq);
+        const subjects = new Set(added.map((fact) => fact.subject));
+        writeEntityRecords(ledger, readSubjectFacts(ledger, subjects, added.at(-1)!.seq), subjects);
       }
       const commit = prepare(ledger, "INSERT OR REPLACE INTO run_commit_results VALUES (?, ?, ?, ?)");
       const runSubject = prepare(ledger, "INSERT OR REPLACE INTO run_subjects VALUES (?, ?, ?)");

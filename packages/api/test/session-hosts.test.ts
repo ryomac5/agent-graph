@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
-import type { spawn } from 'node-pty';
+import type { RunnerEvent, RunnerRequest, RunnerResponse } from '../src/runner-client.ts';
+import type { RunnerPtySpawnRequest, RunnerTerminalInfo } from '../src/terminal/runner-pty.ts';
 import { createSessionHosts, MAX_SCROLLBACK_BYTES, type HostOptions } from '../src/terminal/hosts.ts';
 import { escapeAttachmentPath } from '../src/terminal/attachments.ts';
 import type { TerminalNotification } from '../src/terminal/index.ts';
@@ -20,23 +21,38 @@ const conversationId = JSON.stringify(['claude', SESSION]);
 async function createFixture(t: TestContext, waits?: number[], options: HostOptions = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'ag session-hosts-'));
   const children: { pid: number; killed: boolean; writes: string[]; onWrite: (data: string) => void; output: (data: string) => void; exit: (event: { exitCode: number }) => void }[] = [];
-  const launches: { file: string; args: string[] | string; options: Parameters<typeof spawn>[2] }[] = [];
-  const openTerminal: typeof spawn = (file, args, options) => {
-    launches.push({ file, args, options });
-    const child = { pid: 1000 + children.length, killed: false, writes: [] as string[], onWrite: (_data: string) => {}, output: (_data: string) => {}, exit: (_event: { exitCode: number }) => {} };
-    children.push(child);
-    return {
-      pid: child.pid,
-      write(data: string) { child.writes.push(data); child.onWrite(data); }, resize() {},
-      kill() { child.killed = true; child.exit({ exitCode: 0 }); },
-      onData(callback: typeof child.output) { child.output = callback; queueMicrotask(() => callback(promptFrame(file))); return { dispose() {} }; },
-      onExit(callback: typeof child.exit) { child.exit = callback; return { dispose() {} }; },
-    } as unknown as ReturnType<typeof spawn>;
-  };
+  const launches: { file: string; args: string[] | string; options: { cwd: string; env: Record<string, string | undefined> } }[] = [];
+  const infos: RunnerTerminalInfo[] = [];
+  let onEvent: (event: RunnerEvent) => void = () => {};
+  const runner = { available: true, connectionGeneration: 1, close() {},
+    async request(request: RunnerRequest): Promise<RunnerResponse> {
+      let result: unknown = {};
+      if (request.command === 'status') result = { capabilities: { terminals: true } };
+      if (request.command === 'terminal.spawn') {
+        const input = request.payload as unknown as RunnerPtySpawnRequest;
+        launches.push({ file: input.file, args: input.args, options: { cwd: input.cwd, env: input.env } });
+        const index = children.length, terminalId = 'runner-' + index;
+        const info: RunnerTerminalInfo = { terminalId, pid: 1000 + index, meta: input.meta, startedAt: new Date().toISOString(), scrollback: promptFrame(input.file) };
+        infos.push(info);
+        const child = { pid: info.pid, killed: false, writes: [] as string[], onWrite: (_data: string) => {},
+          output(data: string) { info.scrollback += data; onEvent({ type: 'evt', terminal: { terminalId, output: data } }); },
+          exit(exit: { exitCode: number }) { info.exited = exit; onEvent({ type: 'evt', terminal: { terminalId, exit } }); } };
+        children.push(child);
+        result = { terminalId, pid: info.pid };
+      }
+      if (request.command === 'terminal.list') result = structuredClone(infos);
+      const payload = request.payload as { terminalId: string; data: string } | undefined;
+      if (payload?.terminalId) {
+        const child = children[Number(payload.terminalId.split('-')[1])];
+        if (request.command === 'terminal.write') { child.writes.push(payload.data); child.onWrite(payload.data); }
+        if (request.command === 'terminal.kill') { child.killed = true; child.exit({ exitCode: 0 }); }
+      }
+      return { type: 'res', cmd_id: request.cmd_id, ok: true, result: JSON.parse(JSON.stringify(result)) };
+    } };
   const waitWrites: string[][] = [];
   const messages: TerminalNotification[] = [];
   const notify = (message: TerminalNotification) => messages.push(message);
-  const hosts = createSessionHosts(async () => '/repo', { openTerminal, quietMs: 0, warmupMs: 0, sessionsDirectory: directory, attachments: { directory: join(directory, 'attachments') }, submitDelayMs: waits ? 500 : 0, wait: async ms => { waits?.push(ms); waitWrites.push([...children[0].writes]); },
+  const hosts = createSessionHosts(async () => '/repo', { createRunnerClient: callback => { onEvent = callback; return runner; }, quietMs: 0, warmupMs: 0, sessionsDirectory: directory, attachments: { directory: join(directory, 'attachments') }, submitDelayMs: waits ? 500 : 0, wait: async ms => { waits?.push(ms); waitWrites.push([...children[0].writes]); },
     listProcesses: async () => [{ pid: 2000, ppid: 1000 }, { pid: 3000, ppid: 2000 }, { pid: 9999, ppid: 1 }], ...options,
     targetOptions: { cache: join(directory, 'cache'), settingsPath: join(directory, 'ssh.toml'), ...options.targetOptions } });
   t.after(async () => { hosts.close(); await rm(directory, { recursive: true, force: true }); });

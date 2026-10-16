@@ -124,7 +124,7 @@ test('reconnect polling rebuilds the screen, preserves browser subscriptions and
   assert.equal(f.runner.requests.some(request => request.command === 'terminal.spawn' || request.command === 'terminal.kill'), false);
 });
 
-test('discovery in progress fails explicitly, then newly discovered sessions can receive sends', async t => {
+test('unknown sessions fail with no_host during discovery, then discovered sessions can receive sends', async t => {
   let finish!: () => void;
   const pending = new Promise<void>(resolve => { finish = resolve; });
   const f = await createFixture(t, { listProcesses: async () => { await pending; return []; } });
@@ -132,14 +132,37 @@ test('discovery in progress fails explicitly, then newly discovered sessions can
   await writeFile(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: SESSION }));
   const service = f.start();
   await tick();
-  await assert.rejects(handle(service, 'session.send', { conversationId, text: 'early' }), /Host discovery pending; retry session.send/);
+  await assert.rejects(handle(service, 'session.send', { conversationId, text: 'early' }), /^Error: no_host$/);
   assert.equal(f.runner.requests.some(request => request.command === 'terminal.write'), false);
   finish();
   await service.rehydrate();
   await handle(service, 'session.send', { conversationId, text: 'ready' });
 });
 
-test('reconnect rejects sends while cleared hosts are being rediscovered, then sends to the same runner terminal', async t => {
+test('a matching resume waits with a deadline while unrelated sends remain no_host', async t => {
+  let finish!: () => void;
+  let entered!: () => void;
+  const pending = new Promise<void>(resolve => { finish = resolve; });
+  const discovering = new Promise<void>(resolve => { entered = resolve; });
+  const f = await createFixture(t, { listProcesses: async () => { entered(); await pending; return []; } });
+  f.runner.infos = [{ ...createInfo(), meta: { ...createInfo().meta, resumeId: SESSION } }];
+  await writeFile(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: SESSION }));
+  const service = f.start();
+  await discovering;
+  try {
+    const started = performance.now();
+    const sending = assert.rejects(handle(service, 'session.send', { conversationId, text: 'too early' }), /^Error: Host discovery pending; retry session.send$/);
+    await assert.rejects(handle(service, 'session.send', { conversationId: 'unrelated', text: 'absent' }), /^Error: no_host$/);
+    await sending;
+    assert.ok(performance.now() - started >= 3000);
+    assert.equal(f.runner.requests.some(request => request.command === 'terminal.write'), false);
+  } finally { finish(); await service.rehydrate(); }
+  await handle(service, 'session.send', { conversationId, text: 'ready' });
+  assert.deepEqual(f.runner.requests.filter(request => request.command === 'terminal.write').map(request => request.payload),
+    ['\x15', '\x1b[200~ready\x1b[201~', '\r'].map(data => ({ terminalId: 'runner-terminal', data })));
+});
+
+test('reconnect waits only for a matching conversation and sends to the same runner terminal after discovery', async t => {
   let pending: Promise<void> | undefined;
   let entered!: () => void;
   const f = await createFixture(t, { listProcesses: async () => {
@@ -155,15 +178,20 @@ test('reconnect rejects sends while cleared hosts are being rediscovered, then s
   const discovering = new Promise<void>(resolve => { entered = resolve; });
   f.runner.connectionGeneration++;
   const restoring = service.rehydrate();
+  let sending!: Promise<unknown>;
   try {
     await discovering;
     assert.equal(service.hasTerminal('runner-terminal'), true);
-    await assert.rejects(handle(service, 'session.send', { conversationId, text: 'during reconnect' }), /^Error: Host discovery pending; retry session.send$/);
+    let sent = false;
+    sending = handle(service, 'session.send', { conversationId, text: 'during reconnect' }).then(result => { sent = true; return result; });
+    await tick();
+    assert.equal(sent, false);
+    await assert.rejects(handle(service, 'session.send', { conversationId: 'unrelated', text: 'absent' }), /^Error: no_host$/);
     assert.equal(f.runner.requests.some(request => request.command === 'terminal.write'), false);
   } finally { release(); await restoring; }
-  await handle(service, 'session.send', { conversationId, text: 'after reconnect' });
+  await sending;
   assert.deepEqual(f.runner.requests.filter(request => request.command === 'terminal.write').map(request => request.payload),
-    ['\x15', '\x1b[200~after reconnect\x1b[201~', '\r'].map(data => ({ terminalId: 'runner-terminal', data })));
+    ['\x15', '\x1b[200~during reconnect\x1b[201~', '\r'].map(data => ({ terminalId: 'runner-terminal', data })));
   assert.equal(f.runner.requests.some(request => request.command === 'terminal.spawn' || request.command === 'terminal.kill'), false);
 });
 

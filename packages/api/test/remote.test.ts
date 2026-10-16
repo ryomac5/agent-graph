@@ -10,6 +10,45 @@ import type { spawn } from 'node:child_process';
 import { createTargetService, buildLaunchCommand, quoteShell, validateBase, validateName, validateTarget, cacheRoot } from '../src/remote/index.ts';
 import { startRemoteMirror, discoverRemoteSession } from '../src/remote/mirror.ts';
 import { openObservationService } from '../src/service/index.ts';
+import type { HostOptions } from '../src/terminal/hosts.ts';
+import type { RunnerEvent, RunnerRequest, RunnerResponse } from '../src/runner-client.ts';
+import type { RunnerPtySpawnRequest, RunnerTerminalInfo } from '../src/terminal/runner-pty.ts';
+
+function createFakeRunner(options: {
+  pid: number; scrollback?: string; onSpawn?: (input: RunnerPtySpawnRequest) => void; onWrite?: (data: string) => void;
+}) {
+  const infos: RunnerTerminalInfo[] = [];
+  let onEvent = (_event: RunnerEvent) => {};
+  const runner = {
+    available: true, connectionGeneration: 1, close() { onEvent = () => {}; },
+    async request(request: RunnerRequest): Promise<RunnerResponse> {
+      let result: unknown = {};
+      const payload = request.payload as { terminalId: string; data: string };
+      if (request.command === 'status') result = { capabilities: { terminals: true } };
+      else if (request.command === 'terminal.spawn') {
+        const input = request.payload as unknown as RunnerPtySpawnRequest;
+        options.onSpawn?.(input);
+        const info = { terminalId: 'runner-' + infos.length, pid: options.pid, meta: input.meta,
+          startedAt: new Date().toISOString(), scrollback: options.scrollback ?? '' };
+        infos.push(info); result = { terminalId: info.terminalId, pid: info.pid };
+      } else if (request.command === 'terminal.list') result = structuredClone(infos);
+      else {
+        assert.equal(payload.terminalId, infos[0].terminalId);
+        if (request.command === 'terminal.write') options.onWrite?.(payload.data);
+        else if (request.command === 'terminal.kill') fake.exit({ exitCode: 0 });
+        else assert.equal(request.command, 'terminal.resize');
+      }
+      return { type: 'res', cmd_id: request.cmd_id, ok: true, result: JSON.parse(JSON.stringify(result)) };
+    },
+  };
+  const fake = {
+    createRunnerClient: ((callback: (event: RunnerEvent) => void) => { onEvent = callback; return runner; }) satisfies NonNullable<HostOptions['createRunnerClient']>,
+    output(data: string) { infos[0].scrollback += data; onEvent({ type: 'evt', terminal: { terminalId: infos[0].terminalId, output: data } }); },
+    exit(exit: { exitCode: number }) { infos[0].exited = exit; onEvent({ type: 'evt', terminal: { terminalId: infos[0].terminalId, exit } }); },
+  };
+  return fake;
+}
+
 const SESSION = '12345678-1234-1234-1234-123456789abc';
 const connection = { id: 'server', name: 'Server', destination: 'dev@host', projects: [{ projectId: 'demo', path: '/remote/demo' }] };
 test('shell arguments are quoted and injection in names, refs, targets and destination is rejected', async () => {
@@ -99,11 +138,9 @@ test('SSH hosted terminals safely launch, attach, send, interrupt and report dis
     return `\x1e${Date.now() / 1000}\n${JSON.stringify({ sessionId: SESSION, cwd: '/remote/demo', pid: 300 })}`;
   }, spawnStream: (() => stream) as unknown as typeof spawn });
   await targets.handle('ssh.write', { connections: [connection] });
-  const hosts = createSessionHosts(async () => '/local/demo', { targets, submitDelayMs: 0, quietMs: 0, warmupMs: 0, openTerminal: ((file: string, args: string[] | string) => {
-    launches.push({ file, args });
-    return { pid: 100, write: (text: string) => writes.push(text), resize() {}, kill() {},
-      onData: (fn: typeof output) => { output = fn; return { dispose() {} }; }, onExit: (fn: typeof exit) => { exit = fn; return { dispose() {} }; } };
-  }) as unknown as import('../src/terminal/hosts.ts').HostOptions['openTerminal'] });
+  const fake = createFakeRunner({ pid: 100, onSpawn: input => launches.push({ file: input.file, args: input.args }), onWrite: text => writes.push(text) });
+  output = fake.output; exit = fake.exit;
+  const hosts = createSessionHosts(async () => '/local/demo', { targets, submitDelayMs: 0, quietMs: 0, warmupMs: 0, createRunnerClient: fake.createRunnerClient });
   t.after(() => hosts.close()); const notify = () => {};
   const launch = await hosts.handle('session.launch', { projectId: 'demo', provider: 'claude', target: { kind: 'ssh', id: 'server' }, model: 'opus' }, notify) as { terminalId: string };
   assert.equal(launches[0].file, 'ssh'); assert.ok(launches[0].args.includes('-tt'));
@@ -135,10 +172,8 @@ test('Codex discovery follows children and launch runs inside the selected local
   assert.equal((await discoverCodex(targets, 100))?.sessionId, SESSION);
   assert.deepEqual(calls.at(-1), ['lsof', '-nP', '-p', '100,200', '-F', 'n']);
   const launches: { file: string; args: string[] | string; cwd: string | undefined }[] = [];
-  const hosts = createSessionHosts(selectRoot, { targets, openTerminal: ((file: string, args: string[] | string, options: { cwd?: string }) => {
-    launches.push({ file, args, cwd: options.cwd });
-    return { pid: 100, write() {}, resize() {}, kill() {}, onData() { return { dispose() {} }; }, onExit() { return { dispose() {} }; } };
-  }) as unknown as import('../src/terminal/hosts.ts').HostOptions['openTerminal'] });
+  const fake = createFakeRunner({ pid: 100, onSpawn: input => launches.push({ file: input.file, args: input.args, cwd: input.cwd }) });
+  const hosts = createSessionHosts(selectRoot, { targets, createRunnerClient: fake.createRunnerClient });
   t.after(() => hosts.close());
   await hosts.handle('session.launch', { projectId: 'demo', provider: 'codex', target: { kind: 'local' }, worktree: '/cache/tree', model: 'gpt-5' }, () => {});
   assert.deepEqual(launches[0], { file: 'codex', args: ['--model', 'gpt-5'], cwd: '/cache/tree' });

@@ -1,25 +1,24 @@
-import { discoverCodex } from '../remote/codex.ts';
-import { createTargetService, buildLaunchCommand, validateTarget, type TargetOptions, type TargetService, type ExecutionTarget, type SshConnection } from '../remote/index.ts';
-import { discoverRemoteSession, startRemoteMirror } from '../remote/mirror.ts';
-import type { spawn } from 'node-pty';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { RunnerClient, runnerSocketPath, type RunnerEvent } from '../runner-client.ts';
-import { createRunnerPty, type RunnerPty, type RunnerPtyClient } from './runner-pty.ts';
 import { mkdir, readFile, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import type { FilesRequest } from '../files/index.ts';
+import { discoverCodex } from '../remote/codex.ts';
+import { createTargetService, buildLaunchCommand, validateTarget, type TargetOptions, type TargetService, type ExecutionTarget, type SshConnection } from '../remote/index.ts';
+import { discoverRemoteSession, startRemoteMirror } from '../remote/mirror.ts';
+import { RunnerClient, runnerSocketPath, type RunnerEvent } from '../runner-client.ts';
+import { SMOKE_DIRECTORY, SMOKE_PROJECT_ID } from '../verification.ts';
+import { createAttachmentStore, escapeAttachmentPath, uploadRemoteAttachment, type AttachmentOptions } from './attachments.ts';
 import { MAX_TERMINALS, type TerminalNotification } from './index.ts';
+import { createRunnerPty, type RunnerPty, type RunnerPtyClient } from './runner-pty.ts';
 import { TerminalScreen, isInputBlocked, readPrompt, readPanel, readCommandOutput } from './screen.ts';
 import { listSlashCommands } from './slash-commands.ts';
-import { SMOKE_DIRECTORY, SMOKE_PROJECT_ID } from '../verification.ts';
-
-import { createAttachmentStore, escapeAttachmentPath, uploadRemoteAttachment, type AttachmentOptions } from './attachments.ts';
 
 export const MAX_SCROLLBACK_BYTES = 256 * 1024;
 const DISCOVERY_MS = 500;
+const DISCOVERY_LIMIT_MS = 3000;
 const STARTUP_LIMIT_MS = 15_000;
 const STARTUP_POLL_MS = 100;
 const COMMAND_SETTLE_MS = 300;
@@ -37,7 +36,7 @@ const execute = promisify(execFile);
 type Notify = (message: TerminalNotification) => void;
 interface Host {
   launchModel?: string;
-  terminalId: string; terminal: RunnerPty; subscriptions: { dispose(): void }[]; launchId?: string; startedAt: string; startedTick: number; conversationId?: string; resumeId?: string; sessionPid?: number;
+  terminalId: string; terminal: RunnerPty; subscriptions: { dispose(): void }[]; launchId?: string; startedAt: string; startedTick: number; conversationId?: string; pendingConversationId?: string; resumeId?: string; sessionPid?: number;
   described?: boolean; provider?: 'claude' | 'codex'; projectId?: string; cwd?: string; target?: ExecutionTarget; connection?: SshConnection; remotePid?: number; discoveryBuffer?: string; disconnected?: boolean; mirror?: ReturnType<typeof startRemoteMirror>;
   scrollback: Buffer; screen: TerminalScreen; listeners: Set<Notify>; sending?: Promise<unknown>; lastOutputAt?: number; inputReady?: boolean; inputRevision: number;
 }
@@ -54,8 +53,6 @@ export class TerminalInputError extends Error {
 export interface HostOptions {
   targets?: TargetService;
   targetOptions?: TargetOptions;
-  /** 旧呼び出し側の型互換用。ホスト端末の起動には使わない。 */
-  openTerminal?: typeof spawn;
   createRunnerClient?: (onEvent: (event: RunnerEvent) => void) => RunnerPtyClient & { close(): void };
   sessionsDirectory?: string;
   listProcesses?: () => Promise<{ pid: number; ppid: number }[]>;
@@ -148,13 +145,15 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
       await scanning;
       const terminals = await adapter.list();
       if (closed) return;
-      const listeners = new Map([...hosts].map(([id, host]) => [id, host.listeners]));
+      const previous = new Map(hosts);
       for (const host of hosts.values()) detachHost(host);
       hosts.clear();
       for (const terminal of terminals) {
-        const subscribers = listeners.get(terminal.terminalId);
+        const old = previous.get(terminal.terminalId);
+        const subscribers = old?.listeners;
         for (const listener of subscribers ?? []) listener({ type: 'terminal', event: 'output', terminalId: terminal.terminalId, data: '\x1bc' });
-        attachHost(terminal, subscribers);
+        const host = attachHost(terminal, subscribers);
+        if (host) host.pendingConversationId = old?.conversationId ?? old?.pendingConversationId;
       }
       await refresh();
       if (!client.available || generation !== client.connectionGeneration) throw new Error('Runner unavailable');
@@ -179,6 +178,23 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
     if (!client.available) throw new Error('Runner unavailable');
     if (restoring || restoredGeneration !== client.connectionGeneration) throw new Error('Host discovery pending; retry session.send');
     if (hosts.get(host.terminalId) !== host || host.disconnected) throw new Error('no_host');
+  }
+  async function waitForHost(conversationId: string): Promise<Host> {
+    if (!client.available) throw new Error('Runner unavailable');
+    if (restoring || restoredGeneration !== client.connectionGeneration) void ensureRestored().catch(() => {});
+    for (let elapsed = 0; ; elapsed += STARTUP_POLL_MS) {
+      if (closed) throw new Error('Terminal service closed');
+      if (!client.available) throw new Error('Runner unavailable');
+      const host = [...hosts.values()].find(host => host.conversationId === conversationId
+        || !host.conversationId && (host.pendingConversationId === conversationId
+          || host.resumeId && JSON.stringify([host.provider, host.resumeId]) === conversationId));
+      if (!host || host.disconnected) throw new Error('no_host');
+      if (!restoring && restoredGeneration === client.connectionGeneration && host.conversationId === conversationId) return host;
+      // 一致する未確定 Host だけを待ち、探索停止でも送信要求を無期限に残さない。
+      if (elapsed >= DISCOVERY_LIMIT_MS) throw new Error('Host discovery pending; retry session.send');
+      if (!restoring && restoredGeneration === client.connectionGeneration) void refresh().catch(() => {});
+      await new Promise<void>(resolve => setTimeout(resolve, STARTUP_POLL_MS));
+    }
   }
   // 貼り付けと Enter を分け、端末ごとに送信を直列化する。
   function writeMessage(host: Host, conversationId: string, text: string, paths: Promise<string[]> = Promise.resolve([])): Promise<SessionSendResult> {
@@ -407,15 +423,7 @@ export function createSessionHosts(selectRoot: (request: FilesRequest) => Promis
       }
       if (command === 'session.send' || command === 'session.interrupt') {
         if (typeof request.conversationId !== 'string' || command === 'session.send' && typeof request.text !== 'string') throw new Error('Invalid session request');
-        if (!client.available) throw new Error('Runner unavailable');
-        if (restoring || restoredGeneration !== client.connectionGeneration) {
-          void ensureRestored().catch(() => {});
-          throw new Error('Host discovery pending; retry session.send');
-        }
-        const host = [...hosts.values()].find(host => host.conversationId === request.conversationId
-          || !host.conversationId && host.resumeId && JSON.stringify([host.provider ?? 'claude', host.resumeId]) === request.conversationId);
-        if (!host && [...hosts.values()].some(host => !host.conversationId && !host.disconnected)) throw new Error('Host discovery pending; retry session.send');
-        if (!host || host.disconnected) throw new Error('no_host');
+        const host = await waitForHost(request.conversationId);
         if (command === 'session.interrupt') { host.inputRevision++; host.terminal.write('\x1b'); }
         else {
           const paths = attachments.resolve(request.attachments);

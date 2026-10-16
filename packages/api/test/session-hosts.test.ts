@@ -207,9 +207,11 @@ test('session files bind descendants and undiscovered resume sends are awaited i
   const f = await createFixture(t);
   const launched = await f.launch(SESSION);
   await f.handle('session.hosts');
-  await f.handle('session.send', { conversationId, text: 'first\nline' });
-  await f.handle('session.send', { conversationId, text: 'second' });
-  assert.deepEqual(f.children[0].writes, ['\x15', '\x1b[200~first\nline\x1b[201~', '\r', '\x15', '\x1b[200~second\x1b[201~', '\r']);
+  const first = f.handle('session.send', { conversationId, text: 'first\nline' });
+  const second = f.handle('session.send', { conversationId, text: 'second' });
+  await delay(20);
+  assert.deepEqual(f.children[0].writes, []);
+  await assert.rejects(f.handle('session.send', { conversationId: 'unknown', text: 'absent' }), /^Error: no_host$/);
   await writeFile(join(f.directory, '9999.json'), JSON.stringify({ pid: 9999, sessionId: SESSION }));
   await writeFile(join(f.directory, '1000.json'), '{');
   assert.deepEqual(await f.handle('session.hosts'), { hosts: [] });
@@ -217,7 +219,7 @@ test('session files bind descendants and undiscovered resume sends are awaited i
   const result = await f.handle('session.hosts') as { hosts: { conversationId: string; terminalId: string; pid: number; startedAt: string }[] };
   assert.deepEqual(result.hosts.map(({ startedAt, ...row }) => row), [{ conversationId, terminalId: launched.terminalId, pid: 1000 }]);
   assert.ok(Number.isFinite(Date.parse(result.hosts[0].startedAt)));
-  await new Promise(resolve => setImmediate(resolve));
+  await Promise.all([first, second]);
   assert.deepEqual(f.children[0].writes, ['\x15', '\x1b[200~first\nline\x1b[201~', '\r', '\x15', '\x1b[200~second\x1b[201~', '\r']);
   await f.handle('session.send', { conversationId, text: 'third' });
   await f.handle('session.interrupt', { conversationId });
@@ -327,6 +329,8 @@ test('the startup deadline never permits writing into a known panel', async t =>
     wait: async ms => { elapsed += ms; f.children[0].output(MODEL_PANEL); },
   });
   await f.launch(SESSION);
+  await writeFile(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: SESSION }));
+  await f.handle('session.hosts');
   elapsed = 14_500;
   f.children[0].output(MODEL_PANEL);
   await assert.rejects(f.handle('session.send', { conversationId, text: 'first' }), /Terminal is not ready/);
@@ -340,8 +344,13 @@ for (const provider of ['claude', 'codex'] as const) {
     ['working', '\x1b[2J\x1b[H⠋ Working…\r\n  esc to interrupt'],
     ['composer without footer', '\x1b[2J\x1b[HOpenAI Codex\r\n\r\n› \x1b[3;3H'],
   ]) test(`${provider}: ${name} keeps the ordinary paste and submit path`, async t => {
-    const f = await createFixture(t, [], { targetOptions: { execute: async () => '' } });
+    let rollout = '';
+    const f = await createFixture(t, [], { targetOptions: { execute: async file => file === 'lsof' ? 'n' + rollout : '' } });
+    rollout = join(f.directory, 'rollout-test-' + SESSION + '.jsonl');
+    await writeFile(rollout, JSON.stringify({ type: 'session_meta', payload: { id: SESSION, cwd: '/repo' } }));
+    await writeFile(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: SESSION }));
     await f.handle('session.launch', { projectId: 'p', provider, resume: SESSION });
+    await f.handle('session.hosts');
     f.children[0].output(frame);
     assert.deepEqual(await f.handle('session.send', { conversationId: JSON.stringify([provider, SESSION]), text: 'follow up' }), {});
     assert.deepEqual(f.children[0].writes, ['\x15', '\x1b[200~follow up\x1b[201~', '\r']);

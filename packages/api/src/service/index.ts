@@ -9,7 +9,7 @@ import { basename, dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { applyIncremental, rebuild } from "../../../core/src/ledger/index.ts";
 import type { AppendResult, Fact, FactInput, Ledger } from "../../../core/src/ledger/index.ts";
-import { createHookFacts, parseHookEvent } from "../hook/index.ts";
+import { createHookFacts, createHookRunResolver, parseHookEvent } from "../hook/index.ts";
 import type { HookEvent } from "../hook/index.ts";
 import { observeClaudeHistories } from "./claude-reader.ts";
 import { codexLocationEventId, observeCodex, observeCodexLocations } from "../observe/codex/index.ts";
@@ -73,7 +73,8 @@ export interface ObservationProgress {
   seq?: number;
 }
 
-function ingestOutbox(ledger: Ledger, paths: string[], batch: <T>(operation: () => T) => T): void {
+function ingestOutbox(ledger: Ledger, paths: string[], batch: <T>(operation: () => T) => T,
+  resolveRun: (event: HookEvent) => string | undefined): void {
   if (paths.length === 0) return;
   const conversations = new Set(ledger.readSince(0, Number.MAX_SAFE_INTEGER)
     .filter((fact) => fact.kind === "conversation.created").map((fact) => fact.subject));
@@ -98,7 +99,7 @@ function ingestOutbox(ledger: Ledger, paths: string[], batch: <T>(operation: () 
       continue;
     }
     batch(() => {
-      for (const fact of createHookFacts(event)) {
+      for (const fact of createHookFacts(event, undefined, resolveRun(event))) {
         if (fact.kind === "conversation.created" && conversations.has(fact.subject)) continue;
         const result = ledger.append(fact);
         if (result.status === "conflict") throw new Error(`Conflicting hook event: ${event.event_id}`);
@@ -217,6 +218,7 @@ export function openObservationService(options: ObservationOptions = {}) {
     return ledger.append(decorate(input));
   } };
   registerLedgerDatabase(projectedLedger, projectionDb);
+  const resolveHookRun = createHookRunResolver(projectedLedger);
   const snapshot: Fact[] = [];
   let snapshotSeq = 0;
   function refreshSnapshot(): void {
@@ -503,7 +505,7 @@ export function openObservationService(options: ObservationOptions = {}) {
         let aliases = { pending: 0, deferred: 0 };
         if (!changes) {
           ingestOutbox(scanLedger, listOutbox(hookOutboxPath(env, home),
-            (name) => !name.startsWith(".") && name.endsWith(".json")), buffered.batch);
+            (name) => !name.startsWith(".") && name.endsWith(".json")), buffered.batch, resolveHookRun);
           refreshSnapshot();
           aliases = kit.observe();
           refreshSnapshot();

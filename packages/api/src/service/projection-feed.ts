@@ -530,7 +530,8 @@ export class ProjectionFeed {
       after = String(page.at(-1)!.id);
     }
     const latest = new Map<string, Record<string, unknown>>();
-    for (const row of this.prepare("SELECT conversation_id, generation, state, last_evidence_ts, ended_ts, started_ts FROM runs ORDER BY generation").iterate()) {
+    // 同世代の割れでは既知の状態を優先する。新世代の unknown は古い状態で補わない。
+    for (const row of this.prepare("SELECT conversation_id, generation, state, last_evidence_ts, ended_ts, started_ts FROM runs ORDER BY generation, state != 'unknown', id").iterate()) {
       latest.set(this.conversationId(String(row.conversation_id)), row);
     }
     for (const row of conversations) {

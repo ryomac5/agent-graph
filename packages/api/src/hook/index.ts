@@ -75,9 +75,18 @@ export function createHookFacts(event: HookEvent, locate: LocationResolver = def
   return [conversation, run];
 }
 
+export function createHookRunResolver(ledger: Ledger): (event: HookEvent) => string | undefined {
+  // 投影の有無や payload の会話 ID の形に依存せず、追記先の旧 subject を索引で照合する。
+  const findRun = readLedgerDatabase(ledger).prepare("SELECT 1 FROM facts WHERE subject = ? AND kind GLOB 'run.*' LIMIT 1");
+  return (event) => {
+    if (event.run_id) return event.run_id;
+    const legacyId = `claude:${event.session_id}:${event.generation}`;
+    return findRun.get(`run:${legacyId}`) ? legacyId : undefined;
+  };
+}
+
 export function createHookHandler(ledger: Ledger, token: string) {
-  const legacyRuns = new Set<string>();
-  const findRun = readLedgerDatabase(ledger).prepare("SELECT subject_id FROM run_subjects WHERE conversation_id = ? AND generation = ?");
+  const resolveRun = createHookRunResolver(ledger);
   const conversations = new Set<string>();
   let lastSeq = 0;
   return async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
@@ -117,16 +126,11 @@ export function createHookHandler(ledger: Ledger, token: string) {
         const facts = ledger.readSince(lastSeq, LEDGER_READ_BATCH_SIZE);
         for (const fact of facts) {
           if (fact.kind === "conversation.created") conversations.add(fact.subject);
-          // 投影前の run も、既存の差分読み取りで拾う。
-          if (fact.subject.startsWith("run:claude:")) legacyRuns.add(fact.subject.slice(4));
           lastSeq = fact.seq;
         }
         if (facts.length < LEDGER_READ_BATCH_SIZE) break;
       }
-      const legacyId = `claude:${event.session_id}:${event.generation}`;
-      const indexed = event.run_id ? undefined : findRun.get(`claude:${event.session_id}`, event.generation);
-      const existingRunId = indexed ? String(indexed.subject_id) : legacyRuns.has(legacyId) ? legacyId : undefined;
-      const results = createHookFacts(event, defaultLocationResolver, existingRunId)
+      const results = createHookFacts(event, defaultLocationResolver, resolveRun(event))
         .filter((fact) => fact.kind !== "conversation.created" || !conversations.has(fact.subject))
         .map((fact) => {
           const result = ledger.append(fact);

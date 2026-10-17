@@ -1,12 +1,17 @@
 import { USAGE_PROBE_PATH } from '../src/usage/probe-path.ts';
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { openObservationService } from '../src/service/index.ts';
+import { ProjectionFeed } from '../src/service/projection-feed.ts';
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import test from "node:test";
 import { applyIncremental, openLedger, projectConversations, projectRuns, readLedgerDatabase } from "../../core/src/ledger/index.ts";
-import type { Ledger } from "../../core/src/ledger/index.ts";
-import { createHookHandler, startHookServer } from "../src/hook/index.ts";
+import type { FactInput, Ledger } from "../../core/src/ledger/index.ts";
+import { createHookFacts, createHookHandler, startHookServer } from "../src/hook/index.ts";
 import type { HookEvent } from "../src/hook/index.ts";
 
 const nativeFetch = globalThis.fetch;
@@ -306,5 +311,91 @@ for (const conversationId of ['claude:session', '["claude","session"]']) {
       'content-type': 'application/json', authorization: `Bearer ${receiver.token}`,
     }, body: JSON.stringify({ ...EVENT, generation: 2, event_id: 'resume' }) })).status, 200);
     assert.equal(ledger.readSince(facts.at(-1)!.seq, 100)[0].subject, 'run:["claude","session"]:2');
+  });
+}
+
+for (const projected of [false, true]) for (const split of [false, true]) {
+  test(`本番の旧形 run を outbox でも再利用する（投影=${projected}、両形=${split}）`, async t => {
+    const home = mkdtempSync(join(tmpdir(), 'hook-outbox-'));
+    const state = join(home, 'state');
+    const path = join(state, 'agent-graph', 'agent-graph.db');
+    mkdirSync(join(state, 'agent-graph'), { recursive: true });
+    const env = { HOME: home, XDG_STATE_HOME: state, CLAUDE_CONFIG_DIR: join(home, '.claude'), CODEX_HOME: join(home, '.codex') };
+    const session = 'b6e4a8a5-742d-45e1-b374-97ac7bad6077';
+    const generation = 1792162860493;
+    const legacyId = `claude:${session}:${generation}`;
+    const canonical = JSON.stringify(['claude', session]);
+    const ledger = openLedger(path);
+    ledger.append({ source: 'hook', source_event_id: 'old-start', kind: 'run.created',
+      subject: `run:${legacyId}`, source_ts: '2026-10-16T15:01:00.510Z', confidence: 'confirmed',
+      payload: { conversation_id: `claude:${session}`, generation, state: 'idle', started_ts: '2026-10-16T15:01:00.510Z' } });
+    ledger.append({ source: 'transcript-claude', source_event_id: 'old-turn', kind: 'run.state_changed',
+      subject: `run:${legacyId}`, source_ts: '2026-10-17T10:28:52.758Z', confidence: 'confirmed',
+      payload: { conversation_id: canonical, generation, state: 'idle', last_evidence: { kind: 'turn_completed' } } });
+    if (split) ledger.append({ source: 'hook', source_event_id: 'split', kind: 'run.updated',
+      subject: `run:${canonical}:${generation}`, source_ts: '2026-10-17T10:29:19.611Z', confidence: 'confirmed',
+      payload: { conversation_id: canonical, generation, last_evidence: { hook_event_name: 'SubagentStop', auxiliary: false } } });
+    if (projected) {
+      applyIncremental(readLedgerDatabase(ledger), 0);
+      assert.deepEqual({ ...readLedgerDatabase(ledger).prepare('SELECT * FROM run_subjects').get() },
+        { conversation_id: `claude:${session}`, generation, subject_id: legacyId });
+    }
+    const original = ledger.readSince(0, 100);
+    ledger.close();
+    const service = openObservationService({ home, env, writerOnly: true });
+    t.after(() => { service.close(); rmSync(home, { recursive: true, force: true }); });
+    mkdirSync(service.outbox);
+    const event: HookEvent = { ...EVENT, session_id: session, generation, event_id: 'continue',
+      hook_event_name: 'SubagentStop', source_ts: '2026-10-17T10:40:00.078Z' };
+    writeFileSync(join(service.outbox, 'event.json'), JSON.stringify(event));
+    service.ingestOnce();
+    const facts = service.ledger.readSince(0, 100);
+    assert.deepEqual(facts.slice(0, original.length), original);
+    assert.equal(facts.at(-1)!.subject, `run:${legacyId}`);
+    assert.equal(projectRuns(facts).length, split ? 2 : 1);
+    writeFileSync(join(service.outbox, 'retry.json'), JSON.stringify(event));
+    service.ingestOnce();
+    const receiver = createReceiver(service.ledger);
+    const response = await receiver.post(receiver.url, { method: 'POST', headers: {
+      'content-type': 'application/json', authorization: `Bearer ${receiver.token}`,
+    }, body: JSON.stringify(event) });
+    assert.equal(response.status, 200);
+    assert.deepEqual(service.ledger.readSince(0, 100), facts);
+  });
+}
+
+for (const state of ['idle', 'running'] as const) for (const reverse of [false, true]) {
+  test(`同世代の unknown は根の ${state} に勝たない（逆順=${reverse}）`, t => {
+    const directory = mkdtempSync(join(tmpdir(), 'hook-root-'));
+    const path = join(directory, 'ledger.db');
+    const ledger = openLedger(path);
+    let feed: ProjectionFeed | undefined;
+    t.after(() => { feed?.close(); ledger.close(); rmSync(directory, { recursive: true, force: true }); });
+    const canonical = '["claude","session"]';
+    const start = createHookFacts(EVENT)[0];
+    ledger.append(start);
+    ledger.append({ ...start, subject: 'conversation:claude:session', source_event_id: 'old-conversation' });
+    const rows: FactInput[] = [
+      { source: 'hook', source_event_id: 'known', source_ts: EVENT.source_ts, confidence: 'confirmed',
+        kind: 'run.created', subject: 'run:claude:session:1',
+        payload: { conversation_id: 'claude:session', generation: 1, state, started_ts: EVENT.source_ts,
+          last_evidence: { hook_event_name: state === 'running' ? 'UserPromptSubmit' : 'SessionStart', auxiliary: false } } },
+      { source: 'hook', source_event_id: 'unknown', source_ts: '2026-01-01T00:01:00.000Z', confidence: 'confirmed',
+        kind: 'run.updated', subject: `run:${canonical}:1`,
+        payload: { conversation_id: canonical, generation: 1, last_evidence: { hook_event_name: 'SubagentStop', auxiliary: false } } },
+    ];
+    for (const row of reverse ? rows.toReversed() : rows) {
+      ledger.append(row);
+      applyIncremental(readLedgerDatabase(ledger), 0);
+    }
+    feed = new ProjectionFeed(path, () => applyIncremental(readLedgerDatabase(ledger), 0));
+    assert.equal(feed.snapshot().projection.roots[0].state, state);
+    assert.equal(feed.snapshot().projection.runs.length, 2);
+    ledger.append({ ...rows[1], source_event_id: 'new-generation', subject: `run:${canonical}:2`,
+      payload: { conversation_id: canonical, generation: 2 } } as FactInput);
+    const patch = feed.refresh();
+    assert.ok(patch && patch !== 'resync');
+    assert.equal(patch.changes.roots.upsert[0].state, 'unknown');
+    assert.equal(feed.snapshot().projection.roots[0].state, 'unknown');
   });
 }

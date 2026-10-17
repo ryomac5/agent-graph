@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -9,6 +9,55 @@ import { openObservationService } from "../src/service/index.ts";
 import { ProjectionFeed } from "../src/service/projection-feed.ts";
 import { openLedger, rebuild } from "../../core/src/ledger/index.ts";
 import type { ProjectionState } from "../../core/src/ledger/rebuild.ts";
+
+for (const stopped of [false, true]) test(`子の収集中も refresh が resync を返し、追記後も更新できる（停止=${stopped}）`, t => {
+  const home = mkdtempSync(join(tmpdir(), "api-child-feed-"));
+  const dbPath = join(home, "ledger.db");
+  const projects = join(home, ".claude", "projects", "fixture");
+  mkdirSync(join(home, ".claude", "sessions"), { recursive: true });
+  mkdirSync(join(projects, "parent", "subagents"), { recursive: true });
+  let feed: ProjectionFeed;
+  const refreshes: unknown[] = [];
+  const service = openObservationService({ home, env: { HOME: home }, dbPath,
+    claudeProcessReader: () => { refreshes.push(feed.refresh()); return new Map(); },
+    codexProcessReader: { listProcesses: () => "", readOpenFiles: () => "" } });
+  feed = new ProjectionFeed(dbPath, service.catchUp);
+  const writer = new DatabaseSync(dbPath);
+  writer.exec("PRAGMA busy_timeout = 0");
+  t.after(() => { writer.close(); feed.close(); service.close(); rmSync(home, { recursive: true, force: true }); });
+  const target = feed as unknown as { refreshProjection(state: ProjectionState, changes: Record<string, unknown>[]): unknown };
+  const refreshProjection = target.refreshProjection.bind(feed);
+  let probes = 0;
+  t.mock.method(target, "refreshProjection", (state: ProjectionState, changes: Record<string, unknown>[]) => {
+    writer.exec("BEGIN IMMEDIATE; COMMIT");
+    probes++;
+    return refreshProjection(state, changes);
+  });
+  const log = t.mock.method(console, "error", () => {});
+  if (stopped) {
+    const timestamp = new Date().toISOString();
+    writeFileSync(join(projects, "parent", "subagents", "agent-child.jsonl"), JSON.stringify({
+      type: "assistant", uuid: "tool", timestamp, promptId: "child-turn",
+      message: { role: "assistant", content: [{ type: "tool_use", id: "tool", name: "Bash", input: {} }] },
+    }) + "\n");
+    writeFileSync(join(projects, "parent.jsonl"), JSON.stringify({ type: "queue-operation", operation: "enqueue", timestamp,
+      content: "<task-notification><task-id>child</task-id><status>stopped</status></task-notification>" }) + "\n");
+  }
+  service.rebuild();
+  service.ingestOnce();
+  assert.deepEqual(refreshes, ["resync"]);
+  assert.equal(probes, 1);
+  if (stopped) {
+    const patch = feed.refresh();
+    assert.ok(patch && patch !== "resync");
+    assert.ok(patch.changes.runs.upsert.some(run => run.state === "unknown"));
+  }
+  service.rebuild();
+  service.ingestOnce();
+  assert.deepEqual(refreshes, ["resync", "resync"]);
+  assert.equal(feed.snapshot().seq, service.lastSeq());
+  assert.equal(log.mock.callCount(), 0);
+});
 
 for (const errcode of [5, 517]) test(`locked が続く間は resync を返さず、ログを60秒ごとに制限する（${errcode}）`, t => {
   const path = `file:feed-lock-${randomUUID()}?mode=memory&cache=shared`;

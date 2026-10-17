@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
+import { openBatchLedger } from "../../src/service/batch-ledger.ts";
+import { appendFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -12,6 +14,47 @@ import { observeClaudeContext } from "../../src/observe/claude/context.ts";
 const START = Date.parse("2026-10-14T09:10:00Z");
 const LATER = START + 29 * 60 * 60 * 1000;
 const stamp = (at: number) => new Date(at).toISOString();
+
+test("子の空周期は取引ゼロ、複数の追記は入力を読み終えてから一取引で保存する", t => {
+  const f = fixture(t);
+  const other = join(f.sessions, "..", "parent", "subagents", "agent-other.jsonl");
+  writeFileSync(other, JSON.stringify({ type: "assistant", uuid: "other", timestamp: stamp(START), promptId: "other-turn",
+    message: { role: "assistant", content: [{ type: "tool_use", id: "other-tool", name: "Bash", input: {} }] } }) + "\n");
+  observeClaudeFile(f.ledger, other);
+  observeClaudeContext(f.ledger, other, { parentAtLaunch: f.observer.parentAtLaunch });
+  const dbPath = join(f.sessions, "ledger.db");
+  const buffered = openBatchLedger(dbPath);
+  t.after(() => buffered.ledger.close());
+  const exec = DatabaseSync.prototype.exec;
+  let begins = 0;
+  t.mock.method(DatabaseSync.prototype, "exec", function(this: DatabaseSync, sql: string) {
+    if (sql === "BEGIN IMMEDIATE" && this.prepare("PRAGMA database_list").all()
+      .some(row => row.name === "main" && row.file === realpathSync(dbPath))) begins++;
+    return exec.call(this, sql);
+  });
+  const scanBegins: number[] = [];
+  const reader = t.mock.fn(() => { scanBegins.push(begins); return new Map([[42, "old"]]); });
+  const batch = t.mock.fn(<T>(operation: () => T): T => {
+    // 書き始めに入力を消しても、収集済みの二件を保存できる。
+    rmSync(f.child); rmSync(other); rmSync(join(f.sessions, "..", "parent.jsonl"));
+    return buffered.batch(operation);
+  });
+  const observer = createClaudeChildObserver(buffered.ledger, f.sessions, createSessionQuery(f.ledger), reader, batch);
+  assert.equal(observer.observe([], stamp(LATER)), 0);
+  assert.equal(observer.observe([f.child, other], stamp(LATER)), 0);
+  assert.equal(begins, 0);
+  assert.equal(batch.mock.callCount(), 0);
+  f.notify(); f.notify("queue", "stopped", "other");
+  assert.equal(observer.observe([f.child, other], stamp(LATER + 1000)), 2);
+  assert.equal(reader.mock.callCount(), 3);
+  assert.deepEqual(scanBegins, [0, 0, 0]);
+  assert.equal(batch.mock.callCount(), 1);
+  assert.equal(begins, 1);
+  assert.equal(buffered.ledger.readSince(0, 10).length, 2);
+  assert.equal(observer.observe([], stamp(LATER + 2000)), 0);
+  assert.equal(begins, 1);
+});
+
 function fixture(t: TestContext, bind = true) {
   const directory = mkdtempSync(join(tmpdir(), "ag-child-"));
   const ledger = openLedger(":memory:");
@@ -121,7 +164,7 @@ test("古い turn の停止通知は新しい turn を止めない", t => {
   assert.equal(f.run().state, "running");
 });
 
-test("取り込みサービスは子の観測を呼ばず、後着した親の停止通知で子を変更しない", async t => {
+test("取り込みサービスは後着した親の停止通知で子を解除し、再走査で重複しない", async t => {
   const { openObservationService } = await import("../../src/service/index.ts");
   const home = mkdtempSync(join(tmpdir(), "ag-child-service-"));
   const projects = join(home, ".claude", "projects", "fixture");
@@ -138,14 +181,14 @@ test("取り込みサービスは子の観測を呼ばず、後着した親の�
   service.ingestOnce();
   const read = () => projectRuns(service.ledger.readSince(0, Number.MAX_SAFE_INTEGER)).find(run => run.conversation_id.includes("agent-child"))!;
   assert.equal(read().state, "running");
-  const before = read();
   writeFileSync(join(projects, "parent.jsonl"), JSON.stringify({ type: "queue-operation", operation: "enqueue", timestamp: now,
     content: "<task-notification><task-id>child</task-id><status>stopped</status></task-notification>" }) + "\n");
   service.ingestOnce();
-  assert.deepEqual(read(), before);
+  assert.equal(read().state, "unknown");
+  const before = read();
   service.ingestOnce();
   assert.deepEqual(read(), before);
-  assert.equal(readProcesses.mock.callCount(), 0);
+  assert.equal(readProcesses.mock.callCount(), 3);
   assert.equal(service.ledger.readSince(0, Number.MAX_SAFE_INTEGER)
-    .some(fact => fact.source_event_id.startsWith("child-unverified:")), false);
+    .filter(fact => fact.source_event_id.startsWith("child-unverified:")).length, 1);
 });

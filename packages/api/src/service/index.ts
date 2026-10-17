@@ -284,7 +284,7 @@ export function openObservationService(options: ObservationOptions = {}) {
   let remoteConversations = new Set<string>();
   const localQuery = { ...sessionQuery, read: (provider: 'claude' | 'codex', subagents = false) => sessionQuery.read(provider, subagents).filter(run => !remoteConversations.has(run.conversation_id)) };
   const observeClaudeSessions = createClaudeSessionObserver(scanLedger, claudeSessionsDirectory, localQuery);
-  const claudeChildren = createClaudeChildObserver(scanLedger, claudeSessionsDirectory, localQuery, options.claudeProcessReader);
+  const claudeChildren = createClaudeChildObserver(scanLedger, claudeSessionsDirectory, localQuery, options.claudeProcessReader, buffered.batch);
   const observeCodexSessions = createCodexSessionObserver(scanLedger, env.CODEX_HOME ?? join(home, ".codex"),
     options.codexProcessReader, localQuery);
   let rollout: ReturnType<typeof createIncrementalRolloutReader> | undefined;
@@ -520,6 +520,11 @@ export function openObservationService(options: ObservationOptions = {}) {
               JSON.stringify({ cursor, context: rollouts.has(path) ? createRolloutContext(rollouts.get(path)!.context) : undefined }));
             projectionDb.exec("COMMIT");
           } catch (error) { projectionDb.exec("ROLLBACK"); throw error; }
+        }
+        // 通常の観測と cursor の保存を確定してから、子の入力を錠の外で集める。
+        if (!changes) {
+          refreshSnapshot();
+          claudeChildren.observe(claudeFiles);
         }
         const added = countAdded.get(start)!;
         return { appended: Number(added.appended), unsupported: Number(added.unsupported),

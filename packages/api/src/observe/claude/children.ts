@@ -4,7 +4,7 @@ import { basename, dirname, join } from "node:path";
 import { evaluateState, readNativeEvidence, readNativeTurnId } from "../../../../core/src/state/index.ts";
 import type { ProcessIdentity, StateEvidence } from "../../../../core/src/state/index.ts";
 import { getMessageText } from "../../../../core/src/ledger/projections/messages.ts";
-import type { JsonValue, Ledger } from "../../../../core/src/ledger/index.ts";
+import type { FactInput, JsonValue, Ledger } from "../../../../core/src/ledger/index.ts";
 import { createSessionQuery } from "../session-query.ts";
 import { readAppendOnlyFile, type FileCursor } from "../files.ts";
 import { readRemoteMetadata } from "../../remote/observation.ts";
@@ -31,7 +31,8 @@ type History = { cursor?: FileCursor; rows: { turn: string | null; signals: Stat
 
 /** 起動前の走査だけを親の組に使い、既存の子には現在の親を補完しない。 */
 export function createClaudeChildObserver(ledger: Ledger, directory: string,
-  query = createSessionQuery(ledger), readProcesses = readClaudeProcessStarts) {
+  query = createSessionQuery(ledger), readProcesses = readClaudeProcessStarts,
+  batch: <T>(operation: () => T) => T = operation => operation()) {
   let snapshot: Snapshot | undefined;
   const histories = new Map<string, History>();
   function readHistory(path: string, notificationsOnly = false): History["rows"] {
@@ -88,7 +89,7 @@ export function createClaudeChildObserver(ledger: Ledger, directory: string,
       const children = new Map(paths.filter(path => basename(dirname(path)) === "subagents")
         .map(path => [basename(path, ".jsonl"), path]));
       if (!children.size) { histories.clear(); return 0; }
-      let appended = 0;
+      const pending: FactInput[] = [];
       const used = new Set<string>();
       for (const run of query.read("claude", true)) {
         const path = children.get(run.nativeId);
@@ -129,15 +130,23 @@ export function createClaudeChildObserver(ledger: Ledger, directory: string,
         const reason = interrupted ? "boundary_unavailable" : state.process.reason;
         const eventId = `child-unverified:${run.id}:${run.generation}:${run.last_evidence_ts}:${reason}`;
         if (query.hasEvent("transcript-claude", eventId)) continue;
-        const result = ledger.append({ source: "transcript-claude", source_event_id: eventId,
+        pending.push({ source: "transcript-claude", source_event_id: eventId,
           source_ts: checkedTs, observed_ts: checkedTs, confidence: "confirmed", kind: "run.state_changed", subject: run.subject,
           payload: { conversation_id: run.conversation_id, generation: run.generation, state: "unknown", reason,
             last_evidence: { kind: "child_unverified", reason }, last_evidence_ts: checkedTs } });
-        if (result.status === "conflict") throw new Error(`Conflicting child observation: ${run.id}`);
-        if (result.status === "appended") appended++;
       }
       for (const path of histories.keys()) if (!used.has(path)) histories.delete(path);
-      return appended;
+      // 入力の収集と判定を終えてから錠を取り、空の周期では取引を開かない。
+      if (!pending.length) return 0;
+      return batch(() => {
+        let appended = 0;
+        for (const input of pending) {
+          const result = ledger.append(input);
+          if (result.status === "conflict") throw new Error(`Conflicting child observation: ${input.subject}`);
+          if (result.status === "appended") appended++;
+        }
+        return appended;
+      });
     },
   };
 }

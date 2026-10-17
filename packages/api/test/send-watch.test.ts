@@ -4,8 +4,6 @@ import http from 'node:http';
 import { syncBuiltinESMExports } from 'node:module';
 import { setTimeout as delay } from 'node:timers/promises';
 import { WebSocketServer } from 'ws';
-import type { IPty } from 'node-pty';
-import type { RunnerRequest } from '../src/runner-client.ts';
 import { startWebSocketServer, type WebSocketOptions } from '../src/ws/index.ts';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -19,6 +17,44 @@ import { ProjectionFeed } from '../src/service/projection-feed.ts';
 import { SendWatch, SEND_WATCH_TIMEOUT_MS, SEND_WATCH_FAILED_RETENTION_MS, SEND_WATCH_CLOSED_RETENTION_MS, SEND_WATCH_PENDING_MAX_AGE_MS, SEND_WATCH_CLEANUP_INTERVAL_MS, normalizeSentBody } from '../src/service/send-watch.ts';
 import { observeClaudeFile } from '../src/observe/claude/index.ts';
 import { createHookFacts } from '../src/hook/index.ts';
+import type { HostOptions } from '../src/terminal/hosts.ts';
+import type { RunnerEvent, RunnerRequest, RunnerResponse } from '../src/runner-client.ts';
+import type { RunnerPtySpawnRequest, RunnerTerminalInfo } from '../src/terminal/runner-pty.ts';
+
+function createFakeRunner(options: {
+  pid: number; scrollback?: string; onSpawn?: (input: RunnerPtySpawnRequest) => void; onWrite?: (data: string) => void;
+}) {
+  const infos: RunnerTerminalInfo[] = [];
+  let onEvent = (_event: RunnerEvent) => {};
+  const runner = {
+    available: true, connectionGeneration: 1, close() { onEvent = () => {}; },
+    async request(request: RunnerRequest): Promise<RunnerResponse> {
+      let result: unknown = {};
+      const payload = request.payload as { terminalId: string; data: string };
+      if (request.command === 'status') result = { capabilities: { terminals: true } };
+      else if (request.command === 'terminal.spawn') {
+        const input = request.payload as unknown as RunnerPtySpawnRequest;
+        options.onSpawn?.(input);
+        const info = { terminalId: 'runner-' + infos.length, pid: options.pid, meta: input.meta,
+          startedAt: new Date().toISOString(), scrollback: options.scrollback ?? '' };
+        infos.push(info); result = { terminalId: info.terminalId, pid: info.pid };
+      } else if (request.command === 'terminal.list') result = structuredClone(infos);
+      else {
+        assert.equal(payload.terminalId, infos[0].terminalId);
+        if (request.command === 'terminal.write') options.onWrite?.(payload.data);
+        else if (request.command === 'terminal.kill') fake.exit({ exitCode: 0 });
+        else assert.equal(request.command, 'terminal.resize');
+      }
+      return { type: 'res', cmd_id: request.cmd_id, ok: true, result: JSON.parse(JSON.stringify(result)) };
+    },
+  };
+  const fake = {
+    createRunnerClient: ((callback: (event: RunnerEvent) => void) => { onEvent = callback; return runner; }) satisfies NonNullable<HostOptions['createRunnerClient']>,
+    output(data: string) { infos[0].scrollback += data; onEvent({ type: 'evt', terminal: { terminalId: infos[0].terminalId, output: data } }); },
+    exit(exit: { exitCode: number }) { infos[0].exited = exit; onEvent({ type: 'evt', terminal: { terminalId: infos[0].terminalId, exit } }); },
+  };
+  return fake;
+}
 
 const NOW = Date.parse('2026-10-13T10:00:00.000Z');
 const CONVERSATION = JSON.stringify(['claude', 'fixture']);
@@ -435,8 +471,7 @@ for (const failure of ['busy', 'exception'] as const) {
     writeFileSync(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: session }));
     const a = await createApiFixture(t, f, {
       sessionsDirectory: f.directory, listProcesses: async () => [], quietMs: 0, warmupMs: 0, submitDelayMs: 0,
-      openTerminal: () => ({ pid: 1000, write: (body: string) => writes.push(body), resize() {}, kill() {},
-        onData: (output: (data: string) => void) => { queueMicrotask(() => output(promptFrame())); return { dispose() {} }; }, onExit: () => ({ dispose() {} }) }) as unknown as IPty,
+      createRunnerClient: createFakeRunner({ pid: 1000, scrollback: promptFrame(), onWrite: body => writes.push(body) }).createRunnerClient,
     });
     const writer = new DatabaseSync(join(f.directory, 'ledger.db'));
     try {
@@ -623,20 +658,17 @@ test('WebSocket returns panel output once and rejects subsequent sends into a mo
   f.append('project.created', 'project:project', { repository_id: 'project', root_path: f.directory, state: 'registered', display_name: 'Fixture' });
   writeFileSync(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: session }));
   const { HELP_PANEL, MODEL_PANEL } = await import('./terminal-screen-fixture.ts');
-  let output = (_data: string) => {};
   let text = '';
   const writes: string[] = [];
+  const fake = createFakeRunner({ pid: 1000, scrollback: promptFrame(), onWrite(data) {
+    writes.push(data);
+    if (data.includes('[200~')) text = data;
+    if (data === '\r') fake.output(text.includes('/help') ? HELP_PANEL : MODEL_PANEL);
+    if (data === '\x1b') fake.output(promptFrame());
+  } });
   const a = await createApiFixture(t, f, {
     sessionsDirectory: f.directory, listProcesses: async () => [], quietMs: 0, warmupMs: 0, submitDelayMs: 0, wait: async () => {},
-    openTerminal: () => ({ pid: 1000, resize() {}, kill() {},
-      onData(callback: (data: string) => void) { output = callback; queueMicrotask(() => output(promptFrame())); return { dispose() {} }; },
-      onExit: () => ({ dispose() {} }), write(data: string) {
-        writes.push(data);
-        if (data.includes('[200~')) text = data;
-        if (data === '\r') output(text.includes('/help') ? HELP_PANEL : MODEL_PANEL);
-        if (data === '\x1b') output(promptFrame());
-      },
-    }) as unknown as IPty,
+    createRunnerClient: fake.createRunnerClient,
   });
   try {
     assert.equal((await a.command('launch', 'session.launch', { projectId: 'project', provider: 'claude', resume: session })).ok, true);

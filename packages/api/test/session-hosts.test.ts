@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
-import type { spawn } from 'node-pty';
+import type { RunnerEvent, RunnerRequest, RunnerResponse } from '../src/runner-client.ts';
+import type { RunnerPtySpawnRequest, RunnerTerminalInfo } from '../src/terminal/runner-pty.ts';
 import { createSessionHosts, MAX_SCROLLBACK_BYTES, type HostOptions } from '../src/terminal/hosts.ts';
 import { escapeAttachmentPath } from '../src/terminal/attachments.ts';
 import type { TerminalNotification } from '../src/terminal/index.ts';
@@ -20,23 +21,38 @@ const conversationId = JSON.stringify(['claude', SESSION]);
 async function createFixture(t: TestContext, waits?: number[], options: HostOptions = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'ag session-hosts-'));
   const children: { pid: number; killed: boolean; writes: string[]; onWrite: (data: string) => void; output: (data: string) => void; exit: (event: { exitCode: number }) => void }[] = [];
-  const launches: { file: string; args: string[] | string; options: Parameters<typeof spawn>[2] }[] = [];
-  const openTerminal: typeof spawn = (file, args, options) => {
-    launches.push({ file, args, options });
-    const child = { pid: 1000 + children.length, killed: false, writes: [] as string[], onWrite: (_data: string) => {}, output: (_data: string) => {}, exit: (_event: { exitCode: number }) => {} };
-    children.push(child);
-    return {
-      pid: child.pid,
-      write(data: string) { child.writes.push(data); child.onWrite(data); }, resize() {},
-      kill() { child.killed = true; child.exit({ exitCode: 0 }); },
-      onData(callback: typeof child.output) { child.output = callback; queueMicrotask(() => callback(promptFrame(file))); return { dispose() {} }; },
-      onExit(callback: typeof child.exit) { child.exit = callback; return { dispose() {} }; },
-    } as unknown as ReturnType<typeof spawn>;
-  };
+  const launches: { file: string; args: string[] | string; options: { cwd: string; env: Record<string, string | undefined> } }[] = [];
+  const infos: RunnerTerminalInfo[] = [];
+  let onEvent: (event: RunnerEvent) => void = () => {};
+  const runner = { available: true, connectionGeneration: 1, close() {},
+    async request(request: RunnerRequest): Promise<RunnerResponse> {
+      let result: unknown = {};
+      if (request.command === 'status') result = { capabilities: { terminals: true } };
+      if (request.command === 'terminal.spawn') {
+        const input = request.payload as unknown as RunnerPtySpawnRequest;
+        launches.push({ file: input.file, args: input.args, options: { cwd: input.cwd, env: input.env } });
+        const index = children.length, terminalId = 'runner-' + index;
+        const info: RunnerTerminalInfo = { terminalId, pid: 1000 + index, meta: input.meta, startedAt: new Date().toISOString(), scrollback: promptFrame(input.file) };
+        infos.push(info);
+        const child = { pid: info.pid, killed: false, writes: [] as string[], onWrite: (_data: string) => {},
+          output(data: string) { info.scrollback += data; onEvent({ type: 'evt', terminal: { terminalId, output: data } }); },
+          exit(exit: { exitCode: number }) { info.exited = exit; onEvent({ type: 'evt', terminal: { terminalId, exit } }); } };
+        children.push(child);
+        result = { terminalId, pid: info.pid };
+      }
+      if (request.command === 'terminal.list') result = structuredClone(infos);
+      const payload = request.payload as { terminalId: string; data: string } | undefined;
+      if (payload?.terminalId) {
+        const child = children[Number(payload.terminalId.split('-')[1])];
+        if (request.command === 'terminal.write') { child.writes.push(payload.data); child.onWrite(payload.data); }
+        if (request.command === 'terminal.kill') { child.killed = true; child.exit({ exitCode: 0 }); }
+      }
+      return { type: 'res', cmd_id: request.cmd_id, ok: true, result: JSON.parse(JSON.stringify(result)) };
+    } };
   const waitWrites: string[][] = [];
   const messages: TerminalNotification[] = [];
   const notify = (message: TerminalNotification) => messages.push(message);
-  const hosts = createSessionHosts(async () => '/repo', { openTerminal, quietMs: 0, warmupMs: 0, sessionsDirectory: directory, attachments: { directory: join(directory, 'attachments') }, submitDelayMs: waits ? 500 : 0, wait: async ms => { waits?.push(ms); waitWrites.push([...children[0].writes]); },
+  const hosts = createSessionHosts(async () => '/repo', { createRunnerClient: callback => { onEvent = callback; return runner; }, quietMs: 0, warmupMs: 0, sessionsDirectory: directory, attachments: { directory: join(directory, 'attachments') }, submitDelayMs: waits ? 500 : 0, wait: async ms => { waits?.push(ms); waitWrites.push([...children[0].writes]); },
     listProcesses: async () => [{ pid: 2000, ppid: 1000 }, { pid: 3000, ppid: 2000 }, { pid: 9999, ppid: 1 }], ...options,
     targetOptions: { cache: join(directory, 'cache'), settingsPath: join(directory, 'ssh.toml'), ...options.targetOptions } });
   t.after(async () => { hosts.close(); await rm(directory, { recursive: true, force: true }); });
@@ -191,9 +207,11 @@ test('session files bind descendants and undiscovered resume sends are awaited i
   const f = await createFixture(t);
   const launched = await f.launch(SESSION);
   await f.handle('session.hosts');
-  await f.handle('session.send', { conversationId, text: 'first\nline' });
-  await f.handle('session.send', { conversationId, text: 'second' });
-  assert.deepEqual(f.children[0].writes, ['\x15', '\x1b[200~first\nline\x1b[201~', '\r', '\x15', '\x1b[200~second\x1b[201~', '\r']);
+  const first = f.handle('session.send', { conversationId, text: 'first\nline' });
+  const second = f.handle('session.send', { conversationId, text: 'second' });
+  await delay(20);
+  assert.deepEqual(f.children[0].writes, []);
+  await assert.rejects(f.handle('session.send', { conversationId: 'unknown', text: 'absent' }), /^Error: no_host$/);
   await writeFile(join(f.directory, '9999.json'), JSON.stringify({ pid: 9999, sessionId: SESSION }));
   await writeFile(join(f.directory, '1000.json'), '{');
   assert.deepEqual(await f.handle('session.hosts'), { hosts: [] });
@@ -201,7 +219,7 @@ test('session files bind descendants and undiscovered resume sends are awaited i
   const result = await f.handle('session.hosts') as { hosts: { conversationId: string; terminalId: string; pid: number; startedAt: string }[] };
   assert.deepEqual(result.hosts.map(({ startedAt, ...row }) => row), [{ conversationId, terminalId: launched.terminalId, pid: 1000 }]);
   assert.ok(Number.isFinite(Date.parse(result.hosts[0].startedAt)));
-  await new Promise(resolve => setImmediate(resolve));
+  await Promise.all([first, second]);
   assert.deepEqual(f.children[0].writes, ['\x15', '\x1b[200~first\nline\x1b[201~', '\r', '\x15', '\x1b[200~second\x1b[201~', '\r']);
   await f.handle('session.send', { conversationId, text: 'third' });
   await f.handle('session.interrupt', { conversationId });
@@ -311,6 +329,8 @@ test('the startup deadline never permits writing into a known panel', async t =>
     wait: async ms => { elapsed += ms; f.children[0].output(MODEL_PANEL); },
   });
   await f.launch(SESSION);
+  await writeFile(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: SESSION }));
+  await f.handle('session.hosts');
   elapsed = 14_500;
   f.children[0].output(MODEL_PANEL);
   await assert.rejects(f.handle('session.send', { conversationId, text: 'first' }), /Terminal is not ready/);
@@ -324,8 +344,13 @@ for (const provider of ['claude', 'codex'] as const) {
     ['working', '\x1b[2J\x1b[H⠋ Working…\r\n  esc to interrupt'],
     ['composer without footer', '\x1b[2J\x1b[HOpenAI Codex\r\n\r\n› \x1b[3;3H'],
   ]) test(`${provider}: ${name} keeps the ordinary paste and submit path`, async t => {
-    const f = await createFixture(t, [], { targetOptions: { execute: async () => '' } });
+    let rollout = '';
+    const f = await createFixture(t, [], { targetOptions: { execute: async file => file === 'lsof' ? 'n' + rollout : '' } });
+    rollout = join(f.directory, 'rollout-test-' + SESSION + '.jsonl');
+    await writeFile(rollout, JSON.stringify({ type: 'session_meta', payload: { id: SESSION, cwd: '/repo' } }));
+    await writeFile(join(f.directory, '1000.json'), JSON.stringify({ pid: 1000, sessionId: SESSION }));
     await f.handle('session.launch', { projectId: 'p', provider, resume: SESSION });
+    await f.handle('session.hosts');
     f.children[0].output(frame);
     assert.deepEqual(await f.handle('session.send', { conversationId: JSON.stringify([provider, SESSION]), text: 'follow up' }), {});
     assert.deepEqual(f.children[0].writes, ['\x15', '\x1b[200~follow up\x1b[201~', '\r']);

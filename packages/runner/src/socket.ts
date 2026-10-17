@@ -2,10 +2,12 @@ import { chmodSync, lstatSync, unlinkSync } from "node:fs";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import type { JsonValue } from "../../core/src/ledger/facts.ts";
 import { secureSocketDirectory } from "./paths.ts";
+import type { TerminalExit } from "./terminals/index.ts";
 
 export const PROTOCOL_VERSION = 1;
 export const MAX_FRAME_BYTES = 1024 * 1024;
 const SOCKET_PROBE_TIMEOUT_MS = 5000;
+export const MAX_TERMINAL_OUTPUT_BYTES = 64 * 1024;
 export type ClientRole = "api" | "mcp" | "cli";
 export interface SocketRequest { type: "req"; cmd_id: string; command: string; payload?: JsonValue }
 export type SocketResponse = { type: "res"; cmd_id: string } & (
@@ -15,6 +17,7 @@ export type SocketResponse = { type: "res"; cmd_id: string } & (
 export type RunnerEvent = { type: "evt" } & (
   | { seq: number }
   | { delta: { runId: string; text: string; conversationId?: string; messageId?: string } }
+  | { terminal: { terminalId: string } & ({ output: string } | { exit: TerminalExit }) }
 );
 export interface RunnerSocket {
   publish(event: RunnerEvent): void;
@@ -24,6 +27,9 @@ export interface RunnerSocket {
 export class RunnerProtocol {
   private clients = new Set<Socket>();
   private accepted = new Set<Socket>();
+  private terminalClients = new Set<Socket>();
+  private terminalOutput = new Map<string, string>();
+  private outputFlush?: ReturnType<typeof setImmediate>;
   // 実行中の Promise も保存し、別接続からの同時再送を一度にまとめる。
   private responses = new Map<string, Promise<SocketResponse>>();
   private handle: (request: SocketRequest, role: ClientRole) => Promise<JsonValue> | JsonValue;
@@ -35,7 +41,7 @@ export class RunnerProtocol {
     let role: ClientRole | undefined;
     socket.setEncoding("utf8");
     socket.on("error", () => socket.destroy());
-    socket.on("close", () => { clients.delete(socket); accepted.delete(socket); });
+    socket.on("close", () => { clients.delete(socket); accepted.delete(socket); this.terminalClients.delete(socket); });
     socket.on("data", (chunk) => {
       buffer += chunk;
       while (buffer.includes("\n")) {
@@ -59,14 +65,25 @@ export class RunnerProtocol {
           socket.destroy(); return;
         }
         const request = message as SocketRequest;
-        let response = responses.get(request.cmd_id);
+        // 権限はキャッシュ参照より先に調べ、api の応答を他の role に漏らさない。
+        if (request.command.startsWith("terminal.")) {
+          if (role !== "api") {
+            socket.write(JSON.stringify({ type: "res", cmd_id: request.cmd_id, ok: false, error: "Terminal commands require api role" }) + "\n");
+            continue;
+          }
+          // 旧 api は未知の evt で切断するため、端末を利用した接続だけ購読する。
+          this.terminalClients.add(socket);
+        }
+        const cache = !["terminal.write", "terminal.resize", "terminal.list"].includes(request.command);
+        const responseKey = `${role}:${request.cmd_id}`;
+        let response = cache ? responses.get(responseKey) : undefined;
         if (!response) {
           const clientRole = role;
           response = Promise.resolve().then(() => handle(request, clientRole)).then(
             (result): SocketResponse => ({ type: "res", cmd_id: request.cmd_id, ok: true, result }),
             (error): SocketResponse => ({ type: "res", cmd_id: request.cmd_id, ok: false, error: error instanceof Error ? error.message : String(error) }),
           );
-          responses.set(request.cmd_id, response);
+          if (cache) responses.set(responseKey, response);
         }
         void response.then((result) => { if (!socket.destroyed) socket.write(JSON.stringify(result) + "\n"); });
       }
@@ -74,14 +91,42 @@ export class RunnerProtocol {
     });
   }
   publish(event: RunnerEvent): void {
+    if ("terminal" in event) {
+      const { terminal } = event;
+      if ("output" in terminal) {
+        const output = (this.terminalOutput.get(terminal.terminalId) ?? "") + terminal.output;
+        if (Buffer.byteLength(output) > MAX_TERMINAL_OUTPUT_BYTES) {
+          // 欠けた出力を継続配信せず、再接続時の scrollback で復元する。
+          this.terminalOutput.delete(terminal.terminalId);
+          for (const socket of this.terminalClients) socket.destroy();
+          return;
+        }
+        if (this.terminalClients.size) this.terminalOutput.set(terminal.terminalId, output);
+        this.outputFlush ??= setImmediate(() => this.flushTerminalOutput());
+        return;
+      }
+      this.flushTerminalOutput();
+    }
+    this.broadcast(event);
+  }
+  private flushTerminalOutput(): void {
+    clearImmediate(this.outputFlush);
+    this.outputFlush = undefined;
+    for (const [terminalId, output] of this.terminalOutput) this.broadcast({ type: "evt", terminal: { terminalId, output } });
+    this.terminalOutput.clear();
+  }
+  private broadcast(event: RunnerEvent): void {
     const line = JSON.stringify(event) + "\n";
-    for (const socket of this.accepted) {
+    for (const socket of "terminal" in event ? this.terminalClients : this.accepted) {
       if (socket.destroyed) continue;
       if (socket.writableLength > MAX_FRAME_BYTES) socket.destroy();
       else socket.write(line);
     }
   }
-  disconnect(): void { for (const socket of this.clients) socket.destroy(); }
+  disconnect(): void {
+    clearImmediate(this.outputFlush); this.outputFlush = undefined; this.terminalOutput.clear();
+    for (const socket of this.clients) socket.destroy();
+  }
 }
 
 function listenSocket(server: Server, path: string): Promise<void> {

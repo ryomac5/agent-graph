@@ -15,6 +15,7 @@ import { serveMcpRunner } from "./mcp/index.ts";
 import { RunnerSettings } from "./settings.ts";
 import type { IntakeOptions } from "./intake/index.ts";
 import { Supervisor } from "./supervisor.ts";
+import { createTerminalRegistry, type TerminalRegistryOptions } from "./terminals/index.ts";
 
 function readObject(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError("Expected an object payload");
@@ -57,6 +58,7 @@ function parseNativeRunId(target: string): { conversationId: string; generation:
 export class RunnerRuntime {
   readonly supervisor: Supervisor;
   readonly settings: RunnerSettings;
+  readonly terminals: ReturnType<typeof createTerminalRegistry>;
   private hosts: Map<Provider, AgentHost>;
   private actions: RecoveryAction[] = [];
   private opening = new Set<string>();
@@ -65,9 +67,12 @@ export class RunnerRuntime {
   private ledger: Ledger;
   private publish: (event: RunnerEvent) => void;
   constructor(ledger: Ledger, hosts: readonly AgentHost[], publish: (event: RunnerEvent) => void,
-    isolation: "shared" | "worktree" = "shared") {
+    isolation: "shared" | "worktree" = "shared", terminalOptions: TerminalRegistryOptions = {}) {
     this.ledger = ledger; this.publish = publish;
     this.hosts = new Map(hosts.map((host) => [host.provider, host]));
+    this.terminals = createTerminalRegistry(terminalOptions);
+    this.terminals.onData(({ terminalId, data }) => publish({ type: "evt", terminal: { terminalId, output: data } }));
+    this.terminals.onExit(({ terminalId, ...exit }) => publish({ type: "evt", terminal: { terminalId, exit } }));
     this.supervisor = new Supervisor(ledger, publish, { recover: false, isolation });
     for (const host of hosts) this.supervisor.registerHost(host);
     const activeRuns = () => this.readRuns().filter(run => this.supervisor.isOpen(run.id));
@@ -113,8 +118,27 @@ export class RunnerRuntime {
     const { command } = request;
     if (command.startsWith("runner.settings.")) return this.settings.handleRequest(request, role);
     if (command === "status") return toJson({ ...this.supervisor.status(), recovery: this.actions,
+      capabilities: { terminals: true },
       hosts: Object.fromEntries([...this.hosts].map(([provider, host]) => [provider, host.capabilities()])) });
     const p = request.payload === undefined ? {} : readObject(request.payload);
+    if (command.startsWith("terminal.")) {
+      if (role !== "api") throw new Error("Terminal commands require api role");
+      if (command === "terminal.list") return toJson(this.terminals.list());
+      if (command === "terminal.spawn") {
+        if (!Array.isArray(p.args) || !p.args.every(arg => typeof arg === "string")) throw new TypeError("Invalid args");
+        const env = readObject(p.env);
+        if (!Object.values(env).every(value => typeof value === "string")) throw new TypeError("Invalid env");
+        return toJson(this.terminals.spawn({ file: readText(p.file, "file"), args: p.args,
+          cwd: readText(p.cwd, "cwd"), env: env as Record<string, string>, cols: p.cols as number, rows: p.rows as number,
+          meta: readObject(p.meta) }));
+      }
+      const terminalId = readText(p.terminalId, "terminalId");
+      if (command === "terminal.write") this.terminals.write(terminalId, p.data as string);
+      else if (command === "terminal.resize") this.terminals.resize(terminalId, p.cols as number, p.rows as number);
+      else if (command === "terminal.kill") this.terminals.kill(terminalId);
+      else throw new Error(`Unknown command: ${command}`);
+      return { terminalId };
+    }
     if (command === "prepare_update") return toJson(this.supervisor.prepareUpdate(p.force === true));
     if (command === "start" || command === "resume" || command === "fork" || command === "adopt") {
       const launch = this.launch(command, p);
@@ -200,6 +224,7 @@ export class RunnerRuntime {
   }
   async close(): Promise<void> {
     this.closing = true;
+    this.terminals.dispose();
     await Promise.allSettled([...this.launches]);
     const results = await Promise.allSettled([...this.hosts.values()].map(async (host) => {
       if ("dispose" in host && typeof host.dispose === "function") await host.dispose();

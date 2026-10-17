@@ -5,6 +5,7 @@ import { createRequestId, fingerprintRequest, validateRequest, type IntakeReques
 import type { AppendResult, Confidence, Fact, FactInput, JsonValue, Ledger } from "../../../../core/src/ledger/index.ts";
 import { normalizeTimestamp, projectConversations, projectNames, projectProjects, searchNames } from "../../../../core/src/ledger/index.ts";
 import { readInode, readAppendOnlyFile, type FileCursor } from "../files.ts";
+import { reconcileGraphDelegations } from "./graph-delegations.ts";
 
 type Row = { [key: string]: JsonValue };
 class KitConflict extends Error {}
@@ -159,6 +160,9 @@ export function observeKitDelegationsFile(ledger: Ledger, path: string, checkpoi
     append({ ...base, source_event_id: `kit:cursor:${checkpointId}`, kind: "delegation.updated", subject: `delegation:${starts.get(key)?.requestId ?? eventId}`,
       cursor: JSON.stringify(line.cursor), payload: {} });
   }
+  const appendedFacts = results.some((result) => result.status === "appended")
+    ? ledger.readSince(facts.at(-1)?.seq ?? 0, Number.MAX_SAFE_INTEGER) : [];
+  results.push(...reconcileGraphDelegations(ledger, path, [...facts, ...appendedFacts]));
   checkpoints?.set(path, file.cursor);
   return results;
 }

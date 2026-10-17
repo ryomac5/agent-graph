@@ -378,3 +378,110 @@ for (const legacy of [false, true]) test(`無変更の kit 周期は台帳を全
   t.mock.method(f.ledger, "readSince", () => { throw new Error("Unchanged kit file must not scan facts"); });
   for (let cycle = 0; cycle < 3; cycle += 1) assert.deepEqual(observeKitDelegationsFile(f.ledger, f.path, checkpoints), []);
 });
+
+function graphStart(task = "T6-1", extra: object = {}) {
+  return start(`${task}-a1`, { origin: "graph", task_id: task, ...extra });
+}
+function graphEvent(event: string, extra: object = {}) {
+  return { ts: "2026-01-01T00:01:00Z", event, session: SESSION, ...extra };
+}
+
+for (const [state, expected] of [
+  ["done", "done"], ["failed", "failed"], ["cancelled", "interrupted"], ["lost", "failed"], ["rejected", "denied"],
+  ["running", "running"], ["reviewing", "running"], ["verifying", "running"], ["merging", "running"],
+  ["planned", "running"], ["waiting_human", "running"], ["unknown", "running"],
+]) test(`graph task_state ${state} を ${expected} に写し、他 task・session・単発を閉じない`, t => {
+  const f = createFixture(t);
+  writeFileSync(f.path, encode(graphStart(), graphStart("T6-10"), graphStart("T6-1", { session: "other" }),
+    start("T6-1-a3", { origin: "single" }), graphStart("T6-1", { node_id: "T6-1-a2" })));
+  f.observer.observe();
+  appendFileSync(f.path, encode(graphEvent("task_state", { task_id: "T6-1", state })));
+  f.observer.observe();
+  assert.deepEqual(projectDelegations(f.facts()).map(d => d.state).sort(),
+    [expected, expected, "running", "running", "running"].sort());
+  const before = f.facts();
+  assert.deepEqual(f.observer.observe(), []);
+  assert.deepEqual(f.facts(), before);
+});
+
+for (const reason of ["作業を手動で終了", ""]) test(`graph_closed は同じ session の graph だけ中断し理由を残す: ${reason}`, t => {
+  const f = createFixture(t);
+  writeFileSync(f.path, encode(graphStart(), graphStart("T6-2"), graphStart("T6-1", { session: "other" }),
+    start("single", { origin: "single" }), graphEvent("graph_closed", { reason })));
+  f.observer.observe();
+  assert.deepEqual(projectDelegations(f.facts()).map(d => d.state).sort(), ["interrupted", "interrupted", "running", "running"]);
+  for (const fact of f.facts().filter(fact => fact.kind === "delegation.state_changed")) {
+    assert.deepEqual(fact.payload!.result, { status: "cancelled", reason });
+  }
+});
+
+test("新しい graph_run で再登場した task の前回分だけ閉じ、再利用された node_id の新しい試行を残す", t => {
+  const f = createFixture(t);
+  writeFileSync(f.path, encode(graphEvent("graph_run", { ts: TS, tasks: 2 }), graphStart(), graphStart("T6-2")));
+  f.observer.observe();
+  appendFileSync(f.path, encode(graphEvent("graph_run", { tasks: 1 })));
+  createKitDelegationObserver(f.ledger).observe();
+  appendFileSync(f.path, encode(graphEvent("task_state", { task_id: "T6-1", state: "running", attempts: 1 }),
+    graphStart("T6-1", { ts: "2026-01-01T00:01:00Z" })));
+  createKitDelegationObserver(f.ledger).observe();
+  assert.deepEqual(projectDelegations(f.facts()).map(d => d.state).sort(), ["interrupted", "running", "running"]);
+  appendFileSync(f.path, encode(graphEvent("task_state", { ts: "2026-01-01T00:02:00Z", task_id: "T6-1", state: "done" })));
+  f.observer.observe();
+  assert.deepEqual(projectDelegations(f.facts()).map(d => d.state).sort(), ["done", "interrupted", "running"]);
+});
+
+test("実物11件の未終了履歴を旧 cursor より前も追記だけで補い、再読・置換で二重に閉じない", t => {
+  const f = createFixture(t);
+  const rows = JSON.parse(readFileSync(new URL("./kit-graph-history.json", import.meta.url), "utf8")) as Record<string, unknown>[];
+  writeFileSync(f.path, encode(...rows));
+  // 旧版の取り込みを再現し、開始と cursor のみ保存する。
+  const append = f.ledger.append;
+  f.ledger.append = fact => fact.source_event_id.startsWith("kit:graph-terminal:")
+    ? { status: "duplicate", seq: 0 } as ReturnType<typeof append> : append(fact);
+  f.observer.observe();
+  f.ledger.append = append;
+  const before = f.facts();
+  assert.equal(projectDelegations(before).filter(d => d.state === "running").length, 11);
+  f.observer.observe();
+  assert.equal(projectDelegations(f.facts()).filter(d => d.state === "running").length, 0);
+  assert.deepEqual(f.facts().slice(0, before.length), before);
+  assert.equal(f.facts().length, before.length + 11);
+  assert.deepEqual(createKitDelegationObserver(f.ledger).observe(), []);
+  const replacement = join(f.state, "replacement.jsonl");
+  writeFileSync(replacement, encode(...rows));
+  renameSync(replacement, f.path);
+  f.observer.observe();
+  assert.equal(f.facts().filter(fact => fact.kind === "delegation.state_changed").length, 11);
+});
+
+test("graph の終了追記が途中で失敗しても再起動で残りを補う", t => {
+  const f = createFixture(t);
+  writeFileSync(f.path, encode(graphStart(), graphStart("T6-2"), graphEvent("graph_closed", { reason: "停止" })));
+  const append = f.ledger.append;
+  let terminals = 0;
+  f.ledger.append = fact => {
+    if (fact.source_event_id.startsWith("kit:graph-terminal:") && ++terminals === 2) throw new Error("terminal failure");
+    return append(fact);
+  };
+  assert.throws(() => f.observer.observe(), /terminal failure/);
+  f.ledger.append = append;
+  createKitDelegationObserver(f.ledger).observe();
+  assert.deepEqual(projectDelegations(f.facts()).map(d => d.state), ["interrupted", "interrupted"]);
+  assert.equal(f.facts().filter(fact => fact.kind === "delegation.state_changed").length, 2);
+});
+
+test("開始前の終端は新しい委譲を閉じず、同居する単発 codex_done の結果を変えない", t => {
+  const f = createFixture(t);
+  writeFileSync(f.path, encode(
+    graphEvent("task_state", { ts: TS, task_id: "T6-1", state: "done" }),
+    graphEvent("graph_closed", { ts: TS, reason: "前回終了" }),
+    graphStart("T6-1", { ts: "2026-01-01T00:02:00Z" }),
+    start("single", { origin: "single" }),
+    done("single", { status: "failed", exit_code: 1, verify: { passed: false } }),
+  ));
+  f.observer.observe();
+  assert.deepEqual(projectDelegations(f.facts()).map(d => d.state).sort(), ["failed", "running"]);
+  const terminal = f.facts().filter(fact => fact.kind === "delegation.state_changed");
+  assert.equal(terminal.length, 1);
+  assert.deepEqual(terminal[0].payload!.result, { status: "failed", exit_code: 1, verify: { passed: false } });
+});

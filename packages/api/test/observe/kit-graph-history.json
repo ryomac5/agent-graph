@@ -1,0 +1,518 @@
+[
+  {
+    "ts": "2026-10-17T01:36:27+0900",
+    "event": "graph_run",
+    "session": "agent-graph-037",
+    "tasks": 7
+  },
+  {
+    "ts": "2026-10-17T01:36:28+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-1",
+    "state": "running",
+    "attempts": 1
+  },
+  {
+    "ts": "2026-10-17T01:36:28+0900",
+    "event": "codex_start",
+    "session": "agent-graph-037",
+    "node_id": "T6-1-a1",
+    "task_id": "T6-1",
+    "origin": "graph"
+  },
+  {
+    "ts": "2026-10-17T01:39:38+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-1",
+    "state": "verifying"
+  },
+  {
+    "ts": "2026-10-17T01:39:42+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-1",
+    "state": "reviewing"
+  },
+  {
+    "ts": "2026-10-17T01:40:06+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-1",
+    "state": "merging"
+  },
+  {
+    "ts": "2026-10-17T01:40:06+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-1",
+    "state": "done"
+  },
+  {
+    "ts": "2026-10-17T01:40:07+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-2",
+    "state": "running",
+    "attempts": 1
+  },
+  {
+    "ts": "2026-10-17T01:40:07+0900",
+    "event": "codex_start",
+    "session": "agent-graph-037",
+    "node_id": "T6-2-a1",
+    "task_id": "T6-2",
+    "origin": "graph"
+  },
+  {
+    "ts": "2026-10-17T01:44:24+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-2",
+    "state": "verifying"
+  },
+  {
+    "ts": "2026-10-17T01:44:31+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-2",
+    "state": "reviewing"
+  },
+  {
+    "ts": "2026-10-17T01:45:06+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-2",
+    "state": "merging"
+  },
+  {
+    "ts": "2026-10-17T01:45:06+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-2",
+    "state": "done"
+  },
+  {
+    "ts": "2026-10-17T01:45:06+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-3",
+    "state": "running",
+    "attempts": 1
+  },
+  {
+    "ts": "2026-10-17T01:45:06+0900",
+    "event": "codex_start",
+    "session": "agent-graph-037",
+    "node_id": "T6-3-a1",
+    "task_id": "T6-3",
+    "origin": "graph"
+  },
+  {
+    "ts": "2026-10-17T01:49:33+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-3",
+    "state": "verifying"
+  },
+  {
+    "ts": "2026-10-17T01:49:37+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-3",
+    "state": "reviewing"
+  },
+  {
+    "ts": "2026-10-17T01:49:58+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-3",
+    "state": "merging"
+  },
+  {
+    "ts": "2026-10-17T01:49:58+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-3",
+    "state": "done"
+  },
+  {
+    "ts": "2026-10-17T01:50:00+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-4",
+    "state": "running",
+    "attempts": 1
+  },
+  {
+    "ts": "2026-10-17T01:50:00+0900",
+    "event": "codex_start",
+    "session": "agent-graph-037",
+    "node_id": "T6-4-a1",
+    "task_id": "T6-4",
+    "origin": "graph"
+  },
+  {
+    "ts": "2026-10-17T01:55:29+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-4",
+    "state": "verifying"
+  },
+  {
+    "ts": "2026-10-17T01:55:42+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-4",
+    "state": "reviewing"
+  },
+  {
+    "ts": "2026-10-17T01:56:04+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-4",
+    "state": "planned"
+  },
+  {
+    "ts": "2026-10-17T01:56:06+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-4",
+    "state": "running",
+    "attempts": 2
+  },
+  {
+    "ts": "2026-10-17T01:56:06+0900",
+    "event": "codex_start",
+    "session": "agent-graph-037",
+    "node_id": "T6-4-a2",
+    "task_id": "T6-4",
+    "origin": "graph"
+  },
+  {
+    "ts": "2026-10-17T01:57:53+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-4",
+    "state": "verifying"
+  },
+  {
+    "ts": "2026-10-17T01:58:06+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-4",
+    "state": "reviewing"
+  },
+  {
+    "ts": "2026-10-17T01:58:28+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-4",
+    "state": "waiting_human"
+  },
+  {
+    "ts": "2026-10-17T01:58:46+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-4",
+    "state": "planned",
+    "attempts": 0
+  },
+  {
+    "ts": "2026-10-17T01:58:47+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-4",
+    "state": "running",
+    "attempts": 1
+  },
+  {
+    "ts": "2026-10-17T01:58:47+0900",
+    "event": "codex_start",
+    "session": "agent-graph-037",
+    "node_id": "T6-4-a1",
+    "task_id": "T6-4",
+    "origin": "graph"
+  },
+  {
+    "ts": "2026-10-17T02:05:23+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-4",
+    "state": "verifying"
+  },
+  {
+    "ts": "2026-10-17T02:05:36+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-4",
+    "state": "reviewing"
+  },
+  {
+    "ts": "2026-10-17T02:06:12+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-4",
+    "state": "planned"
+  },
+  {
+    "ts": "2026-10-17T02:06:13+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-4",
+    "state": "running",
+    "attempts": 2
+  },
+  {
+    "ts": "2026-10-17T02:06:13+0900",
+    "event": "codex_start",
+    "session": "agent-graph-037",
+    "node_id": "T6-4-a2",
+    "task_id": "T6-4",
+    "origin": "graph"
+  },
+  {
+    "ts": "2026-10-17T02:07:44+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-4",
+    "state": "verifying"
+  },
+  {
+    "ts": "2026-10-17T02:07:57+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-4",
+    "state": "reviewing"
+  },
+  {
+    "ts": "2026-10-17T02:08:27+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-4",
+    "state": "waiting_human"
+  },
+  {
+    "ts": "2026-10-17T02:09:35+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-4",
+    "state": "merging"
+  },
+  {
+    "ts": "2026-10-17T02:09:35+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-4",
+    "state": "done"
+  },
+  {
+    "ts": "2026-10-17T02:09:37+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-5",
+    "state": "running",
+    "attempts": 1
+  },
+  {
+    "ts": "2026-10-17T02:09:37+0900",
+    "event": "codex_start",
+    "session": "agent-graph-037",
+    "node_id": "T6-5-a1",
+    "task_id": "T6-5",
+    "origin": "graph"
+  },
+  {
+    "ts": "2026-10-17T02:14:25+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-5",
+    "state": "verifying"
+  },
+  {
+    "ts": "2026-10-17T02:14:29+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-5",
+    "state": "reviewing"
+  },
+  {
+    "ts": "2026-10-17T02:14:59+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-5",
+    "state": "merging"
+  },
+  {
+    "ts": "2026-10-17T02:14:59+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-5",
+    "state": "done"
+  },
+  {
+    "ts": "2026-10-17T02:15:00+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "G1",
+    "state": "waiting_human"
+  },
+  {
+    "ts": "2026-10-17T03:34:06+0900",
+    "event": "graph_run",
+    "session": "agent-graph-037",
+    "tasks": 8
+  },
+  {
+    "ts": "2026-10-17T03:34:06+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-1",
+    "state": "running",
+    "attempts": 1
+  },
+  {
+    "ts": "2026-10-17T03:34:06+0900",
+    "event": "codex_start",
+    "session": "agent-graph-037",
+    "node_id": "T6-1-a1",
+    "task_id": "T6-1",
+    "origin": "graph"
+  },
+  {
+    "ts": "2026-10-17T03:36:12+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-1",
+    "state": "verifying"
+  },
+  {
+    "ts": "2026-10-17T03:36:15+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-1",
+    "state": "reviewing"
+  },
+  {
+    "ts": "2026-10-17T03:36:44+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-1",
+    "state": "merging"
+  },
+  {
+    "ts": "2026-10-17T03:36:44+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-1",
+    "state": "done"
+  },
+  {
+    "ts": "2026-10-17T03:36:45+0900",
+    "event": "task_state",
+    "session": "agent-graph-037",
+    "task_id": "T6-2",
+    "state": "running",
+    "attempts": 1
+  },
+  {
+    "ts": "2026-10-17T03:36:45+0900",
+    "event": "codex_start",
+    "session": "agent-graph-037",
+    "node_id": "T6-2-a1",
+    "task_id": "T6-2",
+    "origin": "graph"
+  },
+  {
+    "ts": "2026-10-17T03:39:40+0900",
+    "event": "graph_closed",
+    "session": "agent-graph-037",
+    "reason": ""
+  },
+  {
+    "ts": "2026-10-17T03:40:49+0900",
+    "event": "graph_run",
+    "session": "agent-graph-037-t6",
+    "tasks": 3
+  },
+  {
+    "ts": "2026-10-17T03:40:49+0900",
+    "event": "task_state",
+    "session": "agent-graph-037-t6",
+    "task_id": "T6-6",
+    "state": "running",
+    "attempts": 1
+  },
+  {
+    "ts": "2026-10-17T03:40:49+0900",
+    "event": "codex_start",
+    "session": "agent-graph-037-t6",
+    "node_id": "T6-6-a1",
+    "task_id": "T6-6",
+    "origin": "graph"
+  },
+  {
+    "ts": "2026-10-17T03:41:45+0900",
+    "event": "task_state",
+    "session": "agent-graph-037-t6",
+    "task_id": "T6-6",
+    "state": "verifying"
+  },
+  {
+    "ts": "2026-10-17T03:41:45+0900",
+    "event": "task_state",
+    "session": "agent-graph-037-t6",
+    "task_id": "T6-6",
+    "state": "reviewing"
+  },
+  {
+    "ts": "2026-10-17T03:42:11+0900",
+    "event": "task_state",
+    "session": "agent-graph-037-t6",
+    "task_id": "T6-6",
+    "state": "merging"
+  },
+  {
+    "ts": "2026-10-17T03:42:11+0900",
+    "event": "task_state",
+    "session": "agent-graph-037-t6",
+    "task_id": "T6-6",
+    "state": "done"
+  },
+  {
+    "ts": "2026-10-17T03:42:12+0900",
+    "event": "task_state",
+    "session": "agent-graph-037-t6",
+    "task_id": "G1",
+    "state": "waiting_human"
+  },
+  {
+    "ts": "2026-10-17T03:48:07+0900",
+    "event": "task_state",
+    "session": "agent-graph-037-t6",
+    "task_id": "G1",
+    "state": "done"
+  },
+  {
+    "ts": "2026-10-17T03:48:09+0900",
+    "event": "task_state",
+    "session": "agent-graph-037-t6",
+    "task_id": "PR",
+    "state": "running",
+    "attempts": 1
+  },
+  {
+    "ts": "2026-10-17T03:48:14+0900",
+    "event": "task_state",
+    "session": "agent-graph-037-t6",
+    "task_id": "PR",
+    "state": "failed"
+  },
+  {
+    "ts": "2026-10-17T20:27:29+0900",
+    "event": "graph_closed",
+    "session": "agent-graph-037-t6",
+    "reason": "PR ノードは基点が未 push で失敗。PR は手で作る"
+  }
+]

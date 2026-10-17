@@ -1,3 +1,4 @@
+import { canonicalConversationId } from "../../../core/src/ledger/projections/relations.ts";
 import type { DatabaseSync } from "node:sqlite";
 import { projectConversations, projectRuns, readLedgerDatabase } from "../../../core/src/ledger/index.ts";
 import type { Fact, Ledger, RunPayload } from "../../../core/src/ledger/index.ts";
@@ -66,10 +67,12 @@ export function createSessionQuery(ledger: Ledger, db: DatabaseSync = readLedger
       } else {
         const facts = metadata.all().map(row => ({ ...row,
           payload: row.payload === null ? null : JSON.parse(String(row.payload)) } as Fact));
-        const eligible = new Map(projectConversations(facts, new Map()).conversations
+        // SQL の依存索引は元の ID で引き、取得後の照合だけ正規化する。
+        const eligibleIds = new Map(projectConversations(facts, new Map()).conversations
           .filter(row => row.provider === provider && row.origin === "observed" && (provider !== "claude" || (row.type === "subagent") === subagents))
           .flatMap(row => [[row.id, row], [`${provider}:${row.native_id}`, row]] as const));
-        const selected = runSubjects.all(JSON.stringify([...eligible.keys()])).map(row => String(row.subject));
+        const eligible = new Map([...eligibleIds].map(([id, row]) => [canonicalConversationId(id), row]));
+        const selected = runSubjects.all(JSON.stringify([...eligibleIds.keys()])).map(row => String(row.subject));
         const runs = runFacts.all(JSON.stringify(selected)).map(row => ({ ...row,
           payload: row.payload === null ? null : JSON.parse(String(row.payload)) } as Fact));
         const subjects = new Map<string, `run:${string}`>();
@@ -79,14 +82,14 @@ export function createSessionQuery(ledger: Ledger, db: DatabaseSync = readLedger
         }
         const latest = new Map<string, ReturnType<typeof projectRuns>[number]>();
         for (const run of projectRuns(runs)) {
-          const conversation = eligible.get(run.conversation_id);
+          const conversation = eligible.get(canonicalConversationId(run.conversation_id));
           if (conversation && run.generation > (latest.get(conversation.id)?.generation ?? -1)) latest.set(conversation.id, run);
         }
         rows = [];
         for (const [id, run] of latest) {
           const subject = subjects.get(JSON.stringify([run.conversation_id, run.generation]));
           if (subject && ["running", "waiting_approval", "waiting_input"].includes(run.state)) rows.push({ id,
-            nativeId: eligible.get(id)!.native_id!, subject, conversation_id: run.conversation_id,
+            nativeId: eligible.get(canonicalConversationId(id))!.native_id!, subject, conversation_id: run.conversation_id,
             generation: run.generation, launch: run.launch as SessionRun["launch"], last_evidence_ts: run.last_evidence_ts, lastRecord: 0 });
         }
       }

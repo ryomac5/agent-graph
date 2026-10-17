@@ -1,3 +1,4 @@
+import { canonicalConversationId } from "../../../core/src/ledger/projections/relations.ts";
 import { observeCodexTitles } from "../observe/codex/titles.ts";
 import { readRemoteMetadata, observeRemoteStatus } from '../remote/observation.ts';
 import { cacheRoot } from '../remote/index.ts';
@@ -366,13 +367,13 @@ export function openObservationService(options: ObservationOptions = {}) {
       watchPathsDirty = false;
       watchProjectionSeq = seq;
       watchExpires = Infinity;
-      const active = new Set(readWatchConversations.all().map(row => `${row.provider}:${row.native_id}`));
+      const active = new Set(readWatchConversations.all().map(row => canonicalConversationId(`${row.provider}:${row.native_id}`)));
       const activePaths = new Set<string>();
       if (active.size) for (const path of historyFiles) {
         const meta = rollouts.get(path)?.context[0]?.value as { type?: string; id?: string; payload?: { id?: string } } | undefined;
         const nativeId = meta?.type === "session_meta" ? meta.payload?.id : meta?.id;
         const key = nativeId ? `codex:${nativeId}` : `claude:${basename(path, ".jsonl")}`;
-        if (active.has(key)) activePaths.add(path);
+        if (active.has(canonicalConversationId(key))) activePaths.add(path);
       }
       selectedWatchPaths = [...checkpoints].filter(([path, cursor]) => historyFiles.has(path)
         && !path.includes("/archived_sessions/")

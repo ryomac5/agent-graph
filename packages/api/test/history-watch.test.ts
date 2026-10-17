@@ -128,3 +128,29 @@ test("監視周期は変更履歴だけを読み、outbox と Codex 題名は見
   assert.ok(scans > 0);
   assert.ok(service.ledger.readSince(0, 100).some(fact => fact.kind === "conversation.updated" && fact.payload?.ai_title === "Deferred title"));
 });
+
+test("監視対象の照合は実行の会話 ID の 2 形で同じ結果になる", async t => {
+  const { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { openObservationService } = await import("../src/service/index.ts");
+  for (const conversation of ["claude:identity", '["claude","identity"]']) {
+    const home = mkdtempSync(join(tmpdir(), "api-watch-identity-"));
+    const directory = join(home, ".claude/projects/fixture");
+    mkdirSync(directory, { recursive: true });
+    const path = join(directory, "identity.jsonl");
+    writeFileSync(path, JSON.stringify({ type: "assistant", uuid: "identity",
+      timestamp: "2026-10-08T00:00:00.000Z", message: { role: "assistant", content: "Reply" } }) + "\n");
+    utimesSync(path, new Date(0), new Date(0));
+    const service = openObservationService({ home, env: { HOME: home }, dbPath: join(home, "ledger.db"),
+      codexProcessReader: { listProcesses: () => "", readOpenFiles: () => "" } });
+    t.after(() => { service.close(); rmSync(home, { recursive: true, force: true }); });
+    service.ingestOnce();
+    assert.deepEqual(service.watchPaths(), []);
+    service.ledger.append({ source: "hook", source_event_id: "active", kind: "run.created", subject: "run:active",
+      source_ts: "2026-10-08T00:01:00.000Z", confidence: "confirmed",
+      payload: { conversation_id: conversation, generation: Date.parse("2026-10-08T00:01:00.000Z"), state: "running" } });
+    service.catchUp();
+    assert.deepEqual(service.watchPaths(), [path]);
+  }
+});

@@ -1,3 +1,4 @@
+import { canonicalConversationId } from "../../../core/src/ledger/projections/relations.ts";
 import { watch, type FSWatcher } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -41,12 +42,13 @@ function readStates(facts: Fact[], target: WatchTarget): Omit<WatchLine, "time" 
   const runs = projectRuns(facts);
   if (target.kind === "conversation") {
     const conversations = projectEntityRecords<{ provider: string; native_id: string }>(facts, "conversation");
-    const conversation = conversations.find((row) => row.id === target.id
-      || JSON.stringify([row.provider, row.native_id]) === target.id);
+    const targetId = canonicalConversationId(target.id);
+    const conversation = conversations.find((row) => canonicalConversationId(row.id) === targetId
+      || JSON.stringify([row.provider, row.native_id]) === targetId);
     if (!conversation) return [];
     const canonicalId = JSON.stringify([conversation.provider, conversation.native_id]);
-    const run = runs.filter((row) => row.conversation_id === conversation.id
-      || row.conversation_id === canonicalId).sort((a, b) => b.generation - a.generation)[0];
+    const run = runs.filter((row) => canonicalConversationId(row.conversation_id) === canonicalConversationId(conversation.id)
+      || canonicalConversationId(row.conversation_id) === canonicalId).sort((a, b) => b.generation - a.generation)[0];
     const evidence = run?.end_evidence as { interrupted?: boolean } | undefined;
     return [{ target: target.id, state: run?.state === "ended" ? (evidence?.interrupted || run.reason === "interrupted" ? "interrupted" : "done")
       : run?.state ?? "unknown", attempt: run?.generation ?? 0, reason: run?.cause ?? run?.reason ?? "" }];

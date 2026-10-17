@@ -1,3 +1,4 @@
+import { canonicalConversationId } from "../../../core/src/ledger/projections/relations.ts";
 import { normalizeTimestamp } from '../../../core/src/ledger/timestamps.ts';
 import { setTimeout as delay } from 'node:timers/promises';
 import { DatabaseSync, type SQLOutputValue } from 'node:sqlite';
@@ -62,7 +63,7 @@ export class SendWatch {
   }
   private rules: () => RedactionRules;
   private canonical(id: string): string {
-    return String(this.db.prepare('SELECT canonical_id FROM api_conversation_ids WHERE id = ?').get(id)?.canonical_id ?? id);
+    return canonicalConversationId(String(this.db.prepare('SELECT canonical_id FROM api_conversation_ids WHERE id = ?').get(id)?.canonical_id ?? id));
   }
   capture(conversation: string, now = Date.now()) {
     const id = this.canonical(conversation);

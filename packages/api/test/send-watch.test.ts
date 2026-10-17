@@ -683,3 +683,22 @@ test('bash-input がない ! の送信は期限後に未配達として残る', 
   assert.equal(f.read().state, 'failed');
   assert.equal(f.read().message_id, null);
 });
+
+test('送信監視は 2 形の入力で捕捉・表示・境界・配達を同じ会話に照合する', t => {
+  t.mock.method(console, 'error', () => {});
+  for (const conversation of ['claude:fixture', CONVERSATION]) {
+    const f = createFixture(t, true);
+    assert.deepEqual(f.watch.capture(conversation, NOW), f.watch.capture(CONVERSATION, NOW));
+    f.watch.record('send', conversation, 'Next step', f.watch.capture(conversation, NOW));
+    assert.equal(f.watch.list()[0].conversation_id, CONVERSATION);
+    f.append('run.state_changed', 'run:root', { state: 'idle' }, NOW + 1000);
+    f.feed.refresh();
+    f.watch.check(NOW + 1000);
+    assert.equal(f.read().deadline_ms, NOW + 1000 + SEND_WATCH_TIMEOUT_MS);
+    addMessage(f, 'delivered', 'Next step');
+    f.watch.check(NOW + 2000);
+    assert.equal(f.read().state, 'closed');
+    assert.equal(f.read().message_id, 'delivered');
+    assert.equal(f.read().conversation_id, conversation);
+  }
+});

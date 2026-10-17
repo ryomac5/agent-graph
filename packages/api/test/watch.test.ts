@@ -250,3 +250,24 @@ test("snapshot crosses pages and writes between snapshot and subscription are no
     [1102, "accepted", 2], [1103, "assigned", 2], [1104, "running", 2], [1105, "failed", 2],
   ]);
 });
+
+test("会話 watch は会話・実行・指定 ID の 2 形を同じ最新世代として読む", { timeout: 10000 }, async t => {
+  const ids = ["claude:identity", '["claude","identity"]'];
+  for (const conversation of ids) for (const runId of ids) {
+    const fixture = createFixture(t);
+    fixture.append({ source: "hook", kind: "conversation.created", subject: `conversation:${conversation}`,
+      payload: { provider: "claude", native_id: "identity", origin: "observed" } });
+    fixture.append({ source: "hook", kind: "run.created", subject: "run:older",
+      payload: { conversation_id: ids.find(id => id !== runId)!, generation: 1, state: "running" } });
+    fixture.append({ source: "hook", kind: "run.created", subject: "run:latest",
+      payload: { conversation_id: runId, generation: 2, state: "running" } });
+    fixture.append({ source: "hook", kind: "run.state_changed", subject: "run:latest",
+      payload: { state: "ended", end_evidence: { kind: "session_end", generation: 2 } } });
+    for (const target of ids) {
+      const rows: WatchLine[] = [];
+      assert.equal(await watchLedger({ dbPath: fixture.dbPath, target: { kind: "conversation", id: target },
+        write: row => rows.push(row) }), 0);
+      assert.deepEqual(rows.map(row => [row.target, row.state, row.attempt]), [[target, "done", 2]]);
+    }
+  }
+});

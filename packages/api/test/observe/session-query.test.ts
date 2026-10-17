@@ -99,3 +99,28 @@ test("生存観測の問い合わせは facts の全件走査をせず、対象�
     assert.ok(!plan.some(detail => /SCAN (?:\w+\.)?facts\b/.test(detail)), `${sql}\n${plan.join("\n")}`);
   }
 });
+
+test("Claude の 2 形を同じ最新世代に照合し、投影の前後で元の ID と subject を保つ", t => {
+  for (const current of ["claude:identity", '["claude","identity"]']) {
+    const ledger = openLedger(":memory:");
+    t.after(() => ledger.close());
+    const db = readLedgerDatabase(ledger);
+    const other = current.startsWith("claude:") ? '["claude","identity"]' : "claude:identity";
+    const inputs = [
+      { kind: "conversation.created", subject: "conversation:claude:identity",
+        payload: { provider: "claude", native_id: "identity", origin: "observed" } },
+      { kind: "run.created", subject: "run:older",
+        payload: { conversation_id: other, generation: 1, state: "running" } },
+      { kind: "run.created", subject: "run:latest",
+        payload: { conversation_id: current, generation: 2, state: "waiting_input" } },
+    ];
+    for (const [index, input] of inputs.entries()) ledger.append({ ...input, source: "hook",
+      source_event_id: String(index), source_ts: TS, confidence: "confirmed" } as FactInput);
+    const query = createSessionQuery(ledger);
+    const expected = [{ id: '["claude","identity"]', nativeId: "identity", subject: "run:latest",
+      conversation_id: current, generation: 2, launch: undefined, last_evidence_ts: TS, lastRecord: 0 }];
+    assert.deepEqual(query.read("claude"), expected);
+    rebuild(db);
+    assert.deepEqual(query.read("claude"), expected);
+  }
+});

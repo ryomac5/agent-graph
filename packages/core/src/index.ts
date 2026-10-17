@@ -12,6 +12,7 @@ export {
   fromEnv,
 } from "./trace.ts";
 export { ulid } from "./ulid.ts";
+export { canonicalConversationId } from "./ledger/projections/relations.ts";
 export { repoKey, stateDbPath } from "./paths.ts";
 export { fingerprint } from "./store/fingerprint.ts";
 export { migrations, type Migration } from "./store/migrations.ts";

@@ -2,6 +2,7 @@ import type { Fact, JsonValue, RunPayload } from "../facts.ts";
 import { orderActiveFacts } from "./connections.ts";
 import { isTurnEvidence, rejectUnobservedLiveState } from "../turns.ts";
 import { normalizeTimestampFields } from "../timestamps.ts";
+import { canonicalConversationId } from "./relations.ts";
 
 // ホストと観測側は、この構造を end_evidence に正規化して追記する。
 export type EndEvidence =
@@ -40,20 +41,15 @@ function confirmEnd(fact: Fact, run: RunProjection, evidence: { [key: string]: J
   }
 }
 
-function matchClaudeConversation(left: string, right: string): boolean {
-  const normalize = (id: string) => id.startsWith("claude:") ? JSON.stringify(["claude", id.slice("claude:".length)]) : id;
-  return normalize(left) === normalize(right);
-}
-
 function canResumeSession(fact: Fact, run: RunProjection, payload: Partial<RunPayload>): boolean {
   if (run.state !== "ended" || readObject(run.end_evidence)?.kind !== "session_end"
     || fact.confidence !== "confirmed" || payload.state !== "running"
     || payload.generation !== run.generation || !payload.conversation_id
-    || !matchClaudeConversation(payload.conversation_id, run.conversation_id)) return false;
+    || canonicalConversationId(payload.conversation_id) !== canonicalConversationId(run.conversation_id)) return false;
   const evidence = readObject(payload.last_evidence);
   const sessionId = readObject(evidence?.input)?.session_id;
   if (sessionId !== undefined && (typeof sessionId !== "string"
-    || !matchClaudeConversation(`claude:${sessionId}`, run.conversation_id))) return false;
+    || canonicalConversationId(`claude:${sessionId}`) !== canonicalConversationId(run.conversation_id))) return false;
   const startsTurn = fact.source === "hook" && evidence?.hook_event_name === "UserPromptSubmit" && evidence.auxiliary !== true
     || fact.source === "transcript-claude" && evidence?.kind === "turn_started";
   const ended = Date.parse(run.ended_ts ?? "");

@@ -15,6 +15,11 @@ export function compareText(left: string, right: string): number {
 export function createNativeId(provider: string, nativeId: string): string {
   return JSON.stringify([provider, nativeId]);
 }
+
+/** 旧い Claude の会話 ID を読み取り時に揃える。空の native ID も従来の照合に合わせる。 */
+export function canonicalConversationId(id: string): string {
+  return id.startsWith("claude:") ? createNativeId("claude", id.slice("claude:".length)) : id;
+}
 // 投影の中で組んだ値は未定義の欄を持ち得る。JSON と同じく、欄は省き、配列の要素は null にする。
 export function serializeValue(value: JsonValue | undefined): string {
   if (value === undefined) return "null";

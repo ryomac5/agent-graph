@@ -58,7 +58,7 @@ try {
     cleanup.push(() => configured.close());
     const detach = bindSettingsRequests(ws.runner, configured.settings); cleanup.push(detach);
     await configured.settings.start();
-    const dashboard = await startStaticServer({ port: 0, dist: join(root, 'dist'), upstream: ws });
+    const dashboard = await startStaticServer({ port: Number(process.env.E2E_DASHBOARD_PORT || 0), dist: join(root, 'dist'), upstream: ws });
     cleanup.push(() => dashboard.close());
     const urls = [dashboard.url, ws.url, observation.hook.url];
     if (urls.some(value => new URL(value).hostname !== '127.0.0.1' || ['7420', '7422'].includes(new URL(value).port))) throw new Error('Unsafe listen address');

@@ -53,13 +53,14 @@ it('formats start dates as time, month/day and year/month/day', () => {
   expect(formatStartedAt(new Date(2026, 9, 11).getTime(), now)).toBe('10/11');
   expect(formatStartedAt(new Date(2025, 9, 11).getTime(), now)).toBe('2025/10/11');
 });
-it.each(['en', 'ja'] as const)('shows the start time at the row end and full identifiers in the tooltip (%s)', language => {
+it.each(['en', 'ja'] as const)('shows the last interaction time at the row end and full identifiers in the tooltip (%s)', language => {
   vi.useFakeTimers(); vi.setSystemTime(new Date(2026, 9, 12, 18));
   const state = createFixture().getSnapshot();
   const roots = selectRoots(state);
   render(<MemoryRouter><RootList roots={roots} state={state} language={language}/></MemoryRouter>);
   const link = screen.getByRole('link', { name: 'Custom' });
-  expect(link.querySelector('.root-row-meta > time')?.textContent).toBe('14:02');
+  expect(link.querySelector('.root-row-meta > time')?.getAttribute('datetime')).toBe('2026-10-12T15:00:00.000Z');
+  expect(link.querySelector('.root-row-meta > time')?.textContent).toBe(formatStartedAt(Date.parse('2026-10-12T15:00:00Z'), Date.now()));
   expect(link.title).toContain('repo-001');
   expect(link.title).toContain(new Date(2026, 9, 12, 14, 2).toISOString());
   expect(link.title).toContain('2026-10-12T15:00:00Z');

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,6 +7,53 @@ import { join } from "node:path";
 import test from "node:test";
 import { openObservationService } from "../src/service/index.ts";
 import { ProjectionFeed } from "../src/service/projection-feed.ts";
+import { openLedger, rebuild } from "../../core/src/ledger/index.ts";
+import type { ProjectionState } from "../../core/src/ledger/rebuild.ts";
+
+for (const errcode of [5, 517]) test(`locked が続く間は resync を返さず、ログを60秒ごとに制限する（${errcode}）`, t => {
+  const path = `file:feed-lock-${randomUUID()}?mode=memory&cache=shared`;
+  const ledger = openLedger(path);
+  const db = new DatabaseSync(path);
+  let state = rebuild(db);
+  const feed = new ProjectionFeed(path, () => state);
+  t.after(() => { feed.close(); db.close(); ledger.close(); });
+  let now = 0;
+  t.mock.method(Date, "now", () => now);
+  const log = t.mock.method(console, "error", () => {});
+  const target = feed as unknown as { refreshProjection(state: ProjectionState, changes: Record<string, unknown>[]): unknown };
+  const refreshProjection = target.refreshProjection.bind(feed);
+  let failure: Error | undefined = Object.assign(new Error("database is locked"), { errcode });
+  t.mock.method(target, "refreshProjection", (next: ProjectionState, changes: Record<string, unknown>[]) => {
+    const result = refreshProjection(next, changes);
+    if (failure) throw failure;
+    return result;
+  });
+  state = rebuild(db);
+  for (const [at, count] of [[0, 1], [1, 1], [59_999, 1], [60_000, 2], [60_001, 2], [119_999, 2], [120_000, 3]]) {
+    now = at;
+    assert.equal(feed.refresh(), undefined);
+    assert.equal(log.mock.callCount(), count);
+  }
+  failure = undefined;
+  assert.equal(feed.refresh(), "resync");
+  assert.equal(feed.refresh(), undefined);
+  assert.equal(log.mock.callCount(), 3);
+
+  // 復旧した後の再発は、前のログから60秒未満でも初回として出す。
+  state = rebuild(db);
+  failure = Object.assign(new Error("database is locked"), { errcode });
+  now++;
+  assert.equal(feed.refresh(), undefined);
+  assert.equal(log.mock.callCount(), 4);
+  failure = new Error("unexpected projection failure");
+  assert.throws(() => feed.refresh(), failure);
+  failure = Object.assign(new Error("database is locked"), { errcode });
+  assert.equal(feed.refresh(), undefined);
+  assert.equal(log.mock.callCount(), 5);
+  for (const call of log.mock.calls) assert.deepEqual(call.arguments, ["Projection refresh skipped: database is locked"]);
+  failure = undefined;
+  assert.equal(feed.refresh(), "resync");
+});
 
 for (const restart of [false, true]) {
   test(`要約の途中も別の書き手が追記でき、失敗後の${restart ? "再起動" : "refresh"}で全変更が残る`, t => {

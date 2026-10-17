@@ -1,9 +1,10 @@
-import { basename, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { classifyClaudeRecord, createNativeId, projectConversations, TURN_RULE_VERSION } from "../../../../core/src/ledger/index.ts";
-import type { AppendResult, Fact, FactInput, Ledger, RunPayload } from "../../../../core/src/ledger/index.ts";
+import type { AppendResult, Fact, FactInput, JsonValue, Ledger, RunPayload } from "../../../../core/src/ledger/index.ts";
 import { readAppendOnlyFile, type FileLine } from "../files.ts";
 import { defaultLocationResolver, type LocationResolver, type ObservedLocation } from "../location.ts";
 import { findUnsupportedReason, parseRow } from "./index.ts";
+import { getMessageText } from "../../../../core/src/ledger/projections/messages.ts";
 
 /** 会話の場所の事実の識別。これがあれば、場所とターンの根拠を読み終えている。 */
 export function claudeLocationEventId(conversationId: string): string {
@@ -21,6 +22,7 @@ export interface ClaudeContextOptions {
   fromStart?: boolean;
   observedTs?: string;
   locate?: LocationResolver;
+  parentAtLaunch?: (parent: string, started: number) => import("../../../../core/src/state/index.ts").ProcessIdentity | null;
 }
 export interface ClaudeContextResult { appended: number; duplicates: number; conflicts: AppendResult[] }
 type TurnTarget = { subject: string; generation: number; started: number };
@@ -103,12 +105,17 @@ export function observeClaudeContext(ledger: Ledger, path: string, options: Clau
       located = true;
     }
     let evidence = turns ? classifyClaudeRecord(row) : undefined;
-    if (!evidence) continue;
+    const content = (row.message as { content?: JsonValue } | undefined)?.content;
+    const confirmedModel = turns && row.type === "user"
+      ? /^\s*<local-command-stdout>Set model to\s+([^<\r\n]+)<\/local-command-stdout>\s*$/u.exec(getMessageText(content ?? null))?.[1].trim().replace(/^`([^`]+)`$/u, "$1")
+      : undefined;
+    const model = confirmedModel || evidence?.model;
+    if (!evidence && !model) continue;
     // 子が手を戻す呼び出しと、その呼び出しへの結果は、どちらもターンの終わりである。
     const blocks = Array.isArray((row.message as { content?: unknown } | undefined)?.content)
       ? (row.message as { content: { type?: string; name?: string; id?: string; tool_use_id?: string }[] }).content : [];
     for (const block of blocks) if (block.type === "tool_use" && block.name === "SubagentHandback" && block.id) handbacks.add(block.id);
-    if (evidence.kind === "tool_result" && blocks.some((block) => block.type === "tool_result" && block.tool_use_id && handbacks.has(block.tool_use_id))) {
+    if (evidence?.kind === "tool_result" && blocks.some((block) => block.type === "tool_result" && block.tool_use_id && handbacks.has(block.tool_use_id))) {
       evidence = { ...evidence, state: "idle", kind: "turn_completed" };
     }
     const time = Date.parse(timestamp);
@@ -120,17 +127,19 @@ export function observeClaudeContext(ledger: Ledger, path: string, options: Clau
       own = { subject: `run:${id}:${generation}`, generation, started: generation };
       append({ ...base, kind: "run.created", subject: own.subject as `run:${string}`, source_event_id: `run:${id}`,
         payload: { conversation_id: id, generation, state: "unknown", reason: "missing_state_evidence", started_ts: timestamp,
+          ...(basename(dirname(absolutePath)) === "subagents" ? { launch: { parentProcessAtLaunch:
+            options.parentAtLaunch?.(basename(dirname(dirname(absolutePath))), time) ?? null } } : {}),
           ...(location ? { cwd: location.cwd, ...(location.repository_id ? { repository_id: location.repository_id } : {}) } : {}) } });
       target = own;
     }
     // 状態が同じ行でもモデルの変更は独立に残す。過去分は状態の事実を作り直さない。
-    if (evidence.model && models.get(target.subject) !== evidence.model) {
+    if (model && models.get(target.subject) !== model) {
       append({ ...base, kind: "run.updated", subject: target.subject as `run:${string}`,
         source_event_id: `model:${id}:${target.generation}:${String(row.uuid ?? line.cursor.offset)}`,
-        payload: { conversation_id: id, generation: target.generation, model: evidence.model } });
-      models.set(target.subject, evidence.model);
+        payload: { conversation_id: id, generation: target.generation, model } });
+      models.set(target.subject, model);
     }
-    if (modelsOnly) continue;
+    if (modelsOnly || !evidence) continue;
     if (states.get(target.subject) === evidence.state) continue;
     states.set(target.subject, evidence.state);
     append({ ...base, kind: "run.state_changed", subject: target.subject as `run:${string}`,

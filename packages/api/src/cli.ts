@@ -119,11 +119,12 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
           process.once("SIGTERM", stop);
         })]);
       } finally {
+        // runner の端末を残したまま、先に API の購読と接続を解除する。
+        await websocket?.close();
         await observation.close();
         await dashboard?.close();
         detachSettings?.();
         configured?.close();
-        await websocket?.close();
         process.removeListener("SIGINT", stop);
         process.removeListener("SIGTERM", stop);
         try {

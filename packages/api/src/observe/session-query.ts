@@ -12,6 +12,7 @@ export interface SessionRun {
   generation: number;
   last_evidence_ts?: string;
   lastRecord: number;
+  launch?: { [key: string]: import("../../../core/src/ledger/index.ts").JsonValue };
 }
 
 /** 投影が追いついていない取り込み周期だけ、会話と実行の事実を SQL で絞って投影する。 */
@@ -21,11 +22,11 @@ export function createSessionQuery(ledger: Ledger, db: DatabaseSync = readLedger
     ON facts (json_extract(cursor, '$.file_id'), source_ts)
     WHERE source = 'rollout-codex' AND cursor IS NOT NULL`);
   const revision = db.prepare("SELECT last_seq = (SELECT coalesce(max(seq), 0) FROM facts) AS current FROM projection_state WHERE id = 1");
-  const active = db.prepare(`SELECT c.id, c.native_id, r.conversation_id, r.generation, r.last_evidence_ts,
+  const active = db.prepare(`SELECT c.id, c.native_id, r.conversation_id, r.generation, r.last_evidence_ts, r.launch,
       'run:' || s.subject_id AS subject
     FROM runs r JOIN conversations c ON r.conversation_id IN (c.id, c.provider || ':' || c.native_id)
     JOIN run_subjects s ON s.conversation_id = r.conversation_id AND s.generation = r.generation
-    WHERE c.provider = ? AND c.origin = 'observed' AND (? <> 'claude' OR coalesce(c.type, '') <> 'subagent')
+    WHERE c.provider = ? AND c.origin = 'observed' AND (? <> 'claude' OR (coalesce(c.type, '') = 'subagent') = ?)
       AND r.state IN ('running', 'waiting_approval', 'waiting_input')
       AND NOT EXISTS (SELECT 1 FROM runs newer
         WHERE newer.conversation_id IN (c.id, c.provider || ':' || c.native_id) AND newer.generation > r.generation)`);
@@ -56,17 +57,17 @@ export function createSessionQuery(ledger: Ledger, db: DatabaseSync = readLedger
   }
   return {
     hasEvent(source: string, eventId: string): boolean { return !!exists.get(source, eventId); },
-    read(provider: "claude" | "codex"): SessionRun[] {
+    read(provider: "claude" | "codex", subagents = false): SessionRun[] {
       let rows: SessionRun[];
       if (revision.get()!.current) {
-        rows = active.all(provider, provider).map(row => ({ id: String(row.id), nativeId: String(row.native_id),
+        rows = active.all(provider, provider, Number(subagents)).map(row => ({ id: String(row.id), nativeId: String(row.native_id),
           subject: row.subject as `run:${string}`, conversation_id: String(row.conversation_id),
-          generation: Number(row.generation), last_evidence_ts: row.last_evidence_ts as string | undefined, lastRecord: 0 }));
+          generation: Number(row.generation), launch: row.launch ? JSON.parse(String(row.launch)) : undefined, last_evidence_ts: row.last_evidence_ts as string | undefined, lastRecord: 0 }));
       } else {
         const facts = metadata.all().map(row => ({ ...row,
           payload: row.payload === null ? null : JSON.parse(String(row.payload)) } as Fact));
         const eligible = new Map(projectConversations(facts, new Map()).conversations
-          .filter(row => row.provider === provider && row.origin === "observed" && (provider !== "claude" || row.type !== "subagent"))
+          .filter(row => row.provider === provider && row.origin === "observed" && (provider !== "claude" || (row.type === "subagent") === subagents))
           .flatMap(row => [[row.id, row], [`${provider}:${row.native_id}`, row]] as const));
         const selected = runSubjects.all(JSON.stringify([...eligible.keys()])).map(row => String(row.subject));
         const runs = runFacts.all(JSON.stringify(selected)).map(row => ({ ...row,
@@ -86,7 +87,7 @@ export function createSessionQuery(ledger: Ledger, db: DatabaseSync = readLedger
           const subject = subjects.get(JSON.stringify([run.conversation_id, run.generation]));
           if (subject && ["running", "waiting_approval", "waiting_input"].includes(run.state)) rows.push({ id,
             nativeId: eligible.get(id)!.native_id!, subject, conversation_id: run.conversation_id,
-            generation: run.generation, last_evidence_ts: run.last_evidence_ts, lastRecord: 0 });
+            generation: run.generation, launch: run.launch as SessionRun["launch"], last_evidence_ts: run.last_evidence_ts, lastRecord: 0 });
         }
       }
       if (provider !== "codex" || !rows.length) return rows;

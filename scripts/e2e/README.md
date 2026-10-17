@@ -53,7 +53,7 @@ api は製品と同じ静的配信・WebSocket・観測ワーカー・設定サ�
 | 3 | 最新の応答、再読み込み、会話と端末タブの往復、開き直し。compact 後の最新発言と要約の非表示 |
 | 4 | 同じ PTY で native ID を fork。continued-in の同じ根への統合、分岐前のタブからの送信と履歴 |
 | 5 | 行の rename と端末で入力する `/rename` を別々に実行。サイドバーとタブの両方を確認 |
-| 6 | 画面のモデル選択と Apply、実際の端末確認画面。確認中の送信拒否と下書き保持、`s` による確定と表示変更 |
+| 6 | 画面のモデル選択と Apply、実際の端末確認画面。確認中の送信拒否と下書き保持、Enter による確定と表示変更 |
 | 7 | 保留中の Working と完了後の Idle/Done。SessionEnd の後、同じプロセス・世代に続く入力でも Working に戻る |
 | 8 | 二日前の履歴を持つ会話に今日の発言を追加し、行の datetime を最新発言と比較。fork 後の根とサイドバーの行数も別項目で確認 |
 | 9 | 通常文の配達成功と意図的な未着。`!` の配達成功と未着。製品の 60 秒の期限を実時間で待ち、未着表示を確認 |
@@ -74,7 +74,7 @@ api は製品と同じ静的配信・WebSocket・観測ワーカー・設定サ�
 | Claude 2.1.299 | `~/.claude/projects` の version が一致する実行から user、assistant、queue-operation、attachment.queued_command、custom-title、continued-in、local-command-stdout、bash-input の構造を確認 |
 | キュー | 2.1.299 の attachment に `commandMode: prompt`、`origin.kind: human`、`source_uuid`、`delivery_id`、`humanTurn`、独立した timestamp がある。enqueue/remove と、吸収後の attachment を出す |
 | 圧縮 | ローカルの実履歴では 2.1.285 / 2.1.296 の標本を確認。2.1.299 の保存済み実行ファイルも読み、compact_boundary と isCompactSummary / isVisibleInTranscriptOnly の保持を確認。2.1.299 の圧縮成功の実履歴はこの環境では見つからなかった |
-| TUI | リポジトリの実機画面標本 `packages/api/test/samples/terminal-panels/claude.json` と、保存済み 2.1.299 実行ファイルの ModelPicker の見出し・案内・キー名を照合。入力欄の罫線と ❯、作業中の入力欄、番号付きモデル選択と `s` / Enter / Esc を ANSI で描画する。画面全体のピクセル一致や全キー操作は対象外 |
+| TUI | リポジトリの実機画面標本 `packages/api/test/samples/terminal-panels/claude.json` と、保存済み 2.1.299 実行ファイルの ModelPicker の見出し・案内・キー名を照合。入力欄の罫線と ❯、作業中の入力欄、会話中の `/model <名前>` の「Switch model?」と Yes / No、Enter / Esc を ANSI で描画する。画面全体のピクセル一致や全キー操作は対象外 |
 | hook | 既存の台帳を SQLite の `mode=ro&immutable=1` で開き、保存済み input のキーを確認。SessionStart / UserPromptSubmit / Stop / SessionEnd を再現。hook 自体に CLI version がないため、全標本が 2.1.299 由来とは断定しない |
 | Codex | `~/.codex/sessions` の 0.160.1 の paginated rollout を読み取り、session_meta、turn_context、response_item の構造を確認。TUI は送信・返事の最小の合成画面。app-server はモデル一覧と使用量の問い合わせだけに応答する |
 
@@ -101,4 +101,37 @@ node --test scripts/e2e/harness.test.mjs
 
 調査のときは `--only=6,9-bang` のように項目を絞れる。除いた項目は blocked になり、公開の判定は失敗のままになる。
 
-製品コード、本番サービス、既存の smoke、依存と lockfile は変更していない。
+初回の確認では、製品コード、本番サービス、既存の smoke、依存と lockfile は変更していない。
+
+上表は修正前の結果。配達照合、モデル確定の取り込み、根の表示日付、コマンド本文の表示は単体試験で修正を確認した。項目 6 の確認画面も会話中の「Switch model?」に合わせた。修正後のブラウザ E2E は listen できる環境で再実行する。
+
+## 本番規模の関門（T1）
+
+```sh
+node scripts/e2e/prod-gate.mjs
+node scripts/e2e/prod-gate.mjs --db-copy /path/to/existing-copy.db
+node scripts/e2e/prod-gate.mjs --help
+```
+
+本番の `~/.local/state/agent-graph/agent-graph.db`、または `--db-copy` を sqlite3 の `-readonly` で開き、`VACUUM INTO` で `$TMPDIR/agent-graph-prod-gate-*` 配下へ写す。既存の写しも入力としてのみ再利用するので、元ファイルを変更・削除しない。状態、socket、HOME、偽 CLI、会話の cwd、dashboard build もこの一時ディレクトリに隔離する。api・runner はこの作業ツリーの実装を別プロセスで起動し、TCP port は動的に割り当てる。本番サービスには接続しない。
+
+写しの `ledger_repairs` の時刻補完の完了印を外し、製品と同じ observation worker の起動経路で全件を読み直す。独自のインプロセス投影に置き換えない。時刻補完完了と初回観測完了を確認し、api 起動からの時間、時刻補完時間、初回観測までの時間を出す。利用者の Claude/Codex 履歴ディレクトリは読み込まないため、ネイティブ履歴の全件再取り込みの負荷は対象外。
+
+ブラウザは初回走査と並行して、隔離したプロジェクトを追加し、偽 Claude の会話を起動・送信する。偽 CLI の reply 記録と画面の返事の両方を確認する。実際の Claude/Codex は起動しない。
+
+stdout は JSON Lines。各項目の `pass` と数値、RSS の全採取点を出す。必要なら実行側で stdout を保存する。DB、本文、DOM、ブラウザ trace は保存しない。判定の既定値は次のとおりで、`--help` のオプションで指定できる。
+
+- RSS: 5 秒間隔で起動時から採取。最大 1024 MiB。初回走査と送信試行の完了後、180 秒の区間を実測時刻による最小二乗法で評価し、傾きが 1 MiB/分以下。3 点未満や採取失敗は不合格。
+- 接続: ブラウザ内で 100 ms ごとに `Reconnecting` を観測し、連続 30 秒超または最終時点で残る場合は不合格。
+- locked: api と runner の stderr を別々に連結し、大文字小文字を無視した `database is locked` の出現数を合計。既定では 1 回でも不合格。chunk の境界をまたぐ語句も数える。
+- 起動・読み直し: 20 分まで。送信操作: 各操作 120 秒まで。api の途中終了、未完了、後片付け失敗も終了コード 1。
+
+通常終了、例外、SIGINT、SIGTERM は子プロセスを停止して一時ディレクトリを削除する。SIGKILL・電源断では終了処理は実行できない。通し実行には socket listen と ps が使える環境が必要。
+
+純関数だけの受け入れ確認（サービスは起動しない）:
+
+```sh
+node --check scripts/e2e/prod-gate.mjs
+node --test scripts/e2e/prod-gate.test.mjs
+node scripts/e2e/prod-gate.mjs --help
+```

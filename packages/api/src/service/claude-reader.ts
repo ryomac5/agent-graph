@@ -13,7 +13,8 @@ import type { FileCursor } from "../observe/files.ts";
 export function observeClaudeHistories(ledger: Ledger, directory: string, facts: Fact[],
   batch: <T>(operation: () => T) => T = (operation) => operation(),
   paths?: string[], saved?: Map<string, FileCursor>, locate?: LocationResolver,
-  fileBatch?: (path: string, operation: () => ClaudeObservation) => ClaudeObservation): ClaudeObservation[] {
+  fileBatch?: (path: string, operation: () => ClaudeObservation) => ClaudeObservation,
+  parentAtLaunch?: import("../observe/claude/context.ts").ClaudeContextOptions["parentAtLaunch"]): ClaudeObservation[] {
   const cursors = new Map<string, FileCursor>();
   const conversations = new Map<string, Fact[]>();
   const identities = new Map(projectEntities(facts, "conversation").map((conversation) => [
@@ -89,7 +90,7 @@ export function observeClaudeHistories(ledger: Ledger, directory: string, facts:
           fromStart: !start || observation.reset || start.offset === 0 });
         // 発言の取り込みで読んだ行から、場所とターンの根拠を同じ取引で足す。
         const context = observeClaudeContext(fileLedger, file, { lines: observation.lines,
-          modelBackfillLines: observation.modelBackfillLines,
+          modelBackfillLines: observation.modelBackfillLines, parentAtLaunch: remote ? undefined : parentAtLaunch,
           fromStart: !start || observation.reset || start.offset === 0, ...(readLocation ? { locate: readLocation } : {}) });
         return { ...observation, conflicts: [...observation.conflicts, ...titles.filter(result => result.status === "conflict"), ...context.conflicts] };
       });

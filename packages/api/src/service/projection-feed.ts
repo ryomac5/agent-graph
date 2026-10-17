@@ -23,6 +23,7 @@ export interface ProjectionPatch {
     membership_conversations: Record<string, string[]> };
 }
 const PATCH_RETENTION = 1000;
+const LOCK_LOG_INTERVAL_MS = 60_000;
 const PATCH_RETENTION_BYTES = 16 * 1024 * 1024;
 const LIST_PAGE_SIZE = 1000;
 const EXCERPT_LENGTH = 120;
@@ -92,6 +93,7 @@ export class ProjectionFeed {
   private registeredRepositories = new Map<string, string[]>();
   private statements = new Map<string, StatementSync>();
   private inputQueues = new Map<string, unknown[]>();
+  private lastLockLogAt?: number;
   private prepare(sql: string): StatementSync {
     let statement = this.statements.get(sql);
     if (!statement) { statement = this.db.prepare(sql); this.statements.set(sql, statement); }
@@ -350,6 +352,7 @@ export class ProjectionFeed {
           this.historyBytes -= this.historySizes.shift()!;
         }
       }
+      this.lastLockLogAt = undefined;
       return patch;
     } catch (error) {
       this.state = previous;
@@ -357,7 +360,15 @@ export class ProjectionFeed {
       this.roots = roots;
       this.inputQueues = inputQueues;
       this.registeredRepositories = registeredRepositories;
-      if (error instanceof Error && "errcode" in error && (Number(error.errcode) & 0xff) === 5) return;
+      if (error instanceof Error && "errcode" in error && (Number(error.errcode) & 0xff) === 5) {
+        const now = Date.now();
+        if (this.lastLockLogAt === undefined || now - this.lastLockLogAt >= LOCK_LOG_INTERVAL_MS) {
+          console.error("Projection refresh skipped: database is locked");
+          this.lastLockLogAt = now;
+        }
+        return;
+      }
+      this.lastLockLogAt = undefined;
       throw error;
     }
   }

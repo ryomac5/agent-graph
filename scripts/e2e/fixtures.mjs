@@ -119,14 +119,9 @@ export class Transcript {
 
 export function renderClaude({ input = '', working = false, panel = false, model = 'haiku', output = '' } = {}) {
   if (panel) {
-    const selected = model === 'haiku' ? 5 : 4;
-    const items = ['Default (recommended)  Use the default model', 'Opus                   Opus 5.5',
-      'Fable                  Fable 5.1', 'Sonnet                 Sonnet 5.5', 'Haiku                  Haiku 5.5'];
-    return '\x1b[2J\x1b[HSelect model\r\n  Switch between Claude models. Your pick becomes the default for new\r\n'
-      + '  sessions. For other/previous model names, specify with --model.\r\n\r\n'
-      + items.map((item, index) => `  ${index + 1 === selected ? '❯' : ' '} ${index + 1}. ${item}`).join('\r\n')
-      + '\r\n\r\n  ◐ Medium effort (default) ←/→ to adjust\r\n\r\n'
-      + '  Enter to set as default · s to use this session only · Esc to cancel' + `\x1b[${4 + selected};5H`;
+    const display = CLAUDE_MODELS.find(item => item.value === model)?.displayName ?? model;
+    return '\x1b[2J\x1b[HSwitch model?\r\n\r\n'
+      + '❯ 1. Yes, switch to ' + display + '\r\n  2. No, go back\r\n\r\n  Enter to confirm · Esc to cancel\x1b[3;1H';
   }
   const lines = [`Claude Code v${CLAUDE_VERSION}`, output || '', working ? '✻ Working… (esc to interrupt)' : '',
     '────────────────────────────────────────────────────────────', `❯ ${input}`,

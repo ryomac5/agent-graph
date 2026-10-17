@@ -147,3 +147,13 @@ test("追記された本文も差分投影で正規化し、excerpt と検索へ
   assert.equal(searchLedger(db, { query: "pasted_content" }).total, 0);
   assert.equal(searchLedger(db, { query: "追記された依頼" }).total, 1);
 });
+
+test('スラッシュコマンドを引数付きの普通の文として投影する', () => {
+  const text = '<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>haiku</command-args>';
+  assert.equal(normalize(text).body, '/model haiku');
+  assert.equal(normalize(text.replace('haiku', '')).body, '/model');
+  const code = '```xml\n' + text + '\n```';
+  assert.equal(normalize(code).body, code);
+  assert.deepEqual(normalizeClaudeContent({ provider: 'claude', role: 'user', body: [{ type: 'text', text }] }).body,
+    [{ type: 'text', text: '/model haiku' }]);
+});

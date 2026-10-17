@@ -160,3 +160,20 @@ it.each([{ hosted: false }, { disconnected: true }, { provider: 'codex' }])('dis
   expect(command.mock.calls.filter(([name]) => name === 'session.send')).toHaveLength(0);
   if (options.provider === 'codex') expect(screen.getByText('Change the model in the Codex terminal. /model requires interactive selection.')).toBeTruthy();
 });
+
+it('updates the composer and model panel from projection after interactive confirmation without another reply', async () => {
+  const { openTerminal, target, conversationId } = setup({ response: { result: {
+    terminalId: 'terminal', command: { status: 'interactive', output: 'Switch model?' },
+  } } });
+  await selectHaiku();
+  fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+  await waitFor(() => expect(openTerminal).toHaveBeenCalledExactlyOnceWith('terminal'));
+  expect(screen.getByTitle('Claude · opus')).toBeTruthy();
+  act(() => target.applyPatch({ type: 'patch', from_seq: 1, seq: 2, generation: 0, changes: {
+    runs: { upsert: [{ id: 'r', conversation_id: conversationId, generation: 1, state: 'idle', model: 'Haiku 5.5' }], remove: [] },
+  } }));
+  expect(screen.getByTitle('Claude · Haiku 5.5')).toBeTruthy();
+  expect(screen.getByRole('button', { name: /^Model · Haiku 5.5/ })).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: /^Model · / }));
+  expect((screen.getByRole('button', { name: 'Apply' }) as HTMLButtonElement).disabled).toBe(true);
+});

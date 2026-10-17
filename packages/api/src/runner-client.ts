@@ -6,6 +6,8 @@ import type { JsonValue } from "../../core/src/ledger/facts.ts";
 // runner の内部には依存せず、ソケットの版とフレームだけを共有する。
 export const RUNNER_PROTOCOL_VERSION = 1;
 const MAX_FRAME_BYTES = 1024 * 1024;
+// 最大 8 端末の scrollback と meta を含む一覧は、通常の 1 フレームを超える。
+const MAX_TERMINAL_LIST_FRAME_BYTES = 32 * MAX_FRAME_BYTES;
 const RECONNECT_MS = 500;
 const REQUEST_TIMEOUT_MS = 10_000;
 export interface RunnerRequest { type: "req"; cmd_id: string; command: string; payload?: JsonValue }
@@ -14,10 +16,13 @@ export type RunnerResponse = { type: "res"; cmd_id: string } & (
 );
 export type RunnerEvent = { type: "evt"; seq: number } | {
   type: "evt"; delta: { runId: string; text: string; conversationId?: string; messageId?: string };
+} | {
+  type: "evt"; terminal: { terminalId: string } & ({ output: string } | { exit: { exitCode: number; signal?: number } });
 };
 export function runnerSocketPath(): string { return join(dirname(ledgerDbPath()), "runner.sock"); }
 
-export class RunnerClient {
+// 既存の購読者は seq/delta の型を維持し、端末利用側は RunnerEvent を指定する。
+export class RunnerClient<Event extends RunnerEvent = Exclude<RunnerEvent, { terminal: unknown }>> {
   connectionGeneration = 0;
   private socket?: Socket;
   private ready = false;
@@ -28,8 +33,8 @@ export class RunnerClient {
     timer: ReturnType<typeof setTimeout>;
   }>();
   private path: string;
-  private onEvent: (event: RunnerEvent) => void;
-  constructor(path: string, onEvent: (event: RunnerEvent) => void) {
+  private onEvent: (event: Event) => void;
+  constructor(path: string, onEvent: (event: Event) => void) {
     this.path = path;
     this.onEvent = onEvent;
     this.connect();
@@ -75,10 +80,13 @@ export class RunnerClient {
         const end = buffer.indexOf("\n");
         const line = buffer.slice(0, end);
         buffer = buffer.slice(end + 1);
-        if (Buffer.byteLength(line) > MAX_FRAME_BYTES) { socket.destroy(); return; }
+        const bytes = Buffer.byteLength(line);
+        if (bytes > MAX_TERMINAL_LIST_FRAME_BYTES) { socket.destroy(); return; }
         let message;
         try { message = JSON.parse(line); } catch { socket.destroy(); return; }
         if (!message || typeof message !== "object" || Array.isArray(message)) { socket.destroy(); return; }
+        if (bytes > MAX_FRAME_BYTES && !(message.type === "res"
+          && this.pending.get(message.cmd_id)?.request.command === "terminal.list")) { socket.destroy(); return; }
         if (!this.ready) {
           if (message.type !== "hello" || message.version !== RUNNER_PROTOCOL_VERSION || message.role !== "runner") {
             socket.destroy(); return;
@@ -91,11 +99,17 @@ export class RunnerClient {
           && (message.ok ? "result" in message : typeof message.error === "string")) {
           this.complete(message as RunnerResponse);
         } else if (message.type === "evt" && (Number.isSafeInteger(message.seq) && message.seq >= 0
-          || message.delta && typeof message.delta.runId === "string" && typeof message.delta.text === "string")) {
-          this.onEvent(message as RunnerEvent);
+          || message.delta && typeof message.delta.runId === "string" && typeof message.delta.text === "string"
+          || message.terminal && typeof message.terminal.terminalId === "string"
+            && (typeof message.terminal.output === "string"
+              || message.terminal.exit && Number.isSafeInteger(message.terminal.exit.exitCode)
+                && (message.terminal.exit.signal === undefined || Number.isSafeInteger(message.terminal.exit.signal))))) {
+          this.onEvent(message as Event);
         } else { socket.destroy(); return; }
       }
-      if (Buffer.byteLength(buffer) > MAX_FRAME_BYTES) socket.destroy();
+      const limit = [...this.pending.values()].some(pending => pending.request.command === "terminal.list")
+        ? MAX_TERMINAL_LIST_FRAME_BYTES : MAX_FRAME_BYTES;
+      if (Buffer.byteLength(buffer) > limit) socket.destroy();
     });
   }
   close(): void {

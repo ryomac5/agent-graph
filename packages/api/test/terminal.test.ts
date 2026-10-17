@@ -1,19 +1,61 @@
 import { promptFrame } from './terminal-screen-fixture.ts';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { once } from 'node:events';
+import { EventEmitter, once } from 'node:events';
+import http from 'node:http';
+import { syncBuiltinESMExports } from 'node:module';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test, { type TestContext } from 'node:test';
 import { promisify } from 'node:util';
-import { WebSocket } from 'ws';
+import { WebSocket, WebSocketServer } from 'ws';
 import { createFilesApi } from '../src/files/index.ts';
 import { openObservationService } from '../src/service/index.ts';
 import { startWebSocketServer } from '../src/ws/index.ts';
 import { startStaticServer } from '../src/static/index.ts';
 import { createTerminalSession, type TerminalNotification } from '../src/terminal/index.ts';
+import type { HostOptions } from '../src/terminal/hosts.ts';
+import type { RunnerEvent, RunnerRequest, RunnerResponse } from '../src/runner-client.ts';
+import type { RunnerPtySpawnRequest, RunnerTerminalInfo } from '../src/terminal/runner-pty.ts';
+
+function createFakeRunner(options: {
+  pid: number; scrollback?: string; onSpawn?: (input: RunnerPtySpawnRequest) => void; onWrite?: (data: string) => void;
+}) {
+  const infos: RunnerTerminalInfo[] = [];
+  let kills = 0;
+  let onEvent = (_event: RunnerEvent) => {};
+  const runner = {
+    available: true, connectionGeneration: 1, close() { onEvent = () => {}; },
+    async request(request: RunnerRequest): Promise<RunnerResponse> {
+      let result: unknown = {};
+      const payload = request.payload as { terminalId: string; data: string };
+      if (request.command === 'status') result = { capabilities: { terminals: true } };
+      else if (request.command === 'terminal.spawn') {
+        const input = request.payload as unknown as RunnerPtySpawnRequest;
+        options.onSpawn?.(input);
+        const info = { terminalId: 'runner-' + infos.length, pid: options.pid, meta: input.meta,
+          startedAt: new Date().toISOString(), scrollback: options.scrollback ?? '' };
+        infos.push(info); result = { terminalId: info.terminalId, pid: info.pid };
+      } else if (request.command === 'terminal.list') result = structuredClone(infos);
+      else {
+        assert.equal(payload.terminalId, infos[0].terminalId);
+        if (request.command === 'terminal.write') options.onWrite?.(payload.data);
+        else if (request.command === 'terminal.kill') { kills++; fake.exit({ exitCode: 0 }); }
+        else assert.equal(request.command, 'terminal.resize');
+      }
+      return { type: 'res', cmd_id: request.cmd_id, ok: true, result: JSON.parse(JSON.stringify(result)) };
+    },
+  };
+  const fake = {
+    get kills() { return kills; },
+    createRunnerClient: ((callback: (event: RunnerEvent) => void) => { onEvent = callback; return runner; }) satisfies NonNullable<HostOptions['createRunnerClient']>,
+    output(data: string) { infos[0].scrollback += data; onEvent({ type: 'evt', terminal: { terminalId: infos[0].terminalId, output: data } }); },
+    exit(exit: { exitCode: number }) { infos[0].exited = exit; onEvent({ type: 'evt', terminal: { terminalId: infos[0].terminalId, exit } }); },
+  };
+  return fake;
+}
 
 const execute = promisify(execFile);
 async function createFixture(t: TestContext) {
@@ -223,35 +265,60 @@ test('hosted sessions survive WebSocket disconnect, replay commands once and att
   const writes: string[] = [];
   let output = (_data: string) => {};
   let exit = (_event: { exitCode: number }) => {};
-  let killed = false;
   await writeFile(join(directory, '98765.json'), JSON.stringify({ pid: 98765, sessionId }));
-  const { spawn } = await import('node-pty');
-  const openTerminal: typeof spawn = () => {
-    starts++;
-    return { pid: 98765, write: (data: string) => writes.push(data), resize() {},
-      kill() { killed = true; exit({ exitCode: 0 }); },
-      onData(callback: typeof output) { output = callback; return { dispose() {} }; },
-      onExit(callback: typeof exit) { exit = callback; return { dispose() {} }; },
-    } as unknown as ReturnType<typeof spawn>;
-  };
-  let api: Awaited<ReturnType<typeof startWebSocketServer>>;
-  try { api = await startWebSocketServer(service, { port: 0, runnerPath: join(directory, 'missing.sock'), sessionHosts: { quietMs: 0, warmupMs: 0,
-    openTerminal, sessionsDirectory: directory, listProcesses: async () => [],
-  } }); }
-  catch (error) { if (skipSandbox(t, error)) return; throw error; }
-  t.after(() => api.close());
+  const fake = createFakeRunner({ pid: 98765, onSpawn: () => { starts++; }, onWrite: data => writes.push(data) });
+  output = fake.output;
+  exit = fake.exit;
+  let accept: ((socket: unknown) => void) | undefined;
+  const startApi = () => startWebSocketServer(service, { port: 0, runnerPath: join(directory, 'missing.sock'), sessionHosts: { quietMs: 0, warmupMs: 0,
+    createRunnerClient: fake.createRunnerClient, sessionsDirectory: directory, listProcesses: async () => [],
+  } });
+  let api: Awaited<ReturnType<typeof startApi>>;
+  try { api = await startApi(); }
+  catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'EPERM' && 'syscall' in error && error.syscall === 'listen')) throw error;
+    // 待ち受け禁止の環境でも本番の接続・メッセージハンドラを通す。
+    const server = Object.assign(new EventEmitter(), {
+      listen: (_port: number, _host: string, ready: () => void) => ready(),
+      address: () => ({ port: 12345 }), close: (done: () => void) => done(),
+    });
+    t.mock.method(http, 'createServer', () => server as unknown as http.Server);
+    syncBuiltinESMExports();
+    t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+    const on = WebSocketServer.prototype.on;
+    t.mock.method(WebSocketServer.prototype, 'on', function (this: WebSocketServer, event: string, listener: (...args: any[]) => void) {
+      if (event === 'connection') accept = listener;
+      return on.call(this, event, listener);
+    });
+    api = await startApi();
+  }
+  t.after(async () => { await api.close(); assert.equal(fake.kills, 0); });
   const snapshot = api.feed.snapshot();
   let sequence = 0;
   async function connect() {
-    const socket = new WebSocket(`${api.wsUrl}?token=${api.token}`, { origin: api.url });
-    t.after(() => socket.terminate());
     const frames: any[] = [];
-    socket.on('message', data => frames.push(JSON.parse(data.toString())));
-    await once(socket, 'open');
-    socket.send(JSON.stringify({ type: 'hello', seq: snapshot.seq, generation: snapshot.generation }));
+    const inMemory = Object.assign(new EventEmitter(), {
+      readyState: 1, bufferedAmount: 0,
+      send(body: string) { frames.push(JSON.parse(body)); },
+      close() { inMemory.readyState = 3; inMemory.emit('close'); },
+      terminate() { inMemory.close(); },
+    });
+    const socket = accept ? inMemory : new WebSocket(`${api.wsUrl}?token=${api.token}`, { origin: api.url });
+    t.after(() => socket.terminate());
+    if (accept) accept(socket);
+    else {
+      socket.on('message', data => frames.push(JSON.parse(data.toString())));
+      await once(socket, 'open');
+    }
+    function send(message: unknown) {
+      const body = JSON.stringify(message);
+      if (accept) socket.emit('message', Buffer.from(body), false);
+      else socket.send(body);
+    }
+    send({ type: 'hello', seq: snapshot.seq, generation: snapshot.generation });
     async function command(command: string, payload: unknown, cmd_id = `hosted-${++sequence}`) {
       const before = frames.length;
-      socket.send(JSON.stringify({ type: 'cmd', cmd_id, command, payload }));
+      send({ type: 'cmd', cmd_id, command, payload });
       await waitUntil(() => frames.slice(before).some(frame => frame.type === 'ack' && frame.cmd_id === cmd_id));
       return frames.slice(before).find(frame => frame.type === 'ack' && frame.cmd_id === cmd_id);
     }
@@ -265,8 +332,9 @@ test('hosted sessions survive WebSocket disconnect, replay commands once and att
   output(promptFrame());
   await first.command('session.send', { conversationId, text: 'one message' }, 'same-send');
   output('before disconnect');
-  first.socket.close(); await once(first.socket, 'close');
-  assert.equal(killed, false);
+  const disconnected = once(first.socket, 'close');
+  first.socket.close(); await disconnected;
+  assert.equal(fake.kills, 0);
   output(' while disconnected');
   const next = await connect();
   assert.deepEqual(await next.command('session.launch', payload, 'same-launch'), launched);

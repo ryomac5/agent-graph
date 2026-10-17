@@ -2,7 +2,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { sendJson } from '../ws/compression.ts';
-import { classifyHookEvent } from "../../../core/src/ledger/index.ts";
+import { classifyHookEvent, createNativeId, readLedgerDatabase } from "../../../core/src/ledger/index.ts";
 import type { FactInput, JsonValue, Ledger } from "../../../core/src/ledger/index.ts";
 import { defaultLocationResolver, type LocationResolver } from "../observe/location.ts";
 import { verificationVisibility } from '../verification.ts';
@@ -37,10 +37,10 @@ export function parseHookEvent(value: unknown): HookEvent {
   return event;
 }
 
-export function createHookFacts(event: HookEvent, locate: LocationResolver = defaultLocationResolver): FactInput[] {
+export function createHookFacts(event: HookEvent, locate: LocationResolver = defaultLocationResolver, existingRunId?: string): FactInput[] {
   const source_event_id = JSON.stringify([event.session_id, event.generation, event.event_id]);
-  const conversationId = `claude:${event.session_id}`;
-  const runId = event.run_id ?? `${conversationId}:${event.generation}`;
+  const conversationId = createNativeId("claude", event.session_id);
+  const runId = event.run_id ?? existingRunId ?? `${conversationId}:${event.generation}`;
   const base = { source: "hook" as const, source_event_id, source_ts: event.source_ts, confidence: "confirmed" as const };
   const evidence = {
     hook_event_name: event.hook_event_name, event_id: event.event_id,
@@ -76,6 +76,8 @@ export function createHookFacts(event: HookEvent, locate: LocationResolver = def
 }
 
 export function createHookHandler(ledger: Ledger, token: string) {
+  const legacyRuns = new Set<string>();
+  const findRun = readLedgerDatabase(ledger).prepare("SELECT subject_id FROM run_subjects WHERE conversation_id = ? AND generation = ?");
   const conversations = new Set<string>();
   let lastSeq = 0;
   return async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
@@ -115,11 +117,16 @@ export function createHookHandler(ledger: Ledger, token: string) {
         const facts = ledger.readSince(lastSeq, LEDGER_READ_BATCH_SIZE);
         for (const fact of facts) {
           if (fact.kind === "conversation.created") conversations.add(fact.subject);
+          // 投影前の run も、既存の差分読み取りで拾う。
+          if (fact.subject.startsWith("run:claude:")) legacyRuns.add(fact.subject.slice(4));
           lastSeq = fact.seq;
         }
         if (facts.length < LEDGER_READ_BATCH_SIZE) break;
       }
-      const results = createHookFacts(event)
+      const legacyId = `claude:${event.session_id}:${event.generation}`;
+      const indexed = event.run_id ? undefined : findRun.get(`claude:${event.session_id}`, event.generation);
+      const existingRunId = indexed ? String(indexed.subject_id) : legacyRuns.has(legacyId) ? legacyId : undefined;
+      const results = createHookFacts(event, defaultLocationResolver, existingRunId)
         .filter((fact) => fact.kind !== "conversation.created" || !conversations.has(fact.subject))
         .map((fact) => {
           const result = ledger.append(fact);

@@ -1,5 +1,5 @@
 import { basename, dirname, resolve } from "node:path";
-import { classifyClaudeRecord, createNativeId, projectConversations, TURN_RULE_VERSION } from "../../../../core/src/ledger/index.ts";
+import { canonicalConversationId, classifyClaudeRecord, createNativeId, projectConversations, TURN_RULE_VERSION } from "../../../../core/src/ledger/index.ts";
 import type { AppendResult, Fact, FactInput, JsonValue, Ledger, RunPayload } from "../../../../core/src/ledger/index.ts";
 import { readAppendOnlyFile, type FileLine } from "../files.ts";
 import { defaultLocationResolver, type LocationResolver, type ObservedLocation } from "../location.ts";
@@ -35,9 +35,7 @@ type TurnTarget = { subject: string; generation: number; started: number };
  */
 export function observeClaudeContext(ledger: Ledger, path: string, options: ClaudeContextOptions = {}): ClaudeContextResult {
   const absolutePath = resolve(path);
-  const nativeId = basename(absolutePath, ".jsonl");
   const id = claudeConversationId(absolutePath);
-  const hookConversation = `claude:${nativeId}`;
   const existing = ledger.readSince(0, Number.MAX_SAFE_INTEGER);
   const observedTs = options.observedTs ?? new Date().toISOString();
   const result: ClaudeContextResult = { appended: 0, duplicates: 0, conflicts: [] };
@@ -49,7 +47,7 @@ export function observeClaudeContext(ledger: Ledger, path: string, options: Clau
   }
   const belongs = (fact: Fact) => {
     const conversation = (fact.payload as Partial<RunPayload> | null)?.conversation_id;
-    return conversation === id || conversation === hookConversation;
+    return typeof conversation === "string" && canonicalConversationId(conversation) === id;
   };
   const conversation = projectConversations(existing.filter((fact) => fact.kind.startsWith("conversation.")))
     .conversations.find((row) => row.id === id);

@@ -4,7 +4,7 @@ import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import test from "node:test";
-import { openLedger, projectConversations, projectRuns } from "../../core/src/ledger/index.ts";
+import { applyIncremental, openLedger, projectConversations, projectRuns, readLedgerDatabase } from "../../core/src/ledger/index.ts";
 import type { Ledger } from "../../core/src/ledger/index.ts";
 import { createHookHandler, startHookServer } from "../src/hook/index.ts";
 import type { HookEvent } from "../src/hook/index.ts";
@@ -42,6 +42,11 @@ test("hook を受理し、再送と受け口の再起動でも事実が増えな
     const response = await post(first, first.token);
     assert.equal(response.status, 200);
     assert.equal((await response.json()).accepted, true);
+    assert.deepEqual(ledger.readSince(0, 100).map(fact => fact.subject),
+      ['conversation:["claude","session"]', 'run:["claude","session"]:1']);
+    const created = ledger.readSince(0, 100)[1];
+    assert.ok(created.kind === 'run.created');
+    assert.equal(created.payload?.conversation_id, '["claude","session"]');
     assert.equal(projectRuns(ledger.readSince(0, 100))[0].state, "idle");
     assert.equal((await post(first, first.token)).status, 200);
     assert.equal(ledger.readSince(0, 100).length, 2);
@@ -220,7 +225,7 @@ test("根は子の終了を待つ間も hook のターンを保ち、Stop でだ
   const start = "2026-01-01T00:01:00.000Z";
   await post({ ...EVENT, event_id: "prompt", hook_event_name: "UserPromptSubmit", source_ts: start });
   ledger.append({ source: "transcript-claude", source_event_id: "child-stop", source_ts: "2026-01-01T00:11:42.000Z",
-    kind: "run.state_changed", subject: "run:claude:session:1", confidence: "confirmed",
+    kind: "run.state_changed", subject: 'run:["claude","session"]:1', confidence: "confirmed",
     payload: { conversation_id: "claude:session", generation: 1, state: "idle", last_evidence: { kind: "turn_completed" } } });
   await post({ ...EVENT, event_id: "tool", hook_event_name: "PostToolUse", source_ts: "2026-01-01T00:11:42.000Z" });
   let runs = projectRuns(ledger.readSince(0, 100));
@@ -267,3 +272,39 @@ test('real conversation hooks remain recorded at the exact probe path', async t 
   assert.equal(facts.filter(fact => fact.kind.startsWith('run.')).length, 4);
   assert.equal(projectRuns(facts)[0].state, 'ended');
 });
+
+for (const conversationId of ['claude:session', '["claude","session"]']) {
+  for (const projected of [false, true]) test(`既存 ${conversationId} の run を再利用する（投影済み=${projected}）`, async t => {
+    const ledger = openLedger(':memory:');
+    t.after(() => ledger.close());
+    const subject = `run:${conversationId}:1` as const;
+    ledger.append({ source: 'hook', source_event_id: 'old-start', source_ts: EVENT.source_ts,
+      confidence: 'confirmed', kind: 'run.created', subject,
+      payload: { conversation_id: conversationId, generation: 1, state: 'idle', started_ts: EVENT.source_ts } });
+    if (projected) applyIncremental(readLedgerDatabase(ledger), 0);
+    const original = ledger.readSince(0, 100);
+    const event = { ...EVENT, event_id: 'new-prompt', hook_event_name: 'UserPromptSubmit', source_ts: '2026-01-01T00:01:00.000Z' };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const receiver = createReceiver(ledger);
+      const response = await receiver.post(receiver.url, { method: 'POST', headers: {
+        'content-type': 'application/json', authorization: `Bearer ${receiver.token}`,
+      }, body: JSON.stringify(event) });
+      assert.equal(response.status, 200);
+    }
+    const facts = ledger.readSince(0, 100);
+    assert.deepEqual(facts.slice(0, original.length), original);
+    assert.equal(facts.length, 3);
+    assert.equal(facts[1].subject, 'conversation:["claude","session"]');
+    assert.equal(facts[2].subject, subject);
+    const updated = facts[2];
+    assert.ok(updated.kind === 'run.updated');
+    assert.equal(updated.payload?.conversation_id, '["claude","session"]');
+    assert.equal(projectRuns(facts).length, 1);
+    assert.equal(projectRuns(facts)[0].state, 'running');
+    const receiver = createReceiver(ledger);
+    assert.equal((await receiver.post(receiver.url, { method: 'POST', headers: {
+      'content-type': 'application/json', authorization: `Bearer ${receiver.token}`,
+    }, body: JSON.stringify({ ...EVENT, generation: 2, event_id: 'resume' }) })).status, 200);
+    assert.equal(ledger.readSince(facts.at(-1)!.seq, 100)[0].subject, 'run:["claude","session"]:2');
+  });
+}

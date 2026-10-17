@@ -531,3 +531,26 @@ test('model の確定 stdout だけでモデルを更新し、ターンの状態
   applyIncremental(db, 0);
   assert.equal(db.prepare('SELECT model FROM runs').get()!.model, 'Haiku 5.5');
 });
+
+for (const conversationId of ['claude:session', '["claude","session"]']) {
+  test(`transcript の事実を ${conversationId} の hook run に結ぶ`, t => {
+    const { ledger, directory } = createFixture(t);
+    const subject = `run:${conversationId}:5` as const;
+    ledger.append({ source: 'hook', source_event_id: 'start', source_ts: '2026-10-06T09:59:00.000Z',
+      confidence: 'confirmed', kind: 'run.created', subject,
+      payload: { conversation_id: conversationId, generation: 5, state: 'idle', started_ts: '2026-10-06T09:59:00.000Z' } });
+    const original = readFacts(ledger);
+    const path = join(directory, 'session.jsonl');
+    writeFileSync(path, createMessage('prompt') + '\n');
+    assert.deepEqual(observeClaudeContext(ledger, path).conflicts, []);
+    const facts = readFacts(ledger);
+    const runs = facts.filter(fact => fact.source === 'transcript-claude' && fact.kind.startsWith('run.'));
+    assert.ok(runs.length > 0);
+    assert.ok(runs.every(fact => fact.subject === subject && fact.kind === 'run.state_changed'
+      && fact.payload?.conversation_id === '["claude","session"]'));
+    assert.ok(runs.every(fact => fact.kind !== 'run.created'));
+    assert.deepEqual(facts.slice(0, original.length), original);
+    assert.equal(project(facts).runs.length, 1);
+    assert.equal(observeClaudeContext(ledger, path).appended, 0);
+  });
+}

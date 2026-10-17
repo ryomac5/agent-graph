@@ -27,8 +27,8 @@ test('hook の根の状態と開始時刻を snapshot と patch に配り、旧 
     assert.equal(patch.changes.runs.upsert[0].state, 'running');
     assert.equal(patch.changes.runs.upsert[0].turn_started_ts, '2026-10-11T00:01:00.000Z');
     ledger.append({ source: 'transcript-claude', source_event_id: 'child-stop', source_ts: '2026-10-11T00:11:42Z',
-      kind: 'run.state_changed', subject: 'run:claude:root:1', confidence: 'confirmed',
-      payload: { conversation_id: 'claude:root', generation: 1, state: 'idle', last_evidence: { kind: 'turn_completed' } } });
+      kind: 'run.state_changed', subject: 'run:["claude","root"]:1', confidence: 'confirmed',
+      payload: { conversation_id: '["claude","root"]', generation: 1, state: 'idle', last_evidence: { kind: 'turn_completed' } } });
     append({ ...event, event_id: 'tool', hook_event_name: 'PostToolUse', source_ts: '2026-10-11T00:11:42Z' });
     feed.refresh();
     const running = feed.snapshot().projection;
@@ -36,8 +36,8 @@ test('hook の根の状態と開始時刻を snapshot と patch に配り、旧 
     assert.equal(running.roots[0].state, 'running');
     assert.equal(running.runs[0].turn_started_ts, '2026-10-11T00:01:00.000Z');
     ledger.append({ source: 'transcript-claude', source_event_id: 'process-absent', source_ts: '2026-10-11T00:11:43Z',
-      kind: 'run.state_changed', subject: 'run:claude:root:1', confidence: 'confirmed',
-      payload: { conversation_id: 'claude:root', generation: 1, state: 'idle', last_evidence: { kind: 'process_absent' } } });
+      kind: 'run.state_changed', subject: 'run:["claude","root"]:1', confidence: 'confirmed',
+      payload: { conversation_id: '["claude","root"]', generation: 1, state: 'idle', last_evidence: { kind: 'process_absent' } } });
     feed.refresh();
     const projected = feed.snapshot().projection;
     assert.equal(projected.runs[0].state, 'idle');
@@ -97,8 +97,8 @@ test('本番 seq 262199–262309 の背景完了のターンは、遅れて届�
     ];
     for (const row of rows) {
       ledger.append({ source: row.source, source_event_id: row.source === 'transcript-claude' ? `turn:v3:background-root:${row.seq}` : String(row.seq),
-        source_ts: row.ts, kind: row.kind, subject: 'run:claude:background-root:1', confidence: 'confirmed',
-        payload: { conversation_id: 'claude:background-root', generation: 1, ...(row.state ? { state: row.state } : {}),
+        source_ts: row.ts, kind: row.kind, subject: 'run:["claude","background-root"]:1', confidence: 'confirmed',
+        payload: { conversation_id: '["claude","background-root"]', generation: 1, ...(row.state ? { state: row.state } : {}),
           last_evidence: row.evidence, last_evidence_ts: row.ts } } as FactInput);
       applyIncremental(db, 0);
       const run = db.prepare('SELECT state, turn_started_ts FROM runs').get()!;
